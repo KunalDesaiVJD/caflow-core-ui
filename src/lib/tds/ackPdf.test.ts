@@ -99,6 +99,19 @@ describe("extractAckFields", () => {
   // spacing order as the real receipt's "Label : Value" rows, each label and
   // value split into the same number of pdf.js text runs the real file
   // produced (e.g. "Form" + "No." as two runs, "PAN/TAN" as one).
+  //
+  // Includes the FULL "Form Description" field exactly as printed on the
+  // real receipt, wrapping across three separate visual rows (bands) between
+  // "Form No." and "Assessment Year":
+  //
+  //   Form Description : Quarterly statement of deduction of tax under
+  //   sub-section (3) of section 200 of the Income-tax Act, 1961 in respect
+  //   of salary for the quarter ended June/September/December/March
+  //   (Financial year)
+  //
+  // Its third line starts with the bare, lowercase, colon-less word
+  // "quarter" — this is the exact real-world text that collided with the
+  // genuine "Quarter : Q4" row further down the page before the fix.
   const items: PdfTextItem[] = [
     cell(40, 681.3, "e-Filing"), cell(120, 681.3, "Acknowledgement"), cell(280, 681.3, "Number"),
     cell(500, 681.3, "Date"), cell(540, 681.3, "of"), cell(570, 681.3, "e-Filing"),
@@ -110,6 +123,16 @@ describe("extractAckFields", () => {
     cell(40, 562.3, "PAN/TAN"), cell(90, 562.3, ":"), cell(110, 562.3, "AHMK08204A"),
     cell(40, 535.7, "Address"), cell(90, 535.7, ":"), cell(110, 535.7, "E-604, TITANIUM CITY CENTER,NR SACHIN"),
     cell(40, 496.8, "Form"), cell(75, 496.8, "No."), cell(100, 496.8, ":"), cell(120, 496.8, "Form"), cell(150, 496.8, "24Q"),
+    // "Form Description" — full real paragraph, wrapping across 3 bands.
+    cell(40, 470.0, "Form"), cell(90, 470.0, "Description"), cell(150, 470.0, ":"),
+    cell(170, 470.0, "Quarterly"), cell(230, 470.0, "statement"), cell(300, 470.0, "of"), cell(320, 470.0, "deduction"),
+    cell(390, 470.0, "of"), cell(410, 470.0, "tax"), cell(440, 470.0, "under"), cell(480, 470.0, "sub-section"),
+    cell(550, 470.0, "(3)"), cell(580, 470.0, "of"),
+    cell(170, 452.0, "section"), cell(220, 452.0, "200"), cell(250, 452.0, "of"), cell(270, 452.0, "the"),
+    cell(300, 452.0, "Income-tax"), cell(360, 452.0, "Act,"), cell(390, 452.0, "1961"), cell(430, 452.0, "in"),
+    cell(450, 452.0, "respect"), cell(500, 452.0, "of"), cell(520, 452.0, "salary"), cell(560, 452.0, "for"), cell(590, 452.0, "the"),
+    cell(170, 434.0, "quarter"), cell(220, 434.0, "ended"), cell(260, 434.0, "June/September/December/March"),
+    cell(430, 434.0, "(Financial"), cell(480, 434.0, "year)"),
     cell(40, 419.0, "Assessment"), cell(100, 419.0, "Year"), cell(150, 419.0, ":"), cell(170, 419.0, "-"),
     cell(40, 392.4, "Financial"), cell(100, 392.4, "Year"), cell(150, 392.4, ":"), cell(170, 392.4, "2025-26"),
     cell(40, 365.8, "Month"), cell(90, 365.8, ":"), cell(110, 365.8, "-"),
@@ -137,6 +160,37 @@ describe("extractAckFields", () => {
 
   it("returns all-null fields (never throws) for a PDF with no matching text layer, e.g. scanned/image-only", () => {
     expect(extractAckFields([[]])).toEqual({
+      ackNumber: null, name: null, financialYear: null, quarter: null, formNo: null, tan: null,
+    });
+  });
+
+  it("does not let the 'Form Description' boilerplate's 'quarter ended June/September/December/March (Financial year)' line shadow the genuine 'Quarter : Q4' row", () => {
+    // Regression test for a real bug: the Form Description field's 3rd wrapped
+    // line starts with the bare, lowercase, colon-less word "quarter" and
+    // sits ABOVE the genuine "Quarter : Q4" row on the page. A label match
+    // that only checked "does this band's text start with /^Quarter\b/i"
+    // (no colon requirement) matched that boilerplate line FIRST and returned
+    // "ended June/September/December/March (Financial year)" as the
+    // extracted quarter — a false-positive mismatch against a fully correct
+    // upload. The `items` fixture above includes the full real paragraph;
+    // this asserts the genuine value still wins.
+    expect(extractAckFields([items]).quarter).toBe("Q4");
+  });
+
+  it("rejects a label-like prose line for ANY field, not just Quarter, when it lacks a colon separator", () => {
+    // Same class of bug, made generic: a band whose text merely STARTS with
+    // a label word (Name/Financial Year/Form No./PAN-TAN) but isn't actually
+    // a "label: value" row (no colon right after the label) must never be
+    // mistaken for the real field — mirroring the Quarter collision above,
+    // for every other label extractLabelledValue() supports.
+    const prose: PdfTextItem[] = [
+      cell(40, 500, "Name"), cell(90, 500, "of"), cell(110, 500, "the"), cell(130, 500, "deductor"), cell(190, 500, "as"), cell(220, 500, "per"), cell(250, 500, "PAN"),
+      cell(40, 480, "Financial"), cell(100, 480, "Year"), cell(150, 480, "beginning"), cell(230, 480, "April"),
+      cell(40, 460, "Form"), cell(80, 460, "No"), cell(110, 460, "provided"), cell(170, 460, "for"), cell(200, 460, "reference"),
+      cell(40, 440, "PAN/TAN"), cell(110, 440, "as"), cell(140, 440, "applicable"),
+      cell(40, 420, "Quarter"), cell(90, 420, "wise"), cell(130, 420, "breakup"), cell(190, 420, "below"),
+    ];
+    expect(extractAckFields([prose])).toEqual({
       ackNumber: null, name: null, financialYear: null, quarter: null, formNo: null, tan: null,
     });
   });
