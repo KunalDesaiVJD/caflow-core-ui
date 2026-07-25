@@ -44,6 +44,7 @@ import { useSpellCheck } from "./hooks/useSpellCheck";
 import { toast } from "sonner";
 
 import { supabase } from "@/integrations/supabase/client";
+import { sanitizeStorageName } from "@/lib/storagePath";
 import {
   useQuerySheetStorage,
   STATUS_META, PRIORITY_META,
@@ -832,7 +833,7 @@ export default function QuerySheet({
     for (const file of files) {
       const reason = validateAttachment(file);
       if (reason) { toast.error(reason); continue; }
-      const safe = file.name.replace(/\s+/g, "_");
+      const safe = sanitizeStorageName(file.name);
       const path = `query_attachments/${engagementId}/${rowId}/${Date.now()}_${safe}`;
       setAttachUploadingId(rowId);
       const { error } = await supabase.storage.from("documents").upload(path, file, {
