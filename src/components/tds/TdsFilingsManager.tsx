@@ -525,6 +525,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     });
   }, [filtered, searchBuffer, clientSearchQuery, statusMultiFilter, preparedByMultiFilter, clients, deletedClients, users]);
 
+  // Prepared By options — only users who actually appear as a preparer among
+  // the currently-loaded filings (per FY/Quarter/Client/Form), not the whole
+  // firm's user list; "Unassigned" only shows up if some filing really has
+  // no preparer yet.
+  const preparedByOptions = useMemo(() => {
+    const presentIds = new Set(filtered.map(f => f.preparer_id).filter((id): id is string => !!id));
+    const hasUnassigned = filtered.some(f => !f.preparer_id);
+    const opts = users
+      .filter(u => presentIds.has(u.id))
+      .map(u => ({ value: u.id, label: u.name || "Unnamed" }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return hasUnassigned ? [{ value: UNASSIGNED_PREPARER, label: "Unassigned" }, ...opts] : opts;
+  }, [filtered, users]);
+
   // Global type-to-search capture — Excel/Tally style. Fires only when
   // keyboard focus isn't on a real interactive control (native inputs,
   // textareas, contentEditable, or any Radix-based control surfaced as a
@@ -1166,10 +1180,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         />
         <MultiSelectFilter
           label="Prepared By"
-          options={[
-            { value: UNASSIGNED_PREPARER, label: "Unassigned" },
-            ...users.map(u => ({ value: u.id, label: u.name || "Unnamed" })),
-          ]}
+          options={preparedByOptions}
           selection={preparedByMultiFilter}
           onChange={setPreparedByMultiFilter}
         />
