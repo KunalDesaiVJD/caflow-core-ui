@@ -84,6 +84,16 @@ export interface TallyPdfRow {
   vch_type: string | null;    // captured for display only — NEVER reconciled on
   vch_no: string | null;      // captured for display only — NEVER reconciled on
   section: string | null;     // from this ledger's name
+  // The compound-Journal narration line ("BEING THE INTEREST PAID @ 6% …"),
+  // when present — captured for DISPLAY only, same as vch_type/vch_no, never
+  // reconciled on. Stage 3's matching (assignment.ts/match.ts) already
+  // resolves the real deductee from the breakdown lines by amount alone
+  // (see awaitingCompoundParty below), scoped per-row so it can't cross-
+  // contaminate between rows even when amounts are similar — narration adds
+  // no matching signal there. It exists purely so a reviewer looking at a
+  // Stage 3 card can read the rate/period without reopening the source PDF.
+  // null for a simple (non-compound) row: those don't reach this capture path.
+  narration: string | null;
 }
 
 export interface TallyPdfParse {
@@ -285,7 +295,13 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
           }
           continue;   // breakdown line either way — never a new row
         }
-        if (f.onlyParticulars) continue;   // narration ("BEING THE INTEREST…") — not a party continuation here
+        if (f.onlyParticulars) {
+          // The narration line ("BEING THE INTEREST PAID @ 6% …") — not a
+          // party continuation here (see the field's own doc on TallyPdfRow
+          // for why this is captured for display only, never for matching).
+          if (current && f.party) current.narration = current.narration ? `${current.narration} ${f.party}` : f.party;
+          continue;
+        }
         awaitingCompoundParty = false;     // anything else starts the NEXT real entry
       }
 
@@ -305,6 +321,7 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         vch_type: f.vchType ?? null,
         vch_no: f.vchNo ?? null,
         section: null,
+        narration: null,
       };
       all.push(current);
       awaitingCompoundParty = !!(current.party && AS_PER_DETAILS_RE.test(current.party));

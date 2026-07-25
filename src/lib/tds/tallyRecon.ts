@@ -37,6 +37,13 @@ export interface TallyRow {
   credit: number | null;      // the deduction amount (TDS or principal — see amount_basis)
   vch_no: string | null;
   vch_type: string | null;
+  // Display-only context (a compound-Journal's "BEING THE INTEREST PAID @ 6%
+  // …" narration line) — never read by assign()/render() below. Carried on
+  // this row purely so the UI can show it next to a ledger entry; adding it
+  // did not touch the matching engine's own logic at all (see tallyPdf.ts's
+  // own doc on the field for why narration is deliberately NOT a matching
+  // signal).
+  narration?: string | null;
   // The TDS section this row belongs to, taken from ITS OWN sheet/ledger title.
   // Carried PER ROW (not per file) because a client's Tally dataset is normally
   // one ledger PER SECTION — spread across several sheets AND several files — and

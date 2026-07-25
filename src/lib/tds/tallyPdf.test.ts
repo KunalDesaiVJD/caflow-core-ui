@@ -107,6 +107,13 @@ describe("parseTallyPdfPages — compound '(as per details)' Journal rows", () =
     expect(r2.date).toBe("20-May-26");            // inherited from r1
     expect(r2.party).toBe("Hansaben Nikhilbhai Patel (UK)");
     expect(r2.credit).toBe(7397);
+
+    // Narration is captured for display (never reconciled on — see the
+    // field's own doc), joined across its wrapped lines, and scoped
+    // per-row — the second entry's narration must reflect ITS OWN gross
+    // amount (73973), not leak the first entry's (29590).
+    expect(r1.narration).toBe("BEING THE INTEREST PAID @ 6% (01.04. 2026 to 20.05.2026) (29590@10%)");
+    expect(r2.narration).toBe("BEING THE INTEREST PAID @ 6% (01.04. 2026 to 20.05.2026) (73973@10%)");
   });
 
   it("never lets the generic expense head (Dr, gross amount) be mistaken for the deductee", () => {
@@ -187,6 +194,10 @@ describe("parseTallyPdfPages — regression: simple (non-compound) rows are unaf
     expect(rows[0].date).toBe("5-Apr-26");
     expect(rows[0].party).toBe("Hero Fincorp Ltd - Tranche 01 - 78143 84206@10%");
     expect(rows[0].credit).toBe(8421);
+    // A simple row never reaches the compound-journal narration-capture path
+    // — its own wrapped continuation line is (correctly) read as more of the
+    // party name instead, not narration.
+    expect(rows[0].narration).toBeNull();
   });
 
   it("still drops a simple challan/payment row (Debit side)", () => {

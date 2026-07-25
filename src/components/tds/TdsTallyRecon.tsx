@@ -252,6 +252,10 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       debit: t.debit != null ? Number(t.debit) : null, credit: t.credit != null ? Number(t.credit) : null,
       vch_no: t.vch_no, vch_type: t.vch_type,
       section: t.section ?? batchSection.get(t.batch_id) ?? null,
+      // Only tallyPdf.ts's compound-Journal rows ever populate this — it
+      // rides free inside the `raw` jsonb blob (no migration), stored there
+      // by handleImport's `raw: r` below. Display only, see TallyRow's own doc.
+      narration: t.raw?.narration ?? null,
     }));
   }, []);
 
