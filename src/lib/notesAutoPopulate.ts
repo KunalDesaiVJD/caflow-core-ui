@@ -990,6 +990,18 @@ export function buildBreakup(
   // 2) Build linked rows
   const result: BreakupRow[] = [];
   const usedLedgers = new Set<string>();
+  // 2026-07-24 (V J Desai — Mill Power P&L PY mismatch): track which PY
+  // ledgers were consumed by a CY-side match so we can append PY-only
+  // ("CLOSED") ledgers at the end. Previously buildBreakup iterated only
+  // over CY ledgers, silently dropping every ledger that existed in the
+  // prior year's TB but not in the current year (e.g. accounts the client
+  // stopped using). Their PY balance vanished from the note's breakup
+  // sum, so the FS PY face read a smaller total than the COA mapping.
+  const usedPyLedgers = new Set<string>();
+  const markPyUsed = (name: string) => {
+    const k = (name || "").toLowerCase().trim();
+    if (k) usedPyLedgers.add(k);
+  };
 
   const round2 = (n: number) => Math.round(n * 100) / 100;
 
@@ -1015,9 +1027,12 @@ export function buildBreakup(
   }
 
   /** Resolve PY amount for a ledger: prefer FY-1 closing balance, fall back
-   *  to current-year opening_balance (works for BS accounts; 0 for P&L). */
+   *  to current-year opening_balance (works for BS accounts; 0 for P&L).
+   *  Marks the PY ledger as consumed so PY-only ("CLOSED") ledgers are not
+   *  re-emitted by the tail loop below. */
   const resolvePY = (accountName: string, openingBalance: number): number => {
     const py = pyMap.get(accountName.toLowerCase().trim());
+    if (py) markPyUsed(py.account_name);
     return py ? present(py.balance) : present(openingBalance);
   };
 
@@ -1046,6 +1061,7 @@ export function buildBreakup(
       } else {
         // Template head with no matching ledger — check if it exists in PY TB
         const pyMatch = pyMap.get(head.toLowerCase().trim());
+        if (pyMatch) markPyUsed(pyMatch.account_name);
         result.push(carryUserMeta({
           description:   head,
           amount_cy:     0,
@@ -1071,6 +1087,31 @@ export function buildBreakup(
       linked_ledger: l.account_name,
       ...(sources && sources.length > 1 ? { sources } : {}),
     }, l.account_name));
+  }
+
+  // 3b) 2026-07-24 (V J Desai — Mill Power P&L PY mismatch): append every
+  //     PY-only ledger ("CLOSED" — present in the FY-1 TB but not in the
+  //     current-year TB) as a fresh row with amount_cy = 0 and amount_py
+  //     from the PY balance. Prior to this loop these ledgers vanished
+  //     from the breakup completely, so the note sum for the PY column
+  //     was smaller than the COA mapping's PY total for the same head,
+  //     which then propagated to the P&L / BS face. Root-cause fix, valid
+  //     for every corporate + non-corporate client because buildBreakup
+  //     is the single writer for `.breakup` across every note type.
+  for (const pl of (pyLedgers || [])) {
+    if (!pl || !pl.account_name) continue;
+    const key = pl.account_name.toLowerCase().trim();
+    if (usedPyLedgers.has(key)) continue;
+    const sources = (pl as TBLedgerWithSources)._sources;
+    result.push(carryUserMeta({
+      description:   pl.account_name,
+      amount_cy:     0,
+      amount_py:     present(pl.balance),
+      source:        "linked",
+      linked_ledger: pl.account_name,
+      ...(sources && sources.length > 1 ? { sources } : {}),
+    }, pl.account_name));
+    markPyUsed(pl.account_name);
   }
 
   // 4) Append manual rows at the end so the user's custom entries are visible
@@ -2005,26 +2046,21 @@ export async function autoPopulateNotes(
       return Math.round(-s * 100) / 100;
     };
 
-    if (isUnset(existRS.surplus_deferred_adj_cy)) {
-      const v = sumByPattern(tb, "BS_EQ_RS", DEFERRED_TAX_RX, false);
-      if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_cy = v;
-    }
-    if (isUnset(existRS.surplus_deferred_adj_py)) {
-      const v = pyTB
-        ? sumByPattern(pyTB, "BS_EQ_RS", DEFERRED_TAX_RX, false)
-        : sumByPattern(tb,   "BS_EQ_RS", DEFERRED_TAX_RX, true);
-      if (Math.abs(v) > 0.005) outRS.surplus_deferred_adj_py = v;
-    }
-    if (isUnset(existRS.surplus_excess_short_cy)) {
-      const v = sumByPattern(tb, "BS_EQ_RS", EXCESS_SHORT_RX, false);
-      if (Math.abs(v) > 0.005) outRS.surplus_excess_short_cy = v;
-    }
-    if (isUnset(existRS.surplus_excess_short_py)) {
-      const v = pyTB
-        ? sumByPattern(pyTB, "BS_EQ_RS", EXCESS_SHORT_RX, false)
-        : sumByPattern(tb,   "BS_EQ_RS", EXCESS_SHORT_RX, true);
-      if (Math.abs(v) > 0.005) outRS.surplus_excess_short_py = v;
-    }
+    // 2026-07-24 (V J Desai — Mill Power, R&S mismatch): overwrite the
+    // deferred-adj / excess-short values with the pattern-scan result
+    // unconditionally (0 when no matching Tally ledger is found). Any
+    // stale plug values written by the earlier "always-plug" logic
+    // are cleared on the next resync so the auditor sees an honest
+    // picture. Auditor's manual overrides are still restored by the
+    // final respectManualEdits() call.
+    outRS.surplus_deferred_adj_cy = sumByPattern(tb, "BS_EQ_RS", DEFERRED_TAX_RX, false);
+    outRS.surplus_deferred_adj_py = pyTB
+      ? sumByPattern(pyTB, "BS_EQ_RS", DEFERRED_TAX_RX, false)
+      : sumByPattern(tb,   "BS_EQ_RS", DEFERRED_TAX_RX, true);
+    outRS.surplus_excess_short_cy = sumByPattern(tb, "BS_EQ_RS", EXCESS_SHORT_RX, false);
+    outRS.surplus_excess_short_py = pyTB
+      ? sumByPattern(pyTB, "BS_EQ_RS", EXCESS_SHORT_RX, false)
+      : sumByPattern(tb,   "BS_EQ_RS", EXCESS_SHORT_RX, true);
 
     out.bs_liab.reserves_surplus = outRS;
   }
@@ -2049,77 +2085,53 @@ export async function autoPopulateNotes(
     });
   }
 
-  // ── R&S RECONCILIATION INVARIANT ──────────────────────────────────────
-  // Note 3 sub-total MUST equal the BS-face Reserves & Surplus amount in
-  // BOTH CY and PY. Sub-total = opening + profit + deferred_adj + excess.
-  // After the journal-voucher scan, any residual gap is plugged into
-  // surplus_excess_short_(cy|py) — that's the canonical "balancing" line
-  // for prior-period tax adjustments routed through Surplus. This keeps
-  // the mismatch banner clean across all clients (corporate + non-corp).
+  // ── R&S OPENING BALANCE SEED ONLY ─────────────────────────────────────
+  // 2026-07-24 (V J Desai — Mill Power, R&S mismatch): the previous
+  // implementation of this block mechanically closed any gap between
+  //   (Tally opening + P&L NPAT + adjustments)
+  //   and
+  //   Tally closing (bs_liab.reserves_surplus.cy)
+  // by stuffing the residual into surplus_excess_short_(cy|py) so the
+  // mismatch banner stayed quiet on every client.
   //
-  // Manual overrides are still respected: respectManualEdits() runs AFTER
-  // this block, so if the auditor has typed a value into excess/deferred,
-  // their number wins on the next render.
+  // On Mill Power (and other clients) the Tally R&S ledger has ONE
+  // year-end P&L closing entry — no separate "Excess/(Short) provision
+  // for income tax" journal — yet the FS was showing (₹4,77,074) on
+  // that line because the plug was the ONLY way to reconcile the
+  // Tally-derived closing with an inflated P&L NPAT. The auditor
+  // opens the underlying ledger looking for a matching journal and
+  // finds none — the plug hides the real problem (usually a COA
+  // mis-mapping of a tax ledger between PL_TAX and BS_EQ_RS).
+  //
+  // Root-cause fix: don't fabricate the plug. Only populate
+  // surplus_excess_short from a REAL Tally ledger match (already done
+  // via sumByPattern above); only populate surplus_deferred_adj from
+  // a REAL Tally ledger match (also above). If those scans returned
+  // zero AND (opening + npat) ≠ Tally closing, the FsHealthPanel /
+  // notesMismatch banner surfaces the gap, and the auditor either:
+  //   • fixes the COA mis-mapping (root cause), OR
+  //   • types the disclosure amount into Deferred adj / Excess-Short
+  //     (manual edit is honoured across resyncs).
+  //
+  // Retaining just the opening-balance seed here so the sub-total
+  // display still knows the CY opening = PY closing carry-forward.
   try {
     const rs = (out.bs_liab.reserves_surplus ?? {}) as any;
     const existRS2 = ((options.existing?.bs_liab as any)?.reserves_surplus ?? {}) as any;
-    const bsCy   = Number(rs.cy ?? 0);
     const bsPy   = Number(rs.py ?? 0);
-    // Mirror the NoteBSLiab display fallback: if surplus_opening_* is unset
-    // anywhere, fall back to rs.py (= prior-year R&S closing = CY opening)
-    // and an analogous PY-opening fallback. Without this, my reconciliation
-    // reads openCy=0 while the UI shows opening=rs.py — making the gap
-    // calculation overshoot by the entire PY balance.
     const pick = (key: string, fallback: number) => {
       if (Number.isFinite(rs[key])) return Number(rs[key]);
       if (Number.isFinite(existRS2[key])) return Number(existRS2[key]);
       return fallback;
     };
-    const npat   = Number((out.pl as any)?.eps?.npat       ?? 0);
     const npatPy = Number((out.pl as any)?.eps?.npat_py    ?? 0);
-    // Opening balance CY = prior-year closing (= rs.py magnitude)
     const openCy = pick("surplus_opening_cy", Math.abs(bsPy));
-    // Opening balance PY = bsPy - npatPy (back out the year-to-year movement
-    // when no PPY data is available). This matches how the UI's "Opening
-    // balance" PY column resolves when no prior-prior FS amounts exist.
     const openPyFallback = Math.abs(bsPy) - npatPy;
     const openPy = pick("surplus_opening_py", Math.max(0, openPyFallback));
-    const defCy  = pick("surplus_deferred_adj_cy", 0);
-    const defPy  = pick("surplus_deferred_adj_py", 0);
-    const excCy0 = pick("surplus_excess_short_cy", 0);
-    const excPy0 = pick("surplus_excess_short_py", 0);
 
-    // PERSIST openings on rs so the rendered sub-total uses the same numbers.
     if (!Number.isFinite(rs.surplus_opening_cy)) rs.surplus_opening_cy = openCy;
     if (!Number.isFinite(rs.surplus_opening_py)) rs.surplus_opening_py = openPy;
-
-    const subCy = openCy + npat   + defCy + excCy0;
-    const subPy = openPy + npatPy + defPy + excPy0;
-    const gapCy = Math.round((bsCy - subCy) * 100) / 100;
-    const gapPy = Math.round((bsPy - subPy) * 100) / 100;
-
-    // ALWAYS enforce reconciliation by writing the residual to excess_short.
-    // This row is, by accounting definition, the balancing plug for any
-    // post-NPAT adjustment routed through Surplus that wasn't captured
-    // by the deferred-tax journal scan. The auditor's custom adjustments
-    // should go into surplus_deferred_adj_cy/py (where manual override is
-    // honoured) — NEVER into excess_short, which is auto-derived.
-    //
-    // Strip the excess_short paths from manual_edits so the post-call
-    // respectManualEdits() doesn't restore a stale buggy value from a
-    // previous run. This is one-way: future re-syncs always recompute.
-    rs.surplus_excess_short_cy = Math.round((excCy0 + gapCy) * 100) / 100;
-    rs.surplus_excess_short_py = Math.round((excPy0 + gapPy) * 100) / 100;
     out.bs_liab.reserves_surplus = rs;
-
-    // Strip these paths from the existing manual_edits so respectManualEdits
-    // can't put the stale value back. autoPopulate is the source of truth.
-    if (options.existing && Array.isArray(options.existing.manual_edits)) {
-      options.existing.manual_edits = options.existing.manual_edits.filter(p =>
-        p !== "bs_liab.reserves_surplus.surplus_excess_short_cy" &&
-        p !== "bs_liab.reserves_surplus.surplus_excess_short_py"
-      );
-    }
   } catch { /* non-fatal */ }
 
   // Respect user-touched paths from the existing notes (if provided).
