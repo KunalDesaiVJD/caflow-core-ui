@@ -223,7 +223,12 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
                           <span>{e.old_value || "—"} → {e.new_value || "—"}</span>
                         ) : "—"}
                       </TableCell>
-                      <TableCell className="text-xs max-w-[200px] truncate">{e.remark || "—"}</TableCell>
+                      {/* Wraps instead of truncating with "..." — a remark (an
+                          override reason, a narration excerpt, etc.) is often
+                          the single most important field on the row, so it
+                          must never be silently cut off. The native `title`
+                          also surfaces the full text as a hover tooltip. */}
+                      <TableCell className="text-xs max-w-[340px] whitespace-normal break-words" title={e.remark || undefined}>{e.remark || "—"}</TableCell>
                     </TableRow>
                   );
                 })}
