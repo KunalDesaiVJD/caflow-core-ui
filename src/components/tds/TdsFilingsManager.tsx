@@ -598,17 +598,27 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const statusMeasureRef = useRef<HTMLSpanElement>(null);
   const [statusColWidth, setStatusColWidth] = useState(180);
 
+  // Excel-style AutoFit for the Ack No column, same idea as Status but keyed
+  // off the actual acknowledgment_number VALUES currently on screen (there's
+  // no fixed enum here) — grows to fit the longest one, in full, with no
+  // truncation, and never shrinks below today's 160px so short/blank values
+  // don't collapse the column.
+  const ackMeasureRef = useRef<HTMLSpanElement>(null);
+  const [ackColWidth, setAckColWidth] = useState(160);
+
   // Sum of every OTHER column's explicit width (checkbox 40 + Status
   // (dynamic) + Filing Date 184 [160 + extra pl-6 gap after Status] + Ack No
-  // 160 + Validate & Finalise 224 + Prepared By 112 + Filed By 112 + Actions
-  // 100) plus Client's own min-w-[220px] floor. This is now a
+  // (dynamic) + Validate & Finalise 224 + Prepared By 112 + Filed By 112 +
+  // Actions 100) plus Client's own min-w-[220px] floor. This is now a
   // MINIMUM width, not a pinned total: the <Table> itself stretches to 100%
   // of its container, and Client — the only column left without an explicit
   // width — deterministically absorbs all width beyond this sum per the
-  // table-layout:fixed algorithm. Below this minimum the shadcn Table's own
-  // overflow-auto wrapper kicks in with horizontal scroll instead of
-  // squeezing columns below what they need.
-  const TABLE_MIN_WIDTH = 40 + 220 + statusColWidth + 184 + 160 + 224 + 112 + 112 + 100;
+  // table-layout:fixed algorithm, so any growth/shrinkage of Status or Ack No
+  // is offset by Client shrinking/growing the other way, keeping the overall
+  // layout balanced. Below this minimum the shadcn Table's own overflow-auto
+  // wrapper kicks in with horizontal scroll instead of squeezing columns
+  // below what they need.
+  const TABLE_MIN_WIDTH = 40 + 220 + statusColWidth + 184 + ackColWidth + 224 + 112 + 112 + 100;
 
   useLayoutEffect(() => {
     const statusEl = statusMeasureRef.current;
@@ -627,6 +637,31 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     }
     setStatusColWidth(Math.ceil(maxStatus) + STATUS_PADDING);
   }, [filtered]);
+
+  useLayoutEffect(() => {
+    const ackEl = ackMeasureRef.current;
+    if (!ackEl) return;
+
+    // The Input is now w-full, so it inherits whatever width the TableCell
+    // gives it — unlike Status's SelectTrigger (given an explicit width of
+    // its own), the budget here has to cover the surrounding TableCell's OWN
+    // padding too, not just the Input's chrome, since that padding is what's
+    // eating into the column width before the Input ever sees it.
+    const sampleAck = document.querySelector('[data-autofit="ackno"]');
+    if (sampleAck) ackEl.style.font = getComputedStyle(sampleAck).font;
+
+    // TableCell padding (16px × 2, default shadcn p-4) + Input padding
+    // (12px × 2) + border (1px × 2) + a little breathing room
+    const ACK_PADDING = 32 + 24 + 2 + 8;
+    const ACK_MIN_WIDTH = 160;   // today's width — never shrink below it
+    let maxAck = 0;
+    for (const f of searchFiltered) {
+      if (!f.acknowledgment_number) continue;
+      ackEl.textContent = f.acknowledgment_number;
+      maxAck = Math.max(maxAck, ackEl.getBoundingClientRect().width);
+    }
+    setAckColWidth(Math.max(ACK_MIN_WIDTH, Math.ceil(maxAck) + ACK_PADDING));
+  }, [searchFiltered]);
 
   // Check if a filing belongs to a deleted client (for archived styling)
   const isArchivedFiling = (f: TdsFiling): boolean => {
@@ -844,19 +879,55 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     }
   };
 
-  // View: open public URL in new tab
+  // View: open the public URL in a new tab via a synthesized <a target="_blank">
+  // click, NOT window.open(). window.open("_blank") is silently blocked by
+  // ad-blocker extensions and strict browser popup settings on some machines
+  // (the blocked call just returns null — no error, nothing opens); a real
+  // anchor click is a direct user-gesture navigation that popup blockers let
+  // through. Same fix already applied to the sibling Checklist "Preview"
+  // button in commit 5bb10afc — mirrored here rather than reinvented.
   const viewAckFile = (ackFile: TdsAckFile) => {
-    window.open(ackFile.file_url, '_blank');
-  };
-
-  // Download: programmatic <a> click
-  const downloadAckFile = (ackFile: TdsAckFile) => {
     const a = document.createElement('a');
     a.href = ackFile.file_url;
-    a.download = ackFile.file_name;
+    a.target = '_blank';
+    a.rel = 'noopener';
     document.body.appendChild(a);
     a.click();
-    document.body.removeChild(a);
+    a.remove();
+  };
+
+  // Download: force a real Save-As via Supabase Storage's `?download=` query
+  // param, not the <a download> attribute alone. `a.download` is only honored
+  // by browsers for same-origin (or blob:/data:) URLs — this app's origin
+  // (Vercel) differs from the Supabase Storage origin, so the attribute was
+  // silently ignored. Worse, the public URL has no
+  // `Content-Disposition: attachment` by default, so the click just navigated
+  // the CURRENT tab to the PDF, which the browser then rendered inline in
+  // place of this page. Appending `download=<filename>` — the same query
+  // param @supabase/storage-js's own `getPublicUrl(path, { download })`
+  // option produces (see StorageFileApi.ts) — makes Storage return a real
+  // `Content-Disposition: attachment` header, so the browser saves the file
+  // instead of navigating. target="_blank" + the anchor-click pattern are
+  // kept as a safety net (same shape as viewAckFile / 5bb10afc) in case that
+  // header is ever missing for some reason.
+  const downloadAckFile = (ackFile: TdsAckFile) => {
+    let href = ackFile.file_url;
+    try {
+      const url = new URL(ackFile.file_url);
+      url.searchParams.set('download', ackFile.file_name);
+      href = url.toString();
+    } catch {
+      toast({ title: 'Download link looks invalid', description: 'Could not build a download link for this file — try View PDF instead.', variant: 'destructive' });
+      return;
+    }
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = ackFile.file_name;
+    a.target = '_blank';
+    a.rel = 'noopener';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   };
 
   // CP-01: Delete PDF — confirmation → remove from Supabase Storage → delete
@@ -1263,6 +1334,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       {/* Hidden measuring span for Excel-style column AutoFit (Status) — same
           font as the real rendered element, positioned off-screen */}
       <span ref={statusMeasureRef} className="text-xs fixed -left-[9999px] top-0 whitespace-pre" aria-hidden="true" />
+      {/* Same idea for Ack No — see the ackColWidth effect above */}
+      <span ref={ackMeasureRef} className="text-xs fixed -left-[9999px] top-0 whitespace-pre" aria-hidden="true" />
 
       {/* Main Table */}
       <Card>
@@ -1294,7 +1367,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                 <TableHead className="min-w-[220px] sticky left-0 bg-background z-10">Client</TableHead>
                 <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
                 <TableHead className="w-[184px] pl-6">Filing Date</TableHead>
-                <TableHead className="w-40">Ack No</TableHead>
+                <TableHead style={{ width: ackColWidth, minWidth: ackColWidth }}>Ack No</TableHead>
                 <TableHead className="w-56">Validate &amp; Finalise</TableHead>
                 <TableHead className="w-28">Prepared By</TableHead>
                 <TableHead className="w-28">Filed By</TableHead>
@@ -1450,7 +1523,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                                 additionally guarded by a compare-and-swap in handleAttachAck). */}
                             <Input
                               key={f.acknowledgment_number || "empty"}
-                              className={cn("h-7 w-32 text-xs", (isFiledLocked || ackUploading === f.id) && "bg-muted cursor-not-allowed opacity-70")}
+                              data-autofit="ackno"
+                              className={cn("h-7 w-full text-xs", (isFiledLocked || ackUploading === f.id) && "bg-muted cursor-not-allowed opacity-70")}
                               defaultValue={f.acknowledgment_number || ""}
                               disabled={isFiledLocked || ackUploading === f.id}
                               onBlur={e => { if (!isFiledLocked && e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
