@@ -539,6 +539,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     return hasUnassigned ? [{ value: UNASSIGNED_PREPARER, label: "Unassigned" }, ...opts] : opts;
   }, [filtered, users]);
 
+  // Status options — same idea as Prepared By: only statuses actually held by
+  // some currently-loaded filing, kept in the canonical FILING_STATUSES
+  // workflow order rather than alphabetical.
+  const statusOptions = useMemo(() => {
+    const present = new Set(filtered.map(f => f.work_status));
+    return FILING_STATUSES.filter(s => present.has(s)).map(s => ({ value: s, label: statusLabel(s) }));
+  }, [filtered]);
+
   // Global type-to-search capture — Excel/Tally style. Fires only when
   // keyboard focus isn't on a real interactive control (native inputs,
   // textareas, contentEditable, or any Radix-based control surfaced as a
@@ -1174,7 +1182,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         </div>
         <MultiSelectFilter
           label="Status"
-          options={FILING_STATUSES.map(s => ({ value: s, label: statusLabel(s) }))}
+          options={statusOptions}
           selection={statusMultiFilter}
           onChange={setStatusMultiFilter}
         />
