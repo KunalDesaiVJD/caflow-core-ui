@@ -1,7 +1,37 @@
 import { describe, it } from "vitest";
 import { readFileSync } from "fs";
-import { pdfToTextPages } from "./pdfText";
 import { extractAckFields, extractAckNumber } from "./ackPdf";
+
+// jsdom (vitest's test environment for this repo) doesn't implement
+// DOMMatrix, which pdfjs-dist's canvas module references at import time.
+// Minimal stub, sufficient for text-only extraction (no rendering).
+(globalThis as any).DOMMatrix ??= class {
+  constructor(_init?: unknown) {}
+};
+
+// pdfText.ts is written for Vite's browser bundling (`?url` worker import),
+// which vitest's transform can't resolve for a plain node-invoked script the
+// same way. Import pdfjs-dist directly here instead — same library, same
+// getTextContent() API pdfText.ts calls — to build the identical
+// {x,y,w,str}[] shape, then hand it to the REAL parsing logic under test
+// (extractAckFields / extractAckNumber) unmodified.
+import * as pdfjsLib from "pdfjs-dist";
+import type { PdfTextItem } from "./tallyPdf";
+
+async function pdfToTextPagesForTest(arrayBuffer: ArrayBuffer): Promise<PdfTextItem[][]> {
+  const doc = await (pdfjsLib as any).getDocument({ data: new Uint8Array(arrayBuffer), useSystemFonts: true }).promise;
+  const pages: PdfTextItem[][] = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const page = await doc.getPage(p);
+    const tc = await page.getTextContent();
+    pages.push(
+      (tc.items as any[])
+        .filter((i) => i?.str && String(i.str).trim())
+        .map((i) => ({ x: i.transform[4] as number, y: i.transform[5] as number, w: (i.width as number) ?? 0, str: String(i.str) })),
+    );
+  }
+  return pages;
+}
 
 describe("REAL PDF manual verification (temporary, not part of suite)", () => {
   it("extracts fields from the real Form 24Q ack PDF on Desktop", async () => {
