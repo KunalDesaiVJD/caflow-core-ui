@@ -161,7 +161,7 @@ export function reconcileTallyFull(
   }));
   const rowAt = (pos: number) => tally[pos];
 
-  const { outcomes, surplus } = assign(asgOffice, asgLedger, partyMap);
+  const { outcomes, surplus, basisFor } = assign(asgOffice, asgLedger, partyMap);
 
   const rows = office.map((o, i) => {
     const missing = unassignable(o);
@@ -172,7 +172,7 @@ export function reconcileTallyFull(
         confidence: 0,
       };
     }
-    return render(o, outcomes[i], rowAt, ledgerSection, sectionOf);
+    return render(o, outcomes[i], rowAt, ledgerSection, sectionOf, basisFor);
   });
 
   return { rows: applySplitEntryGrouping(rows, office), surplusLedger: surplus.map(rowAt) };
@@ -247,7 +247,7 @@ function applySplitEntryGrouping(rows: TallyReconRow[], office: OfficeTxn[]): Ta
 
   const groups = new Map<string, number[]>();
   rows.forEach((r, i) => {
-    if (r.result !== "Ledger Entry Not Found" && r.result !== "Matched") return;
+    if (r.result !== "Ledger Entry Not Found" && r.result !== "Matched" && r.result !== "Credit Amount Mismatch") return;
     const k = groupKey(r);
     const g = groups.get(k);
     if (g) g.push(i); else groups.set(k, [i]);
@@ -256,11 +256,17 @@ function applySplitEntryGrouping(rows: TallyReconRow[], office: OfficeTxn[]): Ta
   const patched = [...rows];
   for (const idxs of groups.values()) {
     if (idxs.length < 2) continue;
-    const anchors = idxs.filter((i) => rows[i].result === "Matched");
+    // A "Credit Amount Mismatch" row (paired to a ledger row, but its own
+    // figure isn't exact) is just as valid an anchor as "Matched" — since
+    // Stage 3 now shows ANY non-zero gap as a mismatch (no rounding
+    // tolerance), the anchor for a real split is expected to land here, not
+    // as "Matched" — its own individual gap is exactly what the leftover(s)
+    // are expected to close.
+    const anchors = idxs.filter((i) => rows[i].result === "Matched" || rows[i].result === "Credit Amount Mismatch");
     const allLeftovers = idxs.filter((i) => rows[i].result === "Ledger Entry Not Found");
     if (anchors.length !== 1 || allLeftovers.length === 0) continue;   // ambiguous or nothing to fold in
     const anchor = rows[anchors[0]];
-    if (anchor.tally_credit == null || !anchor.amount_basis) continue;
+    if (anchor.tally_credit == null) continue;
     const anchorPan = panOf.get(anchor.office_deductee_id) ?? null;
 
     // PAN GATE — a leftover whose PAN is present and DIFFERS from the
@@ -274,34 +280,47 @@ function applySplitEntryGrouping(rows: TallyReconRow[], office: OfficeTxn[]): Ta
     });
     if (!leftovers.length) continue;
 
-    const figureOf = (r: TallyReconRow) => (anchor.amount_basis === "tds" ? r.office_tds : r.office_amount);
-    const anchorFigure = figureOf(anchor);
-    if (anchorFigure == null) continue;
-    if (leftovers.some((i) => figureOf(rows[i]) == null)) continue; // an ungrounded member — don't guess
-    const leftoverSum = leftovers.reduce((sum, i) => sum + (figureOf(rows[i]) ?? 0), 0);
-    if (Math.abs(anchor.tally_credit - (anchorFigure + leftoverSum)) > SPLIT_FOLD_TOLERANCE) continue;
+    // A "Matched" anchor already names its own basis (amount_basis); a
+    // "Credit Amount Mismatch" anchor's amount_basis is null (render() never
+    // commits to a basis it didn't actually match on) — try both office
+    // figures and use whichever one, once the leftovers are folded in,
+    // lands exactly on the credit.
+    const candidateBases = anchor.amount_basis ? [anchor.amount_basis] : (["tds", "amount"] as const);
+    for (const basis of candidateBases) {
+      const figureOf = (r: TallyReconRow) => (basis === "tds" ? r.office_tds : r.office_amount);
+      const anchorFigure = figureOf(anchor);
+      if (anchorFigure == null) continue;
+      if (leftovers.some((i) => figureOf(rows[i]) == null)) continue; // an ungrounded member — don't guess
+      const leftoverSum = leftovers.reduce((sum, i) => sum + (figureOf(rows[i]) ?? 0), 0);
+      if (Math.abs(anchor.tally_credit - (anchorFigure + leftoverSum)) > SPLIT_FOLD_TOLERANCE) continue;
 
-    const foldReason = `Office Data splits this payment to "${anchor.office_name ?? "—"}" (${anchor.office_date ?? "—"}) across multiple rows; `
-      + `together they total ${inr(anchorFigure + leftoverSum)}, matching the single Tally ledger entry "${anchor.tally_party ?? "—"}" `
-      + `${anchor.tally_date ?? "—"} ${inr(anchor.tally_credit)} exactly.`;
+      const foldReason = `Office Data splits this payment to "${anchor.office_name ?? "—"}" (${anchor.office_date ?? "—"}) across multiple rows; `
+        + `together they total ${inr(anchorFigure + leftoverSum)}, matching the single Tally ledger entry "${anchor.tally_party ?? "—"}" `
+        + `${anchor.tally_date ?? "—"} ${inr(anchor.tally_credit)} exactly.`;
 
-    for (const i of leftovers) {
-      const o = rows[i];
-      patched[i] = {
-        ...o, tally_row_index: anchor.tally_row_index, tally_party: anchor.tally_party,
-        tally_date: anchor.tally_date, tally_credit: anchor.tally_credit,
-        result: "Matched", amount_basis: anchor.amount_basis, confidence: SPLIT_FOLD_CONFIDENCE,
-        mapped: anchor.mapped, reason: foldReason,
+      for (const i of leftovers) {
+        const o = rows[i];
+        patched[i] = {
+          ...o, tally_row_index: anchor.tally_row_index, tally_party: anchor.tally_party,
+          tally_date: anchor.tally_date, tally_credit: anchor.tally_credit,
+          result: "Matched", amount_basis: basis, confidence: SPLIT_FOLD_CONFIDENCE,
+          mapped: anchor.mapped, reason: foldReason,
+        };
+      }
+      // The anchor's own card must disclose the fold too — otherwise a
+      // checker reading it in isolation sees an ordinary single-record
+      // verdict with no signal this credit is shared with another office
+      // row. Also stamped with SPLIT_FOLD_CONFIDENCE (not just the
+      // leftovers) so a consumer that needs to recognise "every row in this
+      // fold shares one physical ledger credit" — e.g. the manual picker's
+      // claim-counting in TdsTallyRecon.tsx — can identify the WHOLE group,
+      // anchor included, not just its leftovers.
+      patched[anchors[0]] = {
+        ...anchor, result: "Matched", amount_basis: basis, confidence: SPLIT_FOLD_CONFIDENCE,
+        reason: `${anchor.reason} ${foldReason}`,
       };
+      break;
     }
-    // The anchor's own card must disclose the fold too — otherwise a checker
-    // reading it in isolation sees an ordinary single-record match and has
-    // no signal this credit is shared with another office row. Also stamped
-    // with SPLIT_FOLD_CONFIDENCE (not just the leftovers) so a consumer that
-    // needs to recognise "every row in this fold shares one physical ledger
-    // credit" — e.g. the manual picker's claim-counting in TdsTallyRecon.tsx —
-    // can identify the WHOLE group, anchor included, not just its leftovers.
-    patched[anchors[0]] = { ...anchor, confidence: SPLIT_FOLD_CONFIDENCE, reason: `${anchor.reason} ${foldReason}` };
   }
   return patched;
 }
@@ -311,6 +330,7 @@ function applySplitEntryGrouping(rows: TallyReconRow[], office: OfficeTxn[]): Ta
 function render(
   o: OfficeTxn, out: Outcome, rowAt: (pos: number) => TallyRow,
   ledgerSection: string | null, sectionOf: (t: TallyRow) => string | null,
+  basisFor: (section: string | null) => "tds" | "amount",
 ): TallyReconRow {
   const b = {
     office_deductee_id: o.deductee_id, office_name: o.name, office_date: o.date_iso,
@@ -391,7 +411,19 @@ function render(
   const ev: Evidence = out.ev;
   const paired = { ...b, tally_row_index: t.row_index, tally_party: t.party, tally_date: t.date, tally_credit: t.credit };
   const dateEq = ev.dateDelta === 0;
-  const moneyEq = ev.basis !== null;
+  // ev.basis (assignment.ts) only tells us WHICH office figure is close enough
+  // to be worth pairing on — it is deliberately tolerant (±0.5%/₹10), because
+  // that is the right question for FINDING the right ledger row (a genuine
+  // rupee-rounding gap must not make the correct counterpart invisible). The
+  // VERDICT is a different question — by explicit request, Stage 3 shows
+  // ANY non-zero gap as a Credit Amount Mismatch with the exact amount,
+  // never silently absorbing it into "Matched". EXACT_EPS is float-safety
+  // only (sub-paisa), not a business tolerance.
+  const EXACT_EPS = 0.005;
+  const officeFigureOnBasis = ev.basis === "tds" ? o.tds : ev.basis === "amount" ? o.amount : null;
+  const amountDiff = ev.basis !== null && officeFigureOnBasis != null && t.credit != null
+    ? t.credit - officeFigureOnBasis : null;
+  const moneyEq = ev.basis !== null && amountDiff != null && Math.abs(amountDiff) < EXACT_EPS;
   // A saved mapping settles the PARTY and nothing else — the user asserted this
   // identity, so the name is no longer a question, but the date and TDS are still
   // validated on it and a mapped record that fails them stays an exception carrying
@@ -443,11 +475,22 @@ function render(
   }
 
   if (!moneyEq) {
+    // ev.basis !== null means the figure was CLOSE (within the pairing
+    // tolerance) but not exact. ev.basis === null means neither figure was
+    // even close — but the section still has a VOTED basis (which office
+    // figure this ledger's credits represent overall), so fall back to that
+    // to still name a specific figure and an exact difference, rather than
+    // the old bare "differs" with no computed amount.
+    const basis = ev.basis ?? basisFor(oSec);
+    const officeLabel = basis === "amount" ? "office amount" : "office TDS";
+    const officeVal = basis === "amount" ? o.amount : o.tds;
+    const diff = officeVal != null && t.credit != null ? t.credit - officeVal : null;
+    const diffText = diff != null ? ` — a difference of ${inr(Math.abs(diff))}` : "";
     return {
       ...paired, result: "Credit Amount Mismatch", amount_basis: null, mapped,
       reason: ev.mapped
-        ? `Party is mapped to "${t.party ?? "—"}", but the ledger credit (${inr(t.credit)}) differs from the office TDS (${inr(o.tds)}). Mapping resolves the party name only.`
-        : `Party and date match, but the ledger credit (${inr(t.credit)}) differs from the office TDS (${inr(o.tds)}).`,
+        ? `Party is mapped to "${t.party ?? "—"}", but the ledger credit (${inr(t.credit)}) differs from the ${officeLabel} (${inr(officeVal)})${diffText}. Mapping resolves the party name only.`
+        : `Party and date match, but the ledger credit (${inr(t.credit)}) differs from the ${officeLabel} (${inr(officeVal)})${diffText}.`,
       confidence: 60,
     };
   }

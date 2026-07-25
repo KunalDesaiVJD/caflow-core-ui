@@ -200,10 +200,11 @@ describe("reconcileTallyFull — split-entry grouping (Office Data splits one pa
     const out = reconcileTally([personA, personB], credit, "194C");
     const a = out.find((r) => r.office_deductee_id === "a")!;
     const b = out.find((r) => r.office_deductee_id === "b")!;
-    // A's own 9995 is already within amountsMatch's ₹10 rounding cap of 10000, so
-    // A matches independently; B must NOT be folded onto A's ledger row despite
-    // 9995 + 5 = 10000 landing exactly.
-    expect(a.result).toBe("Matched");
+    // Stage 3 shows ANY gap, so A's own ₹5 shortfall is a real, visible
+    // Credit Amount Mismatch on its own — it must STAY that way. B must NOT
+    // be folded in to silently explain it away just because 9995 + 5 = 10000
+    // lines up exactly — B is a different PAN, full stop.
+    expect(a.result).toBe("Credit Amount Mismatch");
     expect(b.result).toBe("Ledger Entry Not Found");
     expect(b.tally_row_index).not.toBe(a.tally_row_index);
   });
@@ -245,6 +246,48 @@ describe("reconcileTallyFull — split-entry grouping (Office Data splits one pa
     const out = reconcileTally([solo], ledgerRow, "194A");
     expect(out[0].result).toBe("Matched");
     expect(out[0].reason).not.toMatch(/splits this payment/);
+  });
+});
+
+describe("reconcileTally — Stage 3 verdict is ZERO-tolerance (any gap is a Mismatch, by user request)", () => {
+  // Reported verbatim: "why can't it detect ₹1,000 vs. ₹999... regardless of
+  // whether it is ₹1 or ₹1,000, the record should appear under Mismatched
+  // with the correct mismatch amount." Scoped to Stage 3 only — Stage 1/2's
+  // own comparison code (stage1Compare.ts etc.) doesn't call assignment.ts
+  // and is untouched; amountsMatch() itself (match.ts) is untouched too, so
+  // assign()'s PAIRING/exclusivity behaviour is unaffected — only Stage 3's
+  // final VERDICT (tallyRecon.ts's render()) now requires exact equality.
+  it("reports a standalone ₹1 gap as Credit Amount Mismatch, not a silently-tolerated Match", () => {
+    const office: OfficeTxn = { deductee_id: "x", name: "Standalone Vendor", date_iso: "2026-03-31", amount: 9990, tds: 999, section: "194C" };
+    const ledger: TallyRow[] = [{ row_index: 0, date: "31-Mar-26", iso: "2026-03-31", party: "Standalone Vendor", credit: 1000, debit: null, vch_no: "1", vch_type: "Journal", section: "194C" }];
+    const out = reconcileTally([office], ledger, "194C");
+    expect(out[0].result).toBe("Credit Amount Mismatch");
+    expect(out[0].reason).toMatch(/₹1\b/); // the exact ₹ difference is shown, not just "differs"
+  });
+
+  it("still reports a genuinely EXACT match as Matched (zero tolerance ≠ no matches)", () => {
+    const office: OfficeTxn = { deductee_id: "x", name: "Standalone Vendor", date_iso: "2026-03-31", amount: 10000, tds: 1000, section: "194C" };
+    const ledger: TallyRow[] = [{ row_index: 0, date: "31-Mar-26", iso: "2026-03-31", party: "Standalone Vendor", credit: 1000, debit: null, vch_no: "1", vch_type: "Journal", section: "194C" }];
+    const out = reconcileTally([office], ledger, "194C");
+    expect(out[0].result).toBe("Matched");
+  });
+
+  it("shows the exact difference amount for a larger gap too, e.g. ₹1,000 vs ₹999 style discrepancies at scale", () => {
+    const office: OfficeTxn = { deductee_id: "x", name: "Standalone Vendor", date_iso: "2026-03-31", amount: 90000, tds: 9000, section: "194C" };
+    const ledger: TallyRow[] = [{ row_index: 0, date: "31-Mar-26", iso: "2026-03-31", party: "Standalone Vendor", credit: 9995, debit: null, vch_no: "1", vch_type: "Journal", section: "194C" }];
+    const out = reconcileTally([office], ledger, "194C");
+    expect(out[0].result).toBe("Credit Amount Mismatch");
+    expect(out[0].reason).toMatch(/₹995\b/);
+  });
+
+  it("still surfaces the mismatch after a manual party mapping — mapping settles identity only, never the amount", () => {
+    const partyMap: PartyMap = { [normalizeName("Office Spelling")]: "Ledger Spelling" };
+    const office: OfficeTxn = { deductee_id: "x", name: "Office Spelling", date_iso: "2026-03-31", amount: 9990, tds: 999, section: "194C" };
+    const ledger: TallyRow[] = [{ row_index: 0, date: "31-Mar-26", iso: "2026-03-31", party: "Ledger Spelling", credit: 1000, debit: null, vch_no: "1", vch_type: "Journal", section: "194C" }];
+    const out = reconcileTally([office], ledger, "194C", partyMap);
+    expect(out[0].result).toBe("Credit Amount Mismatch");
+    expect(out[0].mapped).toBe(true);
+    expect(out[0].reason).toMatch(/Mapping resolves the party name only/);
   });
 });
 
