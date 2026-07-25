@@ -9295,6 +9295,22 @@ export default function PipelineFinancialStatements({
                 }
                 companyName={engagement?.clients?.name || ""}
                 readOnly={corpIsLocked}
+                /* 2026-07-24 (V J Desai — Mill Power R&S profit): pass the
+                   face-side tax totals (PL_TAX_CUR + PL_TAX_DEF, straight
+                   from cyOf/pyOf) so the Reserves & Surplus note's "Add/
+                   (Less): Profit for the year" line can subtract them from
+                   its live PBT and land exactly on the P&L face XV. Notes
+                   don't hold a dedicated tax row, and reading it from
+                   pl.eps.total_tax_cy required the auditor to Re-sync from
+                   TB first — this prop path removes that requirement. */
+                faceTaxCy={
+                  (corpPlData?.currentTax?.cy ?? 0)
+                  + (corpPlData?.deferredTax?.cy ?? 0)
+                }
+                faceTaxPy={
+                  (corpPlData?.currentTax?.py ?? 0)
+                  + (corpPlData?.deferredTax?.py ?? 0)
+                }
               />
             </TabsContent>
           )}

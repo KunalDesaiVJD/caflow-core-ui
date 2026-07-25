@@ -55,6 +55,17 @@ interface Props {
    * but the surrounding chrome makes the read-only intent clear.
    */
   readOnly?: boolean;
+  /**
+   * 2026-07-24 (V J Desai — Mill Power R&S profit sync): face-side total
+   * tax (Current + Deferred) passed by PipelineFinancialStatements so
+   * NoteBSLiab can subtract it from its live PBT computation to render
+   * the exact same NPAT that the P&L face XV displays. Notes don't hold
+   * a dedicated tax row and the alternative — stashing pl.eps.total_tax_cy
+   * during autoPopulate — required a Re-sync from TB. Prop-drilling from
+   * the pipeline avoids that.
+   */
+  faceTaxCy?: number;
+  faceTaxPy?: number;
 }
 
 // Navy A4-style "page" frame used in readOnly preview mode (mirrors NCE).
@@ -66,7 +77,7 @@ const pageFrame: CSSProperties = {
   pageBreakAfter: "always",
 };
 
-export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote, extraOverrideCount = 0, companyName, readOnly = false }: Props) {
+export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote, extraOverrideCount = 0, companyName, readOnly = false, faceTaxCy = 0, faceTaxPy = 0 }: Props) {
   const [notes,         setNotes]         = useState<Stage5Notes | null>(null);
   const [loading,       setLoading]       = useState(true);
   const [syncing,       setSyncing]       = useState(false);
@@ -482,6 +493,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
               onRemapLedger={handleRemapLedger}
               onUnmapLedger={handleUnmapLedger}
               hideEmpty={true}
+              faceTaxCy={faceTaxCy} faceTaxPy={faceTaxPy}
             />
           </div>
           <div style={pageFrame}>
@@ -552,6 +564,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
               onRemapLedger={handleRemapLedger}
               onUnmapLedger={handleUnmapLedger}
               hideEmpty={false}
+              faceTaxCy={faceTaxCy} faceTaxPy={faceTaxPy}
             />
           </TabsContent>
           <TabsContent value="bs_asset" className="mt-3">
