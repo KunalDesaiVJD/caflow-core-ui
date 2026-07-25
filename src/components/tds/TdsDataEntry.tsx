@@ -496,14 +496,25 @@ export function TdsDataEntry({
 
     const currentPeriod = periodToNum(fy, quarter);
 
-    // Query challans by stable metadata (client_id + form_type) rather than
-    // walking filing_id → prior filings. A challan's filing_id can drift if
-    // its owning filing was deleted and re-created, which would cause the
-    // old filing_id→filings lookup to silently skip the challan. Querying
+    // Query challans by stable metadata (client_id) rather than walking
+    // filing_id → prior filings. A challan's filing_id can drift if its
+    // owning filing was deleted and re-created, which would cause the old
+    // filing_id→filings lookup to silently skip the challan. Querying
     // directly on the challan's own quarter/FY columns is drift-proof.
+    //
+    // Deliberately NOT scoped to form_type: a COMBINED PAYMENT — one bank
+    // challan funding both e.g. 24Q and 26Q — is recorded under whichever
+    // form's Genius import happened to see it first (see
+    // resolveExistingChallansByNumber in genius-import.ts, which already
+    // reuses a challan by Bank Challan Number across forms). Any of the
+    // client's prior-period challans with remaining balance is a legitimate
+    // carry-forward candidate for THIS form too, regardless of which form
+    // originally created the row — the applied/unconsumed maths below
+    // already sum every form's deductees against it (unfiltered by form),
+    // so this is purely about not hiding a challan that money-wise is still
+    // usable here.
     const { data: priorChallansRaw } = await supabase.from("tds_challans").select("*")
       .eq("client_id", clientId)
-      .eq("form_type", form)
       .order("deposit_date", { ascending: true });
 
     const priorChallans = ((priorChallansRaw as unknown as Challan[]) || []).filter(c =>
@@ -579,10 +590,13 @@ export function TdsDataEntry({
       .eq("financial_year", selFy)
       .eq("quarter", selQuarter)
       .order("deposit_date", { ascending: true });
-    const list = (data as unknown as Challan[]) || [];
+    const ownList = (data as unknown as Challan[]) || [];
 
-    // Self-heal filing_id drift
-    const stale = list.filter(c => c.filing_id !== filingId);
+    // Self-heal filing_id drift — ONLY for this form's OWN challans. A SHARED
+    // challan (below) legitimately belongs to a different form's filing_id;
+    // overwriting that here would sever it from the return that actually
+    // created it.
+    const stale = ownList.filter(c => c.filing_id !== filingId);
     if (stale.length > 0) {
       console.log(`[TDS] Repairing filing_id on ${stale.length} challan(s) for ${selFy} ${selQuarter} ${selForm}`);
       const { error: fixErr } = await supabase.from("tds_challans")
@@ -592,6 +606,34 @@ export function TdsDataEntry({
       // Reflect the fix in the in-memory list so the UI shows correct relations
       stale.forEach(c => { (c as any).filing_id = filingId; });
     }
+
+    // A COMBINED PAYMENT — one bank challan funding deductions on more than
+    // one form (e.g. 24Q and 26Q) — is deposited under whichever form's
+    // Genius import happened to see it first; every later form's import
+    // reuses that SAME challan row by Bank Challan Number rather than
+    // duplicating it (see resolveExistingChallansByNumber in genius-import.ts).
+    // That means its OWN form_type column never changes to match every form
+    // now using it, so the query above alone would make it invisible on this
+    // form's screen even though this form's deductees are correctly attached
+    // to it. Find those via the deductee side instead: any challan (whatever
+    // its own form_type) that has at least one deductee actually booked
+    // under THIS form/quarter/FY is genuinely in use here and must show up,
+    // with its Applied/Available already reflecting every form's usage
+    // (the deductee sums below carry no form_type filter).
+    const { data: sharedDeds } = await supabase.from("tds_deductees").select("challan_id")
+      .eq("client_id", selClient).eq("form_type", selForm)
+      .eq("financial_year", selFy).eq("quarter", selQuarter);
+    const ownIds = new Set(ownList.map(c => c.id));
+    const sharedIds = Array.from(new Set((sharedDeds || []).map((d: any) => d.challan_id as string)))
+      .filter(id => !ownIds.has(id));
+    let sharedList: Challan[] = [];
+    if (sharedIds.length > 0) {
+      const { data: sharedChallans } = await supabase.from("tds_challans").select("*").in("id", sharedIds);
+      sharedList = (sharedChallans as unknown as Challan[]) || [];
+    }
+
+    const list = [...ownList, ...sharedList].sort((a, b) =>
+      (a.deposit_date || "").localeCompare(b.deposit_date || ""));
 
     setChallans(list);
     if (list.length > 0) {
@@ -609,14 +651,17 @@ export function TdsDataEntry({
       // take precedence since they're the freshest.
       setAllChallanDeductees(prev => ({ ...prev, ...grouped }));
       setSelectedChallan(list[0]);
-      // Split first challan entries using BOTH filing_id AND quarter/FY.
-      // Using quarter+FY makes the split resilient to legacy records where
-      // filing_id might be stale (e.g., filing was re-created after an
-      // accidental delete).
+      // Split first challan entries using BOTH filing_id AND quarter/FY/form.
+      // Using quarter+FY+form makes the split resilient to legacy records
+      // where filing_id might be stale (e.g., filing was re-created after an
+      // accidental delete) — form_type is required here (not just quarter+FY)
+      // because a SHARED (combined-payment) challan can hold another form's
+      // entries for this SAME quarter+FY, which must stay read-only, never
+      // merge into this form's own editable list.
       const firstAll = grouped[list[0].id] || [];
       const isCurrent = (d: any) =>
         d.filing_id === filingId ||
-        (d.quarter === selQuarter && d.financial_year === selFy);
+        (d.quarter === selQuarter && d.financial_year === selFy && d.form_type === selForm);
       // Non-current entries (both prior AND future quarters) are shown as
       // read-only rows. Each retains its own quarter/FY so the label can
       // correctly say e.g. "Q2 FY 2025-26 Entries (Read-Only)".
@@ -639,15 +684,19 @@ export function TdsDataEntry({
     await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
   };
 
-  // Helper: is this deductee an entry FOR the currently-selected quarter?
-  // Uses both filing_id (strict UUID match) AND quarter/financial_year (stable
-  // regardless of filing UUID changes). Robust against legacy data where a
-  // deductee may have a stale filing_id but correct quarter/FY fields.
-  const isCurrentQuarterDeductee = useCallback((d: { filing_id?: string | null; quarter?: string | null; financial_year?: string | null }) => {
+  // Helper: is this deductee an entry FOR the currently-selected filing?
+  // Uses both filing_id (strict UUID match) AND quarter/financial_year/form
+  // (stable regardless of filing UUID changes). Robust against legacy data
+  // where a deductee may have a stale filing_id but correct quarter/FY/form
+  // fields. form_type is required alongside quarter+FY (not just quarter+FY
+  // alone) because a SHARED (combined-payment) challan can hold a DIFFERENT
+  // form's entries for this exact same quarter+FY — those must stay
+  // read-only here, never merge into this form's own editable list.
+  const isCurrentQuarterDeductee = useCallback((d: { filing_id?: string | null; quarter?: string | null; financial_year?: string | null; form_type?: string | null }) => {
     if (filing && d.filing_id === filing.id) return true;
-    if (d.quarter === selQuarter && d.financial_year === selFy) return true;
+    if (d.quarter === selQuarter && d.financial_year === selFy && d.form_type === selForm) return true;
     return false;
-  }, [filing, selQuarter, selFy]);
+  }, [filing, selQuarter, selFy, selForm]);
 
   // Helper: is this deductee from a PRIOR quarter (earlier FY/quarter than the
   // currently-selected one)? These appear as read-only carry-forward entries.
@@ -1517,6 +1566,13 @@ export function TdsDataEntry({
                                     <CreditCard size={12} className="text-accent-foreground shrink-0" />
                                     <span className="text-xs font-semibold font-mono">{cf.challan.bsr_code || "No BSR"}</span>
                                     <Badge variant="secondary" className="text-[9px]">From {cf.fromQuarter} {cf.fromFy}</Badge>
+                                    {/* Combined-payment challan carried forward from a DIFFERENT form —
+                                        e.g. a 26Q challan still funding this 24Q return. */}
+                                    {cf.challan.form_type !== selForm && (
+                                      <Badge variant="outline" className="text-[9px] px-1 border-primary/40 text-primary">
+                                        Shared with {cf.challan.form_type}
+                                      </Badge>
+                                    )}
                                   </div>
                                   <div className="flex items-center justify-between text-[10px]">
                                     <span className="text-muted-foreground">Available</span>
@@ -1583,6 +1639,15 @@ export function TdsDataEntry({
                                     <CreditCard size={12} className="text-primary shrink-0" />
                                     <span className="text-xs font-semibold font-mono truncate">{c.bsr_code || "No BSR"}</span>
                                     {c.section_code && <Badge variant="outline" className="text-[9px] px-1">{c.section_code}</Badge>}
+                                    {/* Combined-payment challan: same bank challan funding more than one
+                                        form — this row was created under c.form_type, not the form
+                                        currently open, but its Applied/Available below already includes
+                                        every form's usage. */}
+                                    {c.form_type !== selForm && (
+                                      <Badge variant="outline" className="text-[9px] px-1 border-primary/40 text-primary">
+                                        Shared with {c.form_type}
+                                      </Badge>
+                                    )}
                                   </div>
                                   {/* Issue 2: Hide Edit/Delete when filed */}
                                   {!isFilingLocked && (
