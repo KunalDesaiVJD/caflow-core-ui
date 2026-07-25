@@ -93,6 +93,14 @@ export interface ExpertPdfRow {
   vch_no: string | null;      // "B NO. ####" bill reference, if present — display only, NEVER reconciled on
   vch_type: string | null;    // Expert has no such column — always null; kept so the shape lines up with Tally's row for the shared adapter
   section: string | null;     // from this ledger's own page title
+  // The narration line(s) below an entry ("BEING THE TDS 7906.25@1%",
+  // "36260@2%", the 194Q purchase-total formula, etc.), joined across
+  // however many continuation lines it wraps to. Display only, same as
+  // vch_no/vch_type — never reconciled on. Stage 3's matching already
+  // resolves every real case correctly from party/date/amount alone; this
+  // exists purely so a reviewer can read the rate/bill reference without
+  // reopening the source PDF. null when no narration line was printed.
+  narration: string | null;
 }
 
 export interface ExpertPdfParse {
@@ -171,7 +179,7 @@ function toBands(items: ExpertPdfTextItem[]): ExpertPdfTextItem[][] {
   return bands;
 }
 
-interface BandFields { date?: string; party?: string; debit?: number; credit?: number; billRef?: string; }
+interface BandFields { date?: string; party?: string; debit?: number; credit?: number; billRef?: string; narration?: string; }
 
 /** Split one band into its fields. A band with a `date` starts a new entry;
  *  a band without one is a continuation line (narration) — Expert never
@@ -217,6 +225,10 @@ function readBand(band: ExpertPdfTextItem[], a: Anchors): BandFields {
   if (out.date) {
     if (joined) out.party = joined;
   } else if (joined) {
+    // The whole continuation line is kept as narration (display only, see
+    // ExpertPdfRow's own doc) — a bill reference, when present, is ALSO
+    // lifted out separately for vch_no, but doesn't replace the full text.
+    out.narration = joined;
     const bill = BILL_REF_RE.exec(joined);
     if (bill) out.billRef = bill[1];
   }
@@ -252,9 +264,13 @@ export function parseExpertPdfPages(pages: ExpertPdfTextItem[][]): ExpertPdfPars
     for (const band of bands) {
       const f = readBand(band, a);
       if (f.date == null) {
-        // Continuation line — narration to skip, except a bill reference is
-        // worth surfacing on the entry it belongs to.
-        if (current && f.billRef && !current.vch_no) current.vch_no = f.billRef;
+        // Continuation line — captured as narration on the entry it belongs
+        // to (joined across however many lines it wraps to); a bill
+        // reference, when present, is ALSO surfaced separately as vch_no.
+        if (current) {
+          if (f.billRef && !current.vch_no) current.vch_no = f.billRef;
+          if (f.narration) current.narration = current.narration ? `${current.narration} ${f.narration}` : f.narration;
+        }
         continue;
       }
       current = {
@@ -267,6 +283,7 @@ export function parseExpertPdfPages(pages: ExpertPdfTextItem[][]): ExpertPdfPars
         vch_no: null,
         vch_type: null,
         section: null,
+        narration: null,
       };
       all.push(current);
     }

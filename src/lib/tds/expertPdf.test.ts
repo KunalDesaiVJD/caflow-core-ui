@@ -153,6 +153,14 @@ describe("parseExpertPdfPages — 194H (POINT PACKERS Q1 FY2026-27)", () => {
     expect(b.party).toBe("GORDHANBHAI PUNJABHAI PATEL");
     expect(b.credit).toBe(72);
   });
+
+  it("captures narration with no bill reference at all — a bare rate line is still full narration, and no vch_no is fabricated", () => {
+    const [a, b] = parsed.rows;
+    expect(a.narration).toBe("BEING THE TDS 66637@2%");
+    expect(a.vch_no).toBeNull();
+    expect(b.narration).toBe("BEING THE TDS 3579@2%");
+    expect(b.vch_no).toBeNull();
+  });
 });
 
 describe("parseExpertPdfPages — 194J (POINT PACKERS Q1 FY2026-27)", () => {
@@ -184,6 +192,10 @@ describe("parseExpertPdfPages — 194J (POINT PACKERS Q1 FY2026-27)", () => {
       expect(r.credit).not.toBe(1798);
     }
   });
+
+  it("captures identical narration text independently per row, scoped correctly across 3 repeated same-party entries", () => {
+    expect(parsed.rows.every((r) => r.narration === "BEING THE TDS 21000@10%")).toBe(true);
+  });
 });
 
 describe("parseExpertPdfPages — 194Q (POINT PACKERS Q1 FY2026-27)", () => {
@@ -210,6 +222,12 @@ describe("parseExpertPdfPages — 194Q (POINT PACKERS Q1 FY2026-27)", () => {
       expect([325, 3471]).toContain(r.credit);
     }
   });
+
+  it("still captures the full 3-line word-wrapped narration as display text, for both rows independently", () => {
+    const [a, b] = parsed.rows;
+    expect(a.narration).toBe("BEING THE TOTAL PUCHASE OF 01. 04.2026 TO 30.06.2026 = 532474 7.50-5000000=324747.50*0.100%");
+    expect(b.narration).toBe("BEING THE TOTAL PUCHASE OF 01. 04.2026 TO 30.06.2026 = 847111 8.95-5000000=3471118.95*0.100%");
+  });
 });
 
 describe("parseExpertPdfPages — 194C (POINT PACKERS Q1 FY2026-27)", () => {
@@ -232,6 +250,15 @@ describe("parseExpertPdfPages — 194C (POINT PACKERS Q1 FY2026-27)", () => {
     expect(melt09?.vch_no).toBe("17");
     const vintex15 = parsed.rows.find((r) => r.date === "15/05/2026");
     expect(vintex15?.vch_no).toBe("0258");
+  });
+
+  it("captures the full narration text (both lines joined), not just the bill reference", () => {
+    const melt09 = parsed.rows.find((r) => r.date === "09/04/2026");
+    expect(melt09?.narration).toBe("BEING THE TDS 7906.25@1% B NO. 17");
+    // A bare "gross@rate%" narration (no "BEING THE TDS" prefix) is captured
+    // just the same — SHILPI GRAPHICS' own convention.
+    const shilpi03 = parsed.rows.find((r) => r.date === "03/05/2026");
+    expect(shilpi03?.narration).toBe("36260@2% B NO. 260");
   });
 
   it("still recovers a row whose own balance is deferred to the NEXT entry's line (sparse balance printing)", () => {
