@@ -20,6 +20,7 @@ import {
   type ListRow, type AgeingMatrix,
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+import { computeFaceNpat } from "@/lib/plFaceNpat";
 import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 import { CORP_SIGNED_NOTE_TOTALS } from "@/lib/nceFeatureFlags";
 import { Plus, Trash2 } from "lucide-react";
@@ -78,10 +79,18 @@ interface Props {
   /** Corporate Lock Preview parity with NCE: when true, individual NoteCards
    *  hide themselves if both CY and PY totals are zero/blank. */
   hideEmpty?:      boolean;
+  /** 2026-07-24 (V J Desai — Mill Power R&S profit): face-side total
+   *  tax (Current + Deferred) piped down from PipelineFinancialStatements
+   *  so the Reserves & Surplus "Add/(Less): Profit for the year" line
+   *  can subtract it and land on the exact P&L face XV. Notes don't hold
+   *  a dedicated tax row; this prop drops the dependency on the
+   *  autoPopulate-only pl.eps.total_tax_cy fallback. */
+  faceTaxCy?:      number;
+  faceTaxPy?:      number;
 }
 
 export default function NoteBSLiab({
-  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger, hideEmpty = false,
+  engagementId, notes, cyYear, pyYear, updatePath, resetPath, isOverridden, collapseControl, onRemapLedger, onUnmapLedger, hideEmpty = false, faceTaxCy = 0, faceTaxPy = 0,
 }: Props) {
   // Bug 4 — Sign-convention bridge for Notes display
   // ─────────────────────────────────────────────────────────────────────────
@@ -236,9 +245,23 @@ export default function NoteBSLiab({
   const subtotalACy   = genReserveCy + sharePremCy;
   const subtotalAPy   = genReservePy + sharePremPy;
 
-  // Profit for the year — auto-pulled from P&L EPS note (NPAT)
-  const profitCy      = Number(get("pl.eps.npat")    ?? 0);
-  const profitPy      = Number(get("pl.eps.npat_py") ?? 0);
+  // 2026-07-24 (V J Desai — Mill Power R&S profit ≠ P&L face NPAT):
+  // "Profit for the year" now mirrors the LIVE P&L face XV — Revenue
+  // − Expenses − Tax — so it never diverges from the P&L face on the
+  // same page even when the auditor has manually edited Cost of Materials
+  // (Opening + Purchases − Closing formula) or overridden a Changes in
+  // Inventories sub-cell.
+  //
+  // Tax comes from the parent (PipelineFinancialStatements) via the
+  // faceTaxCy / faceTaxPy props — the same cyOf("PL_TAX_CUR") +
+  // cyOf("PL_TAX_DEF") sum the P&L face uses. That way the note is
+  // ALWAYS in sync with the face without needing the auditor to Re-sync
+  // from TB after every deploy. computeFaceNpat gives us Revenue -
+  // Expenses (i.e. PBT-ish); we subtract the piped-in tax to reach NPAT.
+  const pbtCyLive    = computeFaceNpat(notes as any, "cy");
+  const pbtPyLive    = computeFaceNpat(notes as any, "py");
+  const profitCy     = pbtCyLive - (Number.isFinite(faceTaxCy) ? faceTaxCy : 0);
+  const profitPy     = pbtPyLive - (Number.isFinite(faceTaxPy) ? faceTaxPy : 0);
 
   // Issue 2 (Aesha) — Carry-forward of closing balance for Reserves & Surplus.
   // CY "Opening balance" of Surplus in P&L should AUTOMATICALLY equal the

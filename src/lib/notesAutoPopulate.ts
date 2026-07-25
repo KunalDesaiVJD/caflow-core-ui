@@ -1632,7 +1632,19 @@ export async function autoPopulateNotes(
     // so the main loop's PL_EXP_CII total remains the source of truth for
     // the FS face; the render layer computes a live sub-cell sum for the
     // "Changes in inventories (per P&L)" row itself.
+    //
+    // 2026-07-24 (V J Desai — Mill Power CII persistence): the earlier
+    // rebuild at the main note-row loop (line ~1558) discarded the
+    // `override` sub-object under `pl.changes_inventory`, so on the next
+    // Re-sync from TB / page reload the auditor's manual sub-cell entries
+    // silently vanished. Now the auditor's `override` block is pulled
+    // from `options.existing` and preserved verbatim on the outgoing
+    // node, so respectManualEdits doesn't have to reconstruct it path by
+    // path (which required every sub-cell to be in `manual_edits` — the
+    // race between updatePath's fire-and-forget save and a fast page
+    // refresh could drop paths that hadn't yet been flushed).
     const priorCI = (out.pl.changes_inventory as any) ?? {};
+    const existingCI = ((options.existing?.pl as any)?.changes_inventory ?? {}) as any;
     (out.pl as any).changes_inventory = {
       ...priorCI,
       fg_close_cy:  Math.round(fg_close_cy  * 100) / 100,
@@ -1647,6 +1659,11 @@ export async function autoPopulateNotes(
       fg_open_py:   Math.round(fg_open_py_auto  * 100) / 100,
       wip_open_py:  Math.round(wip_open_py_auto * 100) / 100,
       sit_open_py:  Math.round(sit_open_py_auto * 100) / 100,
+      // Carry forward the auditor's manual sub-cell overrides and
+      // bucket_map reassignments verbatim — these are user data, not
+      // derivable from the TB.
+      ...(existingCI.override   ? { override:   existingCI.override   } : {}),
+      ...(existingCI.bucket_map ? { bucket_map: existingCI.bucket_map } : {}),
     };
   }
 
@@ -1895,12 +1912,32 @@ export async function autoPopulateNotes(
       npatPy = Math.round((-revSumPy - expSumPy - taxSumPy) * 100) / 100;
     }
 
-    if (Math.abs(npat) > 0.005 || Math.abs(npatPy) > 0.005) {
+    // 2026-07-24 (V J Desai — Mill Power R&S profit): also persist total
+    // tax so plFaceNpat.ts / NoteBSLiab can subtract it from the note-level
+    // (formula-based) PBT to arrive at the face NPAT. Notes don't hold a
+    // dedicated tax row, and reaching back into COAMapping every render
+    // would be expensive; storing the pre-computed total here keeps the
+    // R&S "Profit for the year" line in exact sync with the P&L face XV.
+    const taxTotalCy = Math.round(taxSum * 100) / 100;
+    let taxTotalPy = 0;
+    if (pyTB && pyTB.length > 0) {
+      let sum = 0;
+      for (const ledger of pyTB) {
+        const code = mapping[ledger.account_name]?.code ?? "";
+        if (code.startsWith("PL_TAX")) sum += ledger.balance;
+      }
+      taxTotalPy = Math.round(sum * 100) / 100;
+    }
+    if (Math.abs(npat) > 0.005 || Math.abs(npatPy) > 0.005 || Math.abs(taxTotalCy) > 0.005 || Math.abs(taxTotalPy) > 0.005) {
       if (!out.pl.eps) out.pl.eps = {};
       out.pl.eps = {
         ...(out.pl.eps as any),
         ...(Math.abs(npat)   > 0.005 ? { npat }     : {}),
         ...(Math.abs(npatPy) > 0.005 ? { npat_py: npatPy } : {}),
+        // total_tax_cy/py are always rewritten so a stale tax figure from
+        // a previous TB never leaks into the face NPAT computation.
+        total_tax_cy: taxTotalCy,
+        total_tax_py: taxTotalPy,
       };
     }
   }
