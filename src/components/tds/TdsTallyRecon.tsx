@@ -608,6 +608,17 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     return match?.section ?? null;
   };
 
+  /** A compound-Journal's narration ("BEING THE INTEREST PAID @ 6% …"), for
+   *  display only — same value-matching lookup as ledgerSectionOf above,
+   *  since a ResultRow doesn't persist it directly. Never affects any
+   *  verdict; purely lets a reviewer read the rate/period without reopening
+   *  the source PDF. */
+  const ledgerNarrationOf = (r: ResultRow): string | null => {
+    if (!r.tally_party) return null;
+    const match = tallyRows.find((t) => normalizeName(t.party) === normalizeName(r.tally_party) && t.date === r.tally_date && t.credit === r.tally_credit);
+    return match?.narration ?? null;
+  };
+
   /** A confirmed row's OWN section, whichever side it's anchored on — used to
    *  keep claimedCounts (below) from "orphan-spending" a claim across
    *  sections (see pickRows). */
@@ -789,7 +800,8 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       <CardContent className="p-4 space-y-1.5">
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0"><p className="font-semibold text-sm truncate">{r.tally_party || "—"}</p>
-            <p className="text-[11px] text-muted-foreground">{r.tally_date || "—"} · ledger credit {inr(r.tally_credit)}</p></div>
+            <p className="text-[11px] text-muted-foreground">{r.tally_date || "—"} · ledger credit {inr(r.tally_credit)}</p>
+            {ledgerNarrationOf(r) && <p className="text-[11px] text-muted-foreground italic truncate" title={ledgerNarrationOf(r) || undefined}>{ledgerNarrationOf(r)}</p>}</div>
           <div className="flex items-center gap-2 shrink-0">
             <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.overridden ? oneSidedLabel(r) : r.result}</Badge>
             {!r.overridden ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> {overrideLabel(r)}</Button>
@@ -843,6 +855,12 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             <span>Ledger: <b className="text-foreground">{r.tally_party}</b> · {r.tally_date || "—"} · credit {inr(r.tally_credit)}</span>
             {r.mapped && <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">party mapped</Badge>}
           </p>
+        )}
+        {/* The ledger's own narration ("BEING THE INTEREST PAID @ 6% …"), when
+            present — display only, so a reviewer resolving a dispute (or just
+            reading a Match) doesn't have to reopen the source PDF for context. */}
+        {r.tally_party != null && ledgerNarrationOf(r) && (
+          <p className="text-[11px] text-muted-foreground italic truncate" title={ledgerNarrationOf(r) || undefined}>{ledgerNarrationOf(r)}</p>
         )}
         <p className={cn("text-xs", r.overridden ? "text-blue-600" : r.result === "Matched" ? "text-emerald-600" : "text-destructive")}>
           {r.overridden ? `Overridden — ${r.override_reason || "accepted"}${r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}` : r.reason}
