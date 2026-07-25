@@ -142,6 +142,61 @@ describe("reconcileTally — identical entries pair 1:1 without asking the user"
   });
 });
 
+describe("reconcileTallyFull — split-entry grouping (Office Data splits one payment into two rows)", () => {
+  // Reported verbatim, from Skylark Corporation: Tally books ONE journal entry for
+  // Shantilal Haribhai Malani (gross 10,000, TDS 1,000 @ 10%), but Office Data has
+  // TWO rows for the identical party/date — TDS 999 (on a mistakenly-entered base of
+  // 9,990) and a 1-rupee top-up row correcting it. 999 + 1 = 1,000, exactly the
+  // ledger's own credit, but assign() is deliberately 1:1 so only the bigger row can
+  // claim it — the small one used to come back a false "Ledger Entry Not Found".
+  const bigRow: OfficeTxn = { deductee_id: "big", name: "Shantilal Haribhai Malani", date_iso: "2026-05-31", amount: 9990, tds: 999, section: "194A" };
+  const smallRow: OfficeTxn = { deductee_id: "small", name: "Shantilal Haribhai Malani", date_iso: "2026-05-31", amount: 10, tds: 1, section: "194A" };
+  const oneCredit: TallyRow[] = [
+    { row_index: 0, date: "31-May-26", iso: "2026-05-31", party: "Shantilal Haribhai Malani", credit: 1000, debit: null, vch_no: "28", vch_type: "Journal", section: "194A" },
+  ];
+
+  it("folds the leftover row into the same Matched ledger entry when the split sums exactly", () => {
+    const out = reconcileTally([bigRow, smallRow], oneCredit, "194A");
+    const big = out.find((r) => r.office_deductee_id === "big")!;
+    const small = out.find((r) => r.office_deductee_id === "small")!;
+    expect(big.result).toBe("Matched");
+    expect(small.result).toBe("Matched");
+    expect(small.tally_row_index).toBe(big.tally_row_index);
+    expect(small.tally_credit).toBe(1000);
+    expect(small.reason).toMatch(/splits this payment/);
+  });
+
+  it("does NOT group when the split sum does not land on the ledger credit", () => {
+    // Same shape, but 999 + 50 = 1049, well outside amountsMatch's rounding tolerance
+    // for a ~1,000 figure — the office figures don't actually add up, so grouping
+    // must not fabricate a match.
+    const out = reconcileTally([bigRow, { ...smallRow, tds: 50, amount: 500 }], oneCredit, "194A");
+    const small = out.find((r) => r.office_deductee_id === "small")!;
+    expect(small.result).toBe("Ledger Entry Not Found");
+  });
+
+  it("does NOT group rows for the same party on a DIFFERENT date", () => {
+    const out = reconcileTally([bigRow, { ...smallRow, date_iso: "2026-06-01" }], oneCredit, "194A");
+    const small = out.find((r) => r.office_deductee_id === "small")!;
+    expect(small.result).toBe("Ledger Entry Not Found");
+  });
+
+  it("does NOT group when there is no already-Matched anchor in the group", () => {
+    // Both rows unmatched (no ledger imported at all for this party/date) — nothing
+    // to fold into, so both must stay "Ledger Entry Not Found" untouched.
+    const out = reconcileTally([bigRow, smallRow], [], "194A");
+    expect(out.every((r) => r.result === "Ledger Entry Not Found")).toBe(true);
+  });
+
+  it("leaves a normal, non-split single office record completely unaffected", () => {
+    const solo: OfficeTxn = { deductee_id: "solo", name: "Priyanka Ketanbhai Malani", date_iso: "2026-05-31", amount: 5000, tds: 500, section: "194A" };
+    const ledgerRow: TallyRow[] = [{ row_index: 0, date: "31-May-26", iso: "2026-05-31", party: "Priyanka Ketanbhai Malani", credit: 500, debit: null, vch_no: "27", vch_type: "Journal", section: "194A" }];
+    const out = reconcileTally([solo], ledgerRow, "194A");
+    expect(out[0].result).toBe("Matched");
+    expect(out[0].reason).not.toMatch(/splits this payment/);
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The engine is an ASSIGNMENT, not a per-record decision. Everything below pins a
 // property of the assignment that no pairwise name test can express.

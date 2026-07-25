@@ -25,7 +25,7 @@
 
 // (the Excel/CSV ledger parser that needed columnEngine's value sniffers is gone —
 //  Stage-3 reads Tally ledger PDFs only; see ./tallyPdf.ts)
-import { canonicalSection, rank } from "./match";
+import { canonicalSection, rank, normalizeName, amountsMatch } from "./match";
 import { assign, AUTO_MATCH_MAX_RANK, type AsgLedger, type AsgOffice, type Evidence, type Outcome } from "./assignment";
 
 export interface TallyRow {
@@ -175,7 +175,75 @@ export function reconcileTallyFull(
     return render(o, outcomes[i], rowAt, ledgerSection, sectionOf);
   });
 
-  return { rows, surplusLedger: surplus.map(rowAt) };
+  return { rows: applySplitEntryGrouping(rows), surplusLedger: surplus.map(rowAt) };
+}
+
+/**
+ * SPLIT-ENTRY GROUPING — an office-side data-quality pattern, not a matching
+ * rule: a single real payment sometimes lands in Office Data as TWO (or more)
+ * rows for the exact same party/date/section — e.g. a rounding top-up entered
+ * as its own line rather than editing the original row. `assign()` above is
+ * deliberately 1:1 (see assignment.ts's own header on why THAT is correct: no
+ * threshold, no score, pure exclusivity), so only ONE such row can claim the
+ * ledger's single credit; the rest correctly come back "Ledger Entry Not
+ * Found" even though nothing is actually missing.
+ *
+ * This is intentionally NOT a change to assign()'s exclusivity algorithm —
+ * it runs strictly AFTER it, over rows the engine already committed, and it
+ * never guesses a party or a date: the group's OWN office-recorded TDS
+ * figures must sum to EXACTLY the credit already sitting on one confirmed
+ * "Matched" sibling in that same party/date/section group. That is structural
+ * corroboration (the office's own numbers add up), not a name/amount
+ * coincidence, so it is safe to auto-resolve rather than merely suggest.
+ *
+ * Deliberately narrow: only touches "Ledger Entry Not Found" rows sitting
+ * next to an already-"Matched" sibling for the identical (name, date,
+ * section) key. A group with no such anchor, or whose sum doesn't land on
+ * the anchor's own credit, is left completely untouched — no fabricated
+ * mapping to a surplus ledger row, no partial/subset search across the
+ * group. If a future case needs that, it should be evidenced first, the same
+ * way this one was.
+ */
+function applySplitEntryGrouping(rows: TallyReconRow[]): TallyReconRow[] {
+  const groupKey = (r: TallyReconRow) =>
+    `${normalizeName(r.office_name)}|${r.office_date ?? ""}|${canonicalSection(r.office_section) ?? ""}`;
+
+  const groups = new Map<string, number[]>();
+  rows.forEach((r, i) => {
+    if (r.result !== "Ledger Entry Not Found" && r.result !== "Matched") return;
+    const k = groupKey(r);
+    const g = groups.get(k);
+    if (g) g.push(i); else groups.set(k, [i]);
+  });
+
+  const patched = [...rows];
+  for (const idxs of groups.values()) {
+    if (idxs.length < 2) continue;
+    const anchors = idxs.filter((i) => rows[i].result === "Matched");
+    const leftovers = idxs.filter((i) => rows[i].result === "Ledger Entry Not Found");
+    if (anchors.length !== 1 || leftovers.length === 0) continue;   // ambiguous or nothing to fold in
+    const anchor = rows[anchors[0]];
+    if (anchor.tally_credit == null || !anchor.amount_basis) continue;
+    const figureOf = (r: TallyReconRow) => (anchor.amount_basis === "tds" ? r.office_tds : r.office_amount);
+    const anchorFigure = figureOf(anchor);
+    if (anchorFigure == null) continue;
+    const leftoverSum = leftovers.reduce((sum, i) => sum + (figureOf(rows[i]) ?? 0), 0);
+    if (leftovers.some((i) => figureOf(rows[i]) == null)) continue; // an ungrounded member — don't guess
+    if (!amountsMatch(anchor.tally_credit, anchorFigure + leftoverSum)) continue;
+
+    for (const i of leftovers) {
+      const o = rows[i];
+      patched[i] = {
+        ...o, tally_row_index: anchor.tally_row_index, tally_party: anchor.tally_party,
+        tally_date: anchor.tally_date, tally_credit: anchor.tally_credit,
+        result: "Matched", amount_basis: anchor.amount_basis, confidence: 85,
+        reason: `Office Data splits this payment to "${anchor.office_name ?? "—"}" (${anchor.office_date ?? "—"}) across multiple rows; `
+          + `together they total ${inr(anchorFigure + leftoverSum)}, matching the single Tally ledger entry "${anchor.tally_party ?? "—"}" `
+          + `${anchor.tally_date ?? "—"} ${inr(anchor.tally_credit)} exactly.`,
+      };
+    }
+  }
+  return patched;
 }
 
 /** Turn one Outcome into a TallyReconRow: the verdict, the confidence and a reason
