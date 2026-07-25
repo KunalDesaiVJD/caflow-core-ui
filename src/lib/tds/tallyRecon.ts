@@ -25,7 +25,7 @@
 
 // (the Excel/CSV ledger parser that needed columnEngine's value sniffers is gone —
 //  Stage-3 reads Tally ledger PDFs only; see ./tallyPdf.ts)
-import { canonicalSection, rank, normalizeName, amountsMatch } from "./match";
+import { canonicalSection, rank, normalizeName } from "./match";
 import { assign, AUTO_MATCH_MAX_RANK, type AsgLedger, type AsgOffice, type Evidence, type Outcome } from "./assignment";
 
 export interface TallyRow {
@@ -175,8 +175,18 @@ export function reconcileTallyFull(
     return render(o, outcomes[i], rowAt, ledgerSection, sectionOf);
   });
 
-  return { rows: applySplitEntryGrouping(rows), surplusLedger: surplus.map(rowAt) };
+  return { rows: applySplitEntryGrouping(rows, office), surplusLedger: surplus.map(rowAt) };
 }
+
+// A flat ₹1 floor — never a percentage of the transaction — because this is
+// verifying a SUM of otherwise-unrelated rows against a target, not comparing
+// two readings of the SAME figure. amountsMatch()'s sliding tolerance (up to
+// 0.5%, capped by AMOUNT_ROUNDING_MAX) exists for the latter; reusing it here
+// let a leftover as large as several tens of rupees fold onto an ALREADY
+// fully-matched anchor merely for being "small enough", which is exactly how
+// a genuinely separate, unrelated deduction gets silently hidden. ₹1 covers a
+// single-rupee rounding artefact and nothing more.
+const SPLIT_FOLD_TOLERANCE = 1;
 
 /**
  * SPLIT-ENTRY GROUPING — an office-side data-quality pattern, not a matching
@@ -189,22 +199,41 @@ export function reconcileTallyFull(
  * Found" even though nothing is actually missing.
  *
  * This is intentionally NOT a change to assign()'s exclusivity algorithm —
- * it runs strictly AFTER it, over rows the engine already committed, and it
- * never guesses a party or a date: the group's OWN office-recorded TDS
- * figures must sum to EXACTLY the credit already sitting on one confirmed
- * "Matched" sibling in that same party/date/section group. That is structural
- * corroboration (the office's own numbers add up), not a name/amount
- * coincidence, so it is safe to auto-resolve rather than merely suggest.
+ * it runs strictly AFTER it, over rows the engine already committed. Two
+ * independent guards keep it from becoming a second, uncontrolled matching
+ * path of its own:
  *
- * Deliberately narrow: only touches "Ledger Entry Not Found" rows sitting
- * next to an already-"Matched" sibling for the identical (name, date,
- * section) key. A group with no such anchor, or whose sum doesn't land on
- * the anchor's own credit, is left completely untouched — no fabricated
- * mapping to a surplus ledger row, no partial/subset search across the
- * group. If a future case needs that, it should be evidenced first, the same
- * way this one was.
+ *  1. PAN. `assign()` treats a PAN difference as PROOF of non-identity (see
+ *     its own "PAN SPLIT" handling) — but that proof only fires when two
+ *     office records are EVIDENTIARILY TIED for one ledger row. When one
+ *     record's evidence instead DOMINATES another's (the exact shape here:
+ *     the anchor is a clean Match, the leftover a clean non-match), the
+ *     loser never enters that tied comparison and the PAN check never runs
+ *     on it — so this pass must re-apply the same rule itself: a leftover
+ *     whose PAN provably differs from the anchor's is never folded in,
+ *     full stop, even if the arithmetic lines up (see SPLIT_FOLD_TOLERANCE
+ *     doc for why "the arithmetic lines up" is not by itself sufficient).
+ *  2. AN EXACT SUM, not a tolerant one. The anchor is only ever "Matched"
+ *     because its own figure ALREADY satisfies amountsMatch against the
+ *     credit — so re-applying that same generous, size-scaled tolerance to
+ *     the GROUP sum would accept almost any small, wholly unrelated entry
+ *     riding along on a large anchor. Requiring the fold to land within
+ *     SPLIT_FOLD_TOLERANCE (a flat ₹1) of the credit means a leftover is
+ *     only ever absorbed when it is the thing that makes the total land
+ *     exactly right — real structural corroboration, not coincidence.
+ *
+ * Deliberately narrow beyond that too: only touches "Ledger Entry Not Found"
+ * rows sitting next to exactly one already-"Matched" sibling for the
+ * identical (name, date, section) key. A group with no such anchor, more
+ * than one, or whose (PAN-admissible) sum doesn't land on the anchor's own
+ * credit, is left completely untouched — no fabricated mapping to a surplus
+ * ledger row, no partial/subset search across the group. If a future case
+ * needs that, it should be evidenced first, the same way this one was.
  */
-function applySplitEntryGrouping(rows: TallyReconRow[]): TallyReconRow[] {
+function applySplitEntryGrouping(rows: TallyReconRow[], office: OfficeTxn[]): TallyReconRow[] {
+  const panOf = new Map<string, string | null>();
+  for (const o of office) panOf.set(o.deductee_id, o.pan ? o.pan.trim().toUpperCase() : null);
+
   const groupKey = (r: TallyReconRow) =>
     `${normalizeName(r.office_name)}|${r.office_date ?? ""}|${canonicalSection(r.office_section) ?? ""}`;
 
@@ -220,16 +249,33 @@ function applySplitEntryGrouping(rows: TallyReconRow[]): TallyReconRow[] {
   for (const idxs of groups.values()) {
     if (idxs.length < 2) continue;
     const anchors = idxs.filter((i) => rows[i].result === "Matched");
-    const leftovers = idxs.filter((i) => rows[i].result === "Ledger Entry Not Found");
-    if (anchors.length !== 1 || leftovers.length === 0) continue;   // ambiguous or nothing to fold in
+    const allLeftovers = idxs.filter((i) => rows[i].result === "Ledger Entry Not Found");
+    if (anchors.length !== 1 || allLeftovers.length === 0) continue;   // ambiguous or nothing to fold in
     const anchor = rows[anchors[0]];
     if (anchor.tally_credit == null || !anchor.amount_basis) continue;
+    const anchorPan = panOf.get(anchor.office_deductee_id) ?? null;
+
+    // PAN GATE — a leftover whose PAN is present and DIFFERS from the
+    // anchor's is proof it is a different deductee, never grouped in. A
+    // blank PAN on either side is not evidence of anything either way (most
+    // Stage-3 office data has no PAN at all), so it does not block folding
+    // — same asymmetry assignment.ts itself uses for its PAN rules.
+    const leftovers = allLeftovers.filter((i) => {
+      const p = panOf.get(rows[i].office_deductee_id) ?? null;
+      return !(anchorPan && p && anchorPan !== p);
+    });
+    if (!leftovers.length) continue;
+
     const figureOf = (r: TallyReconRow) => (anchor.amount_basis === "tds" ? r.office_tds : r.office_amount);
     const anchorFigure = figureOf(anchor);
     if (anchorFigure == null) continue;
-    const leftoverSum = leftovers.reduce((sum, i) => sum + (figureOf(rows[i]) ?? 0), 0);
     if (leftovers.some((i) => figureOf(rows[i]) == null)) continue; // an ungrounded member — don't guess
-    if (!amountsMatch(anchor.tally_credit, anchorFigure + leftoverSum)) continue;
+    const leftoverSum = leftovers.reduce((sum, i) => sum + (figureOf(rows[i]) ?? 0), 0);
+    if (Math.abs(anchor.tally_credit - (anchorFigure + leftoverSum)) > SPLIT_FOLD_TOLERANCE) continue;
+
+    const foldReason = `Office Data splits this payment to "${anchor.office_name ?? "—"}" (${anchor.office_date ?? "—"}) across multiple rows; `
+      + `together they total ${inr(anchorFigure + leftoverSum)}, matching the single Tally ledger entry "${anchor.tally_party ?? "—"}" `
+      + `${anchor.tally_date ?? "—"} ${inr(anchor.tally_credit)} exactly.`;
 
     for (const i of leftovers) {
       const o = rows[i];
@@ -237,11 +283,13 @@ function applySplitEntryGrouping(rows: TallyReconRow[]): TallyReconRow[] {
         ...o, tally_row_index: anchor.tally_row_index, tally_party: anchor.tally_party,
         tally_date: anchor.tally_date, tally_credit: anchor.tally_credit,
         result: "Matched", amount_basis: anchor.amount_basis, confidence: 85,
-        reason: `Office Data splits this payment to "${anchor.office_name ?? "—"}" (${anchor.office_date ?? "—"}) across multiple rows; `
-          + `together they total ${inr(anchorFigure + leftoverSum)}, matching the single Tally ledger entry "${anchor.tally_party ?? "—"}" `
-          + `${anchor.tally_date ?? "—"} ${inr(anchor.tally_credit)} exactly.`,
+        mapped: anchor.mapped, reason: foldReason,
       };
     }
+    // The anchor's own card must disclose the fold too — otherwise a checker
+    // reading it in isolation sees an ordinary single-record match and has
+    // no signal this credit is shared with another office row.
+    patched[anchors[0]] = { ...anchor, reason: `${anchor.reason} ${foldReason}` };
   }
   return patched;
 }

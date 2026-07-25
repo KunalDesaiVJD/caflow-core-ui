@@ -624,14 +624,26 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const pickRows = useMemo(() => {
     const sug = pickTarget?.tally_party ? normalizeName(pickTarget.tally_party) : null;
     const targetSection = canonicalSection(pickTarget?.office_section ?? null);
-    const claimedCounts = new Map<string, number>();
+    // Dedup by tally_row_index WITHIN each value-key before counting: Stage
+    // 3's split-entry grouping (tallyRecon.ts) can fold two or more
+    // confirmed ResultRows onto the SAME physical ledger row (a single real
+    // payment Office Data recorded as multiple rows), which would otherwise
+    // inflate the claim count and wrongly hide an unrelated, genuinely free
+    // "twin" row that only coincidentally shares the same party+date+credit
+    // value. row_index isn't globally unique across files (see below), but
+    // two rows sharing BOTH the identical value key AND the identical
+    // row_index are — by construction of that fold — the same physical row.
+    const claimedRowIdx = new Map<string, Set<number | null>>();
     for (const r of results || []) {
       if (r.id === pickTarget?.id || !r.tally_party || r.tally_date == null || r.tally_credit == null || isOpenRow(r)) continue;
       const rSection = confirmedRowSection(r);
       if (targetSection && rSection && rSection !== targetSection) continue;
       const key = `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`;
-      claimedCounts.set(key, (claimedCounts.get(key) || 0) + 1);
+      const set = claimedRowIdx.get(key);
+      if (set) set.add(r.tally_row_index); else claimedRowIdx.set(key, new Set([r.tally_row_index]));
     }
+    const claimedCounts = new Map<string, number>();
+    for (const [k, set] of claimedRowIdx) claimedCounts.set(k, set.size);
     const rows = tallyRows
       .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0)
       // A 194C deductee can never legitimately be booked under a 192B (or any

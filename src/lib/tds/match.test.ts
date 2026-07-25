@@ -4,9 +4,9 @@
  * deciding — the complaint each time was "why are you asking me this?".
  */
 import { describe, it, expect } from "vitest";
-import { nameCompare, nameEvidence, rank, canonicalSection, amountsMatch } from "./match";
+import { nameCompare, nameEvidence, rank, canonicalSection, amountsMatch, normalizeName } from "./match";
 import { TIERS, AUTO_MATCH_MAX_RANK } from "./assignment";
-import { reconcileTally, reconcileTallyFull, type OfficeTxn, type TallyRow } from "./tallyRecon";
+import { reconcileTally, reconcileTallyFull, type OfficeTxn, type TallyRow, type PartyMap } from "./tallyRecon";
 
 describe("nameCompare — spelling variants vs genuinely different names", () => {
   // The rule accepts a token pair only when the consonant skeleton is IDENTICAL
@@ -167,12 +167,45 @@ describe("reconcileTallyFull — split-entry grouping (Office Data splits one pa
   });
 
   it("does NOT group when the split sum does not land on the ledger credit", () => {
-    // Same shape, but 999 + 50 = 1049, well outside amountsMatch's rounding tolerance
-    // for a ~1,000 figure — the office figures don't actually add up, so grouping
-    // must not fabricate a match.
+    // Same shape, but 999 + 50 = 1049 — ₹49 off, well outside the flat ₹1 fold
+    // tolerance — the office figures don't actually add up, so grouping must not
+    // fabricate a match.
     const out = reconcileTally([bigRow, { ...smallRow, tds: 50, amount: 500 }], oneCredit, "194A");
     const small = out.find((r) => r.office_deductee_id === "small")!;
     expect(small.result).toBe("Ledger Entry Not Found");
+  });
+
+  it("does NOT swallow a genuinely separate, unrelated small entry riding an already-EXACT anchor", () => {
+    // Adversarial-review finding: an anchor that matches its OWN credit exactly
+    // (no gap to explain) must not absorb some other small, unrelated leftover
+    // just because the total still lands "close enough" on a percentage-based
+    // tolerance. Anchor 10,000 vs credit 10,000 (exact); an unrelated ₹8 entry
+    // for the same party/date must stay unmatched, not get folded in.
+    const anchorTxn: OfficeTxn = { deductee_id: "anchor", name: "Vendor One Pvt Ltd", date_iso: "2026-03-31", amount: 100000, tds: 10000, section: "194C" };
+    const strayTxn: OfficeTxn = { deductee_id: "stray", name: "Vendor One Pvt Ltd", date_iso: "2026-03-31", amount: 80, tds: 8, section: "194C" };
+    const credit: TallyRow[] = [{ row_index: 0, date: "31-Mar-26", iso: "2026-03-31", party: "Vendor One Pvt Ltd", credit: 10000, debit: null, vch_no: "1", vch_type: "Journal", section: "194C" }];
+    const out = reconcileTally([anchorTxn, strayTxn], credit, "194C");
+    expect(out.find((r) => r.office_deductee_id === "anchor")!.result).toBe("Matched");
+    expect(out.find((r) => r.office_deductee_id === "stray")!.result).toBe("Ledger Entry Not Found");
+  });
+
+  it("does NOT fold a different taxpayer's entry across a PAN boundary, even when the arithmetic lines up", () => {
+    // Adversarial-review finding: two DIFFERENT real people can share a name/date/
+    // section (the same population match.test.ts's PATEL/PATIL corpus exists for).
+    // Their TDS figures summing exactly to one ledger credit is a coincidence, not
+    // proof of a split — a differing PAN is proof of the opposite, and must win.
+    const personA: OfficeTxn = { deductee_id: "a", name: "Ramesh Patel", date_iso: "2026-03-31", amount: 99950, tds: 9995, section: "194C", pan: "AAAPP1111A" };
+    const personB: OfficeTxn = { deductee_id: "b", name: "Ramesh Patel", date_iso: "2026-03-31", amount: 50, tds: 5, section: "194C", pan: "BBBPP2222B" };
+    const credit: TallyRow[] = [{ row_index: 0, date: "31-Mar-26", iso: "2026-03-31", party: "Ramesh Patel", credit: 10000, debit: null, vch_no: "1", vch_type: "Journal", section: "194C" }];
+    const out = reconcileTally([personA, personB], credit, "194C");
+    const a = out.find((r) => r.office_deductee_id === "a")!;
+    const b = out.find((r) => r.office_deductee_id === "b")!;
+    // A's own 9995 is already within amountsMatch's ₹10 rounding cap of 10000, so
+    // A matches independently; B must NOT be folded onto A's ledger row despite
+    // 9995 + 5 = 10000 landing exactly.
+    expect(a.result).toBe("Matched");
+    expect(b.result).toBe("Ledger Entry Not Found");
+    expect(b.tally_row_index).not.toBe(a.tally_row_index);
   });
 
   it("does NOT group rows for the same party on a DIFFERENT date", () => {
@@ -186,6 +219,24 @@ describe("reconcileTallyFull — split-entry grouping (Office Data splits one pa
     // to fold into, so both must stay "Ledger Entry Not Found" untouched.
     const out = reconcileTally([bigRow, smallRow], [], "194A");
     expect(out.every((r) => r.result === "Ledger Entry Not Found")).toBe(true);
+  });
+
+  it("inherits `mapped` onto the folded leftover, and discloses the fold on the ANCHOR's own reason too", () => {
+    const partyMap: PartyMap = { [normalizeName("ABC Traders")]: "XYZ Enterprises" };
+    const anchorTxn: OfficeTxn = { deductee_id: "am", name: "ABC Traders", date_iso: "2026-04-10", amount: 50000, tds: 4999, section: "194C" };
+    const leftoverTxn: OfficeTxn = { deductee_id: "lm", name: "ABC Traders", date_iso: "2026-04-10", amount: 10, tds: 1, section: "194C" };
+    const ledgerRow: TallyRow[] = [{ row_index: 0, date: "10-Apr-26", iso: "2026-04-10", party: "XYZ Enterprises", credit: 5000, debit: null, vch_no: "9", vch_type: "Journal", section: "194C" }];
+    const out = reconcileTally([anchorTxn, leftoverTxn], ledgerRow, "194C", partyMap);
+    const anchor = out.find((r) => r.office_deductee_id === "am")!;
+    const leftover = out.find((r) => r.office_deductee_id === "lm")!;
+    expect(anchor.result).toBe("Matched");
+    expect(leftover.result).toBe("Matched");
+    expect(leftover.mapped).toBe(anchor.mapped);
+    expect(anchor.mapped).toBe(true);
+    // The anchor's OWN card must also disclose that its credit is now shared —
+    // a checker reading it in isolation must not see an ordinary single-record
+    // match with no signal anything was folded in.
+    expect(anchor.reason).toMatch(/splits this payment/);
   });
 
   it("leaves a normal, non-split single office record completely unaffected", () => {
