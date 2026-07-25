@@ -1632,7 +1632,19 @@ export async function autoPopulateNotes(
     // so the main loop's PL_EXP_CII total remains the source of truth for
     // the FS face; the render layer computes a live sub-cell sum for the
     // "Changes in inventories (per P&L)" row itself.
+    //
+    // 2026-07-24 (V J Desai — Mill Power CII persistence): the earlier
+    // rebuild at the main note-row loop (line ~1558) discarded the
+    // `override` sub-object under `pl.changes_inventory`, so on the next
+    // Re-sync from TB / page reload the auditor's manual sub-cell entries
+    // silently vanished. Now the auditor's `override` block is pulled
+    // from `options.existing` and preserved verbatim on the outgoing
+    // node, so respectManualEdits doesn't have to reconstruct it path by
+    // path (which required every sub-cell to be in `manual_edits` — the
+    // race between updatePath's fire-and-forget save and a fast page
+    // refresh could drop paths that hadn't yet been flushed).
     const priorCI = (out.pl.changes_inventory as any) ?? {};
+    const existingCI = ((options.existing?.pl as any)?.changes_inventory ?? {}) as any;
     (out.pl as any).changes_inventory = {
       ...priorCI,
       fg_close_cy:  Math.round(fg_close_cy  * 100) / 100,
@@ -1647,6 +1659,11 @@ export async function autoPopulateNotes(
       fg_open_py:   Math.round(fg_open_py_auto  * 100) / 100,
       wip_open_py:  Math.round(wip_open_py_auto * 100) / 100,
       sit_open_py:  Math.round(sit_open_py_auto * 100) / 100,
+      // Carry forward the auditor's manual sub-cell overrides and
+      // bucket_map reassignments verbatim — these are user data, not
+      // derivable from the TB.
+      ...(existingCI.override   ? { override:   existingCI.override   } : {}),
+      ...(existingCI.bucket_map ? { bucket_map: existingCI.bucket_map } : {}),
     };
   }
 

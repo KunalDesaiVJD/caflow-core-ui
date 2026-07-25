@@ -20,6 +20,7 @@ import {
   type ListRow, type AgeingMatrix,
 } from "./EditableCell";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
+import { computeFaceNpat } from "@/lib/plFaceNpat";
 import { useDynamicNoteRegistry } from "@/lib/noteNumberRegistry";
 import { CORP_SIGNED_NOTE_TOTALS } from "@/lib/nceFeatureFlags";
 import { Plus, Trash2 } from "lucide-react";
@@ -236,9 +237,18 @@ export default function NoteBSLiab({
   const subtotalACy   = genReserveCy + sharePremCy;
   const subtotalAPy   = genReservePy + sharePremPy;
 
-  // Profit for the year — auto-pulled from P&L EPS note (NPAT)
-  const profitCy      = Number(get("pl.eps.npat")    ?? 0);
-  const profitPy      = Number(get("pl.eps.npat_py") ?? 0);
+  // 2026-07-24 (V J Desai — Mill Power R&S profit ≠ P&L face NPAT):
+  // "Profit for the year" now mirrors the LIVE P&L face NPAT — Revenue
+  // − Expenses − Tax — computed via computeFaceNpat(). Reading a static
+  // pl.eps.npat previously diverged from the face any time the auditor
+  // manually edited Cost of Materials (Opening + Purchases − Closing
+  // formula) or overrode a Changes in Inventories sub-cell. That gap
+  // then propagated into Sub-total [b] under Reserves & Surplus,
+  // triggering a spurious Note-3 reconciliation banner even though the
+  // note editor was internally consistent. Now R&S profit always ties
+  // back to the P&L face on the same page, for every corporate client.
+  const profitCy      = computeFaceNpat(notes as any, "cy");
+  const profitPy      = computeFaceNpat(notes as any, "py");
 
   // Issue 2 (Aesha) — Carry-forward of closing balance for Reserves & Surplus.
   // CY "Opening balance" of Surplus in P&L should AUTOMATICALLY equal the
