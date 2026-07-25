@@ -80,3 +80,92 @@ export async function extractAckNumberFromFile(file: File): Promise<string | nul
   const pages = await pdfToTextPages(file);
   return extractAckNumber(pages);
 }
+
+// ─── Cross-check fields (Name / Financial Year / Quarter / Form No. / TAN) ──
+//
+// Unlike the Ack No./RRR pair above, every one of these prints as a single
+// "Label : Value" row on the real receipt (confirmed against a genuine Form
+// 24Q acknowledgement's actual extracted text runs, top to bottom):
+//
+//   Name        : KWIKTEAM SUPPORT SERVICES PRIVATE LIMITED
+//   PAN/TAN     : AHMK08204A
+//   Form No.    : Form 24Q
+//   Financial Year : 2025-26
+//   Quarter     : Q4
+//
+// So no RRR-style lookahead/bail-out is needed here: find the band whose text
+// starts with the label, then take whatever remains of THAT SAME band's text
+// after the label and its ":" separator.
+
+export interface AckFields {
+  ackNumber: string | null;
+  name: string | null;
+  financialYear: string | null;
+  quarter: string | null;
+  /** Bare form code, e.g. "24Q" — the receipt's own "Form " prefix is stripped
+   *  so this compares directly against tds_filings.tds_forms[0]. */
+  formNo: string | null;
+  tan: string | null;
+}
+
+const NAME_LABEL_RE = /^Name\b/i;
+const FY_LABEL_RE = /^Financial\s+Year\b/i;
+const QUARTER_LABEL_RE = /^Quarter\b/i;
+const FORM_NO_LABEL_RE = /^Form\s+No\.?/i;
+const PAN_TAN_LABEL_RE = /^PAN\s*\/\s*TAN\b/i;
+
+function bandText(band: PdfTextItem[]): string {
+  return band.map((i) => i.str.trim()).filter(Boolean).join(" ");
+}
+
+/** Pull the value out of a "Label : Value" row. Returns null if the label
+ * isn't found on this page, OR if it is but the printed value is blank/"-"
+ * (several fields — Assessment Year, Month — are legitimately "-" on a
+ * regular quarterly TDS receipt; nothing to report there). */
+function extractLabelledValue(bands: PdfTextItem[][], labelRe: RegExp): string | null {
+  for (const band of bands) {
+    const text = bandText(band);
+    const m = labelRe.exec(text);
+    if (!m) continue;
+    const rest = text.slice(m.index + m[0].length).replace(/^\s*:\s*/, "").trim();
+    return rest && rest !== "-" ? rest : null;
+  }
+  return null;
+}
+
+/** Pure parse: extract every field this codebase cross-checks an attached ACK
+ * PDF against, from already-extracted text runs. Accumulates across pages
+ * (first hit per field wins) so a multi-page PDF with a cover page still
+ * resolves correctly. Returns all-null fields (never throws) when the PDF has
+ * no matching text layer at all — e.g. a scanned/image-only PDF — so callers
+ * can treat "nothing extracted" as "nothing to cross-check" rather than an
+ * error. */
+export function extractAckFields(pages: PdfTextItem[][]): AckFields {
+  let name: string | null = null;
+  let financialYear: string | null = null;
+  let quarter: string | null = null;
+  let formNo: string | null = null;
+  let tan: string | null = null;
+  for (const items of pages) {
+    const bands = toBands(items);
+    name ??= extractLabelledValue(bands, NAME_LABEL_RE);
+    financialYear ??= extractLabelledValue(bands, FY_LABEL_RE);
+    quarter ??= extractLabelledValue(bands, QUARTER_LABEL_RE);
+    formNo ??= extractLabelledValue(bands, FORM_NO_LABEL_RE);
+    tan ??= extractLabelledValue(bands, PAN_TAN_LABEL_RE);
+  }
+  return {
+    ackNumber: extractAckNumber(pages),
+    name,
+    financialYear,
+    quarter,
+    formNo: formNo ? formNo.replace(/^Form\s+/i, "").trim() : null,
+    tan,
+  };
+}
+
+/** Convenience wrapper: read a PDF File and return every cross-check field. */
+export async function extractAckFieldsFromFile(file: File): Promise<AckFields> {
+  const pages = await pdfToTextPages(file);
+  return extractAckFields(pages);
+}

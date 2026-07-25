@@ -5,7 +5,7 @@ import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
 import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PenLine,
-  ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw,
+  ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw, Repeat2,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
@@ -13,6 +13,7 @@ import { TdsDataEntry } from "@/components/tds/TdsDataEntry";
 import { TdsValidateFinalise } from "@/components/tds/TdsValidateFinalise";
 import { TdsReports } from "@/components/tds/TdsReports";
 import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
+import { TdsCorrections } from "@/components/tds/TdsCorrections";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -37,6 +38,7 @@ const NAV_ITEMS = [
   { key: "reports",    label: "Reports",        icon: BarChart3 },
   { key: "rate-master",label: "Rate Master",    icon: Settings },
   { key: "audit-log",  label: "Audit Log",      icon: ClipboardList },
+  { key: "corrections",label: "Corrections",    icon: Repeat2 },
 ] as const;
 
 type NavKey = typeof NAV_ITEMS[number]["key"];
@@ -341,6 +343,7 @@ const TdsFilings = () => {
           {activeSection === "reports" && <TdsReports clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
           {activeSection === "rate-master" && <TdsRateMaster resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />}
           {activeSection === "audit-log" && <TdsAuditLog clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
+          {activeSection === "corrections" && <TdsCorrections clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
         </div>
       </div>
     </div>

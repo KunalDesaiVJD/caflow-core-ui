@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } fr
 import { supabase } from "@/integrations/supabase/client";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { isPanException } from "@/lib/tdsPanVerification";
-import { extractAckNumberFromFile } from "@/lib/tds/ackPdf";
+import { extractAckFieldsFromFile, type AckFields } from "@/lib/tds/ackPdf";
 import { sanitizeStorageName } from "@/lib/storagePath";
+import { nameCompare, normalizePan } from "@/lib/tds/match";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -763,6 +764,60 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     setVfStatuses(map);
   };
 
+  // Financial year strings appear as either "2025-26" (this app's own format,
+  // matching the real ACK receipt's own printed format) or occasionally
+  // "2025-2026" — normalise both to "2025-26" before comparing so a harmless
+  // 2 vs 4-digit end-year difference is never reported as a real mismatch.
+  const normalizeFy = (v: string | null | undefined): string => {
+    const s = (v ?? "").trim();
+    const m = s.match(/^(\d{4})[-/](\d{2,4})$/);
+    if (!m) return s.toUpperCase();
+    return `${m[1]}-${m[2].length === 4 ? m[2].slice(2) : m[2]}`;
+  };
+
+  // Compare the receipt's own printed Name/FY/Quarter/TAN/Form No. against
+  // this row's actual client/period. Returns null when everything matches
+  // (or nothing could be extracted at all — nothing to compare) — never
+  // blocks, only informs; per this codebase's established pattern of
+  // surfacing mismatches for human judgement (e.g. the TDS reconciliation
+  // Override flow) rather than hard-blocking the upload.
+  const buildAckMismatchWarning = (fields: AckFields, filing: TdsFiling, client: ClientOption | undefined): string | null => {
+    if (!fields.name && !fields.financialYear && !fields.quarter && !fields.tan) return null; // nothing extracted — nothing to compare
+
+    const clientName = client?.name || "";
+    const clientTan = client?.tan_number || filing.tan || "";
+    const problems: string[] = [];
+
+    // Name — fuzzy/equivalent match (PVT=PRIVATE, LTD=LIMITED, case/punctuation
+    // -insensitive) via the same nameCompare() every other TDS stage uses.
+    // "unknown" (blank/unusable on one side) is deliberately NOT a mismatch.
+    if (fields.name && clientName) {
+      const cmp = nameCompare(clientName, fields.name);
+      if (cmp === "mismatch" || cmp === "different") problems.push(`name ("${fields.name}" vs "${clientName}")`);
+    }
+    if (fields.financialYear && normalizeFy(fields.financialYear) !== normalizeFy(filing.financial_year)) {
+      problems.push(`Financial Year (${fields.financialYear} vs ${filing.financial_year})`);
+    }
+    if (fields.quarter && fields.quarter.trim().toUpperCase() !== (filing.quarter || "").trim().toUpperCase()) {
+      problems.push(`Quarter (${fields.quarter} vs ${filing.quarter})`);
+    }
+    if (fields.tan && clientTan && normalizePan(fields.tan) !== normalizePan(clientTan)) {
+      problems.push(`TAN (${fields.tan} vs ${clientTan})`);
+    }
+    // Bonus cross-check — filing.tds_forms holds bare codes ("24Q"), never
+    // the receipt's "Form 24Q" (already stripped by extractAckFields).
+    if (fields.formNo && filing.tds_forms?.[0] && fields.formNo.toUpperCase() !== filing.tds_forms[0].toUpperCase()) {
+      problems.push(`Form (${fields.formNo} vs ${filing.tds_forms[0]})`);
+    }
+
+    if (problems.length === 0) return null;
+
+    return `This acknowledgement is for ${fields.name || "a different deductor"}`
+      + `${fields.financialYear ? `, FY ${fields.financialYear}` : ""}${fields.quarter ? ` ${fields.quarter}` : ""}`
+      + ` — but you're attaching it to ${clientName || "this client"}, FY ${filing.financial_year} ${filing.quarter}.`
+      + ` Please verify this is the correct file. (Mismatch: ${problems.join("; ")})`;
+  };
+
   // Upload PDF → documents bucket → insert tds_ack_files record
   const handleAttachAck = async (filing: TdsFiling, file: File) => {
     // a. Auth check — read the already-in-scope `user` from useAuth() rather
@@ -833,19 +888,32 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         next.set(filing.id, insertResult.data as TdsAckFile);
         return next;
       });
-      // g. Auto-fill Ack No. from the receipt's own printed "e-Filing
-      // Acknowledgement Number". The write uses a DB-level compare-and-swap
-      // (.is("acknowledgment_number", null)) rather than trusting this stale
-      // `filing` snapshot — the Ack No. input stays enabled during upload, so
-      // the user could be typing a value by hand in this exact window; the
-      // CAS guarantees the auto-fill silently no-ops if the column is no
-      // longer null by the time it runs, instead of racing a manual entry.
-      let ackNo: string | null = null;
+      // g. Auto-fill Ack No. — and cross-check Name/FY/Quarter/TAN/Form No. —
+      // from the receipt's own printed fields. There is no manual Ack No.
+      // entry point anymore, so the DB-level compare-and-swap below
+      // (.is("acknowledgment_number", null)) no longer guards against a
+      // concurrent hand-typed value; it's kept as-is since it's still a
+      // correct, harmless guard against a second concurrent attach landing
+      // first.
+      let fields: AckFields = { ackNumber: null, name: null, financialYear: null, quarter: null, formNo: null, tan: null };
       try {
-        ackNo = await extractAckNumberFromFile(file);
+        fields = await extractAckFieldsFromFile(file);
       } catch (e) {
-        console.error('Ack number extraction failed:', e);
+        console.error('Ack PDF field extraction failed:', e);
       }
+      const ackNo = fields.ackNumber;
+
+      // Warn (never block) when the receipt's own printed identity doesn't
+      // match this row's client/period — silently skipped when nothing could
+      // be extracted at all (e.g. a scanned/image-only PDF with no text
+      // layer), since there's nothing to compare in that case.
+      const client = clients.find(c => c.id === filing.client_id);
+      const mismatchWarning = buildAckMismatchWarning(fields, filing, client);
+      const withWarning = (desc?: string): string | undefined => {
+        if (!mismatchWarning) return desc;
+        return desc ? `${desc} ⚠️ ${mismatchWarning}` : `⚠️ ${mismatchWarning}`;
+      };
+
       if (ackNo && !filing.acknowledgment_number) {
         const { data: casRows, error: casError } = await supabase.from("tds_filings").update({
           acknowledgment_number: ackNo,
@@ -853,20 +921,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           last_updated_at: new Date().toISOString(),
         }).eq("id", filing.id).is("acknowledgment_number", null).select("id");
         if (casError) {
-          toast({ title: '✅ ACK file uploaded', description: `Uploaded, but couldn't save the Ack No. automatically (${casError.message}) — please enter it manually.` });
+          toast({ title: '✅ ACK file uploaded', description: withWarning(`Uploaded, but couldn't save the Ack No. automatically (${casError.message}).`) });
           return;
         }
         if (casRows && casRows.length > 0) {
           fetchFilings();
           onFilingsChanged?.();
-          toast({ title: '✅ ACK file uploaded', description: `Ack No. auto-filled: ${ackNo}` });
+          toast({ title: '✅ ACK file uploaded', description: withWarning(`Ack No. auto-filled: ${ackNo}`) });
           return;
         }
       }
       toast(
         !filing.acknowledgment_number
-          ? { title: '✅ ACK file uploaded', description: "Couldn't auto-read the acknowledgement number from this PDF — please enter it manually." }
-          : { title: '✅ ACK file uploaded' },
+          ? { title: '✅ ACK file uploaded', description: withWarning("Couldn't auto-read the acknowledgement number from this PDF.") }
+          : { title: '✅ ACK file uploaded', description: withWarning() },
       );
     } catch (e: any) {
       // Any thrown (not resolved-with-error) failure from an auth/storage/DB
@@ -1073,16 +1141,6 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       fetchFilings();
       onFilingsChanged?.();
     }
-  };
-
-  const handleInlineUpdate = async (filing: TdsFiling, field: string, value: any) => {
-    const { error } = await supabase.from("tds_filings").update({
-      [field]: value,
-      last_updated_by: user?.id,
-      last_updated_at: new Date().toISOString(),
-    }).eq("id", filing.id);
-    if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
-    else { fetchFilings(); onFilingsChanged?.(); }
   };
 
   const toggleSelect = (id: string) => {
@@ -1508,27 +1566,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                     </TableCell>
                     <TableCell>
                       {(() => {
-                        const isFiledLocked = f.work_status === "Filed" || f.work_status === "Processed";
                         const ackFile = ackFiles.get(f.id);
                         return (
                           <div className="space-y-1">
-                            {/* Ack No — editable unless Filed. Keyed on the value itself so
-                                an auto-fill from the uploaded ACK PDF (which updates
-                                f.acknowledgment_number from outside this input) forces a
-                                remount and actually shows up — defaultValue alone only
-                                applies on first mount and won't reflect later prop changes.
-                                Also disabled while its own ACK PDF is uploading/parsing, so
-                                there's no window where the user can be mid-typing here at the
-                                exact moment an auto-fill could land (the DB write itself is
-                                additionally guarded by a compare-and-swap in handleAttachAck). */}
-                            <Input
-                              key={f.acknowledgment_number || "empty"}
+                            {/* Ack No — read-only, auto-filled ONLY from the uploaded ACK
+                                PDF's own printed "e-Filing Acknowledgement Number"
+                                (handleAttachAck). No manual entry point exists anymore —
+                                same read-only-span convention as Prepared By / Filed By. */}
+                            <span
                               data-autofit="ackno"
-                              className={cn("h-7 w-full text-xs", (isFiledLocked || ackUploading === f.id) && "bg-muted cursor-not-allowed opacity-70")}
-                              defaultValue={f.acknowledgment_number || ""}
-                              disabled={isFiledLocked || ackUploading === f.id}
-                              onBlur={e => { if (!isFiledLocked && e.target.value !== (f.acknowledgment_number || "")) handleInlineUpdate(f, "acknowledgment_number", e.target.value || null); }}
-                            />
+                              className={cn("text-xs block truncate", !f.acknowledgment_number && "text-muted-foreground")}
+                              title={f.acknowledgment_number || "Auto-filled when an ACK PDF is attached"}
+                            >
+                              {f.acknowledgment_number || "—"}
+                            </span>
                             {/* ACK PDF attachment — documents bucket + tds_ack_files table */}
                             <div className="flex items-center gap-1 flex-wrap">
                               {ackFile ? (
