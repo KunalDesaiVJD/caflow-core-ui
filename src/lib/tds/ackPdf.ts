@@ -96,6 +96,26 @@ export async function extractAckNumberFromFile(file: File): Promise<string | nul
 // So no RRR-style lookahead/bail-out is needed here: find the band whose text
 // starts with the label, then take whatever remains of THAT SAME band's text
 // after the label and its ":" separator.
+//
+// IMPORTANT — a label word starting a line is NOT enough by itself. The
+// "Form Description" field on the real receipt wraps across three lines, and
+// its boilerplate third line reads (verbatim, lowercase, no colon anywhere
+// near it):
+//
+//   quarter ended June/September/December/March (Financial year)
+//
+// A bare `/^Quarter\b/i` (or `/^Name\b/i`, `/^Financial\s+Year\b/i`, etc.)
+// matches that prose line just as happily as the genuine "Quarter : Q4" row,
+// and — because it's earlier on the page — wins first, handing back
+// "ended June/September/December/March (Financial year)" as the "quarter".
+// So every label pattern below requires the colon to appear immediately
+// after the label (only whitespace in between): that's what actually makes a
+// band a "label: value" row rather than a sentence that merely starts with
+// the same word. Quarter additionally gets a value-shape check
+// (`/^Q[1-4]$/i`) as a second, independent safety net — even if some future
+// receipt template put a colon somewhere inside boilerplate prose, a
+// resulting value that doesn't look like a real quarter code is rejected
+// rather than accepted.
 
 export interface AckFields {
   ackNumber: string | null;
@@ -108,11 +128,20 @@ export interface AckFields {
   tan: string | null;
 }
 
-const NAME_LABEL_RE = /^Name\b/i;
-const FY_LABEL_RE = /^Financial\s+Year\b/i;
-const QUARTER_LABEL_RE = /^Quarter\b/i;
-const FORM_NO_LABEL_RE = /^Form\s+No\.?/i;
-const PAN_TAN_LABEL_RE = /^PAN\s*\/\s*TAN\b/i;
+// Each pattern requires the label to be followed (after only whitespace) by
+// the ":" separator itself — NOT just `\b` — so a prose line that happens to
+// start with the same word (e.g. the Form Description boilerplate's
+// "quarter ended ...") can never qualify as a "label: value" row.
+const NAME_LABEL_RE = /^Name\s*:\s*/i;
+const FY_LABEL_RE = /^Financial\s+Year\s*:\s*/i;
+const QUARTER_LABEL_RE = /^Quarter\s*:\s*/i;
+const FORM_NO_LABEL_RE = /^Form\s+No\.?\s*:\s*/i;
+const PAN_TAN_LABEL_RE = /^PAN\s*\/\s*TAN\s*:\s*/i;
+// Safety net beyond the regex tightening above: a genuine Quarter value is
+// always exactly Q1–Q4. If a matched band still produces anything else,
+// something is wrong (e.g. an unforeseen boilerplate collision) and the
+// value should be discarded rather than trusted.
+const QUARTER_VALUE_RE = /^Q[1-4]$/i;
 
 function bandText(band: PdfTextItem[]): string {
   return band.map((i) => i.str.trim()).filter(Boolean).join(" ");
@@ -121,14 +150,18 @@ function bandText(band: PdfTextItem[]): string {
 /** Pull the value out of a "Label : Value" row. Returns null if the label
  * isn't found on this page, OR if it is but the printed value is blank/"-"
  * (several fields — Assessment Year, Month — are legitimately "-" on a
- * regular quarterly TDS receipt; nothing to report there). */
-function extractLabelledValue(bands: PdfTextItem[][], labelRe: RegExp): string | null {
+ * regular quarterly TDS receipt; nothing to report there), OR if a
+ * `valuePattern` is given and the extracted value doesn't match it (an
+ * additional shape check so a stray match never hands back garbage). */
+function extractLabelledValue(bands: PdfTextItem[][], labelRe: RegExp, valuePattern?: RegExp): string | null {
   for (const band of bands) {
     const text = bandText(band);
     const m = labelRe.exec(text);
     if (!m) continue;
     const rest = text.slice(m.index + m[0].length).replace(/^\s*:\s*/, "").trim();
-    return rest && rest !== "-" ? rest : null;
+    if (!rest || rest === "-") return null;
+    if (valuePattern && !valuePattern.test(rest)) return null;
+    return rest;
   }
   return null;
 }
@@ -150,7 +183,7 @@ export function extractAckFields(pages: PdfTextItem[][]): AckFields {
     const bands = toBands(items);
     name ??= extractLabelledValue(bands, NAME_LABEL_RE);
     financialYear ??= extractLabelledValue(bands, FY_LABEL_RE);
-    quarter ??= extractLabelledValue(bands, QUARTER_LABEL_RE);
+    quarter ??= extractLabelledValue(bands, QUARTER_LABEL_RE, QUARTER_VALUE_RE);
     formNo ??= extractLabelledValue(bands, FORM_NO_LABEL_RE);
     tan ??= extractLabelledValue(bands, PAN_TAN_LABEL_RE);
   }
