@@ -300,8 +300,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     try {
       const parsed = await parseLedgerFile(file);
       const firmId = await resolveFirmId();
-      const { data: dup } = await supabase.from("tds_tally_batches").select("id").eq("filing_id", filing.id).eq("file_name", file.name);
+      const { data: dup } = await supabase.from("tds_tally_batches").select("id, row_count, section").eq("filing_id", filing.id).eq("file_name", file.name);
       const dupIds = (dup || []).map((b: any) => b.id);
+      const replaced = dupIds.length > 0;
+      const priorRowCount = dup?.[0]?.row_count ?? null;
+      const priorSection = dup?.[0]?.section ?? null;
       if (dupIds.length) { await supabase.from("tds_tally_rows").delete().in("batch_id", dupIds); await supabase.from("tds_tally_batches").delete().in("id", dupIds); }
       const { data: bRow, error: bErr } = await supabase.from("tds_tally_batches").insert({
         filing_id: filing.id, client_id: selClient, firm_id: firmId, financial_year: selFy, quarter: selQuarter, form_type: selForm,
@@ -333,6 +336,16 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           "Click Run Validation.",
         ].filter(Boolean).join(" "),
         ...(parsed.issues.length ? { variant: "default" as const } : {}),
+      });
+      // Audit the import itself (distinct from TALLY_RECON_RUN, which logs the
+      // reconciliation outcome) — a new action_type since this is a new event,
+      // not an overload of an existing one.
+      await logReconAudit({
+        filingId: filing.id, firmId, userId: user?.id, userName: userMap[user?.id ?? ""],
+        actionType: "TALLY_LEDGER_IMPORTED",
+        oldValue: replaced ? `${priorRowCount ?? "?"} row(s) · ${priorSection || "no section"}` : null,
+        newValue: `${parsed.rows.length} row(s) · ${parsed.section || "no section"}`,
+        remark: `Imported "${file.name}" (${parsed.source} ledger)${replaced ? " — replaced previous import of the same file." : "."}`,
       });
       await loadAll();
     } catch (e: any) { toast({ title: "Tally import failed", description: e.message, variant: "destructive" }); }

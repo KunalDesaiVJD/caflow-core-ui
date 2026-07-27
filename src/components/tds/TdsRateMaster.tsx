@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { resolveSection393, isItAct2025Regime, SECTION_393_DISCLAIMER } from "@/lib/section393";
 import { TDS_RATE_SEED_DATA } from "@/lib/tdsRateSeed";
 import { financialYearToAssessmentYear } from "@/lib/tdsQuarter";
+import { logRateMasterAudit } from "@/lib/tdsRateMasterAudit";
 
 const TAX_YEAR_OPTIONS = Array.from({ length: 8 }, (_, i) => {
   const s = 2023 + i;

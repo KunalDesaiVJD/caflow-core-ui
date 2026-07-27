@@ -447,6 +447,12 @@ export interface ImportResult {
   challansReused: number;      // pre-existing challans whose deductees were attached as carry-forward utilisation
   deducteesInserted: number;
   warnings: string[];
+  /** Detail on each pre-existing challan this import newly attached deductees
+   *  to (the combined-payment / cross-form-and-quarter reuse feature — see
+   *  resolveExistingChallansByNumber below). Empty when nothing was reused.
+   *  Consumed by callers (e.g. TdsDataEntry.tsx) to write one audit-log entry
+   *  per reused challan naming which form/quarter its balance is shared FROM. */
+  reused: { challanNumber: string; fromForm: string; fromQuarter: string; fromFy: string }[];
 }
 
 export interface ExistingChallanRef {
@@ -872,7 +878,7 @@ export async function importGeniusXls(
     );
   }
 
-  const reusedChallans: { fileSerial: number; challanNum: string; from: string }[] = [];
+  const reusedChallans: { fileSerial: number; challanNum: string; from: string; fromForm: string; fromQuarter: string; fromFy: string }[] = [];
   const newChallans: typeof parsed.challans = [];
   parsed.challans.forEach(c => {
     const existingRec = c.bankChallanNo ? existingChallanByNum.get(c.bankChallanNo) : undefined;
@@ -881,11 +887,19 @@ export async function importGeniusXls(
         fileSerial: c.serialNo,
         challanNum: c.bankChallanNo,
         from: `${existingRec.form_type} ${existingRec.quarter} ${existingRec.financial_year}`,
+        fromForm: existingRec.form_type,
+        fromQuarter: existingRec.quarter,
+        fromFy: existingRec.financial_year,
       });
     } else {
       newChallans.push(c);
     }
   });
+  // Structured (non-string) form for callers that need to log per-challan
+  // audit entries rather than parse the human-readable `from` sentence above.
+  const reusedForCaller = () => reusedChallans.map(r => ({
+    challanNumber: r.challanNum, fromForm: r.fromForm, fromQuarter: r.fromQuarter, fromFy: r.fromFy,
+  }));
 
   if (reusedChallans.length > 0) {
     const sample = reusedChallans.slice(0, 3)
@@ -906,6 +920,7 @@ export async function importGeniusXls(
         ...warnings,
         "Nothing to import — no challans in the file.",
       ],
+      reused: [],
     };
   }
 
@@ -989,6 +1004,7 @@ export async function importGeniusXls(
       challansReused: reusedChallans.length,
       deducteesInserted: 0,
       warnings,
+      reused: reusedForCaller(),
     };
   }
 
@@ -1054,5 +1070,6 @@ export async function importGeniusXls(
     challansReused: reusedChallans.length,
     deducteesInserted: insertedDeductees,
     warnings,
+    reused: reusedForCaller(),
   };
 }

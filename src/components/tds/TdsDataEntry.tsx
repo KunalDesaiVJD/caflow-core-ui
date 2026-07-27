@@ -35,6 +35,7 @@ import {
 import { generateGeniusExport } from "@/lib/genius-export";
 import { importGeniusXls, repairFilingSectionCodes } from "@/lib/genius-import";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
+import { logReconAudit } from "@/lib/tdsReconAudit";
 
 // ─── Types ───
 interface ClientOption {
@@ -118,6 +119,19 @@ const PAN_4TH_CHAR_MAP: Record<string, string> = {
 
 const isValidPan = (pan: string): boolean => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan.toUpperCase());
 const isIndividualRateType = (type: string | null): boolean => type === "Individual" || type === "HUF";
+
+// Office-record fields the user explicitly asked to have audit-tracked on
+// edit (tds_filing_audit_log). Scoped deliberately narrow — every OTHER
+// field on a deductee row (name, amount, dates, rate, etc.) is intentionally
+// NOT logged here; logging every keystroke would drown the trail that
+// matters. Keyed by the exact tds_deductees column name so callers can look
+// up straight off the `field` string already in hand.
+const TRACKED_DEDUCTEE_AUDIT_FIELDS: Record<string, { actionType: string; label: string }> = {
+  deductee_pan: { actionType: "DEDUCTEE_PAN_EDIT", label: "PAN" },
+  section_code: { actionType: "DEDUCTEE_SECTION_EDIT", label: "Section" },
+  lower_deduction_certificate_no: { actionType: "DEDUCTEE_LDC_NUMBER_EDIT", label: "Lower Deduction Certificate No." },
+  lower_deduction_rate: { actionType: "DEDUCTEE_LDC_RATE_EDIT", label: "Lower Deduction Rate" },
+};
 
 // Challan utilisation status — ZERO tolerance on over-application. Applied
 // strictly exceeding the allocatable challan amount by ANY amount (even
@@ -273,6 +287,13 @@ export function TdsDataEntry({
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
+  // Display name for the acting user on audit-log entries — resolved from the
+  // already-fetched `users` list (same pattern as other TDS screens), no
+  // separate fetch needed.
+  const currentUserName = useMemo(
+    () => users.find(u => u.id === user?.id)?.name || null,
+    [users, user?.id]
+  );
 
   // Client/FY/Quarter/Form are the SHARED Workspace context (owned by the parent),
   // so a return selected here is already loaded when the user opens Validate & Finalise.
@@ -869,6 +890,18 @@ export function TdsDataEntry({
         return supabase.from("tds_challans").insert(p);
       }
     };
+    // Audit trail — log NEW challan creation only (not edits to an existing
+    // one). Fire-and-forget, called after the write already succeeded.
+    const auditChallanCreate = () => {
+      if (editingChallan) return;
+      logReconAudit({
+        filingId: filing.id, firmId: payload.firm_id,
+        userId: user?.id, userName: currentUserName,
+        actionType: "CHALLAN_CREATE",
+        newValue: `Challan ${payload.challan_serial_no}, ₹${challanTotal.toLocaleString("en-IN")} deposited`,
+        remark: `New challan added (BSR ${payload.bsr_code}) for ${selForm} ${selQuarter} FY ${selFy}`,
+      });
+    };
     ({ error } = await tryInsertOrUpdate(payload));
     if (error && (error.message?.includes("late_fees_234e") || error.message?.includes("schema cache"))) {
       // Column not yet in DB — save without it, show partial success notice
@@ -877,6 +910,7 @@ export function TdsDataEntry({
       if (!error) {
         toast({ title: editingChallan ? "Challan updated" : "Challan added", description: "Note: Late Fees field will be available after database migration is applied." });
         setChallanDialogOpen(false);
+        auditChallanCreate();
         await refreshChallansAndCF(filing.id);
         await bumpUnderProcess();
         return;
@@ -885,6 +919,7 @@ export function TdsDataEntry({
     if (error) { toast({ title: "Error saving challan", description: error.message, variant: "destructive" }); return; }
     toast({ title: editingChallan ? "Challan updated" : "Challan added" });
     setChallanDialogOpen(false);
+    auditChallanCreate();
     await refreshChallansAndCF(filing.id);
     await bumpUnderProcess();
   };
@@ -1003,6 +1038,25 @@ export function TdsDataEntry({
 
     const { error } = await supabase.from("tds_deductees").update(updates).eq("id", deducteeId);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+    // Audit trail — PAN / Section / LDC No. / LDC Rate edits only (the fields
+    // explicitly asked to be tracked), and only when the value genuinely
+    // changed. Fire-and-forget: logReconAudit never throws and must never
+    // gate or block the save that already succeeded above.
+    const tracked = TRACKED_DEDUCTEE_AUDIT_FIELDS[field];
+    if (tracked) {
+      const oldVal = (deductee as any)[field] ?? null;
+      const newVal = (updates as any)[field] ?? null;
+      if (oldVal !== newVal) {
+        logReconAudit({
+          filingId: deductee.filing_id, firmId: deductee.firm_id,
+          userId: user?.id, userName: currentUserName,
+          actionType: tracked.actionType,
+          oldValue: oldVal !== null ? String(oldVal) : null,
+          newValue: newVal !== null ? String(newVal) : null,
+          remark: `${tracked.label} changed for ${deductee.deductee_name || "deductee"} (${selForm} ${selQuarter} FY ${selFy})`,
+        });
+      }
+    }
     const merged = { ...deductee, ...updates };
     setDeductees(prev => prev.map(d => d.id === deducteeId ? merged : d));
     // Issue 7G: sync allChallanDeductees for instant balance update
@@ -1288,6 +1342,15 @@ export function TdsDataEntry({
     try {
       await generateGeniusExport(selForm, filing, client, challans, allDeductees);
       toast({ title: "Genius Excel generated successfully! File saved." });
+      // Audit trail — pure "this happened" event, no natural old/new value.
+      // Placed AFTER the export genuinely succeeds (not in the catch/finally)
+      // so a cancelled save dialog (AbortError, below) is never logged as an export.
+      logReconAudit({
+        filingId: filing.id, firmId: filing.firm_id,
+        userId: user?.id, userName: currentUserName,
+        actionType: "GENIUS_EXPORT_RUN",
+        remark: `Exported Genius Excel for ${selForm} ${selQuarter} FY ${selFy} — ${challans.length} challan(s), ${allDeductees.length} deductee(s)`,
+      });
     } catch (err: any) {
       // User cancelled the save dialog — not an error
       if (err?.name === "AbortError") return;
@@ -1346,6 +1409,29 @@ export function TdsDataEntry({
         title: "Genius file imported successfully",
         description: `Added ${result.challansInserted} challan(s)${reusedText} and ${result.deducteesInserted} deductee(s)${warningText}`,
       });
+
+      // Audit trail — one entry summarizing the import itself...
+      logReconAudit({
+        filingId: filing.id, firmId: firmId || filing.firm_id,
+        userId: user?.id, userName: currentUserName,
+        actionType: "GENIUS_IMPORT_RUN",
+        newValue: `${result.deducteesInserted} deductee(s), ${result.challansInserted} new challan(s)${(result.challansReused ?? 0) > 0 ? `, ${result.challansReused} reused` : ""}`,
+        remark: `Imported Genius file "${file.name}" for ${selForm} ${selQuarter} FY ${selFy}`,
+      });
+      // ...and one per PRE-EXISTING challan newly associated with this filing
+      // via the combined-payment / cross-form-and-quarter reuse feature — the
+      // whole point of that feature is that a challan's balance is shared
+      // FROM another form/quarter, so name it explicitly here.
+      for (const r of result.reused) {
+        logReconAudit({
+          filingId: filing.id, firmId: firmId || filing.firm_id,
+          userId: user?.id, userName: currentUserName,
+          actionType: "CHALLAN_CROSS_FORM_LINK",
+          newValue: `Challan ${r.challanNumber}`,
+          remark: `Challan ${r.challanNumber} shared from ${r.fromForm} ${r.fromQuarter} FY ${r.fromFy} — now also linked to ${selForm} ${selQuarter} FY ${selFy}`,
+        });
+      }
+
       await bumpUnderProcess();
     } catch (err: any) {
       console.error("[GeniusImport] Failed:", err);

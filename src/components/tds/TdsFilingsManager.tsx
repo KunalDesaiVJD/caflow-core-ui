@@ -903,6 +903,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       }
       const ackNo = fields.ackNumber;
 
+      // Audit trail — record the ACK upload itself (not just the downstream
+      // Ack No. auto-fill). Reuses the same logAuditEntry wrapper as
+      // STATUS_CHANGE/FILING_DATE_SET/PREPARED_BY_SET/NOTE_ADDED below for
+      // consistency. Best-effort: never let a logging failure surface as an
+      // "Upload failed" toast for an upload that actually succeeded, so the
+      // rejection is swallowed locally rather than bubbling to the outer catch.
+      logAuditEntry(
+        filing.id,
+        "ACK_UPLOADED",
+        null,
+        ackNo || null,
+        `Acknowledgement PDF uploaded: "${file.name}"${ackNo ? ` (Ack No. ${ackNo} auto-detected)` : ' (no Ack No. could be auto-read)'}`,
+      ).catch(() => { /* audit logging must never block or reverse the user's action */ });
+
       // Warn (never block) when the receipt's own printed identity doesn't
       // match this row's client/period — silently skipped when nothing could
       // be extracted at all (e.g. a scanned/image-only PDF with no text

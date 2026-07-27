@@ -31,6 +31,7 @@ import {
   isPanException, panReason, panRecommendedAction, panDiagnostics,
   type OfficeParty, type TracesPanRow, type PanValidationResult, type PanCheckDetail,
 } from "@/lib/tdsPanVerification";
+import { canonicalSection } from "@/lib/tds/match";
 
 // ── Row shapes read back from each stage's results table ─────────────────────
 // Structurally identical to the (module-local) interfaces in
@@ -160,6 +161,18 @@ async function fetchTracesRows(filingId: string): Promise<TracesPanRow[]> {
     row_id: t.id, pan: t.pan, name: t.name, verified_name: t.verified_name,
     pan_status: t.pan_status, mismatch_in_name: t.mismatch_in_name,
   }));
+}
+
+/** Office Data's own section codes for this filing — needed only to reproduce
+ *  TdsTallyRecon.tsx's `missingSections` note. Mirrors that file's `loadOffice`
+ *  section formula: `section_code || nature_of_payment`. */
+async function fetchOfficeSections(filingId: string): Promise<string[]> {
+  const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filingId);
+  const chIds = (ch || []).map((c: any) => c.id);
+  if (!chIds.length) return [];
+  const { data: ded } = await supabase.from("tds_deductees")
+    .select("section_code, nature_of_payment").in("challan_id", chIds);
+  return (ded || []).map((d: any) => d.section_code || d.nature_of_payment).filter(Boolean);
 }
 
 /**
@@ -296,15 +309,19 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
   }
 
   // ── Stage 3 report — byte-identical to TdsTallyRecon.tsx stage3Report(), ───
-  // EXCEPT the `missingSections` note (Office Data sections with no imported
-  // ledger). Reproducing it exactly needs Office Data's own section codes
-  // (tds_deductees) run through canonicalSection() and compared against the
-  // ledger's sections — real work for an informational-only note. Per the task
-  // brief this is an accepted simplification for the standalone report;
-  // `ledgerSections` (the imported ledger's sections, used in the subtitle) IS
-  // still reproduced, since that only needs the already-fetched batch rows.
+  // including the `missingSections` note (Office Data sections with no
+  // imported ledger). Mirrors TdsTallyRecon.tsx's own `missingSections` useMemo:
+  // skip the office-sections fetch entirely when the ledger's own sections
+  // don't canonicalise to anything (`have.size === 0`), same short-circuit.
   let stage3Report: StageReport | null = null;
   if (tallyApplicable) {
+    const have = new Set(ledgerSections.map((s) => canonicalSection(s)).filter(Boolean) as string[]);
+    let missingSections: string[] = [];
+    if (have.size) {
+      const officeSections = await fetchOfficeSections(filingId);
+      const need = new Set(officeSections.map((s) => canonicalSection(s)).filter(Boolean) as string[]);
+      missingSections = [...need].filter((s) => !have.has(s)).sort();
+    }
     const stage3Row = (r: TallyResultRow) => ({
       "Office Party": r.office_name || "—",
       "Office Date": r.office_date || "—",
@@ -335,8 +352,9 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
         { title: "Overridden", rows: results3.filter((r) => r.overridden).map(stage3Row), emptyNote: "No overrides." },
         { title: "Matched", rows: results3.filter((r) => r.result === "Matched").map(stage3Row), emptyNote: "No matched records." },
       ],
-      // missingSections omitted — see the comment above this block.
-      notes: [],
+      notes: missingSections.length
+        ? [`Office Data has section(s) ${missingSections.join(", ")} with no imported ledger — those records cannot be reconciled until that ledger PDF is imported.`]
+        : [],
     };
   }
 
@@ -547,7 +565,13 @@ export function mergeQuarterlyReports(perQuarter: QuarterReportInput[]): { meta:
         as.rows.push(...sec.rows.map((r) => ({ Quarter: q.quarter, ...r })));
         if (sec.emptyNote) as.emptyNotes.add(sec.emptyNote);
       }
-      if (sr.notes?.length) acc.notes.push(`${q.quarter}: ${sr.notes.join(" ")}`);
+      // One pushed entry PER original note (not one run-on line per quarter) —
+      // each renderer (notesBlock in tdsReportExcel.ts, notesHtml in
+      // tdsReportPdf.ts) draws one bullet per array element, so squishing
+      // Stage 4's 3 separate notes ("Ready to file…"/"Digital signature…"/
+      // "Filing status…") into one joined string loses that bulleting even
+      // for a single selected quarter.
+      for (const n of sr.notes || []) acc.notes.push(`${q.quarter}: ${n}`);
     }
   }
 
