@@ -72,8 +72,40 @@ interface Props {
   isSuperadmin: boolean;
 }
 
+// Rate/threshold fields tracked on the audit trail for an edit — deliberately
+// excludes bookkeeping-only fields (surcharge/cess flags, notes) so the log
+// stays focused on the numbers that actually affect deduction amounts.
+const RATE_AUDIT_FIELDS: { key: string; label: string }[] = [
+  { key: "section_code", label: "Section" },
+  { key: "nature_of_payment", label: "Nature of Payment" },
+  { key: "threshold_individual", label: "Threshold (Ind)" },
+  { key: "threshold_company", label: "Threshold (Co.)" },
+  { key: "rate_individual", label: "Rate (Ind)" },
+  { key: "rate_company", label: "Rate (Co.)" },
+  { key: "rate_no_pan", label: "Rate (No PAN)" },
+  { key: "effective_from", label: "Effective From" },
+];
+
+// Diffs an existing rate row against the about-to-be-saved payload, returning
+// parallel "label: value" summaries for only the fields that actually changed
+// — feeds old_value/new_value on the RATE_MASTER_UPDATED audit entry.
+function diffRateFields(before: RateRecord, after: Record<string, any>) {
+  const oldParts: string[] = [];
+  const newParts: string[] = [];
+  for (const { key, label } of RATE_AUDIT_FIELDS) {
+    const oldV = (before as any)[key] ?? null;
+    const newV = after[key] ?? null;
+    if (String(oldV ?? "") !== String(newV ?? "")) {
+      oldParts.push(`${label}: ${oldV ?? "—"}`);
+      newParts.push(`${label}: ${newV ?? "—"}`);
+    }
+  }
+  return { oldParts, newParts };
+}
+
 export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
   const { toast } = useToast();
+  const { user } = useAuth();
   const [rates, setRates] = useState<RateRecord[]>([]);
   const [loading, setLoading] = useState(true);
   // "Tax Year" here means financial_year (the year TDS is deducted/deposited) —
@@ -259,6 +291,20 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
       if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
       else {
         toast({ title: "Rate updated" });
+        // Audit trail — fire-and-forget, called after the write already
+        // succeeded. Rate Master rows are firm-scoped config, not tied to a
+        // filing, so this goes to the dedicated tds_rate_master_audit_log
+        // (see src/lib/tdsRateMasterAudit.ts) rather than logReconAudit's
+        // filing-scoped tds_filing_audit_log.
+        const { oldParts, newParts } = diffRateFields(editingRate, payload);
+        logRateMasterAudit({
+          rateMasterId: editingRate.id, firmId: payload.firm_id,
+          userId: user?.id, userName: user?.name,
+          actionType: "RATE_MASTER_UPDATED",
+          oldValue: oldParts.length ? oldParts.join("; ") : null,
+          newValue: newParts.length ? newParts.join("; ") : null,
+          remark: `Updated Rate Master section ${payload.section_code} (${selectedForm}, Tax Year ${selectedTaxYear})`,
+        });
         // Follow the §393 dropdown filter to the row's new code so an edit
         // that renames the selected section doesn't strand the filter on a
         // now-nonexistent code (which would blank the grid).
@@ -272,6 +318,17 @@ export function TdsRateMaster({ resolveFirmId, isSuperadmin }: Props) {
       if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
       else {
         toast({ title: "Rate added" });
+        // Audit trail — fire-and-forget. No id is fetched back from the
+        // insert (same pattern as CHALLAN_CREATE in TdsDataEntry.tsx) since
+        // the business-key fields already identify the new row uniquely.
+        logRateMasterAudit({
+          rateMasterId: null, firmId: payload.firm_id,
+          userId: user?.id, userName: user?.name,
+          actionType: "RATE_MASTER_CREATED",
+          oldValue: null,
+          newValue: `Rate (Ind) ${payload.rate_individual ?? "—"}%, Rate (Co.) ${payload.rate_company ?? "—"}%, No PAN ${payload.rate_no_pan ?? "—"}%, Threshold (Ind) ₹${payload.threshold_individual}, Threshold (Co.) ₹${payload.threshold_company}`,
+          remark: `Added new Rate Master section ${payload.section_code} for ${selectedForm} Tax Year ${selectedTaxYear}`,
+        });
         // Filter straight to the just-added section so the user gets
         // immediate visual confirmation of what they created.
         if (is2025Regime) setSelectedSection(payload.section_code);
