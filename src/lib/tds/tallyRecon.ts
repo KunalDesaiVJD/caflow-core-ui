@@ -179,7 +179,7 @@ export function reconcileTallyFull(
         confidence: 0,
       };
     }
-    return render(o, outcomes[i], rowAt, ledgerSection, sectionOf, basisFor);
+    return render(o, outcomes[i], rowAt, ledgerSection, sectionOf, basisFor, partyMap);
   });
 
   return { rows: applySplitEntryGrouping(rows, office), surplusLedger: surplus.map(rowAt) };
@@ -338,6 +338,7 @@ function render(
   o: OfficeTxn, out: Outcome, rowAt: (pos: number) => TallyRow,
   ledgerSection: string | null, sectionOf: (t: TallyRow) => string | null,
   basisFor: (section: string | null) => "tds" | "amount",
+  partyMap: PartyMap = {},
 ): TallyReconRow {
   const b = {
     office_deductee_id: o.deductee_id, office_name: o.name, office_date: o.date_iso,
@@ -435,8 +436,27 @@ function render(
   // identity, so the name is no longer a question, but the date and TDS are still
   // validated on it and a mapped record that fails them stays an exception carrying
   // `mapped: true`, so it shows under BOTH Mapped and Mismatched.
-  const nameOk = ev.mapped || rank(ev.nameTier) <= AUTO_MATCH_MAX_RANK;
-  const mapped = ev.mapped || undefined;
+  //
+  // ev.mapped (assignment.ts) requires the CANDIDATE ledger row's own party text to
+  // equal the saved tally_party STRING exactly — correct and deliberately strict for
+  // deciding tier admission / edge-building (a mapping must not spuriously widen which
+  // ledger rows even compete). But some clients' Tally "party" field is really a
+  // per-voucher NARRATION that bakes in that voucher's own amount/invoice number
+  // ("Nimisha Shah being tds deduct rs .12000/- @ 2%"), so every transaction of the
+  // SAME real party produces a DIFFERENT exact string — confirming one transaction's
+  // mapping then never generalises to the party's other pending transactions, even
+  // though `out.ti` was already independently selected for each of them by the
+  // EXCLUSIVITY engine on date/amount/section evidence alone (that is what put them in
+  // front of the CA as "Party Name Mismatch" with a suggestion in the first place, not
+  // "Ledger Entry Not Found"). `officeConfirmed` recognises that broader case: once the
+  // CA has confirmed ANY mapping for this OFFICE name, every OTHER candidate the
+  // exclusivity engine independently committed to for this same office name is no
+  // longer a name QUESTION either — nothing about which candidate gets chosen changes,
+  // only whether the name portion of the verdict is treated as resolved.
+  const officeConfirmed = !!partyMap[normalizeName(o.name)];
+  const mappedResolved = ev.mapped || officeConfirmed;
+  const nameOk = mappedResolved || rank(ev.nameTier) <= AUTO_MATCH_MAX_RANK;
+  const mapped = mappedResolved || undefined;
   const tSec = sectionOf(t);
 
   // ── The witness fired: a better claimant exists somewhere in this client's books
@@ -495,7 +515,7 @@ function render(
     const diffText = diff != null ? ` — a difference of ${inr(Math.abs(diff))}` : "";
     return {
       ...paired, result: "Credit Amount Mismatch", amount_basis: null, mapped,
-      reason: ev.mapped
+      reason: mappedResolved
         ? `Party is mapped to "${t.party ?? "—"}", but the ledger credit (${inr(t.credit)}) differs from the ${officeLabel} (${inr(officeVal)})${diffText}. Mapping resolves the party name only.`
         : `Party and date match, but the ledger credit (${inr(t.credit)}) differs from the ${officeLabel} (${inr(officeVal)})${diffText}.`,
       confidence: 60,
@@ -522,8 +542,8 @@ function render(
   const conf = out.tier === "A0" ? 96 : out.tier === "A1" ? 95 : out.tier === "A2" ? 92 : out.tier === "A3" ? 75 : 55;
   return {
     ...paired, result: "Matched", amount_basis: ev.basis, mapped,
-    reason: (ev.mapped
-      ? `Party matched via the saved mapping to "${t.party ?? "—"}"; date and TDS amount both match.`
+    reason: (mappedResolved
+      ? `Party matched via the confirmed mapping to "${t.party ?? "—"}"; date and TDS amount both match.`
       : ev.nameTier === "unknown"
         ? `Date, amount and section match; the party name could not be compared (missing on one side).`
         : `Date, amount, party and section all match.`) + twins + panWarn,

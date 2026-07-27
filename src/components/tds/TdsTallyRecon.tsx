@@ -468,7 +468,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       // own doc); this only collects the question into a single step.
       if (cands.length) {
         setMappingCandidates(cands);
-        setSelectedMappingIds(new Set(cands.map((c) => c.office_deductee_id)));
+        setSelectedMappingIds(new Set(cands.map((c) => normalizeName(c.office_name))));
         setMappingDialogOpen(true);
       }
     }
@@ -478,12 +478,30 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
 
   // ── Proactive name-mapping confirmation (after Run Validation) ──────────────
   const [mappingCandidates, setMappingCandidates] = useState<TallyReconRow[]>([]);
+  // Keyed by office_name_norm, NOT office_deductee_id — a single office party
+  // routinely has several pending transactions in one run (see mappingGroups
+  // below), and the engine now resolves a confirmed office name across ALL of
+  // that party's transactions, so the user should only ever be asked once per
+  // party, not once per transaction.
   const [selectedMappingIds, setSelectedMappingIds] = useState<Set<string>>(new Set());
   const [mappingDialogOpen, setMappingDialogOpen] = useState(false);
   const [confirmingMappings, setConfirmingMappings] = useState(false);
   const toggleMappingCandidate = (id: string) => setSelectedMappingIds((prev) => {
     const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next;
   });
+  /** One entry per unique office party (office_name_norm), each carrying every
+   *  pending transaction the engine found for it this run — so the dialog asks
+   *  "is this the same person?" exactly ONCE per party, however many of their
+   *  transactions are currently sitting as Party Name Mismatch. */
+  const mappingGroups = useMemo(() => {
+    const byKey = new Map<string, { key: string; officeName: string; transactions: TallyReconRow[] }>();
+    for (const c of mappingCandidates) {
+      const key = normalizeName(c.office_name);
+      const g = byKey.get(key);
+      if (g) g.transactions.push(c); else byKey.set(key, { key, officeName: c.office_name ?? "—", transactions: [c] });
+    }
+    return [...byKey.values()];
+  }, [mappingCandidates]);
 
   /** Batch-confirm every SELECTED candidate in one upsert + one re-run, instead
    *  of N calls to saveMapping() (which each re-run the whole audit on their
@@ -491,24 +509,33 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  flicker-prone for a batch of N confirmed here at once). Every mapping is
    *  still the user's own decision — this only lets several be made at once. */
   const confirmSelectedMappings = async () => {
-    const toConfirm = mappingCandidates.filter((c) => selectedMappingIds.has(c.office_deductee_id));
+    // ONE row per selected PARTY, never per transaction — tds_tally_party_maps
+    // has a unique index on (client_id, office_name_norm), so a batch upsert
+    // with 2+ rows sharing that key (the same party's several transactions)
+    // throws "ON CONFLICT DO UPDATE command cannot affect row a second time"
+    // and silently fails the WHOLE batch. A single representative row per
+    // party is also all that is NEEDED now: the engine resolves a confirmed
+    // office name across ALL of that party's other pending transactions too
+    // (see tallyRecon.ts's officeConfirmed), not just the one exact ledger
+    // string that happened to be saved.
+    const toConfirm = mappingGroups.filter((g) => selectedMappingIds.has(g.key));
     if (!toConfirm.length) { setMappingDialogOpen(false); return; }
     setConfirmingMappings(true);
     try {
       const firmId = await resolveFirmId();
       const { error } = await supabase.from("tds_tally_party_maps").upsert(
-        toConfirm.map((c) => ({
-          firm_id: firmId, client_id: selClient, office_name_norm: normalizeName(c.office_name),
-          office_name: c.office_name, tally_party: c.suggested_party, created_by: user?.id,
+        toConfirm.map((g) => ({
+          firm_id: firmId, client_id: selClient, office_name_norm: g.key,
+          office_name: g.officeName, tally_party: g.transactions[0].suggested_party, created_by: user?.id,
         })),
         { onConflict: "client_id,office_name_norm" },
       );
       if (error) { toast({ title: "Could not save mappings", description: error.message, variant: "destructive" }); setConfirmingMappings(false); return; }
-      for (const c of toConfirm) {
+      for (const g of toConfirm) {
         await logReconAudit({
           filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
-          actionType: "TALLY_PARTY_MAP", oldValue: c.office_name, newValue: c.suggested_party,
-          remark: "Confirmed during Run Validation review",
+          actionType: "TALLY_PARTY_MAP", oldValue: g.officeName, newValue: g.transactions[0].suggested_party,
+          remark: `Confirmed during Run Validation review — applies to all ${g.transactions.length} pending transaction${g.transactions.length === 1 ? "" : "s"} of this party.`,
         });
       }
       setMappingDialogOpen(false);
@@ -844,6 +871,13 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       : r.result === "Office Data Not Found" ? "Tally Ledger Only"
       : r.result;
 
+  /** "Matched" + a confirmed name mapping reads as "Matched & Mapped" — distinct
+   *  from an ordinary Matched, where the name itself already agreed with no
+   *  assist. Any OTHER mismatch type + a confirmed mapping reads as
+   *  "<result> & Mapped": the name question is resolved, so whatever mismatch
+   *  remains is a genuine reconciliation discrepancy, not a spelling issue. */
+  const resultLabel = (r: ResultRow): string => (r.mapped ? `${r.result} & Mapped` : r.result);
+
   /** Office vs Ledger, one row per comparable field, for a record that IS paired
    *  to a specific ledger entry but disputed (anything except "Matched" — that
    *  needs no highlighting since nothing disagrees). Replaces a single "Ledger:
@@ -887,7 +921,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             <p className="text-[11px] text-muted-foreground">{r.tally_date || "—"} · ledger credit {inr(r.tally_credit)}</p>
             {ledgerNarrationOf(r) && <p className="text-[11px] text-muted-foreground italic truncate" title={ledgerNarrationOf(r) || undefined}>{ledgerNarrationOf(r)}</p>}</div>
           <div className="flex items-center gap-2 shrink-0">
-            <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.overridden ? oneSidedLabel(r) : r.result}</Badge>
+            <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.overridden ? oneSidedLabel(r) : resultLabel(r)}</Badge>
             {!r.overridden ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> {overrideLabel(r)}</Button>
               : <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}><RotateCcw size={12} /> Undo</Button>}
           </div>
@@ -916,7 +950,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           <div className="min-w-0"><p className="font-semibold text-sm truncate">{r.office_name || "—"}</p>
             <p className="text-[11px] text-muted-foreground">{r.office_date || "—"} · office {inr(r.office_amount)} / TDS {inr(r.office_tds)} · {r.office_section || "—"}</p></div>
           <div className="flex items-center gap-2 shrink-0">
-            <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.overridden ? oneSidedLabel(r) : r.result}</Badge>
+            <Badge className={cn("text-[10px]", RESULT_BADGE[r.result] || "bg-muted")}>{r.overridden ? oneSidedLabel(r) : resultLabel(r)}</Badge>
             {typeof r.confidence === "number" && <span className="text-[10px] text-muted-foreground">{r.confidence}%</span>}
             {!r.overridden ? <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={disabled}><ShieldCheck size={12} /> {overrideLabel(r)}</Button>
               : <Button variant="ghost" size="sm" className="h-7 gap-1 text-xs" onClick={() => undoOverride(r)}><RotateCcw size={12} /> Undo</Button>}
@@ -1247,29 +1281,36 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           </DialogHeader>
           <div className="space-y-2">
             <p className="text-xs text-muted-foreground">
-              This run found {mappingCandidates.length} office record{mappingCandidates.length === 1 ? "" : "s"} whose ledger entry looks like the same
-              deductee under a different spelling or abbreviation. Confirming saves the mapping for this client and re-runs validation — uncheck any
-              you're not sure about and resolve them individually in the results list instead.
+              This run found {mappingGroups.length} deductee{mappingGroups.length === 1 ? "" : "s"} whose ledger entries look like the same
+              party under a different spelling or abbreviation. Confirming a party applies to ALL of its pending transactions shown below, saves
+              the mapping for this client, and re-runs validation — uncheck any you're not sure about and resolve them individually in the results list instead.
             </p>
             <div className="flex items-center gap-2 px-1">
               <Checkbox
-                checked={selectedMappingIds.size === mappingCandidates.length && mappingCandidates.length > 0}
-                onCheckedChange={(v) => setSelectedMappingIds(v ? new Set(mappingCandidates.map((c) => c.office_deductee_id)) : new Set())}
+                checked={selectedMappingIds.size === mappingGroups.length && mappingGroups.length > 0}
+                onCheckedChange={(v) => setSelectedMappingIds(v ? new Set(mappingGroups.map((g) => g.key)) : new Set())}
               />
-              <span className="text-xs text-muted-foreground">Select all ({selectedMappingIds.size}/{mappingCandidates.length})</span>
+              <span className="text-xs text-muted-foreground">Select all ({selectedMappingIds.size}/{mappingGroups.length})</span>
             </div>
             <ScrollArea className="h-72 rounded-md border">
               <div className="p-1 space-y-0.5">
-                {mappingCandidates.map((c) => (
-                  <label key={c.office_deductee_id} className="w-full flex items-start gap-2 rounded px-2 py-1.5 hover:bg-muted cursor-pointer">
+                {mappingGroups.map((g) => (
+                  <label key={g.key} className="w-full flex items-start gap-2 rounded px-2 py-1.5 hover:bg-muted cursor-pointer">
                     <Checkbox
                       className="mt-0.5"
-                      checked={selectedMappingIds.has(c.office_deductee_id)}
-                      onCheckedChange={() => toggleMappingCandidate(c.office_deductee_id)}
+                      checked={selectedMappingIds.has(g.key)}
+                      onCheckedChange={() => toggleMappingCandidate(g.key)}
                     />
                     <div className="min-w-0 flex-1 text-xs">
-                      <p><b className="text-foreground">{c.office_name}</b> ↔ <b className="text-foreground">{c.suggested_party}</b></p>
-                      <p className="text-[10px] text-muted-foreground">{c.office_date || "—"} · TDS {inr(c.office_tds)} · {c.office_section || "—"}</p>
+                      <p>
+                        <b className="text-foreground">{g.officeName}</b> ↔ <b className="text-foreground">{g.transactions[0].suggested_party}</b>
+                        {g.transactions.length > 1 && <span className="text-muted-foreground"> (+{g.transactions.length - 1} more transaction{g.transactions.length - 1 === 1 ? "" : "s"})</span>}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {g.transactions.length === 1
+                          ? `${g.transactions[0].office_date || "—"} · TDS ${inr(g.transactions[0].office_tds)} · ${g.transactions[0].office_section || "—"}`
+                          : `${g.transactions.length} pending transactions, total TDS ${inr(g.transactions.reduce((s, t) => s + (t.office_tds || 0), 0))}`}
+                      </p>
                     </div>
                   </label>
                 ))}

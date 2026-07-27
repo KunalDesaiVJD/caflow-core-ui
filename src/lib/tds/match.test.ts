@@ -323,6 +323,78 @@ describe("reconcileTallyFull — ledger row index must resolve to POS, never the
   });
 });
 
+// User-reported (with screenshots): confirming a suggested name mapping in
+// Stage 3 didn't clear the entry from the mismatch list, and required
+// re-confirming the SAME underlying party over and over. Root cause: this
+// client's Tally "party" text is really a per-voucher NARRATION that bakes in
+// that voucher's own amount ("Nimisha Shah being tds deduct rs .12000/- @ 2%"),
+// so every transaction of the same real party produces a DIFFERENT exact
+// string — the old `ev.mapped` (assignment.ts) required verbatim (post-
+// normalisation) equality against the ONE saved tally_party, so confirming one
+// transaction's mapping could never help the party's other pending
+// transactions, even though assign()'s exclusivity engine had already
+// independently paired each of them via date/amount/section evidence alone.
+describe("reconcileTallyFull — a confirmed party mapping generalises across ALL of that party's transactions (real client data)", () => {
+  const office: OfficeTxn[] = [
+    { deductee_id: "o1", name: "NIMISHA MONARK SHAH", date_iso: "2026-04-02", amount: 800000, tds: 16000, section: "194H", pan: null },
+    { deductee_id: "o2", name: "NIMISHA MONARK SHAH", date_iso: "2026-04-24", amount: 600000, tds: 12000, section: "194H", pan: null },
+    { deductee_id: "o3", name: "NIMISHA MONARK SHAH", date_iso: "2026-05-15", amount: 700000, tds: 14000, section: "194H", pan: null },
+  ];
+  const tally: TallyRow[] = [
+    { row_index: 0, date: "2-Apr-26", iso: "2026-04-02", party: "Nimisha Shah BEING TDS DEDUCT AMT- 16000/-@ 2%", debit: null, credit: 16000, vch_no: "1", vch_type: "Journal", section: "194H" },
+    { row_index: 1, date: "24-Apr-26", iso: "2026-04-24", party: "Nimisha Shah being tds deduct rs .12000/- @ 2%", debit: null, credit: 12000, vch_no: "2", vch_type: "Journal", section: "194H" },
+    { row_index: 2, date: "15-May-26", iso: "2026-05-15", party: "Nimisha Shah TDS ded. Rs14000 @2%", debit: null, credit: 14000, vch_no: "3", vch_type: "Journal", section: "194H" },
+  ];
+
+  it("with NO mapping confirmed yet, every transaction is a Party Name Mismatch", () => {
+    const { rows } = reconcileTallyFull(office, tally, null, {});
+    for (const r of rows) { expect(r.result).toBe("Party Name Mismatch"); expect(r.mapped).toBeUndefined(); }
+  });
+
+  it("confirming ONE transaction's exact string maps ALL of the party's OTHER transactions too — not just that one string", () => {
+    const partyMap: PartyMap = { [normalizeName("NIMISHA MONARK SHAH")]: "Nimisha Shah being tds deduct rs .12000/- @ 2%" };
+    const { rows } = reconcileTallyFull(office, tally, null, partyMap);
+    const byId = Object.fromEntries(rows.map((r) => [r.office_deductee_id, r]));
+    for (const id of ["o1", "o2", "o3"] as const) {
+      expect(byId[id].result).toBe("Matched");
+      expect(byId[id].mapped).toBe(true);
+    }
+  });
+
+  it("a mapped party whose OTHER transaction has a genuine amount gap is 'Credit Amount Mismatch', mapped:true — not silently absorbed and not left as a name question", () => {
+    const skewed = office.map((o) => (o.deductee_id === "o3" ? { ...o, tds: 14500 } : o)); // ledger still says 14000
+    const partyMap: PartyMap = { [normalizeName("NIMISHA MONARK SHAH")]: "Nimisha Shah being tds deduct rs .12000/- @ 2%" };
+    const { rows } = reconcileTallyFull(skewed, tally, null, partyMap);
+    const o3 = rows.find((r) => r.office_deductee_id === "o3")!;
+    expect(o3.result).toBe("Credit Amount Mismatch");
+    expect(o3.mapped).toBe(true);
+    expect(o3.reason).toMatch(/mapping resolves the party name only/i);
+  });
+
+  it("does NOT widen the exclusivity engine's own candidate selection — a genuinely unrelated ledger entry for a different party is never pulled in just because ITS office name has some other confirmed mapping", () => {
+    const unrelatedOffice: OfficeTxn[] = [
+      ...office,
+      { deductee_id: "o9", name: "RAJESH KUMAR VERMA", date_iso: "2026-06-10", amount: 250000, tds: 5000, section: "194H", pan: null },
+    ];
+    const unrelatedTally: TallyRow[] = [
+      ...tally,
+      // Deliberately no date/amount overlap with ANY Nimisha transaction, so the
+      // only thing that could possibly pull it toward o1 is officeConfirmed
+      // itself (it must not — o9 has no mapping of its own).
+      { row_index: 3, date: "10-Jun-26", iso: "2026-06-10", party: "Rajesh Verma Consultancy Fee", debit: null, credit: 5000, vch_no: "4", vch_type: "Journal", section: "194H" },
+    ];
+    const partyMap: PartyMap = { [normalizeName("NIMISHA MONARK SHAH")]: "Nimisha Shah being tds deduct rs .12000/- @ 2%" };
+    const { rows } = reconcileTallyFull(unrelatedOffice, unrelatedTally, null, partyMap);
+    const byId = Object.fromEntries(rows.map((r) => [r.office_deductee_id, r]));
+    // o1 still pairs with ITS OWN ledger row (16000), not Rajesh's (5000).
+    expect(byId.o1.tally_credit).toBe(16000);
+    // Rajesh's own record is untouched by Nimisha's mapping — it has no
+    // mapping of its own, so a normal name comparison still applies.
+    expect(byId.o9.mapped).toBeUndefined();
+    expect(byId.o9.tally_party).toBe("Rajesh Verma Consultancy Fee");
+  });
+});
+
 describe("reconcileTally — Stage 3 verdict is ZERO-tolerance (any gap is a Mismatch, by user request)", () => {
   // Reported verbatim: "why can't it detect ₹1,000 vs. ₹999... regardless of
   // whether it is ₹1 or ₹1,000, the record should appear under Mismatched
