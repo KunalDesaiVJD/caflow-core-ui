@@ -1119,7 +1119,11 @@ export function TdsDataEntry({
     const totalIncome = Math.max(0, netSalary - (taxRegime === "old" ? via : 0) + otherIncome);
     const tax = calcTaxWithRebate(totalIncome, taxRegime);
     const prevTds = parseFloat(salaryForm.tds_previous_employer) || 0;
-    return { netSalary, totalIncome, tax, balanceTax: Math.max(0, tax - prevTds) };
+    // Gross Salary isn't imported from a Genius file's Annex-I (it only carries an
+    // annual TAXABLE-amount estimate, a different figure) — it's blank until the
+    // CA enters it here. Flag that so the UI can show "—" instead of a misleading
+    // negative Net Salary (0 minus Standard Deduction) before any real data exists.
+    return { netSalary, totalIncome, tax, balanceTax: Math.max(0, tax - prevTds), hasGross: gross > 0 };
   }, [salaryForm, taxRegime]);
 
   const saveSalaryDetails = async () => {
@@ -1891,7 +1895,6 @@ export function TdsDataEntry({
                                 <>
                                   <TableHead className="text-xs" style={{ width: nameColWidth, minWidth: nameColWidth }}>Employee Name</TableHead>
                                   <TableHead className="text-xs" style={{ width: panColWidth, minWidth: panColWidth }}>PAN</TableHead>
-                                  <TableHead className="text-xs">Designation</TableHead>
                                   <TableHead className="text-xs text-right">Gross</TableHead>
                                   <TableHead className="text-xs text-right">Std Ded</TableHead>
                                   <TableHead className="text-xs text-right">Taxable</TableHead>
@@ -1932,7 +1935,7 @@ export function TdsDataEntry({
                             {/* Issue 5: Previous quarter entries section (read-only, Issue 7E: distinct styling) */}
                             {prevEntries.length > 0 && (
                               <TableRow className="bg-slate-100 border-l-4 border-l-slate-400">
-                                <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="py-1 px-2">
+                                <TableCell colSpan={selForm === "24Q" ? 9 : 12} className="py-1 px-2">
                                   {/* Dynamic label: single prev-quarter uses selQuarter/selFy helper;
                                       multi-quarter carry-forward lists all unique quarters from data */}
                                   <span className="text-[10px] font-semibold text-slate-600">
@@ -1942,7 +1945,7 @@ export function TdsDataEntry({
                               </TableRow>
                             )}
                             {prevEntries.map((d, idx) => {
-                              const colSpanVal = selForm === "24Q" ? 10 : 12;
+                              const colSpanVal = selForm === "24Q" ? 9 : 12;
                               // Per-row quarter badge — shows exactly which quarter/FY this
                               // read-only entry belongs to (resolves ambiguity when a
                               // challan has utilisation spanning multiple quarters).
@@ -1963,7 +1966,6 @@ export function TdsDataEntry({
                                     <>
                                       <TableCell><Input className="h-7 text-xs bg-muted cursor-not-allowed" disabled title={d.deductee_name} defaultValue={d.deductee_name} /></TableCell>
                                       <TableCell><Input className="h-7 text-xs font-mono bg-muted cursor-not-allowed" disabled title={d.deductee_pan || ""} defaultValue={d.deductee_pan || ""} /></TableCell>
-                                      <TableCell><Input className="h-7 text-xs w-20 bg-muted cursor-not-allowed" disabled defaultValue={d.designation || ""} /></TableCell>
                                       <TableCell className="text-right text-xs">{(d.gross_salary || 0).toLocaleString("en-IN")}</TableCell>
                                       <TableCell className="text-right text-xs">{(d.standard_deduction_allowed || 0).toLocaleString("en-IN")}</TableCell>
                                       <TableCell className="text-right text-xs font-medium">{d.net_taxable_salary?.toLocaleString("en-IN") || "—"}</TableCell>
@@ -1992,7 +1994,7 @@ export function TdsDataEntry({
                             {/* Issue 5: Current quarter section header */}
                             {prevEntries.length > 0 && (
                               <TableRow className="bg-green-50">
-                                <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="py-1 px-2">
+                                <TableCell colSpan={selForm === "24Q" ? 9 : 12} className="py-1 px-2">
                                   <span className="text-[10px] font-semibold text-green-700">✅ Current Quarter Entries</span>
                                 </TableCell>
                               </TableRow>
@@ -2029,7 +2031,6 @@ export function TdsDataEntry({
                                           </Tooltip>
                                         </TooltipProvider>
                                       </TableCell>
-                                      <TableCell><Input className={cn("h-7 text-xs w-20", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked} defaultValue={d.designation || ""} onBlur={e => { if (!locked) updateDeducteeField(d.id, "designation", e.target.value); }} /></TableCell>
                                       <TableCell className="text-right"><Input type="number" className={cn("h-7 text-xs w-24 text-right", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked} defaultValue={d.gross_salary || ""} onBlur={e => { if (!locked) updateDeducteeField(d.id, "gross_salary", parseFloat(e.target.value) || null); }} /></TableCell>
                                       <TableCell className="text-right"><Input type="number" className={cn("h-7 text-xs w-20 text-right", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked} defaultValue={d.standard_deduction_allowed || ""} onBlur={e => { if (!locked) updateDeducteeField(d.id, "standard_deduction_allowed", parseFloat(e.target.value) || null); }} /></TableCell>
                                       <TableCell className="text-right text-xs font-medium">{d.net_taxable_salary?.toLocaleString("en-IN") || "—"}</TableCell>
@@ -2278,7 +2279,7 @@ export function TdsDataEntry({
 
                             {/* Issue 7F: Add Row - disabled when balance=0 or locked */}
                             <TableRow className="bg-muted/20">
-                              <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="text-center py-2">
+                              <TableCell colSpan={selForm === "24Q" ? 9 : 12} className="text-center py-2">
                                 {isFilingLocked ? (
                                   <span className="text-xs text-muted-foreground flex items-center justify-center gap-1"><Lock size={10} /> Data entry locked</span>
                                 ) : selectedChallanBalance <= 0 ? (
@@ -2511,11 +2512,17 @@ export function TdsDataEntry({
             <div className="border-t pt-3 space-y-2">
               <p className="text-xs font-semibold text-muted-foreground uppercase">Tax Computation</p>
               <div className="bg-muted/50 rounded-md p-3 space-y-1 text-sm">
-                <div className="flex justify-between"><span>Net Salary</span><span className="font-mono">₹{computedSalaryTax.netSalary.toLocaleString("en-IN")}</span></div>
-                <div className="flex justify-between"><span>Total Taxable Income</span><span className="font-mono font-semibold">₹{computedSalaryTax.totalIncome.toLocaleString("en-IN")}</span></div>
-                <div className="flex justify-between border-t pt-1 mt-1"><span>Tax Payable (incl. 4% cess)</span><span className="font-mono font-bold text-primary">₹{computedSalaryTax.tax.toLocaleString("en-IN")}</span></div>
-                <div className="flex justify-between"><span>Less: Previous TDS</span><span className="font-mono">₹{(parseFloat(salaryForm.tds_previous_employer) || 0).toLocaleString("en-IN")}</span></div>
-                <div className="flex justify-between border-t pt-1 mt-1"><span className="font-semibold">Balance Tax</span><span className="font-mono font-bold">₹{computedSalaryTax.balanceTax.toLocaleString("en-IN")}</span></div>
+                {computedSalaryTax.hasGross ? (
+                  <>
+                    <div className="flex justify-between"><span>Net Salary</span><span className="font-mono">₹{computedSalaryTax.netSalary.toLocaleString("en-IN")}</span></div>
+                    <div className="flex justify-between"><span>Total Taxable Income</span><span className="font-mono font-semibold">₹{computedSalaryTax.totalIncome.toLocaleString("en-IN")}</span></div>
+                    <div className="flex justify-between border-t pt-1 mt-1"><span>Tax Payable (incl. 4% cess)</span><span className="font-mono font-bold text-primary">₹{computedSalaryTax.tax.toLocaleString("en-IN")}</span></div>
+                    <div className="flex justify-between"><span>Less: Previous TDS</span><span className="font-mono">₹{(parseFloat(salaryForm.tds_previous_employer) || 0).toLocaleString("en-IN")}</span></div>
+                    <div className="flex justify-between border-t pt-1 mt-1"><span className="font-semibold">Balance Tax</span><span className="font-mono font-bold">₹{computedSalaryTax.balanceTax.toLocaleString("en-IN")}</span></div>
+                  </>
+                ) : (
+                  <p className="text-xs text-muted-foreground">Enter Gross Salary to compute Net Salary, Total Taxable Income and Tax Payable.</p>
+                )}
               </div>
             </div>
           </div>

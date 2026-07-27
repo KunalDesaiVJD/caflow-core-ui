@@ -48,6 +48,8 @@ export interface ParsedGeniusFile {
   };
   challans: ParsedChallan[];
   deductees: ParsedDeductee[];
+  /** 24Q only, keyed by uppercased PAN. Empty when Annex-II has no real rows. */
+  salaryDetails: Map<string, ParsedSalaryDetail>;
 }
 
 export interface ParsedChallan {
@@ -66,6 +68,17 @@ export interface ParsedChallan {
   bankChallanNo: string;            // 5-digit serial
   isBookEntry: boolean;
   minorHead: string;
+}
+
+/** 24Q-only: per-employee annual salary break-up, when the file's Annex-II sheet
+ *  actually carries it (typically only a Q4/annual return — Q1-Q3 files commonly
+ *  leave this sheet as a blank template, since the figures aren't final yet). */
+export interface ParsedSalaryDetail {
+  pan: string;
+  designation: string;
+  grossSalary: number;
+  standardDeduction: number;
+  totalTaxableIncome: number;
 }
 
 export interface ParsedDeductee {
@@ -247,8 +260,17 @@ interface ColSpec { field: string; match: (h: string) => boolean; fallback?: num
  * SWASTIK BUILDCON imported blank amounts/TDS). Matching by header makes the parser
  * layout-agnostic. `fallback` (the canonical FVU order) is used ONLY when a header
  * can't be matched, so an unfamiliar variant degrades gracefully instead of
- * failing. First unclaimed header match wins; a claimed column is never reused. */
-function buildColMap(headerRow: unknown[], spec: ColSpec[]): Record<string, number> {
+ * failing. First unclaimed header match wins; a claimed column is never reused.
+ *
+ * `skipFallback` excludes specific fields from the fallback step entirely — for a
+ * form whose real column ORDER genuinely differs from the canonical FVU order the
+ * fallback numbers assume (24Q's Annex-I has no rate/surcharge-rate/cess-rate/
+ * surcharge-amount/cess-amount columns at all, unlike 26Q/27Q), applying a 26Q-shaped
+ * fallback position to a 24Q file silently reads whatever unrelated column happens
+ * to sit at that index (e.g. the Email column) instead of leaving the field
+ * correctly unmapped. Only used where the field's fallback index is KNOWN wrong for
+ * that form — 26Q/27Q are unaffected since their headers already match by text. */
+function buildColMap(headerRow: unknown[], spec: ColSpec[], skipFallback?: Set<string>): Record<string, number> {
   const hs = headerRow.map(normHeader);
   const claimed = new Set<number>();
   const map: Record<string, number> = {};
@@ -259,7 +281,7 @@ function buildColMap(headerRow: unknown[], spec: ColSpec[]): Record<string, numb
     }
   }
   for (const { field, fallback } of spec) {
-    if (map[field] === undefined && fallback !== undefined && !claimed.has(fallback)) {
+    if (map[field] === undefined && fallback !== undefined && !claimed.has(fallback) && !skipFallback?.has(field)) {
       map[field] = fallback; claimed.add(fallback);
     }
   }
@@ -293,12 +315,20 @@ const DEDUCTEE_COLS: ColSpec[] = [
   { field: "pan",              match: (h) => /permanent account number|\bpan\b/.test(h),     fallback: 3 },
   { field: "name",             match: (h) => /name of (the )?deductee|deductee name/.test(h), fallback: 4 },
   { field: "refNo",            match: (h) => /(deductee|party).*\bref|ref(erence)?\.?\s*(no|number)/.test(h) },
-  { field: "amountPaid",       match: (h) => /amount of payment|amount paid|amount credited/.test(h), fallback: 12 },
+  // "taxable amount" is 24Q's own phrasing for this same concept — Annex-I for
+  // salary returns has no "Amount Paid/Credited" column at all, it's labelled
+  // "Taxable amount on which Tax Deducted" instead. Without this alternative the
+  // header never matches for 24Q, and the 26Q-shaped fallback (12) lands on a
+  // completely unrelated column in 24Q's shorter layout — see skipFallback below.
+  { field: "amountPaid",       match: (h) => /amount of payment|amount paid|amount credited|taxable amount/.test(h), fallback: 12 },
   { field: "datePaid",         match: (h) => /date on which amount|date of payment|date.*paid.*credit/.test(h), fallback: 13 },
   { field: "rateOfTds",        match: (h) => /rate at which tax|rate of tds/.test(h) || h === "rate", fallback: 14 },
   { field: "surchargeRate",    match: (h) => /surcharge rate/.test(h),                       fallback: 15 },
   { field: "cessRate",         match: (h) => /cess rate/.test(h),                            fallback: 16 },
-  { field: "tdsAmount",        match: (h) => /amount of tax deducted|tds amount|amount of tax/.test(h), fallback: 17 },
+  // 24Q's TDS column is headed bare "TDS" (no "amount"/"deducted" qualifier) —
+  // the exact-match alternative catches it without loosening the regex enough to
+  // false-match some unrelated column elsewhere.
+  { field: "tdsAmount",        match: (h) => /amount of tax deducted|tds amount|amount of tax/.test(h) || h === "tds", fallback: 17 },
   { field: "surchargeAmount",  match: (h) => /surcharge amount/.test(h),                     fallback: 18 },
   { field: "cessAmount",       match: (h) => /cess amount/.test(h),                          fallback: 19 },
   { field: "totalTaxDeducted", match: (h) => /total tax deposited|total tax deducted/.test(h), fallback: 20 },
@@ -306,6 +336,50 @@ const DEDUCTEE_COLS: ColSpec[] = [
   { field: "reason",           match: (h) => /reason/.test(h),                               fallback: 22 },
   { field: "certificateNo",    match: (h) => /certificate/.test(h),                          fallback: 23 },
 ];
+
+/** Header→field matchers for 24Q's Annex-II salary annexure. This sheet's header
+ *  row carries two near-duplicate columns for Standard Deduction ("...Manual Edit
+ *  Flag" vs "...Amount") — the matcher requires the trailing "amount" token and
+ *  explicitly excludes "flag" so the right one of the pair is picked. */
+const SALARY_COLS: ColSpec[] = [
+  { field: "pan",                match: (h) => /employee pan|^pan$/.test(h) },
+  { field: "name",               match: (h) => /name of employee/.test(h) },
+  { field: "designation",        match: (h) => h === "designation" },
+  { field: "grossSalary",        match: (h) => /gross salary/.test(h) && /17\s*\(\s*1\s*\)|provisions/.test(h) },
+  { field: "standardDeduction",  match: (h) => /standard deduction/.test(h) && /\bamount\b/.test(h) && !/flag/.test(h) },
+  { field: "totalTaxableIncome", match: (h) => /total taxable income/.test(h) },
+];
+
+/**
+ * Parse 24Q's Annex-II (per-employee annual salary break-up) sheet, when present
+ * and actually populated. Genius/most TDS-prep tools leave this sheet as a blank
+ * 1000-row template for Q1-Q3 filings (the full-year figures aren't final until
+ * Q4), so an empty result here is the COMMON case, not a parse failure — callers
+ * should treat it as "nothing to auto-fill", not an error.
+ *
+ * Keyed by PAN (uppercased) rather than row position: Annex-I and Annex-II are
+ * independent sheets with independent row ordering, and PAN is the only reliable
+ * join key common to both.
+ */
+export function parseAnnexIISalaryDetails(ws: XLSX.WorkSheet): Map<string, ParsedSalaryDetail> {
+  const result = new Map<string, ParsedSalaryDetail>();
+  const map = buildColMap(readHeaderRow(ws), SALARY_COLS);
+  if (map.pan === undefined || map.name === undefined) return result;
+  const range = XLSX.utils.decode_range(ws["!ref"] || "A1:A1");
+  for (let r = 2; r <= range.e.r; r++) {
+    const pan = strAt(ws, r, map.pan);
+    const name = strAt(ws, r, map.name);
+    if (!pan || !name) continue; // blank template row — Annex-II not filled in for this employee
+    result.set(pan.toUpperCase(), {
+      pan: pan.toUpperCase(),
+      designation: strAt(ws, r, map.designation),
+      grossSalary: numAt(ws, r, map.grossSalary),
+      standardDeduction: numAt(ws, r, map.standardDeduction),
+      totalTaxableIncome: numAt(ws, r, map.totalTaxableIncome),
+    });
+  }
+  return result;
+}
 
 // ─── Parser ──────────────────────────────────────────────────────────────────
 
@@ -405,8 +479,16 @@ export async function parseGeniusXls(file: File): Promise<ParsedGeniusFile> {
   }
 
   // ── Deductees (row 2+) — columns resolved by HEADER TEXT, not position ────
+  // 24Q's Annex-I has no rate/surcharge-rate/cess-rate/surcharge-amount/cess-amount
+  // columns at all, unlike 26Q/27Q — the 26Q-shaped fallback positions for those
+  // fields would otherwise silently read whatever unrelated column sits there
+  // (e.g. the Email column) instead of correctly staying unmapped. See buildColMap.
+  const is24Q = deductor.formNo.toUpperCase() === "24Q";
+  const deSkipFallback = is24Q
+    ? new Set(["deducteeType", "rateOfTds", "surchargeRate", "cessRate", "surchargeAmount", "cessAmount"])
+    : undefined;
   const deductees: ParsedDeductee[] = [];
-  const deMap = buildColMap(readHeaderRow(deducteeSheet), DEDUCTEE_COLS);
+  const deMap = buildColMap(readHeaderRow(deducteeSheet), DEDUCTEE_COLS, deSkipFallback);
   const deRange = XLSX.utils.decode_range(deducteeSheet["!ref"] || "A1:Z1");
   for (let r = 1; r <= deRange.e.r; r++) {
     // Stop at the first FULLY-empty deductee row (no serial, PAN or name).
@@ -436,7 +518,14 @@ export async function parseGeniusXls(file: File): Promise<ParsedGeniusFile> {
     });
   }
 
-  return { deductor, challans, deductees };
+  // ── 24Q only: Annex-II per-employee salary break-up, when actually filled in ──
+  let salaryDetails = new Map<string, ParsedSalaryDetail>();
+  if (is24Q) {
+    const salarySheetName = wb.SheetNames.find((n) => /annex.*ii.*salary/i.test(n));
+    if (salarySheetName) salaryDetails = parseAnnexIISalaryDetails(wb.Sheets[salarySheetName]);
+  }
+
+  return { deductor, challans, deductees, salaryDetails };
 }
 
 // ─── Importer: parse + insert into DB ────────────────────────────────────────
@@ -1010,12 +1099,15 @@ export async function importGeniusXls(
 
   const deducteePayloads: any[] = [];
   const orphanDeductees: number[] = [];
+  const salaryMatchedPans = new Set<string>();
   parsed.deductees.forEach((d, idx) => {
     const challanId = serialToId.get(d.challanSerialNo);
     if (!challanId) {
       orphanDeductees.push(idx + 2); // row number in Excel (1-indexed + header)
       return;
     }
+    const salary = d.pan ? parsed.salaryDetails.get(d.pan.toUpperCase()) : undefined;
+    if (salary) salaryMatchedPans.add(salary.pan);
     deducteePayloads.push({
       challan_id: challanId,
       filing_id: filing.id,
@@ -1040,6 +1132,18 @@ export async function importGeniusXls(
       total_tax_deducted: d.totalTaxDeducted,
       reason_for_lower_or_nil_deduction: d.reason || null,
       lower_deduction_certificate_no: d.certificateNo || null,
+      // 24Q only — populated ONLY when the file's Annex-II sheet actually carries
+      // this employee's salary break-up (see parseAnnexIISalaryDetails). Left
+      // undefined (DB default / manual entry via Salary Computation) otherwise —
+      // never fabricated from the Annex-I taxable-amount figure, which is a
+      // different concept (the running annual estimate TDS was computed on, not
+      // Gross Salary before deductions).
+      ...(salary ? {
+        designation: salary.designation || undefined,
+        gross_salary: salary.grossSalary || undefined,
+        standard_deduction_allowed: salary.standardDeduction || undefined,
+        net_taxable_salary: salary.totalTaxableIncome || undefined,
+      } : {}),
     });
   });
 
@@ -1048,6 +1152,21 @@ export async function importGeniusXls(
       `Skipped ${orphanDeductees.length} deductee row(s) that reference a Challan Serial No. ` +
       `not present in the Challan Details sheet (excel rows: ${orphanDeductees.slice(0, 5).join(", ")}${orphanDeductees.length > 5 ? "…" : ""}).`
     );
+  }
+  if (formType.toUpperCase() === "24Q") {
+    if (salaryMatchedPans.size > 0) {
+      warnings.push(
+        `Auto-filled Gross Salary / Standard Deduction / Taxable Income for ${salaryMatchedPans.size} ` +
+        `employee(s) from this file's Annex-II salary details.`
+      );
+    } else {
+      warnings.push(
+        `This file's Annex-II (salary break-up) sheet has no employee data, so Gross Salary / Standard ` +
+        `Deduction / Taxable Income could not be auto-filled — enter them manually via each employee's ` +
+        `Salary Computation. This is normal for Q1-Q3 filings; a Q4/annual return with Annex-II filled in ` +
+        `will auto-fill these instead.`
+      );
+    }
   }
   let insertedDeductees = 0;
   if (deducteePayloads.length > 0) {
