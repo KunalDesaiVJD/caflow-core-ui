@@ -249,6 +249,80 @@ describe("reconcileTallyFull — split-entry grouping (Office Data splits one pa
   });
 });
 
+describe("reconcileTallyFull — ledger row index must resolve to POS, never the raw filtered-array position (real client data)", () => {
+  // Reported verbatim, with screenshots: 4 real 194A deductees (Dineshkumar,
+  // Dushyant, Pinnag, Jatin) each showing "Office Data Not Found" for a ledger
+  // credit that VERIFIABLY exists — same date, same TDS amount, same person —
+  // and, for the paired cases, a self-contradictory reason ("Party and date
+  // match") sitting next to a completely unrelated ledger party. Root cause:
+  // assignment.ts's Outcome.ti/nearest.ti/escalation.rivalTis leaked the raw
+  // loop index (position within the `ledger` PARAMETER array `assign()`
+  // received) instead of `ledger[ti].pos` (the ORIGINAL array position —
+  // AsgLedger.pos's whole documented purpose). Reproduced here with the
+  // client's OWN real ledger shape: a payment row (Kotak Mahindra, no
+  // credit — dated months earlier) precedes the four deduction rows, so the
+  // credits-only filter inside reconcileTallyFull drops it, and the four
+  // surviving ledger rows' POSITIONS (1,2,3,4 in the original array) no
+  // longer equal their INDICES within the filtered array (0,1,2,3) — exactly
+  // the gap `surplus` already resolves correctly (`.map(t => t.pos)`) but
+  // `Outcome.ti` did not, before this fix.
+  const office: OfficeTxn[] = [
+    { deductee_id: "o1", name: "DINESHKUMAR VITHALBHAI PADSALA", date_iso: "2026-06-30", amount: 402575, tds: 40258, section: "194A", pan: "AHYPP2567Q" },
+    { deductee_id: "o2", name: "DUSHYANT JASHVANTBHAI PRAJAPATI", date_iso: "2026-06-30", amount: 133203, tds: 13320, section: "194A", pan: "AOYPP5405J" },
+    { deductee_id: "o3", name: "PINNAG BIPINBHAI RATHOD", date_iso: "2026-06-30", amount: 89753, tds: 8975, section: "194A", pan: "AKQPR3138L" },
+    { deductee_id: "o4", name: "JATIN PATEL", date_iso: "2026-06-30", amount: 117507, tds: 11751, section: "194A", pan: "ASBPP1794K" },
+  ];
+  const tally: TallyRow[] = [
+    // A payment row with NO credit, dated well before the deduction block —
+    // dropped by the credits-only filter, opening the pos/index gap.
+    { row_index: 0, date: "23-Apr-26", iso: "2026-04-23", party: "Kotak Mahindra Bank Ltd.", debit: 66449, credit: null, vch_no: "214", vch_type: "Payment", section: "194A" },
+    { row_index: 1, date: "30-Jun-26", iso: "2026-06-30", party: "Dineshkumar V Padsala- Exp", debit: null, credit: 40258, vch_no: "349", vch_type: "Journal", section: "194A" },
+    { row_index: 2, date: "30-Jun-26", iso: "2026-06-30", party: "Dushyant Prajapati - Exp.", debit: null, credit: 13320, vch_no: "351", vch_type: "Journal", section: "194A" },
+    { row_index: 3, date: "30-Jun-26", iso: "2026-06-30", party: "Jatinbhai Patel - Exp.", debit: null, credit: 11751, vch_no: "353", vch_type: "Journal", section: "194A" },
+    { row_index: 4, date: "30-Jun-26", iso: "2026-06-30", party: "Pinnag Rathod - Exp.", debit: null, credit: 8975, vch_no: "355", vch_type: "Journal", section: "194A" },
+  ];
+
+  it("matches every one of the 4 real deductees to its OWN ledger entry, not a shifted neighbour's", () => {
+    const { rows, surplusLedger } = reconcileTallyFull(office, tally, null, {});
+    const byId = Object.fromEntries(rows.map((r) => [r.office_deductee_id, r]));
+
+    expect(byId.o1.result).toBe("Matched");
+    expect(byId.o1.tally_party).toBe("Dineshkumar V Padsala- Exp");
+    expect(byId.o1.tally_credit).toBe(40258);
+
+    expect(byId.o2.result).toBe("Matched");
+    expect(byId.o2.tally_party).toBe("Dushyant Prajapati - Exp.");
+    expect(byId.o2.tally_credit).toBe(13320);
+
+    expect(byId.o3.result).toBe("Matched");
+    expect(byId.o3.tally_party).toBe("Pinnag Rathod - Exp.");
+    expect(byId.o3.tally_credit).toBe(8975);
+
+    expect(byId.o4.result).toBe("Matched");
+    expect(byId.o4.tally_party).toBe("Jatinbhai Patel - Exp.");
+    expect(byId.o4.tally_credit).toBe(11751);
+
+    // The payment row itself claims nothing and is claimed by nobody.
+    expect(surplusLedger).toHaveLength(0);
+  });
+
+  it("still resolves correctly with the payment row appearing AFTER the deductions too (the gap can open on either side)", () => {
+    const reordered: TallyRow[] = [
+      { ...tally[1], row_index: 0 },
+      { ...tally[2], row_index: 1 },
+      { ...tally[0], row_index: 2 },   // the payment row, now in the middle
+      { ...tally[3], row_index: 3 },
+      { ...tally[4], row_index: 4 },
+    ];
+    const { rows } = reconcileTallyFull(office, reordered, null, {});
+    const byId = Object.fromEntries(rows.map((r) => [r.office_deductee_id, r]));
+    expect(byId.o1.tally_party).toBe("Dineshkumar V Padsala- Exp");
+    expect(byId.o2.tally_party).toBe("Dushyant Prajapati - Exp.");
+    expect(byId.o3.tally_party).toBe("Pinnag Rathod - Exp.");
+    expect(byId.o4.tally_party).toBe("Jatinbhai Patel - Exp.");
+  });
+});
+
 describe("reconcileTally — Stage 3 verdict is ZERO-tolerance (any gap is a Mismatch, by user request)", () => {
   // Reported verbatim: "why can't it detect ₹1,000 vs. ₹999... regardless of
   // whether it is ₹1 or ₹1,000, the record should appear under Mismatched
