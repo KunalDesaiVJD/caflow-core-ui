@@ -1132,17 +1132,26 @@ export async function importGeniusXls(
       total_tax_deducted: d.totalTaxDeducted,
       reason_for_lower_or_nil_deduction: d.reason || null,
       lower_deduction_certificate_no: d.certificateNo || null,
-      // 24Q only — populated ONLY when the file's Annex-II sheet actually carries
-      // this employee's salary break-up (see parseAnnexIISalaryDetails). Left
-      // undefined (DB default / manual entry via Salary Computation) otherwise —
-      // never fabricated from the Annex-I taxable-amount figure, which is a
-      // different concept (the running annual estimate TDS was computed on, not
-      // Gross Salary before deductions).
-      ...(salary ? {
-        designation: salary.designation || undefined,
-        gross_salary: salary.grossSalary || undefined,
-        standard_deduction_allowed: salary.standardDeduction || undefined,
-        net_taxable_salary: salary.totalTaxableIncome || undefined,
+      // 24Q only. Designation/Gross Salary/Standard Deduction have NO source
+      // anywhere in a Q1-Q3 file — Annex-II (the only sheet that would carry
+      // them) is a blank 1000-row template until the return's final quarter,
+      // confirmed against two real clients' files this session — so these stay
+      // undefined (manual entry via Salary Computation) unless Annex-II actually
+      // has the employee's row.
+      //
+      // net_taxable_salary is different: Annex-I's "Taxable amount on which Tax
+      // Deducted" (d.amountPaid, now correctly parsed — see amountPaid's header
+      // matcher above) IS that same figure under Rule 31A/section 192 — the
+      // employer's own running Total Taxable Income estimate for this employee,
+      // which is exactly what this column means. Falling back to it (when
+      // Annex-II hasn't supplied a more authoritative one) means the Taxable
+      // column shows the return's own real number for every 24Q import, instead
+      // of a blank the CA must re-key from the same file by hand.
+      ...(formType === "24Q" ? {
+        designation: salary?.designation || undefined,
+        gross_salary: salary?.grossSalary || undefined,
+        standard_deduction_allowed: salary?.standardDeduction || undefined,
+        net_taxable_salary: salary?.totalTaxableIncome || d.amountPaid || undefined,
       } : {}),
     });
   });
@@ -1161,10 +1170,10 @@ export async function importGeniusXls(
       );
     } else {
       warnings.push(
-        `This file's Annex-II (salary break-up) sheet has no employee data, so Gross Salary / Standard ` +
-        `Deduction / Taxable Income could not be auto-filled — enter them manually via each employee's ` +
-        `Salary Computation. This is normal for Q1-Q3 filings; a Q4/annual return with Annex-II filled in ` +
-        `will auto-fill these instead.`
+        `This file's Annex-II (salary break-up) sheet has no employee data, so Taxable Income was filled in ` +
+        `from Annex-I's own "Taxable amount on which Tax Deducted" figure — but Gross Salary and Standard ` +
+        `Deduction have no source in this file and need manual entry via each employee's Salary Computation. ` +
+        `This is normal for Q1-Q3 filings; a Q4/annual return with Annex-II filled in will auto-fill all three.`
       );
     }
   }
