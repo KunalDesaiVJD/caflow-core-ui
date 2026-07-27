@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,9 +13,17 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { format } from "date-fns";
-import { Download } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  Download, Search, X, ChevronDown, ChevronUp, ChevronsUpDown, Printer, FileSpreadsheet,
+} from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
+import { exportToExcel } from "@/lib/exportUtils";
 
 interface ClientOption {
   id: string; name: string | null;
@@ -43,7 +51,117 @@ const DEFAULT_FY = `${CURRENT_FY_START}-${String(CURRENT_FY_START + 1).slice(2)}
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
-const ACTION_TYPES = ["STATUS_CHANGE", "NOTE_ADDED", "TAN_UPDATED", "DEACTIVATED"];
+
+type SortKey = "date" | "client" | "user" | "action";
+type SortDir = "asc" | "desc";
+
+/** Toolbar multi-select filter — search box, Select All, checkbox list,
+ *  Clear (N) footer. Same UX/pattern as TdsFilingsManager.tsx's local
+ *  MultiSelectFilter (Status / Prepared By) — recreated locally here since
+ *  that component isn't exported and this screen needs its own Action Type
+ *  version, generalised over {value,label} options. */
+function MultiSelectFilter({ label, options, selection, onChange }: {
+  label: string;
+  options: { value: string; label: string }[];
+  selection: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const visible = q ? options.filter(o => o.label.toLowerCase().includes(q)) : options;
+  const set = new Set(selection);
+  const allVisibleChecked = visible.length > 0 && visible.every(o => set.has(o.value));
+
+  const toggle = (v: string) => {
+    const next = new Set(set);
+    if (next.has(v)) next.delete(v); else next.add(v);
+    onChange([...next]);
+  };
+  const toggleAll = () => {
+    const next = new Set(set);
+    if (allVisibleChecked) visible.forEach(o => next.delete(o.value));
+    else visible.forEach(o => next.add(o.value));
+    onChange([...next]);
+  };
+
+  const triggerLabel =
+    selection.length === 0 ? label
+    : selection.length === 1 ? (options.find(o => o.value === selection[0])?.label ?? label)
+    : `${label} (${selection.length})`;
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" size="sm" className="h-9 text-xs w-[180px] justify-between font-normal gap-1">
+          <span className="truncate">{triggerLabel}</span>
+          <ChevronDown size={13} className="ml-1 shrink-0 opacity-60" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-2">
+        <div className="relative">
+          <Input
+            autoFocus
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder={`Search ${label.toLowerCase()}…`}
+            className="h-7 text-xs pr-6"
+          />
+          {query && (
+            <button type="button" onClick={() => setQuery("")} className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+              <X size={11} />
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={toggleAll}
+          className="mt-2 flex items-center gap-2 px-1.5 py-1 rounded text-[11px] font-medium hover:bg-muted w-full text-left"
+        >
+          <span className={cn(
+            "inline-flex items-center justify-center h-3.5 w-3.5 rounded border shrink-0",
+            allVisibleChecked ? "bg-indigo-600 border-indigo-600 text-white" : "border-input",
+          )}>
+            {allVisibleChecked && <span className="text-[9px] leading-none">✓</span>}
+          </span>
+          Select All {q && `(${visible.length})`}
+        </button>
+        <div className="max-h-56 overflow-y-auto pr-0.5 mt-1">
+          {visible.map(o => {
+            const checked = set.has(o.value);
+            return (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => toggle(o.value)}
+                className="w-full flex items-center gap-2 px-1.5 py-1 rounded text-[11px] hover:bg-muted text-left"
+              >
+                <span className={cn(
+                  "inline-flex items-center justify-center h-3.5 w-3.5 rounded border shrink-0",
+                  checked ? "bg-indigo-600 border-indigo-600 text-white" : "border-input",
+                )}>
+                  {checked && <span className="text-[9px] leading-none">✓</span>}
+                </span>
+                <span className="truncate">{o.label}</span>
+              </button>
+            );
+          })}
+          {visible.length === 0 && (
+            <div className="px-1.5 py-2 text-[11px] text-muted-foreground italic">No match for "{query}".</div>
+          )}
+        </div>
+        {selection.length > 0 && (
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className="mt-1.5 pt-1.5 flex items-center justify-center gap-1 w-full px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted border-t border-border"
+          >
+            <X size={11} /> Clear ({selection.length})
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Props) {
   const { toast } = useToast();
@@ -53,17 +171,37 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
 
   // Filters
   const [clientFilter, setClientFilter] = useState("all");
-  const [actionFilter, setActionFilter] = useState("all");
+  // Action Type is now a MULTI-select (see MultiSelectFilter above) whose
+  // options are derived from the currently-loaded `entries` below — not a
+  // hardcoded list — so any action type ever written to tds_filing_audit_log
+  // (including ones added elsewhere later) is automatically filterable here
+  // with zero further changes to this file.
+  const [actionTypeFilter, setActionTypeFilter] = useState<string[]>([]);
   const [userFilter, setUserFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  // Free-text search — matches remark, action_type, changed_by_name, and the
+  // resolved client name in one pass (client-side, same as the multi-select
+  // filters above).
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Column sorting — Date/Client/User/Action headers are clickable; clicking
+  // the active column flips direction, clicking a new column selects it
+  // (ascending by default). Purely a client-side sort of the already-fetched
+  // (and already-filtered) rows; the fetch itself always orders by
+  // changed_at desc, unaffected by this.
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir(d => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("asc"); }
+  };
 
   const fetchEntries = useCallback(async () => {
     setLoading(true);
     const firmId = await resolveFirmId();
     let q = supabase.from("tds_filing_audit_log").select("*").order("changed_at", { ascending: false }).limit(500);
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
-    if (actionFilter !== "all") q = q.eq("action_type", actionFilter);
     if (userFilter !== "all") q = q.eq("changed_by", userFilter);
     if (dateFrom) q = q.gte("changed_at", dateFrom);
     if (dateTo) q = q.lte("changed_at", dateTo + "T23:59:59");
@@ -81,28 +219,98 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
       setFilingMap(map);
     }
     setLoading(false);
-  }, [isSuperadmin, resolveFirmId, actionFilter, userFilter, dateFrom, dateTo]);
+  }, [isSuperadmin, resolveFirmId, userFilter, dateFrom, dateTo]);
 
   useEffect(() => { fetchEntries(); }, [fetchEntries]);
 
-  const filteredEntries = entries.filter(e => {
-    const filing = e.filing_id ? filingMap[e.filing_id] : null;
-    // TDS Compliance is the single source of truth — an entry whose filing is
-    // for a de-configured form, an out-of-range quarter, or a client with no
-    // TDS Compliance must not appear or be counted here. Same per-row gate as
-    // every other TDS screen (applied unconditionally).
-    if (filing) {
-      const client = clients.find(c => c.id === filing.client_id);
-      if (!client || !isFilingTdsCompliant(filing, client)) return false;
-    }
-    if (clientFilter !== "all") {
-      if (!filing || filing.client_id !== clientFilter) return false;
-    }
-    return true;
+  // Base set — TDS Compliance gate + Client filter, applied unconditionally
+  // (same per-row gate as every other TDS screen). Action Type options below
+  // are derived from THIS set (not the further-narrowed one below it) so
+  // every action type actually present keeps showing up as a selectable
+  // option no matter what's currently checked in the multi-select.
+  const baseEntries = useMemo(() => {
+    return entries.filter(e => {
+      const filing = e.filing_id ? filingMap[e.filing_id] : null;
+      // TDS Compliance is the single source of truth — an entry whose filing
+      // is for a de-configured form, an out-of-range quarter, or a client
+      // with no TDS Compliance must not appear or be counted here. Same
+      // per-row gate as every other TDS screen (applied unconditionally).
+      if (filing) {
+        const client = clients.find(c => c.id === filing.client_id);
+        if (!client || !isFilingTdsCompliant(filing, client)) return false;
+      }
+      if (clientFilter !== "all") {
+        if (!filing || filing.client_id !== clientFilter) return false;
+      }
+      return true;
+    });
+  }, [entries, filingMap, clients, clientFilter]);
+
+  // Action Type filter options — distinct action_type values actually present
+  // among the currently-loaded (and compliance/client-gated) rows, mirroring
+  // TdsFilingsManager.tsx's statusOptions/preparedByOptions pattern exactly.
+  const actionTypeOptions = useMemo(() => {
+    const present = new Set(baseEntries.map(e => e.action_type).filter(Boolean));
+    return [...present].sort((a, b) => a.localeCompare(b)).map(a => ({ value: a, label: a }));
+  }, [baseEntries]);
+
+  // Final filtered set — base rows further narrowed by the Action Type
+  // multi-select and the free-text search (remark, action_type,
+  // changed_by_name, resolved client name — all in one pass).
+  const filteredEntries = useMemo(() => {
+    const actionSet = actionTypeFilter.length ? new Set(actionTypeFilter) : null;
+    const q = searchQuery.trim().toLowerCase();
+    return baseEntries.filter(e => {
+      if (actionSet && !actionSet.has(e.action_type)) return false;
+      if (!q) return true;
+      const filing = e.filing_id ? filingMap[e.filing_id] : null;
+      const client = filing ? clients.find(c => c.id === filing.client_id) : null;
+      const haystack = [e.remark, e.action_type, e.changed_by_name, client?.name]
+        .filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [baseEntries, actionTypeFilter, searchQuery, filingMap, clients]);
+
+  // Client-side sort applied last, on top of the filtered set — toggled by
+  // clicking the Date/Client/User/Action column headers.
+  const sortedEntries = useMemo(() => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    const decorated = filteredEntries.map(e => {
+      const filing = e.filing_id ? filingMap[e.filing_id] : null;
+      const client = filing ? clients.find(c => c.id === filing.client_id) : null;
+      return { e, client };
+    });
+    decorated.sort((a, b) => {
+      if (sortKey === "date") {
+        const at = a.e.changed_at ? new Date(a.e.changed_at).getTime() : 0;
+        const bt = b.e.changed_at ? new Date(b.e.changed_at).getTime() : 0;
+        return (at - bt) * dir;
+      }
+      const av = sortKey === "client" ? (a.client?.name || "")
+        : sortKey === "user" ? (a.e.changed_by_name || "")
+        : (a.e.action_type || "");
+      const bv = sortKey === "client" ? (b.client?.name || "")
+        : sortKey === "user" ? (b.e.changed_by_name || "")
+        : (b.e.action_type || "");
+      return av.localeCompare(bv) * dir;
+    });
+    return decorated.map(d => d.e);
+  }, [filteredEntries, filingMap, clients, sortKey, sortDir]);
+
+  const SortIcon = ({ col }: { col: SortKey }) => {
+    if (sortKey !== col) return <ChevronsUpDown size={12} className="inline ml-1 opacity-30" />;
+    return sortDir === "asc"
+      ? <ChevronUp size={12} className="inline ml-1" />
+      : <ChevronDown size={12} className="inline ml-1" />;
+  };
+
+  const sortableHeaderProps = (key: SortKey) => ({
+    className: "cursor-pointer select-none hover:text-foreground",
+    onClick: () => toggleSort(key),
   });
 
-  const exportLog = () => {
-    const rows = filteredEntries.map(e => {
+  const printLog = () => {
+    const rows = sortedEntries.map(e => {
       const filing = e.filing_id ? filingMap[e.filing_id] : null;
       const client = filing ? clients.find(c => c.id === filing.client_id) : null;
       return `<tr>
@@ -122,6 +330,32 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
     const blob = new Blob([html], { type: "text/html" });
     const w = window.open(URL.createObjectURL(blob), "_blank");
     if (w) setTimeout(() => w.print(), 500);
+  };
+
+  // Real downloadable .xlsx export — same exportToExcel/xlsx utility used by
+  // TdsReports.tsx's handleExportExcel, over exactly the rows currently on
+  // screen (filtered + sorted), not the raw unfiltered fetch.
+  const exportExcel = () => {
+    if (sortedEntries.length === 0) {
+      toast({ title: "Nothing to export", description: "No audit log rows match the current filters.", variant: "destructive" });
+      return;
+    }
+    const rows = sortedEntries.map(e => {
+      const filing = e.filing_id ? filingMap[e.filing_id] : null;
+      const client = filing ? clients.find(c => c.id === filing.client_id) : null;
+      return {
+        "Date + Time": e.changed_at ? format(new Date(e.changed_at), "dd/MM/yyyy HH:mm") : "—",
+        "Client": client?.name || "—",
+        "Form": filing?.tds_forms?.join(", ") || "—",
+        "Quarter": filing?.quarter || "—",
+        "User": e.changed_by_name || "—",
+        "Action": e.action_type,
+        "Old Value": e.old_value || "—",
+        "New Value": e.new_value || "—",
+        "Remark": e.remark || "—",
+      };
+    });
+    exportToExcel([{ sheetName: "Audit Log", rows }], `TDS_Audit_Log_${format(new Date(), "yyyy-MM-dd")}.xlsx`);
   };
 
   return (
@@ -145,13 +379,12 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
         </div>
         <div className="space-y-1">
           <Label className="text-xs">Action Type</Label>
-          <Select value={actionFilter} onValueChange={setActionFilter}>
-            <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Actions</SelectItem>
-              {ACTION_TYPES.map(a => <SelectItem key={a} value={a}>{a}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <MultiSelectFilter
+            label="All Actions"
+            options={actionTypeOptions}
+            selection={actionTypeFilter}
+            onChange={setActionTypeFilter}
+          />
         </div>
         <div className="space-y-1">
           <Label className="text-xs">User</Label>
@@ -171,10 +404,43 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
           <Label className="text-xs">To</Label>
           <Input type="date" className="w-[140px] h-9" value={dateTo} onChange={e => setDateTo(e.target.value)} />
         </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Search</Label>
+          <div className="relative">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Remark, action, user, client…"
+              className="w-[220px] h-9 pl-7 pr-6"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        </div>
         <div className="flex-1" />
-        <Button variant="outline" size="sm" className="gap-1" onClick={exportLog}>
-          <Download size={14} /> Export
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="sm" className="gap-1">
+              <Download size={14} /> Export
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={printLog} className="gap-2 text-xs">
+              <Printer size={13} /> Print / PDF Preview
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={exportExcel} className="gap-2 text-xs">
+              <FileSpreadsheet size={13} /> Export to Excel (.xlsx)
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Table */}
@@ -184,12 +450,12 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Date + Time</TableHead>
-                  <TableHead>Client</TableHead>
+                  <TableHead {...sortableHeaderProps("date")}>Date + Time <SortIcon col="date" /></TableHead>
+                  <TableHead {...sortableHeaderProps("client")}>Client <SortIcon col="client" /></TableHead>
                   <TableHead>Form</TableHead>
                   <TableHead>Quarter</TableHead>
-                  <TableHead>User</TableHead>
-                  <TableHead>Action</TableHead>
+                  <TableHead {...sortableHeaderProps("user")}>User <SortIcon col="user" /></TableHead>
+                  <TableHead {...sortableHeaderProps("action")}>Action <SortIcon col="action" /></TableHead>
                   <TableHead>Old → New</TableHead>
                   <TableHead>Remark</TableHead>
                 </TableRow>
@@ -197,13 +463,13 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
               <TableBody>
                 {loading ? Array.from({ length: 5 }).map((_, i) => (
                   <TableRow key={i}>{Array.from({ length: 8 }).map((_, j) => <TableCell key={j}><Skeleton className="h-4 w-full" /></TableCell>)}</TableRow>
-                )) : filteredEntries.length === 0 ? (
+                )) : sortedEntries.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
                       No audit log entries found.
                     </TableCell>
                   </TableRow>
-                ) : filteredEntries.map(e => {
+                ) : sortedEntries.map(e => {
                   const filing = e.filing_id ? filingMap[e.filing_id] : null;
                   const client = filing ? clients.find(c => c.id === filing.client_id) : null;
                   return (
