@@ -5,6 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -387,8 +388,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const { data: prior } = await supabase.from("tds_tally_results").select("id, office_deductee_id, tally_party, tally_date, tally_credit, result, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", fId);
     const priorOffice = (prior || []).filter((p: any) => p.office_deductee_id);
     const pm = new Map<string, any>(); for (const p of priorOffice) pm.set(p.office_deductee_id ?? "", p);
+    // Rows where THIS run found a credible suggested mapping (a Party Name
+    // Mismatch with a candidate ledger party — see render()'s suggestion gate
+    // in tallyRecon.ts) AND the user has not already dismissed this exact
+    // question via a prior override. `suggested_party` is deliberately never
+    // persisted to tds_tally_results (it is a recommendation for THIS run, not
+    // a stored fact), so this is the only place it can be captured — must be
+    // computed HERE, in the same pass as the override-preservation `keep`
+    // check above, or a name the user already overrode-and-accepted would be
+    // asked about again on every subsequent Run Validation.
+    const mappingCandidates: TallyReconRow[] = [];
     const newRows = audited.map((r) => {
       const c = pm.get(r.office_deductee_id ?? ""); const keep = !!c?.overridden && c.result === r.result;
+      if (!keep && r.result === "Party Name Mismatch" && r.suggested_party) mappingCandidates.push(r);
       return {
         filing_id: fId, batch_id: b?.[0]?.id ?? null, firm_id: firmId, quarter: selQuarter, office_deductee_id: r.office_deductee_id,
         office_name: r.office_name, office_date: r.office_date, office_amount: r.office_amount, office_tds: r.office_tds, office_section: r.office_section,
@@ -434,19 +446,78 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     });
     if (error) throw new Error(error.message);
     await logReconAudit({ filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_RECON_RUN", newValue: `${audited.filter((r) => r.result === "Matched").length} matched / ${audited.length}`, remark: `Tally reconciliation over ${tally.length} ledger rows` });
-    if (seq !== loadSeq.current) return audited;
-    const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", fId); if (seq !== loadSeq.current) return audited;
+    if (seq !== loadSeq.current) return { audited, mappingCandidates: [] };
+    const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", fId); if (seq !== loadSeq.current) return { audited, mappingCandidates: [] };
     setTallyRows(tally);
     setResults((res as ResultRow[]) || []);
-    return audited;
+    return { audited, mappingCandidates };
   }, [loadOffice, loadMaps, fetchTallyRows, resolveFirmId, selQuarter, user?.id, userMap]);
 
   const runValidation = useCallback(async () => {
     if (!filing || !batches.length || validating) return; setValidating(true);
-    try { const a = await runAudit(filing.id); const m = a.filter((r) => r.result === "Matched").length; toast({ title: "Stage 3 · Tally reconciliation complete", description: `${m} matched · ${a.length - m} to review across ${a.length} office record(s)` }); onActivity?.(); }
+    try {
+      const { audited: a, mappingCandidates: cands } = await runAudit(filing.id);
+      const m = a.filter((r) => r.result === "Matched").length;
+      toast({ title: "Stage 3 · Tally reconciliation complete", description: `${m} matched · ${a.length - m} to review across ${a.length} office record(s)` });
+      onActivity?.();
+      // Surface every credible name-mapping candidate from THIS run in one place,
+      // right away — the same suggestions already sit in the results list one
+      // card at a time, but asking the user to notice and click each one
+      // individually is exactly the manual hunt the user asked to remove. Every
+      // candidate here still needs the user's own confirmation (see the dialog's
+      // own doc); this only collects the question into a single step.
+      if (cands.length) {
+        setMappingCandidates(cands);
+        setSelectedMappingIds(new Set(cands.map((c) => c.office_deductee_id)));
+        setMappingDialogOpen(true);
+      }
+    }
     catch (e: any) { toast({ title: "Reconciliation failed", description: e.message, variant: "destructive" }); }
     setValidating(false);
   }, [filing, batches, validating, runAudit, toast, onActivity]);
+
+  // ── Proactive name-mapping confirmation (after Run Validation) ──────────────
+  const [mappingCandidates, setMappingCandidates] = useState<TallyReconRow[]>([]);
+  const [selectedMappingIds, setSelectedMappingIds] = useState<Set<string>>(new Set());
+  const [mappingDialogOpen, setMappingDialogOpen] = useState(false);
+  const [confirmingMappings, setConfirmingMappings] = useState(false);
+  const toggleMappingCandidate = (id: string) => setSelectedMappingIds((prev) => {
+    const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next;
+  });
+
+  /** Batch-confirm every SELECTED candidate in one upsert + one re-run, instead
+   *  of N calls to saveMapping() (which each re-run the whole audit on their
+   *  own — correct for a single click from the results list, wasteful and
+   *  flicker-prone for a batch of N confirmed here at once). Every mapping is
+   *  still the user's own decision — this only lets several be made at once. */
+  const confirmSelectedMappings = async () => {
+    const toConfirm = mappingCandidates.filter((c) => selectedMappingIds.has(c.office_deductee_id));
+    if (!toConfirm.length) { setMappingDialogOpen(false); return; }
+    setConfirmingMappings(true);
+    try {
+      const firmId = await resolveFirmId();
+      const { error } = await supabase.from("tds_tally_party_maps").upsert(
+        toConfirm.map((c) => ({
+          firm_id: firmId, client_id: selClient, office_name_norm: normalizeName(c.office_name),
+          office_name: c.office_name, tally_party: c.suggested_party, created_by: user?.id,
+        })),
+        { onConflict: "client_id,office_name_norm" },
+      );
+      if (error) { toast({ title: "Could not save mappings", description: error.message, variant: "destructive" }); setConfirmingMappings(false); return; }
+      for (const c of toConfirm) {
+        await logReconAudit({
+          filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+          actionType: "TALLY_PARTY_MAP", oldValue: c.office_name, newValue: c.suggested_party,
+          remark: "Confirmed during Run Validation review",
+        });
+      }
+      setMappingDialogOpen(false);
+      toast({ title: `${toConfirm.length} mapping${toConfirm.length === 1 ? "" : "s"} confirmed`, description: "Re-running validation…" });
+      setValidating(true);
+      try { await runAudit(filing.id); } catch (e: any) { toast({ title: "Re-validation failed", description: e.message, variant: "destructive" }); }
+      setValidating(false);
+    } finally { setConfirmingMappings(false); }
+  };
 
   /** Save a party mapping (office name ↔ ledger party) → re-run.
    *
@@ -1159,6 +1230,59 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             <p className="text-[10px] text-muted-foreground">Selecting a record saves that office party ↔ "{officePickTarget?.tally_party || "—"}" for this client and re-runs the reconciliation.</p>
           </div>
           <DialogFooter><Button variant="outline" size="sm" onClick={() => setOfficePickOpen(false)}>Cancel</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Proactive name-mapping review — opens automatically right after Run
+          Validation whenever this run found credible suggested mappings, so
+          the user confirms them in one step instead of hunting through the
+          results list for the same "Suggested mapping" banner one card at a
+          time. Every candidate here is STILL only a suggestion (identical to
+          the one already shown on its own card) — this dialog changes how it
+          is SURFACED, not the evidence bar for offering it. */}
+      <Dialog open={mappingDialogOpen} onOpenChange={setMappingDialogOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-base">Confirm name mappings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              This run found {mappingCandidates.length} office record{mappingCandidates.length === 1 ? "" : "s"} whose ledger entry looks like the same
+              deductee under a different spelling or abbreviation. Confirming saves the mapping for this client and re-runs validation — uncheck any
+              you're not sure about and resolve them individually in the results list instead.
+            </p>
+            <div className="flex items-center gap-2 px-1">
+              <Checkbox
+                checked={selectedMappingIds.size === mappingCandidates.length && mappingCandidates.length > 0}
+                onCheckedChange={(v) => setSelectedMappingIds(v ? new Set(mappingCandidates.map((c) => c.office_deductee_id)) : new Set())}
+              />
+              <span className="text-xs text-muted-foreground">Select all ({selectedMappingIds.size}/{mappingCandidates.length})</span>
+            </div>
+            <ScrollArea className="h-72 rounded-md border">
+              <div className="p-1 space-y-0.5">
+                {mappingCandidates.map((c) => (
+                  <label key={c.office_deductee_id} className="w-full flex items-start gap-2 rounded px-2 py-1.5 hover:bg-muted cursor-pointer">
+                    <Checkbox
+                      className="mt-0.5"
+                      checked={selectedMappingIds.has(c.office_deductee_id)}
+                      onCheckedChange={() => toggleMappingCandidate(c.office_deductee_id)}
+                    />
+                    <div className="min-w-0 flex-1 text-xs">
+                      <p><b className="text-foreground">{c.office_name}</b> ↔ <b className="text-foreground">{c.suggested_party}</b></p>
+                      <p className="text-[10px] text-muted-foreground">{c.office_date || "—"} · TDS {inr(c.office_tds)} · {c.office_section || "—"}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setMappingDialogOpen(false)} disabled={confirmingMappings}>Review later</Button>
+            <Button size="sm" onClick={confirmSelectedMappings} disabled={confirmingMappings || selectedMappingIds.size === 0}>
+              {confirmingMappings ? <Loader2 size={12} className="animate-spin" /> : null}
+              Confirm {selectedMappingIds.size || ""} mapping{selectedMappingIds.size === 1 ? "" : "s"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
