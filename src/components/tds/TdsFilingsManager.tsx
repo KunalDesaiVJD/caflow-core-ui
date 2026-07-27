@@ -1048,7 +1048,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   };
 
   // CP-01: Delete PDF — confirmation → remove from Supabase Storage → delete
-  // tds_ack_files record → update UI. Does NOT touch any other filing data.
+  // tds_ack_files record → clear the Ack No on the filing → update UI. The Ack
+  // No is auto-filled ONLY from this exact file's own extracted text (manual
+  // entry was removed), so once the file is gone the number has no remaining
+  // source — leaving it behind would be stale, unlinked data pointing at a
+  // PDF that no longer exists.
   const deleteAckFile = async (filingId: string, ackFile: TdsAckFile) => {
     const confirmed = window.confirm(
       "Are you sure you want to delete this PDF? This cannot be undone."
@@ -1076,7 +1080,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         .eq('id', ackFile.id));
       if (dbError) throw dbError;
 
-      // 3. Update local map so the row re-renders with [Attach ACK]
+      // 3. Clear the now-orphaned Ack No
+      const { error: clearError } = await supabase
+        .from('tds_filings')
+        .update({ acknowledgment_number: null })
+        .eq('id', filingId);
+      if (clearError) {
+        console.warn('[deleteAckFile] clear acknowledgment_number:', clearError.message);
+        // Non-fatal — the file/link are already gone either way
+      } else {
+        setFilings(prev => prev.map(f => (f.id === filingId ? { ...f, acknowledgment_number: null } : f)));
+        logAuditEntry(filingId, "ACK_NUMBER_CLEARED", null, null, `Ack No. cleared — attached PDF "${ackFile.file_name}" was deleted`).catch(() => { /* audit logging must never block or reverse the user's action */ });
+      }
+
+      // 4. Update local map so the row re-renders with [Attach ACK]
       setAckFiles(prev => {
         const next = new Map(prev);
         next.delete(filingId);
