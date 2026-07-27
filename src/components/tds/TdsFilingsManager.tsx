@@ -818,19 +818,23 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       const client = clients.find(c => c.id === filing.client_id);
       const { rejectReasons, warnReasons } = evaluateAckMismatch(fields, filing, client);
 
-      // HARD BLOCK — Financial Year and Quarter are closed, unambiguous,
-      // structured values (FY "YYYY-YY", Quarter exactly Q1-Q4) printed
-      // verbatim on the government receipt, with essentially zero risk of a
-      // legitimate false positive (a genuine Q4 can never be mistaken for a
-      // genuine Q1). A definite mismatch here means this receipt belongs to
-      // a different filing — regression fixed: this used to only ever
-      // produce a non-blocking toast warning (easily missed/overwritten),
-      // and the wrong receipt still got linked. Now the attach never
-      // proceeds at all: no storage upload, no tds_ack_files insert, no
-      // acknowledgment_number update. Name/TAN/Form No. mismatches remain
-      // warn-only (handled below, after a successful attach) since a legal
-      // entity name is fuzzy text that can legitimately vary (OCR quality,
-      // punctuation/formatting) in ways a structured FY/Quarter code cannot.
+      // HARD BLOCK — Form Type, Client Name, Financial Year and Quarter are
+      // all required to match before an attach is allowed. Form/FY/Quarter
+      // are closed, unambiguous, structured values (Form is one of
+      // 24Q/26Q/27Q/27EQ, FY "YYYY-YY", Quarter exactly Q1-Q4) printed
+      // verbatim on the government receipt — a genuine 24Q/Q4 can never be
+      // mistaken for a genuine 26Q/Q1. Client Name is compared via the same
+      // nameCompare() every other TDS stage in this app already trusts for
+      // real reconciliation decisions, so its mismatch verdict is likewise
+      // treated as a real, actionable signal rather than OCR noise.
+      // Regression history: a Q4 receipt was once attached to a Q1 filing,
+      // and separately a 24Q receipt to a 26Q filing, both accepted with no
+      // effective block (each was only a non-blocking toast warning, easily
+      // missed/overwritten). Now a genuine mismatch on any of these four
+      // fields stops the attach entirely: no storage upload, no
+      // tds_ack_files insert, no acknowledgment_number update. Only TAN
+      // remains warn-only (handled below, after a successful attach) — it's
+      // a bonus cross-check, not part of the required Form/Client/FY/Quarter set.
       if (rejectReasons.length > 0) {
         logAuditEntry(
           filing.id,
@@ -931,10 +935,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         `Acknowledgement PDF uploaded: "${file.name}"${ackNo ? ` (Ack No. ${ackNo} detected in PDF)` : ' (no Ack No. could be auto-read)'}`,
       ).catch(() => { /* audit logging must never block or reverse the user's action */ });
 
-      // Warn (never block) when the receipt's own printed Name/TAN/Form No.
-      // doesn't match this row's client — silently skipped when there's
-      // nothing to warn about (warnReasons computed in step c, above,
-      // before any of the upload/insert work happened).
+      // Warn (never block) on the one remaining bonus signal — TAN — when it
+      // doesn't match this row's client; silently skipped when there's
+      // nothing to warn about (warnReasons computed in step c, above, before
+      // any of the upload/insert work happened). Form/Client/FY/Quarter are
+      // no longer possible warnReasons — they're hard rejects, handled above.
       const mismatchWarning = buildAckWarningMessage(fields, filing, client, warnReasons);
       const withWarning = (desc?: string): string | undefined => {
         if (!mismatchWarning) return desc;

@@ -4,22 +4,21 @@
  * filing row it's being attached to, and decide REJECT vs WARN per field.
  *
  * Split deliberately by field:
- *   - Financial Year / Quarter — HARD BLOCK. Both are closed, unambiguous,
- *     structured value sets (FY is "YYYY-YY", Quarter is exactly Q1-Q4)
- *     printed verbatim on the government receipt. There is no realistic way
- *     for a genuinely-extracted "Q4" to be confused with a genuinely-filed
- *     "Q1" — a definite mismatch here is always a real data error (wrong
- *     receipt attached to the wrong filing), never a false positive from OCR
- *     noise or entity-naming variance. Regression: a Q4 acknowledgement was
- *     once attached to a Q1 filing with no visible warning and the mismatch
- *     was silently accepted — this module exists so that specific class of
- *     error can never again result in a successful, un-blocked attach.
- *   - Name — WARN ONLY. Legal-entity-name text can legitimately vary in ways
- *     nameCompare() might call "different" in edge cases (OCR quality on a
- *     scanned receipt, unusual punctuation/spacing, a trade name vs legal
- *     name) — hard-blocking on it risks locking out a correct upload, so it's
- *     surfaced for human judgement instead, exactly like this module's own
- *     TAN/Form No. checks (unchanged, pre-existing warn-only behaviour).
+ *   - Form Type / Financial Year / Quarter / Client Name — HARD BLOCK. All
+ *     four are printed verbatim on the government receipt as closed,
+ *     unambiguous values (Form is one of 24Q/26Q/27Q/27EQ, FY is "YYYY-YY",
+ *     Quarter is exactly Q1-Q4, Name is compared via the same nameCompare()
+ *     every other TDS stage in this app already trusts for real
+ *     reconciliation decisions). There is no realistic way for a
+ *     genuinely-extracted "24Q"/"Q4" to be confused with a genuinely-filed
+ *     "26Q"/"Q1" — a definite mismatch on any of these four is always a real
+ *     data error (wrong receipt attached to the wrong filing), never a false
+ *     positive from OCR noise. Regression history: a Q4 acknowledgement was
+ *     once attached to a Q1 filing, and separately a 24Q acknowledgement was
+ *     attached to a 26Q filing, both accepted with no effective block (each
+ *     was only a soft warning, easy to miss/overwrite) — this module exists
+ *     so none of these four fields can ever again result in a successful,
+ *     un-blocked attach when they genuinely disagree.
  *
  * Extraction failure is NOT a mismatch: every check below only fires when
  * `fields.<x>` was actually extracted from the PDF's text layer. A
@@ -90,28 +89,36 @@ export function evaluateAckMismatch(
     rejectReasons.push(`Quarter (${fields.quarter} vs ${filing.quarter})`);
   }
 
-  // ── Name — WARN (fuzzy/equivalent match via the same nameCompare() every
-  // other TDS stage uses; "unknown" i.e. blank/unusable on one side is
-  // deliberately NOT a mismatch) ──────────────────────────────────────────
+  // ── Name — REJECT. Uses the same nameCompare() every other TDS stage
+  // relies on for real reconciliation decisions elsewhere in this system, so
+  // its "match" verdict is already trusted at that level of confidence — a
+  // "mismatch"/"different" verdict is a real, actionable signal, not OCR
+  // noise. "unknown" (blank/unusable on one side) is deliberately NOT a
+  // mismatch, since there's nothing to compare. ──────────────────────────
   const clientName = client?.name || "";
   if (fields.name && clientName) {
     const cmp = nameCompare(clientName, fields.name);
     if (cmp === "mismatch" || cmp === "different") {
-      warnReasons.push(`name ("${fields.name}" vs "${clientName}")`);
+      rejectReasons.push(`Client Name ("${fields.name}" vs "${clientName}")`);
     }
   }
 
-  // ── TAN — WARN (unchanged pre-existing behaviour) ──────────────────────
+  // ── TAN — WARN. Not part of the required Form/Client/FY/Quarter set; kept
+  // as a bonus, non-blocking signal. ─────────────────────────────────────
   const clientTan = client?.tan_number || filing.tan || "";
   if (fields.tan && clientTan && normalizePan(fields.tan) !== normalizePan(clientTan)) {
     warnReasons.push(`TAN (${fields.tan} vs ${clientTan})`);
   }
 
-  // ── Form No. — WARN (unchanged pre-existing behaviour). filing.tds_forms
-  // holds bare codes ("24Q"), never the receipt's "Form 24Q" (already
-  // stripped by extractAckFields). ───────────────────────────────────────
+  // ── Form Type (24Q/26Q/27Q/27EQ) — REJECT. Exactly as unambiguous and
+  // structured as Financial Year/Quarter — a receipt printed "Form 24Q" can
+  // never legitimately be misread as "26Q". filing.tds_forms holds bare
+  // codes ("24Q"), never the receipt's "Form 24Q" prefix (already stripped
+  // by extractAckFields). Regression: a 24Q acknowledgement was attached to
+  // a 26Q filing and accepted with no block — this was a soft warning only,
+  // easy to miss, exactly the same class of gap FY/Quarter closed earlier. ─
   if (fields.formNo && filing.tds_forms?.[0] && fields.formNo.toUpperCase() !== filing.tds_forms[0].toUpperCase()) {
-    warnReasons.push(`Form (${fields.formNo} vs ${filing.tds_forms[0]})`);
+    rejectReasons.push(`Form Type (${fields.formNo} vs ${filing.tds_forms[0]})`);
   }
 
   return { rejectReasons, warnReasons };

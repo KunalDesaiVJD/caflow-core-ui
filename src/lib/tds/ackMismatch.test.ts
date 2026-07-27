@@ -51,6 +51,34 @@ describe("evaluateAckMismatch — regression: real Q4 receipt vs a Q1 filing", (
   });
 });
 
+describe("evaluateAckMismatch — regression: real 24Q receipt vs a 26Q filing", () => {
+  it("REJECTS (not silently accepted) when a genuine, fully-extracted 24Q acknowledgement is attached to a synthetic 26Q filing row for the same client/FY/quarter", () => {
+    // The exact real-world scenario reported: a 24Q acknowledgement was
+    // attached to a 26Q client's filing and accepted with no block — Form
+    // Type was previously a soft warning only, same class of gap FY/Quarter
+    // closed earlier. FY and Quarter both match here (2025-26 Q4 on both
+    // sides); only the form type differs (24Q vs 26Q).
+    const form26QFiling = baseFiling({ tds_forms: ["26Q"] });
+    const result = evaluateAckMismatch(REAL_Q4_FIELDS, form26QFiling, client);
+
+    expect(result.rejectReasons).toEqual(["Form Type (24Q vs 26Q)"]);
+    expect(result.warnReasons).toEqual([]);
+
+    const message = buildAckRejectMessage(REAL_Q4_FIELDS, form26QFiling, client, result.rejectReasons);
+    expect(message).toContain("Form Type (24Q vs 26Q)");
+    expect(message).toContain("Attach the correct file, or contact support if this is expected.");
+  });
+
+  it("rejects on Form Type AND Quarter independently when both genuinely mismatch", () => {
+    const filing = baseFiling({ tds_forms: ["26Q"], quarter: "Q1" });
+    const result = evaluateAckMismatch(REAL_Q4_FIELDS, filing, client);
+    expect(result.rejectReasons).toEqual([
+      "Quarter (Q4 vs Q1)",
+      "Form Type (24Q vs 26Q)",
+    ]);
+  });
+});
+
 describe("evaluateAckMismatch — Financial Year", () => {
   it("rejects a genuine Financial Year mismatch", () => {
     const filing = baseFiling({ financial_year: "2024-25" });
@@ -106,45 +134,45 @@ describe("evaluateAckMismatch — extraction failure is NOT a mismatch (nothing 
   });
 });
 
-describe("evaluateAckMismatch — Name is a WARNING, never a reject", () => {
-  it("warns (does not reject) on a genuine name mismatch, even when FY/Quarter both match", () => {
+describe("evaluateAckMismatch — Client Name is now a REJECT (upgraded from warn-only)", () => {
+  it("rejects on a genuine name mismatch, even when FY/Quarter/Form all match", () => {
     const filing = baseFiling();
     const result = evaluateAckMismatch(REAL_Q4_FIELDS, filing, { name: "SOME COMPLETELY DIFFERENT COMPANY LIMITED", tan_number: "AHMK08204A" });
-    expect(result.rejectReasons).toEqual([]);
-    expect(result.warnReasons.length).toBeGreaterThan(0);
-    expect(result.warnReasons[0]).toContain("name");
+    expect(result.rejectReasons.length).toBeGreaterThan(0);
+    expect(result.rejectReasons[0]).toContain("Client Name");
+    expect(result.warnReasons).toEqual([]);
   });
 
-  it("does not warn on equivalent name spellings (PVT/PRIVATE, LTD/LIMITED handled by nameCompare)", () => {
+  it("does not reject on equivalent name spellings (PVT/PRIVATE, LTD/LIMITED handled by nameCompare)", () => {
     const fieldsWithPvtLtd: AckFields = { ...REAL_Q4_FIELDS, name: "KWIKTEAM SUPPORT SERVICES PVT LTD" };
     const result = evaluateAckMismatch(fieldsWithPvtLtd, baseFiling(), client);
-    expect(result.warnReasons).toEqual([]);
+    expect(result.rejectReasons).toEqual([]);
   });
 
   it("buildAckWarningMessage returns null when there is nothing to warn about", () => {
     expect(buildAckWarningMessage(REAL_Q4_FIELDS, baseFiling(), client, [])).toBeNull();
   });
 
-  it("buildAckWarningMessage renders the mismatch reasons when present", () => {
-    const reasons = ['name ("X" vs "Y")'];
+  it("buildAckWarningMessage renders the mismatch reasons when present (used for the remaining warn-only fields, e.g. TAN)", () => {
+    const reasons = ['TAN ("X" vs "Y")'];
     const message = buildAckWarningMessage(REAL_Q4_FIELDS, baseFiling(), client, reasons);
     expect(message).toContain("Please verify this is the correct file.");
-    expect(message).toContain('name ("X" vs "Y")');
+    expect(message).toContain('TAN ("X" vs "Y")');
   });
 });
 
-describe("evaluateAckMismatch — TAN and Form No. remain warn-only (pre-existing behaviour, unchanged)", () => {
-  it("warns (does not reject) on a TAN mismatch", () => {
+describe("evaluateAckMismatch — TAN remains warn-only; Form Type is now a REJECT (upgraded)", () => {
+  it("warns (does not reject) on a TAN mismatch — not part of the required Form/Client/FY/Quarter set", () => {
     const result = evaluateAckMismatch(REAL_Q4_FIELDS, baseFiling(), { name: client.name, tan_number: "BBBB00000B" });
     expect(result.rejectReasons).toEqual([]);
     expect(result.warnReasons.some((r) => r.startsWith("TAN"))).toBe(true);
   });
 
-  it("warns (does not reject) on a Form No. mismatch", () => {
+  it("rejects (does not merely warn) on a Form Type mismatch", () => {
     const filing = baseFiling({ tds_forms: ["26Q"] });
     const result = evaluateAckMismatch(REAL_Q4_FIELDS, filing, client);
-    expect(result.rejectReasons).toEqual([]);
-    expect(result.warnReasons.some((r) => r.startsWith("Form"))).toBe(true);
+    expect(result.warnReasons).toEqual([]);
+    expect(result.rejectReasons.some((r) => r.startsWith("Form Type"))).toBe(true);
   });
 });
 
