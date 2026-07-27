@@ -671,6 +671,30 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
   };
 
   // ── Assemble ────────────────────────────────────────────────────────────────
+  //
+  // EVERY `ti` LEAVING THIS FUNCTION MUST BE ledger[ti].pos, NEVER THE RAW LOOP
+  // INDEX. Internally, `ti` means "position within the `ledger` PARAMETER array"
+  // (edges are built via `for (let ti = 0; ti < ledger.length; ti++)`) — but a
+  // caller resolves an outgoing `ti` against its OWN original array via
+  // `pos`-indexed lookup (tallyRecon.ts's `rowAt = (pos) => tally[pos]`), because
+  // `ledger` here is USUALLY a FILTERED view of that original array (Stage 3
+  // filters to non-zero credits) and `pos` is exactly the field AsgLedger.pos
+  // documents as existing FOR THIS REASON — "position in the credits array...
+  // Position is unique across the union by construction, so no caller can
+  // reintroduce" the row_index collision. `surplus` below already does this
+  // (`.map((t) => t.pos)`) — every `ti` produced in an Outcome must match that
+  // same contract, or the moment the filter above ACTUALLY drops a row (a
+  // genuine ₹0 credit entry, or any row preceding the first non-zero credit in
+  // a multi-batch-combined ledger), every SUBSEQUENT pairing silently resolves
+  // to the WRONG physical row — the office record's OWN evidence (name/date/
+  // amount) is computed correctly, but the row rendered next to it is some
+  // other entry entirely, shifted by however many rows were filtered ahead of
+  // it. This reproduced BYTE-FOR-BYTE against a real client ledger (a payment
+  // row before four deduction rows put every one of the four Credit Amount
+  // Mismatch reasons next to a UNRELATED party — "Party and date match" text
+  // beside a name that shares neither).
+  const posOf = (ti: number) => ledger[ti].pos;
+
   const outcomes: Outcome[] = offices.map((o, oi) => {
     const c = committed.get(oi);
     if (c) {
@@ -692,13 +716,16 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
         }
       }
       return {
-        oi, ti: c.ti, ev: c.ev, ne: c.ne, tier: c.tier, classSize: c.classSize,
+        oi, ti: posOf(c.ti), ev: c.ev, ne: c.ne, tier: c.tier, classSize: c.classSize,
         panBlankMixed: c.panBlankMixed, suggest, escalation, nearest: null, exhaustion: null,
       };
     }
 
     // Unmatched. Build the material for a reason that is never a bare shrug.
-    const esc = escalated.get(oi) ?? null;
+    const escRaw = escalated.get(oi) ?? null;
+    const esc: Escalation | null = escRaw && escRaw.why === "ambiguous"
+      ? { why: "ambiguous", rivalTis: escRaw.rivalTis.map(posOf) }
+      : escRaw;
 
     // NEAR MISS: the closest row we can point at, consumed or not, so the user learns
     // WHY rather than being sent hunting.
@@ -718,7 +745,7 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
           || (ledger[a.ti].party ?? "").localeCompare(ledger[b.ti].party ?? "")
           || (ledger[a.ti].credit ?? 0) - (ledger[b.ti].credit ?? 0)
           || (ledger[a.ti].iso ?? "").localeCompare(ledger[b.ti].iso ?? ""));
-      if (cands.length) nearest = { ti: cands[0].ti, consumed: usedT.has(cands[0].ti), ev: cands[0].ev };
+      if (cands.length) nearest = { ti: posOf(cands[0].ti), consumed: usedT.has(cands[0].ti), ev: cands[0].ev };
     }
 
     // CARDINALITY EXHAUSTION is a real audit finding, not a shrug: the ledger holds
