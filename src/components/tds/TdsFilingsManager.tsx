@@ -3,8 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { isPanException } from "@/lib/tdsPanVerification";
 import { extractAckFieldsFromFile, type AckFields } from "@/lib/tds/ackPdf";
+import { evaluateAckMismatch, buildAckRejectMessage, buildAckWarningMessage } from "@/lib/tds/ackMismatch";
 import { sanitizeStorageName } from "@/lib/storagePath";
-import { nameCompare, normalizePan } from "@/lib/tds/match";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -764,59 +764,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     setVfStatuses(map);
   };
 
-  // Financial year strings appear as either "2025-26" (this app's own format,
-  // matching the real ACK receipt's own printed format) or occasionally
-  // "2025-2026" — normalise both to "2025-26" before comparing so a harmless
-  // 2 vs 4-digit end-year difference is never reported as a real mismatch.
-  const normalizeFy = (v: string | null | undefined): string => {
-    const s = (v ?? "").trim();
-    const m = s.match(/^(\d{4})[-/](\d{2,4})$/);
-    if (!m) return s.toUpperCase();
-    return `${m[1]}-${m[2].length === 4 ? m[2].slice(2) : m[2]}`;
-  };
-
-  // Compare the receipt's own printed Name/FY/Quarter/TAN/Form No. against
-  // this row's actual client/period. Returns null when everything matches
-  // (or nothing could be extracted at all — nothing to compare) — never
-  // blocks, only informs; per this codebase's established pattern of
-  // surfacing mismatches for human judgement (e.g. the TDS reconciliation
-  // Override flow) rather than hard-blocking the upload.
-  const buildAckMismatchWarning = (fields: AckFields, filing: TdsFiling, client: ClientOption | undefined): string | null => {
-    if (!fields.name && !fields.financialYear && !fields.quarter && !fields.tan) return null; // nothing extracted — nothing to compare
-
-    const clientName = client?.name || "";
-    const clientTan = client?.tan_number || filing.tan || "";
-    const problems: string[] = [];
-
-    // Name — fuzzy/equivalent match (PVT=PRIVATE, LTD=LIMITED, case/punctuation
-    // -insensitive) via the same nameCompare() every other TDS stage uses.
-    // "unknown" (blank/unusable on one side) is deliberately NOT a mismatch.
-    if (fields.name && clientName) {
-      const cmp = nameCompare(clientName, fields.name);
-      if (cmp === "mismatch" || cmp === "different") problems.push(`name ("${fields.name}" vs "${clientName}")`);
-    }
-    if (fields.financialYear && normalizeFy(fields.financialYear) !== normalizeFy(filing.financial_year)) {
-      problems.push(`Financial Year (${fields.financialYear} vs ${filing.financial_year})`);
-    }
-    if (fields.quarter && fields.quarter.trim().toUpperCase() !== (filing.quarter || "").trim().toUpperCase()) {
-      problems.push(`Quarter (${fields.quarter} vs ${filing.quarter})`);
-    }
-    if (fields.tan && clientTan && normalizePan(fields.tan) !== normalizePan(clientTan)) {
-      problems.push(`TAN (${fields.tan} vs ${clientTan})`);
-    }
-    // Bonus cross-check — filing.tds_forms holds bare codes ("24Q"), never
-    // the receipt's "Form 24Q" (already stripped by extractAckFields).
-    if (fields.formNo && filing.tds_forms?.[0] && fields.formNo.toUpperCase() !== filing.tds_forms[0].toUpperCase()) {
-      problems.push(`Form (${fields.formNo} vs ${filing.tds_forms[0]})`);
-    }
-
-    if (problems.length === 0) return null;
-
-    return `This acknowledgement is for ${fields.name || "a different deductor"}`
-      + `${fields.financialYear ? `, FY ${fields.financialYear}` : ""}${fields.quarter ? ` ${fields.quarter}` : ""}`
-      + ` — but you're attaching it to ${clientName || "this client"}, FY ${filing.financial_year} ${filing.quarter}.`
-      + ` Please verify this is the correct file. (Mismatch: ${problems.join("; ")})`;
-  };
+  // Financial Year/Quarter (REJECT) vs Name/TAN/Form No. (WARN) cross-check
+  // logic now lives in src/lib/tds/ackMismatch.ts — a dependency-free, unit
+  // tested module (see ackMismatch.test.ts, including the pinned regression:
+  // a real Q4 receipt attached to a synthetic Q1 filing must reject) — so it
+  // can be verified directly without mounting this component.
 
   // Upload PDF → documents bucket → insert tds_ack_files record
   const handleAttachAck = async (filing: TdsFiling, file: File) => {
@@ -847,7 +799,67 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     }
     setAckUploading(filing.id);
     try {
-      // c. Upload to 'documents' bucket (public — no RLS on read). Sanitize
+      // c. Extract the receipt's own printed Name/FY/Quarter/TAN/Form No. —
+      // BEFORE touching storage or the DB at all — so a definite Financial
+      // Year or Quarter mismatch can be rejected outright below with nothing
+      // to undo (no orphaned storage object, no tds_ack_files row, no
+      // acknowledgment_number write). Extraction failure (e.g. a
+      // scanned/image-only PDF with no text layer) leaves every field null,
+      // which ackMismatch.ts treats as "nothing to compare" — never a
+      // reject or a warning — so it always falls through to the normal
+      // upload path below.
+      let fields: AckFields = { ackNumber: null, name: null, financialYear: null, quarter: null, formNo: null, tan: null };
+      try {
+        fields = await extractAckFieldsFromFile(file);
+      } catch (e) {
+        console.error('Ack PDF field extraction failed:', e);
+      }
+
+      const client = clients.find(c => c.id === filing.client_id);
+      const { rejectReasons, warnReasons } = evaluateAckMismatch(fields, filing, client);
+
+      // HARD BLOCK — Financial Year and Quarter are closed, unambiguous,
+      // structured values (FY "YYYY-YY", Quarter exactly Q1-Q4) printed
+      // verbatim on the government receipt, with essentially zero risk of a
+      // legitimate false positive (a genuine Q4 can never be mistaken for a
+      // genuine Q1). A definite mismatch here means this receipt belongs to
+      // a different filing — regression fixed: this used to only ever
+      // produce a non-blocking toast warning (easily missed/overwritten),
+      // and the wrong receipt still got linked. Now the attach never
+      // proceeds at all: no storage upload, no tds_ack_files insert, no
+      // acknowledgment_number update. Name/TAN/Form No. mismatches remain
+      // warn-only (handled below, after a successful attach) since a legal
+      // entity name is fuzzy text that can legitimately vary (OCR quality,
+      // punctuation/formatting) in ways a structured FY/Quarter code cannot.
+      if (rejectReasons.length > 0) {
+        logAuditEntry(
+          filing.id,
+          "ACK_REJECTED_MISMATCH",
+          null,
+          null,
+          `Acknowledgement PDF rejected — "${file.name}" (${rejectReasons.join("; ")})`,
+        ).catch(() => { /* audit logging must never block or reverse the user's action */ });
+        toast({
+          title: '❌ Acknowledgement rejected',
+          description: buildAckRejectMessage(fields, filing, client, rejectReasons),
+          variant: 'destructive',
+          // duration: Infinity is Radix's own documented way to disable a
+          // toast's auto-close timer entirely (see ToastImpl's startTimer:
+          // `if (!duration2 || duration2 === Infinity) return;`). Every
+          // toast in this app defaults to ToastProvider's 5-SECOND
+          // auto-dismiss (a mechanism completely separate from — and not
+          // fixed by — use-toast.ts's own TOAST_REMOVE_DELAY constant,
+          // which only governs post-dismiss state cleanup, not visible
+          // duration). A rejected-attach toast is a hard block the user
+          // MUST see and act on, so it must not be able to silently vanish
+          // before it's read; only an explicit close (or a later toast
+          // replacing it) dismisses it.
+          duration: Infinity,
+        });
+        return;
+      }
+
+      // d. Upload to 'documents' bucket (public — no RLS on read). Sanitize
       // via the shared helper so non-ASCII characters (en-dashes, curly
       // quotes, etc.) don't trigger Supabase's opaque "Invalid key" error.
       const safeName = sanitizeStorageName(file.name);
@@ -863,9 +875,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         toast({ title: 'Upload failed', description: desc, variant: 'destructive' });
         return;
       }
-      // d. Get public URL (works because bucket is public)
+      // e. Get public URL (works because bucket is public)
       const { data: { publicUrl } } = supabase.storage.from('documents').getPublicUrl(filePath);
-      // e. Insert into tds_ack_files
+      // f. Insert into tds_ack_files
       const insertPayload = {
         filing_id: filing.id,
         client_id: filing.client_id,
@@ -882,25 +894,18 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         toast({ title: 'Failed to save record', description: insertResult.error.message, variant: 'destructive' });
         return;
       }
-      // f. Update local map instantly (no full re-fetch needed)
+      // g. Update local map instantly (no full re-fetch needed)
       setAckFiles(prev => {
         const next = new Map(prev);
         next.set(filing.id, insertResult.data as TdsAckFile);
         return next;
       });
-      // g. Auto-fill Ack No. — and cross-check Name/FY/Quarter/TAN/Form No. —
-      // from the receipt's own printed fields. There is no manual Ack No.
-      // entry point anymore, so the DB-level compare-and-swap below
-      // (.is("acknowledgment_number", null)) no longer guards against a
-      // concurrent hand-typed value; it's kept as-is since it's still a
-      // correct, harmless guard against a second concurrent attach landing
-      // first.
-      let fields: AckFields = { ackNumber: null, name: null, financialYear: null, quarter: null, formNo: null, tan: null };
-      try {
-        fields = await extractAckFieldsFromFile(file);
-      } catch (e) {
-        console.error('Ack PDF field extraction failed:', e);
-      }
+      // h. Auto-fill Ack No. from the receipt's own printed field (extracted
+      // in step c, above). There is no manual Ack No. entry point anymore,
+      // so the DB-level compare-and-swap below (.is("acknowledgment_number",
+      // null)) no longer guards against a concurrent hand-typed value; it's
+      // kept as-is since it's still a correct, harmless guard against a
+      // second concurrent attach landing first.
       const ackNo = fields.ackNumber;
 
       // Audit trail — record the ACK upload itself (not just the downstream
@@ -909,24 +914,43 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       // consistency. Best-effort: never let a logging failure surface as an
       // "Upload failed" toast for an upload that actually succeeded, so the
       // rejection is swallowed locally rather than bubbling to the outer catch.
+      //
+      // newValue is deliberately left null here: at this point ackNo is only
+      // what was READ from the PDF, not what actually landed in
+      // tds_filings.acknowledgment_number — that write is the separate,
+      // conditional compare-and-swap below, which can legitimately not run
+      // (row already has an Ack No.) or fail (casError). A dedicated
+      // ACK_NUMBER_AUTO_FILLED entry is logged further down, only once the
+      // CAS confirms the column actually changed, so the audit trail never
+      // claims a field write that didn't happen.
       logAuditEntry(
         filing.id,
         "ACK_UPLOADED",
         null,
-        ackNo || null,
-        `Acknowledgement PDF uploaded: "${file.name}"${ackNo ? ` (Ack No. ${ackNo} auto-detected)` : ' (no Ack No. could be auto-read)'}`,
+        null,
+        `Acknowledgement PDF uploaded: "${file.name}"${ackNo ? ` (Ack No. ${ackNo} detected in PDF)` : ' (no Ack No. could be auto-read)'}`,
       ).catch(() => { /* audit logging must never block or reverse the user's action */ });
 
-      // Warn (never block) when the receipt's own printed identity doesn't
-      // match this row's client/period — silently skipped when nothing could
-      // be extracted at all (e.g. a scanned/image-only PDF with no text
-      // layer), since there's nothing to compare in that case.
-      const client = clients.find(c => c.id === filing.client_id);
-      const mismatchWarning = buildAckMismatchWarning(fields, filing, client);
+      // Warn (never block) when the receipt's own printed Name/TAN/Form No.
+      // doesn't match this row's client — silently skipped when there's
+      // nothing to warn about (warnReasons computed in step c, above,
+      // before any of the upload/insert work happened).
+      const mismatchWarning = buildAckWarningMessage(fields, filing, client, warnReasons);
       const withWarning = (desc?: string): string | undefined => {
         if (!mismatchWarning) return desc;
         return desc ? `${desc} ⚠️ ${mismatchWarning}` : `⚠️ ${mismatchWarning}`;
       };
+      // A toast carrying an appended mismatch warning needs enough time to
+      // actually be read. Radix's Toast defaults every toast in this app to
+      // a 5-SECOND auto-dismiss (ToastProvider's own `duration`, a
+      // mechanism entirely separate from use-toast.ts's TOAST_REMOVE_DELAY,
+      // which only governs post-dismiss cleanup of the state array, not how
+      // long a toast stays visibly open) — a two-sentence name/TAN/Form
+      // mismatch warning silently vanishing after 5s before anyone reads it
+      // is exactly the "no visible warning" failure mode this feature
+      // exists to prevent. A plain "Uploaded" toast with nothing to warn
+      // about keeps the normal 5s default (undefined below).
+      const toastDuration = mismatchWarning ? 20000 : undefined;
 
       if (ackNo && !filing.acknowledgment_number) {
         const { data: casRows, error: casError } = await supabase.from("tds_filings").update({
@@ -935,20 +959,31 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           last_updated_at: new Date().toISOString(),
         }).eq("id", filing.id).is("acknowledgment_number", null).select("id");
         if (casError) {
-          toast({ title: '✅ ACK file uploaded', description: withWarning(`Uploaded, but couldn't save the Ack No. automatically (${casError.message}).`) });
+          toast({ title: '✅ ACK file uploaded', description: withWarning(`Uploaded, but couldn't save the Ack No. automatically (${casError.message}).`), duration: toastDuration });
           return;
         }
         if (casRows && casRows.length > 0) {
+          // Log the actual field change now that the CAS confirms it really
+          // happened — this is the entry that corresponds to
+          // tds_filings.acknowledgment_number going from null to ackNo (the
+          // ACK_UPLOADED entry above is only about the file, not this field).
+          logAuditEntry(
+            filing.id,
+            "ACK_NUMBER_AUTO_FILLED",
+            null,
+            ackNo,
+            `Acknowledgement number auto-filled from uploaded PDF: ${ackNo}`,
+          ).catch(() => { /* audit logging must never block or reverse the user's action */ });
           fetchFilings();
           onFilingsChanged?.();
-          toast({ title: '✅ ACK file uploaded', description: withWarning(`Ack No. auto-filled: ${ackNo}`) });
+          toast({ title: '✅ ACK file uploaded', description: withWarning(`Ack No. auto-filled: ${ackNo}`), duration: toastDuration });
           return;
         }
       }
       toast(
         !filing.acknowledgment_number
-          ? { title: '✅ ACK file uploaded', description: withWarning("Couldn't auto-read the acknowledgement number from this PDF.") }
-          : { title: '✅ ACK file uploaded', description: withWarning() },
+          ? { title: '✅ ACK file uploaded', description: withWarning("Couldn't auto-read the acknowledgement number from this PDF."), duration: toastDuration }
+          : { title: '✅ ACK file uploaded', description: withWarning(), duration: toastDuration },
       );
     } catch (e: any) {
       // Any thrown (not resolved-with-error) failure from an auth/storage/DB

@@ -26,6 +26,7 @@ import {
 import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
@@ -80,6 +81,7 @@ interface Deductee {
   surcharge_amount: number; cess_amount: number; total_tax_deducted: number | null;
   interest_amount: number; late_fees_amount: number;
   lower_deduction_certificate_no: string | null;
+  lower_deduction_rate: number | null;
   reason_for_lower_or_nil_deduction: string | null;
   country_of_residence: string | null;
   gross_salary: number | null; standard_deduction_allowed: number | null;
@@ -2194,15 +2196,73 @@ export function TdsDataEntry({
                                       </TableCell>
                                       <TableCell>
                                         {locked ? (
-                                          <span className="text-xs text-muted-foreground">{d.reason_for_lower_or_nil_deduction || "—"}</span>
+                                          <div className="flex items-center gap-1">
+                                            <span className="text-xs text-muted-foreground">{d.reason_for_lower_or_nil_deduction || "—"}</span>
+                                            {(d.lower_deduction_certificate_no || d.lower_deduction_rate != null) && (
+                                              <span
+                                                className="text-muted-foreground shrink-0"
+                                                title={`LDC No.: ${d.lower_deduction_certificate_no || "—"} · Rate: ${d.lower_deduction_rate ?? "—"}%`}
+                                              >
+                                                <FileText size={10} />
+                                              </span>
+                                            )}
+                                          </div>
                                         ) : (
-                                          <Select value={d.reason_for_lower_or_nil_deduction || "__none__"} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v === "__none__" ? null : v)}>
-                                            <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
-                                            <SelectContent>
-                                              <SelectItem value="__none__">— None —</SelectItem>
-                                              {REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}
-                                            </SelectContent>
-                                          </Select>
+                                          <div className="flex items-center gap-1">
+                                            <Select value={d.reason_for_lower_or_nil_deduction || "__none__"} onValueChange={v => updateDeducteeField(d.id, "reason_for_lower_or_nil_deduction", v === "__none__" ? null : v)}>
+                                              <SelectTrigger className="h-7 text-xs w-16"><SelectValue placeholder="—" /></SelectTrigger>
+                                              <SelectContent>
+                                                <SelectItem value="__none__">— None —</SelectItem>
+                                                {REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}
+                                              </SelectContent>
+                                            </Select>
+                                            {/* Lower Deduction Certificate No./Rate (u/s 197) — relevant when Reason
+                                                = B. Kept as a compact popover rather than two more table columns
+                                                (this row is already 12 columns wide). Wired through the same
+                                                updateDeducteeField() path as every other field here, so the
+                                                DEDUCTEE_LDC_NUMBER_EDIT / DEDUCTEE_LDC_RATE_EDIT audit-log entries
+                                                (TRACKED_DEDUCTEE_AUDIT_FIELDS, above) now actually have a way to fire. */}
+                                            <Popover>
+                                              <PopoverTrigger asChild>
+                                                <Button
+                                                  variant="ghost" size="icon"
+                                                  className={cn("h-6 w-6 shrink-0", (d.lower_deduction_certificate_no || d.lower_deduction_rate != null) ? "text-amber-600" : "text-muted-foreground")}
+                                                  title="Lower Deduction Certificate No. / Rate (u/s 197)"
+                                                  disabled={locked}
+                                                >
+                                                  <FileText size={11} />
+                                                </Button>
+                                              </PopoverTrigger>
+                                              <PopoverContent className="w-64 space-y-2" align="start">
+                                                <p className="text-xs font-semibold">Lower Deduction Certificate (u/s 197)</p>
+                                                <div className="space-y-1">
+                                                  <Label className="text-[10px] text-muted-foreground">Certificate No.</Label>
+                                                  <Input
+                                                    className="h-7 text-xs"
+                                                    defaultValue={d.lower_deduction_certificate_no || ""}
+                                                    onBlur={e => {
+                                                      const v = e.target.value.trim();
+                                                      if (v !== (d.lower_deduction_certificate_no || "")) updateDeducteeField(d.id, "lower_deduction_certificate_no", v || null);
+                                                    }}
+                                                  />
+                                                </div>
+                                                <div className="space-y-1">
+                                                  <Label className="text-[10px] text-muted-foreground">Certified Rate (%)</Label>
+                                                  <Input
+                                                    type="number" step="0.01"
+                                                    className="h-7 text-xs"
+                                                    defaultValue={d.lower_deduction_rate ?? ""}
+                                                    onBlur={e => {
+                                                      const raw = e.target.value;
+                                                      const v = raw === "" ? null : parseFloat(raw);
+                                                      const normalized = v !== null && isNaN(v) ? null : v;
+                                                      if (normalized !== d.lower_deduction_rate) updateDeducteeField(d.id, "lower_deduction_rate", normalized);
+                                                    }}
+                                                  />
+                                                </div>
+                                              </PopoverContent>
+                                            </Popover>
+                                          </div>
                                         )}
                                       </TableCell>
                                     </>

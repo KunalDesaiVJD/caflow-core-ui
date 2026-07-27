@@ -168,14 +168,23 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [filingMap, setFilingMap] = useState<Record<string, any>>({});
+  // Full universe of distinct action_type values, fetched independently of
+  // both the 500-row display cap and the current Action Type selection below
+  // (see the dedicated effect near fetchEntries) — so picking one action
+  // type never shrinks this same dropdown down to just that type.
+  const [allActionTypes, setAllActionTypes] = useState<string[]>([]);
 
   // Filters
   const [clientFilter, setClientFilter] = useState("all");
-  // Action Type is now a MULTI-select (see MultiSelectFilter above) whose
-  // options are derived from the currently-loaded `entries` below — not a
-  // hardcoded list — so any action type ever written to tds_filing_audit_log
-  // (including ones added elsewhere later) is automatically filterable here
-  // with zero further changes to this file.
+  // Action Type is a MULTI-select (see MultiSelectFilter above). Its options
+  // come from `allActionTypes` (not a hardcoded list), so any action type
+  // ever written to tds_filing_audit_log is automatically filterable here
+  // with zero further changes to this file. The selection itself is pushed
+  // into fetchEntries's own server-side query (`.in("action_type", ...)`,
+  // below `.limit(500)`) rather than applied only client-side — otherwise a
+  // low-frequency action type could have zero of its matching rows inside
+  // the most recent 500 (mixed across every action type) and silently show
+  // as "no results" despite more matching rows existing further back.
   const [actionTypeFilter, setActionTypeFilter] = useState<string[]>([]);
   const [userFilter, setUserFilter] = useState("all");
   const [dateFrom, setDateFrom] = useState("");
@@ -202,6 +211,10 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
     const firmId = await resolveFirmId();
     let q = supabase.from("tds_filing_audit_log").select("*").order("changed_at", { ascending: false }).limit(500);
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+    // Pushed server-side (before the 500-row cap) rather than left to the
+    // client-side re-filter in filteredEntries — see the comment on
+    // actionTypeFilter's declaration for why.
+    if (actionTypeFilter.length > 0) q = q.in("action_type", actionTypeFilter);
     if (userFilter !== "all") q = q.eq("changed_by", userFilter);
     if (dateFrom) q = q.gte("changed_at", dateFrom);
     if (dateTo) q = q.lte("changed_at", dateTo + "T23:59:59");
@@ -219,15 +232,29 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
       setFilingMap(map);
     }
     setLoading(false);
-  }, [isSuperadmin, resolveFirmId, userFilter, dateFrom, dateTo]);
+  }, [isSuperadmin, resolveFirmId, userFilter, dateFrom, dateTo, actionTypeFilter]);
 
   useEffect(() => { fetchEntries(); }, [fetchEntries]);
 
+  // Distinct action_type universe for the multi-select's option list — a
+  // separate, narrow (single-column) query, deliberately NOT scoped by the
+  // current actionTypeFilter selection or the 500-row display cap above, so
+  // selecting some types never removes the others from being re-selectable.
+  useEffect(() => {
+    (async () => {
+      const firmId = await resolveFirmId();
+      let q = supabase.from("tds_filing_audit_log").select("action_type").limit(5000);
+      if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
+      const { data } = await q;
+      const present = new Set((data || []).map((r: any) => r.action_type).filter(Boolean));
+      setAllActionTypes([...present].sort((a, b) => a.localeCompare(b)));
+    })();
+  }, [isSuperadmin, resolveFirmId]);
+
   // Base set — TDS Compliance gate + Client filter, applied unconditionally
-  // (same per-row gate as every other TDS screen). Action Type options below
-  // are derived from THIS set (not the further-narrowed one below it) so
-  // every action type actually present keeps showing up as a selectable
-  // option no matter what's currently checked in the multi-select.
+  // (same per-row gate as every other TDS screen) on top of the already
+  // server-filtered (firm/action-type/user/date) `entries`. Action Type's own
+  // option list does NOT derive from this set — see actionTypeOptions below.
   const baseEntries = useMemo(() => {
     return entries.filter(e => {
       const filing = e.filing_id ? filingMap[e.filing_id] : null;
@@ -246,17 +273,19 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
     });
   }, [entries, filingMap, clients, clientFilter]);
 
-  // Action Type filter options — distinct action_type values actually present
-  // among the currently-loaded (and compliance/client-gated) rows, mirroring
-  // TdsFilingsManager.tsx's statusOptions/preparedByOptions pattern exactly.
-  const actionTypeOptions = useMemo(() => {
-    const present = new Set(baseEntries.map(e => e.action_type).filter(Boolean));
-    return [...present].sort((a, b) => a.localeCompare(b)).map(a => ({ value: a, label: a }));
-  }, [baseEntries]);
+  // Action Type filter options — the full distinct-value universe fetched
+  // independently (see the dedicated effect above), not just what happens to
+  // be in the currently-loaded/filtered rows.
+  const actionTypeOptions = useMemo(
+    () => allActionTypes.map(a => ({ value: a, label: a })),
+    [allActionTypes],
+  );
 
-  // Final filtered set — base rows further narrowed by the Action Type
-  // multi-select and the free-text search (remark, action_type,
-  // changed_by_name, resolved client name — all in one pass).
+  // Final filtered set — base rows further narrowed by the free-text search
+  // (remark, action_type, changed_by_name, resolved client name — all in one
+  // pass). Action Type itself is already applied server-side in fetchEntries
+  // (before the 500-row cap); this re-check is a harmless no-op safety net,
+  // not the source of truth for that filter.
   const filteredEntries = useMemo(() => {
     const actionSet = actionTypeFilter.length ? new Set(actionTypeFilter) : null;
     const q = searchQuery.trim().toLowerCase();
