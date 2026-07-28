@@ -50,18 +50,24 @@ export async function pdfToLines(data: ArrayBuffer | Uint8Array): Promise<TextLi
   const pdfjs = await import('pdfjs-dist');
   await setupPdfWorker(pdfjs);
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-  const doc = await pdfjs.getDocument({ data: bytes }).promise;
+  // Keep the loading task: pdfjs v6's PDFDocumentProxy has no destroy(); cleanup
+  // (worker teardown) lives on the loading task.
+  const loadingTask = pdfjs.getDocument({ data: bytes });
+  const doc = await loadingTask.promise;
   const pages: TextLine[][] = [];
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    const items: RawItem[] = content.items
-      .filter((it: unknown): it is { str: string; transform: number[]; width: number } =>
-        typeof (it as { str?: unknown }).str === 'string')
-      .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], width: it.width }));
-    pages.push(linesFromItems(items));
+  try {
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const content = await page.getTextContent();
+      const items: RawItem[] = content.items
+        .filter((it: unknown): it is { str: string; transform: number[]; width: number } =>
+          typeof (it as { str?: unknown }).str === 'string')
+        .map((it) => ({ str: it.str, x: it.transform[4], y: it.transform[5], width: it.width }));
+      pages.push(linesFromItems(items));
+    }
+  } finally {
+    await loadingTask.destroy();
   }
-  await doc.destroy();
   return pages;
 }
 
