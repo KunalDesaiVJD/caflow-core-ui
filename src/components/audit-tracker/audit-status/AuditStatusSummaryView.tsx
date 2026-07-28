@@ -53,6 +53,7 @@ const STATUS_STYLES: Record<string, { wrap: string; dot: string }> = {
   "QUERIES GIVEN TO CLIENT":  { wrap: "bg-yellow-100 text-yellow-800", dot: "bg-yellow-500" },
   "PREPARE PENDING":          { wrap: "bg-orange-100 text-orange-800", dot: "bg-orange-500" },
   "VERIFICATION PENDING":     { wrap: "bg-blue-100 text-blue-800",     dot: "bg-blue-500"   },
+  "REPORT SENT TO CLIENT FOR VERIFICATION": { wrap: "bg-cyan-100 text-cyan-800", dot: "bg-cyan-500" },
   "REPORT WITH VJD":          { wrap: "bg-violet-100 text-violet-800", dot: "bg-violet-500" },
   "REPORT WITH KVD":          { wrap: "bg-purple-100 text-purple-800", dot: "bg-purple-500" },
   "REPORT SENT TO CLIENT":    { wrap: "bg-teal-100 text-teal-800",     dot: "bg-teal-500"   },

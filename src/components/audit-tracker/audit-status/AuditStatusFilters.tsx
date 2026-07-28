@@ -21,6 +21,10 @@ export const AUDIT_STATUS_OPTIONS = [
   "QUERIES GIVEN TO CLIENT",
   "PREPARE PENDING",
   "VERIFICATION PENDING",
+  // 2026-07-24 — new interim stage between internal verification and
+  // partner review: the draft has been shared with the client for their
+  // own verification round before it goes up to VJD / KVD for sign-off.
+  "REPORT SENT TO CLIENT FOR VERIFICATION",
   "REPORT WITH VJD",
   "REPORT WITH KVD",
   "REPORT PRINTED",
