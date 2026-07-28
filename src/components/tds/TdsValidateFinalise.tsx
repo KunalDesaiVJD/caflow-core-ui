@@ -106,6 +106,21 @@ const AUTHORIZED_SIGNATURES = ["firm admin", "super admin", "kunal desai", "muke
 const normalizeSignatureText = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 const isAuthorizedSignature = (s: string) => AUTHORIZED_SIGNATURES.includes(normalizeSignatureText(s));
 
+/** Downloads a same-origin static template asset via a synthesized <a> click
+ * rather than a plain JSX anchor, so this works the same way from inside a
+ * DropdownMenuItem's onClick as it would from a standalone button — avoids
+ * DropdownMenuItem asChild (a Radix pattern that has crashed this module at
+ * render time before, invisibly to tsc/build/vitest — see TdsFilingsManager's
+ * viewAckFile/downloadAckFile for the same anchor-click convention). */
+function downloadTemplateFile(href: string, filename: string): void {
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 /** Invoke an edge function and surface the function's own JSON error message.
  * When the platform kills the worker (wall-clock timeout / OOM), there is NO
  * JSON body and supabase-js throws a bare "Edge Function returned a non-2xx
@@ -1304,10 +1319,21 @@ export function TdsValidateFinalise({
                     </span>
                   )}
                   <div className="flex-1" />
-                  <a href="/templates/TDS_Data_Entry_Client_Template.xlsx" download
-                    className="inline-flex items-center gap-1 h-6 px-2 text-[11px] rounded-md border shrink-0 hover:bg-muted transition-colors">
-                    <Download size={12} /> Download Template
-                  </a>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button size="sm" variant="outline" className="gap-1 h-6 px-2 text-[11px] shrink-0">
+                        <Download size={12} /> Download Template
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem className="text-xs gap-2" onClick={() => downloadTemplateFile("/templates/TDS_Data_Entry_Simple_Template.xlsx", "TDS_Data_Entry_Simple_Template.xlsx")}>
+                        <FileSpreadsheet size={13} /> Simple (one sheet, one row per entry)
+                      </DropdownMenuItem>
+                      <DropdownMenuItem className="text-xs gap-2" onClick={() => downloadTemplateFile("/templates/TDS_Data_Entry_Client_Template.xlsx", "TDS_Data_Entry_Client_Template.xlsx")}>
+                        <FileSpreadsheet size={13} /> Detailed (Challan Details linked to TDS Entries)
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
                     onChange={(e) => {
                       const picked = Array.from(e.target.files ?? []);
