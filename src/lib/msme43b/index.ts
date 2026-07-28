@@ -9,3 +9,5 @@ export { classifyTxn } from './classify';
 export { buildWorkpaperWorkbook, downloadWorkpaper, msme43bToForm3cd } from './exportExcel';
 export { saveRun, listRuns, loadRun, renameRun, deleteRun, type Msme43bRunSummary } from './persistence';
 export { computeCarryForward, type CarryForward, type CarryForwardInput } from './carryForward';
+export { reconcileLedger } from './reconcile';
+export { extractLedgersViaAI } from './aiExtract';

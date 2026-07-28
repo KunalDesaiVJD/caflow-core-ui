@@ -17,7 +17,8 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { MultiYearTrend } from '@/components/msme43b/MultiYearTrend';
 import {
-  pdfToLines, parseLedgerPages, buildReport, downloadWorkpaper, msme43bToForm3cd,
+  pdfToLines, parseLedgerPages, detectFormat, extractLedgersViaAI,
+  buildReport, downloadWorkpaper, msme43bToForm3cd,
   saveRun, listRuns, loadRun, renameRun, deleteRun, computeCarryForward,
   DEFAULT_CONFIG, type VendorLedger, type Msme43bReport, type VendorResult,
   type Msme43bRunSummary,
@@ -28,14 +29,33 @@ interface ClientOpt { id: string; name: string }
 const inr = (v: number) =>
   new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(v));
 
-async function filesToLedgers(files: FileList | File[]): Promise<VendorLedger[]> {
+interface IngestResult { ledgers: VendorLedger[]; aiCount: number; truncatedAny: boolean }
+
+/**
+ * Route each PDF: Tally/Expert go through the exact deterministic parser;
+ * any other format goes to Claude (when enabled). Both paths are reconciled
+ * against the printed closing balance downstream.
+ */
+async function filesToLedgers(files: FileList | File[], useAi: boolean): Promise<IngestResult> {
   const out: VendorLedger[] = [];
+  let aiCount = 0;
+  let truncatedAny = false;
   for (const f of Array.from(files)) {
     const buf = await f.arrayBuffer();
     const pages = await pdfToLines(buf);
-    out.push(...parseLedgerPages(pages, f.name));
+    const fmt = detectFormat(pages);
+    if (fmt === 'tally' || fmt === 'expert') {
+      out.push(...parseLedgerPages(pages, f.name));
+    } else if (useAi) {
+      const res = await extractLedgersViaAI(f);
+      aiCount += res.ledgers.length;
+      truncatedAny = truncatedAny || res.truncated;
+      out.push(...res.ledgers);
+    } else {
+      out.push(...parseLedgerPages(pages, f.name)); // best-effort deterministic
+    }
   }
-  return out;
+  return { ledgers: out, aiCount, truncatedAny };
 }
 
 export default function Msme43b() {
@@ -45,6 +65,7 @@ export default function Msme43b() {
   const [clients, setClients] = useState<ClientOpt[]>([]);
   const [clientId, setClientId] = useState<string>('');
   const [windowDays, setWindowDays] = useState(45);
+  const [useAi, setUseAi] = useState(true);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<Msme43bReport | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -82,14 +103,20 @@ export default function Msme43b() {
     }
     setRunning(true);
     try {
-      const [cy, fy] = await Promise.all([filesToLedgers(cyFiles), filesToLedgers(fyFiles)]);
+      const [cyRes, fyRes] = await Promise.all([filesToLedgers(cyFiles, useAi), filesToLedgers(fyFiles, useAi)]);
+      const cy = cyRes.ledgers;
+      const fy = fyRes.ledgers;
       const rep = buildReport(cy, fy, { ...DEFAULT_CONFIG, windowDays }, clientName || undefined);
       setReport(rep);
+      if (cyRes.truncatedAny || fyRes.truncatedAny) {
+        toast.warning('A ledger was too large for the AI to read in full — its result may be incomplete. Check reconciliation.');
+      }
       const bad = cy.filter((l) => !l.balanceReconciled);
+      const aiCount = cyRes.aiCount + fyRes.aiCount;
       if (bad.length) {
         toast.warning(`${bad.length} ledger(s) did not reconcile to their printed closing balance — check Exceptions.`);
       } else {
-        toast.success(`Parsed ${cy.length} CY + ${fy.length} FY ledger(s), all reconciled.`);
+        toast.success(`Parsed ${cy.length} CY + ${fy.length} FY ledger(s)${aiCount ? ` (${aiCount} via Claude)` : ''}, all reconciled.`);
       }
     } catch (e) {
       console.error(e);
@@ -97,7 +124,7 @@ export default function Msme43b() {
     } finally {
       setRunning(false);
     }
-  }, [cyFiles, fyFiles, clientName, windowDays]);
+  }, [cyFiles, fyFiles, clientName, windowDays, useAi]);
 
   const doSave = useCallback(async () => {
     if (!report) return;
@@ -233,6 +260,21 @@ export default function Msme43b() {
               </Select>
             </div>
           </div>
+
+          <label className="flex items-start gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox" className="mt-0.5" checked={useAi}
+              onChange={(e) => setUseAi(e.target.checked)}
+            />
+            <span>
+              <span className="font-medium">Read any format with Claude</span>
+              <span className="block text-xs text-muted-foreground">
+                Tally &amp; Expert PDFs are parsed exactly on-device. Any other software's format is
+                sent to Claude to read — the result is still verified against the printed closing
+                balance, so a wrong read is flagged, not trusted.
+              </span>
+            </span>
+          </label>
 
           <div className="grid gap-4 md:grid-cols-2">
             <FileDrop

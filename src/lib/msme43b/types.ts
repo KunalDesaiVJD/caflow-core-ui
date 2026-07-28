@@ -96,7 +96,7 @@ export interface VendorLedger {
   warnings?: string[];
 }
 
-export type LedgerFormat = 'tally' | 'expert' | 'unknown';
+export type LedgerFormat = 'tally' | 'expert' | 'ai' | 'unknown';
 
 // ────────────────────────────────────────────────────────────────────────────
 //  Matching + computation model
