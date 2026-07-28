@@ -33,6 +33,7 @@ import {
   toNum,
   resolveMapping,
   buildCanonicalRow as buildCanonicalFromMap,
+  explodeMonthlyColumns,
 } from "../_shared/tdsColumnEngine.ts";
 
 // Reflect the browser's requested headers on the preflight. Newer supabase-js
@@ -402,7 +403,11 @@ serve(async (req) => {
       // the fix for both the "non-2xx" timeouts and the redundant AI work (the
       // old path called the model per 100-row batch and then overwrote most of
       // its output with these very same deterministic column reads).
-      const allRows = (rows as Record<string, unknown>[]).slice(0, 20000);
+      // explodeMonthlyColumns turns a repeating-per-month layout ("APRIL",
+      // "APRIL-TDS", "MAY", "MAY-TDS", ... one row per employee for the whole
+      // year) into row-per-employee-per-month, matching Office Data's own
+      // shape — a no-op for every other layout (see its own doc comment).
+      const allRows = explodeMonthlyColumns((rows as Record<string, unknown>[]).slice(0, 20000), filing.quarter, filing.financial_year);
 
       // 1) Resolve the header→field map with the CONFIDENCE-SCORED, VALIDATED
       //    engine: every column is profiled by the shape of its VALUES, fields are
