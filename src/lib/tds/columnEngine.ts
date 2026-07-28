@@ -278,6 +278,112 @@ export function resolveMapping(allRows: Record<string, unknown>[], aiMap?: Parti
   return { map, report, issues, notes };
 }
 
+// ── Repeating-month ("wide") layout — a common real-world CA-office format ──
+// Some clients hand over ONE ROW PER EMPLOYEE with a repeating group of
+// columns per calendar month ("APRIL","APRIL - BONUS","APRIL-TDS","MAY",...)
+// spanning the whole financial year, rather than one row per transaction.
+// resolveMapping's engine (above) is fundamentally row-per-transaction: it
+// picks ONE amount column and ONE tds column for the WHOLE file. Confirmed
+// against a real client file (MICROCIRCUITS INNOVATIONS, 24Q Q1): with no
+// header synonym for "APRIL-TDS" etc., every month's columns look equally
+// numeric, so the ratio-based fallback locks onto whichever month happens to
+// score marginally highest — SILENTLY discarding the other 1-2 months of the
+// filing's own quarter for every single employee, guaranteeing 0 clean
+// matches against Office Data (which holds one row per employee PER MONTH).
+//
+// explodeMonthlyColumns runs BEFORE resolveMapping and turns each employee's
+// wide row into up to 3 row-per-month rows (one per calendar month in the
+// filing's quarter) with already-canonical field names — "amount_paid" /
+// "tds_amount" / "date_of_payment" normalise to exact entries in
+// HEADER_SYNONYMS (see amountpaid/tdsamount/dateofpayment above), so they are
+// picked up by resolveMapping's existing exact-match path with no further
+// changes needed there. A row from a DIFFERENT sheet with no month-prefixed
+// columns is returned completely untouched.
+const MONTH_TOKENS: Record<string, number> = {
+  january: 1, jan: 1, february: 2, feb: 2, march: 3, mar: 3,
+  april: 4, apr: 4, may: 5, june: 6, jun: 6, july: 7, jul: 7,
+  august: 8, aug: 8, september: 9, sept: 9, sep: 9,
+  october: 10, oct: 10, november: 11, nov: 11, december: 12, dec: 12,
+};
+const MONTH_PREFIX_RE = new RegExp(`^(${Object.keys(MONTH_TOKENS).sort((a, b) => b.length - a.length).join("|")})`);
+/** Indian FY quarters: Q1 = Apr-Jun, Q2 = Jul-Sep, Q3 = Oct-Dec, Q4 = Jan-Mar. */
+const QUARTER_MONTHS: Record<string, number[]> = { Q1: [4, 5, 6], Q2: [7, 8, 9], Q3: [10, 11, 12], Q4: [1, 2, 3] };
+
+function isoDateForMonth(monthNum: number, financialYear: string): string | null {
+  const startYear = parseInt(String(financialYear).split("-")[0], 10);
+  if (!Number.isFinite(startYear)) return null;
+  const year = monthNum >= 4 ? startYear : startYear + 1;
+  const lastDay = new Date(year, monthNum, 0).getDate(); // day 0 of next month = last day of this one
+  return `${year}-${String(monthNum).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+}
+
+export function explodeMonthlyColumns(
+  allRows: Record<string, unknown>[], quarter: string | null | undefined, financialYear: string | null | undefined,
+): Record<string, unknown>[] {
+  const quarterMonths = quarter ? QUARTER_MONTHS[quarter.toUpperCase()] : undefined;
+  if (!quarterMonths) return allRows;
+
+  const headers = new Set<string>();
+  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) if (!INTERNAL_KEYS.has(k)) headers.add(k);
+
+  const monthCols = new Map<number, { base?: string; bonus?: string; tds?: string }>();
+  for (const h of headers) {
+    const norm = normaliseHeader(h);
+    const m = MONTH_PREFIX_RE.exec(norm);
+    if (!m) continue;
+    const monthNum = MONTH_TOKENS[m[1]];
+    const rest = norm.slice(m[1].length);
+    const kind = rest.includes("tds") ? "tds" : rest.includes("bonus") ? "bonus" : rest === "" ? "base" : null;
+    if (!kind) continue; // an unrecognised suffix on a month-prefixed header — leave it alone rather than guess
+    const g = monthCols.get(monthNum) ?? {};
+    g[kind] = h;
+    monthCols.set(monthNum, g);
+  }
+
+  // Require at least TWO distinct months to actually be present before treating
+  // this as a wide-monthly layout — a single stray column that happens to start
+  // with a month name (e.g. "March closing balance" on an unrelated sheet) must
+  // never trigger this transformation.
+  const monthsWithData = [...monthCols.entries()].filter(([, g]) => g.base || g.tds);
+  if (monthsWithData.length < 2) return allRows;
+
+  const relevantMonths = monthsWithData.filter(([m]) => quarterMonths.includes(m));
+  if (relevantMonths.length === 0) return allRows; // the layout is real but doesn't cover this filing's quarter at all
+
+  const monthHeaders = new Set<string>();
+  for (const [, g] of monthCols) for (const h of [g.base, g.bonus, g.tds]) if (h) monthHeaders.add(h);
+
+  const out: Record<string, unknown>[] = [];
+  for (const row of allRows) {
+    const rowKeys = new Set(Object.keys(row));
+    const isWideRow = [...monthHeaders].some((h) => rowKeys.has(h));
+    if (!isWideRow) { out.push(row); continue; } // a different sheet/shape — untouched
+
+    const passthrough: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(row)) {
+      if (monthHeaders.has(k)) continue;
+      // Annual TOTAL SALARY/TOTAL TDS/TOTAL BONUS columns are the whole-year
+      // figure, not this quarter's — dropping them avoids them competing as a
+      // spurious extra money candidate against the quarter figures below.
+      if (/^total/.test(normaliseHeader(k))) continue;
+      passthrough[k] = v;
+    }
+
+    let anyExploded = false;
+    for (const [monthNum, g] of relevantMonths) {
+      const base = g.base ? toNum(row[g.base]) : null;
+      const bonus = g.bonus ? toNum(row[g.bonus]) : null;
+      const tds = g.tds ? toNum(row[g.tds]) : null;
+      const amount = (base ?? 0) + (bonus ?? 0);
+      if (amount <= 0 && (tds ?? 0) <= 0) continue; // nothing paid this employee this month — skip, matching Office Data's own convention of no row for an unpaid month
+      anyExploded = true;
+      out.push({ ...passthrough, amount_paid: amount || null, tds_amount: tds, date_of_payment: isoDateForMonth(monthNum, financialYear || "") });
+    }
+    if (!anyExploded) out.push(row); // no activity in the relevant months — keep the original row visible rather than silently dropping the employee
+  }
+  return out;
+}
+
 function coerceField(field: CanonField, v: unknown): string | number | undefined {
   if (v === null || v === undefined || String(v).trim() === "") return undefined;
   if (field === "pan") return String(v).trim().toUpperCase();
