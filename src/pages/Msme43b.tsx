@@ -1,7 +1,8 @@
-import { useState, useCallback, Fragment } from 'react';
+import { useState, useCallback, useEffect, Fragment } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/hooks/useAuth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -9,14 +10,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
   Scale, Upload, FileText, Download, Loader2, AlertTriangle, CheckCircle2,
-  ChevronRight, ChevronDown, Info, Landmark,
+  ChevronRight, ChevronDown, Info, Landmark, Save, Trash2, History,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
   pdfToLines, parseLedgerPages, buildReport, downloadWorkpaper, msme43bToForm3cd,
+  saveRun, listRuns, loadRun, deleteRun,
   DEFAULT_CONFIG, type VendorLedger, type Msme43bReport, type VendorResult,
+  type Msme43bRunSummary,
 } from '@/lib/msme43b';
+
+interface ClientOpt { id: string; name: string }
 
 const inr = (v: number) =>
   new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(v));
@@ -32,13 +37,37 @@ async function filesToLedgers(files: FileList | File[]): Promise<VendorLedger[]>
 }
 
 export default function Msme43b() {
+  const { user } = useAuth();
   const [cyFiles, setCyFiles] = useState<File[]>([]);
   const [fyFiles, setFyFiles] = useState<File[]>([]);
-  const [clientName, setClientName] = useState('');
+  const [clients, setClients] = useState<ClientOpt[]>([]);
+  const [clientId, setClientId] = useState<string>('');
   const [windowDays, setWindowDays] = useState(45);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<Msme43bReport | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const [savedRuns, setSavedRuns] = useState<Msme43bRunSummary[]>([]);
+  const [persistOff, setPersistOff] = useState(false);
+
+  const clientName = clients.find((c) => c.id === clientId)?.name || '';
+
+  // Load client list.
+  useEffect(() => {
+    supabase.from('clients')
+      .select('id, name').eq('is_draft', false).is('deleted_at', null).neq('is_active', false).order('name')
+      .then(({ data }) => setClients((data || []).filter((c): c is ClientOpt => !!c.name)));
+  }, []);
+
+  const refreshRuns = useCallback(async (cid: string) => {
+    if (!cid) { setSavedRuns([]); return; }
+    const res = await listRuns(cid);
+    if (res.unavailable) { setPersistOff(true); setSavedRuns([]); return; }
+    setPersistOff(false);
+    setSavedRuns(res.data || []);
+  }, []);
+
+  useEffect(() => { refreshRuns(clientId); }, [clientId, refreshRuns]);
 
   const run = useCallback(async () => {
     if (cyFiles.length === 0) {
@@ -64,6 +93,36 @@ export default function Msme43b() {
     }
   }, [cyFiles, fyFiles, clientName, windowDays]);
 
+  const doSave = useCallback(async () => {
+    if (!report) return;
+    if (!clientId) { toast.error('Select a client to save this run against.'); return; }
+    setSaving(true);
+    const res = await saveRun({
+      clientId, firmId: user?.firm_id, userId: user?.id,
+      userName: user?.name || user?.email || null, report,
+    });
+    setSaving(false);
+    if (res.unavailable) { setPersistOff(true); toast.error('Saved-runs table not deployed yet — apply the migration first.'); return; }
+    if (res.error) { toast.error(`Save failed: ${res.error}`); return; }
+    toast.success('Run saved.');
+    refreshRuns(clientId);
+  }, [report, clientId, user, refreshRuns]);
+
+  const doLoad = useCallback(async (id: string) => {
+    const res = await loadRun(id);
+    if (res.error || !res.data) { toast.error(`Load failed: ${res.error || 'not found'}`); return; }
+    setReport(res.data);
+    setWindowDays(res.data.windowDays);
+    toast.success('Loaded saved run.');
+  }, []);
+
+  const doDelete = useCallback(async (id: string) => {
+    const res = await deleteRun(id);
+    if (res.error) { toast.error(`Delete failed: ${res.error}`); return; }
+    toast.success('Run deleted.');
+    refreshRuns(clientId);
+  }, [clientId, refreshRuns]);
+
   const toggle = (name: string) =>
     setExpanded((s) => {
       const n = new Set(s);
@@ -86,9 +145,18 @@ export default function Msme43b() {
           </p>
         </div>
         {report && (
-          <Button onClick={() => downloadWorkpaper(report)} variant="outline">
-            <Download className="h-4 w-4 mr-2" /> Export working paper
-          </Button>
+          <div className="flex gap-2">
+            {!persistOff && (
+              <Button onClick={doSave} variant="outline" disabled={saving || !clientId}
+                title={!clientId ? 'Select a client first' : 'Save this run against the selected client'}>
+                {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+                Save run
+              </Button>
+            )}
+            <Button onClick={() => downloadWorkpaper(report)} variant="outline">
+              <Download className="h-4 w-4 mr-2" /> Export working paper
+            </Button>
+          </div>
         )}
       </div>
 
@@ -105,8 +173,13 @@ export default function Msme43b() {
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             <div>
-              <Label className="text-sm">Client name (optional)</Label>
-              <Input value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="e.g. Unity Organics Pvt Ltd" />
+              <Label className="text-sm">Client</Label>
+              <Select value={clientId} onValueChange={setClientId}>
+                <SelectTrigger><SelectValue placeholder="Select a client (required to save)" /></SelectTrigger>
+                <SelectContent>
+                  {clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
             </div>
             <div>
               <Label className="text-sm">Section 15 window</Label>
@@ -146,6 +219,48 @@ export default function Msme43b() {
           </div>
         </CardContent>
       </Card>
+
+      {/* ── Saved runs for the selected client ── */}
+      {clientId && !persistOff && savedRuns.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <History className="h-4 w-4" /> Saved runs — {clientName}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Saved</TableHead>
+                  <TableHead>Period</TableHead>
+                  <TableHead className="text-right">Disallowed</TableHead>
+                  <TableHead className="text-right">Vendors</TableHead>
+                  <TableHead>By</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {savedRuns.map((r) => (
+                  <TableRow key={r.id}>
+                    <TableCell className="text-xs">{new Date(r.created_at).toLocaleString('en-IN')}</TableCell>
+                    <TableCell className="text-xs">{r.cy_label} → {r.fy_label || '—'} · {r.window_days}d</TableCell>
+                    <TableCell className="text-right tabular-nums text-red-600">₹{inr(r.total_disallowed_cy)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{r.vendor_count}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{r.created_by_name || '—'}</TableCell>
+                    <TableCell className="text-right">
+                      <Button size="sm" variant="ghost" onClick={() => doLoad(r.id)}>Load</Button>
+                      <Button size="sm" variant="ghost" onClick={() => doDelete(r.id)}>
+                        <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
       {report && (
         <>

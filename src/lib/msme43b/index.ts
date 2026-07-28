@@ -7,3 +7,4 @@ export { detectFormat } from './detectFormat';
 export { analyzeVendor, buildReport } from './engine';
 export { classifyTxn } from './classify';
 export { buildWorkpaperWorkbook, downloadWorkpaper, msme43bToForm3cd } from './exportExcel';
+export { saveRun, listRuns, loadRun, deleteRun, type Msme43bRunSummary } from './persistence';
