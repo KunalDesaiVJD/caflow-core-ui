@@ -23,7 +23,7 @@ import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
 import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
-  reconcileTallyFull, SPLIT_FOLD_CONFIDENCE,
+  reconcileTallyFull, mergeDualLedgerResults, SPLIT_FOLD_CONFIDENCE,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
 } from "@/lib/tds/tallyRecon";
 
@@ -55,6 +55,9 @@ interface ResultRow {
   tally_party: string | null; tally_date: string | null; tally_credit: number | null;
   result: TallyResult; amount_basis: string | null; reason: string | null; confidence: number | null; mapped: boolean;
   overridden: boolean; override_reason: string | null; overridden_by: string | null; overridden_at?: string | null;
+  // 24Q dual-ledger — null/undefined for every single-ledger row (see tallyRecon.ts's mergeDualLedgerResults).
+  salary_tally_row_index?: number | null; salary_tally_party?: string | null; salary_tally_date?: string | null; salary_tally_credit?: number | null;
+  taxable_income_status?: string | null; tds_status?: string | null;
 }
 
 const RESULT_BADGE: Record<string, string> = {
@@ -68,6 +71,14 @@ const RESULT_BADGE: Record<string, string> = {
   "Multiple Possible Matches": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "Duplicate Ledger Entries": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "No Ledger for Section": "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+  // 24Q dual-ledger combined verdicts
+  "Name Mismatch": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  "Taxable Income Missing from Salary Ledger": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  "Taxable Income Missing from Office Data": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  "Taxable Income Amount Mismatch": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  "TDS Missing from TDS Ledger": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  "TDS Missing from Office Data": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
+  "TDS Amount Mismatch": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 };
 const inr = (n: number | null | undefined) => (n == null ? "—" : `₹${Math.round(Number(n)).toLocaleString("en-IN")}`);
 type Filter = null | "total" | "matched" | "issues" | "mapped" | "overridden";
@@ -162,8 +173,13 @@ const isOpenRow = (r: ResultRow) => isTallyIssue(r.result) && !r.mapped && !r.ov
  */
 const mappingOffer = (r: ResultRow): string | null => {
   if (r.overridden || r.mapped || r.result === "Matched") return null;
-  if (!r.tally_party || !r.office_name) return null;
-  if (r.result === "Party Name Mismatch") return r.tally_party;
+  if (!r.office_name) return null;
+  // 24Q dual-ledger's own relabelling of "Party Name Mismatch" (see
+  // mergeDualLedgerResults) — the mismatching side may be EITHER ledger, so
+  // prefer whichever one actually has a party (a "Missing from Ledger" side
+  // has none), falling back to the TDS-ledger party as the default.
+  if (r.result === "Name Mismatch" || r.result === "Party Name Mismatch") return r.tally_party || r.salary_tally_party || null;
+  if (!r.tally_party) return null;
   const cmp = nameCompare(r.office_name, r.tally_party);
   return cmp === "match" || cmp === "unknown" ? null : r.tally_party;
 };
@@ -257,6 +273,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       // rides free inside the `raw` jsonb blob (no migration), stored there
       // by handleImport's `raw: r` below. Display only, see TallyRow's own doc.
       narration: t.raw?.narration ?? null,
+      // Same free ride — set only for the expense-ledger "taxable income"
+      // case (tallyPdf.ts), undefined for every other row (unaffected).
+      amountKind: t.raw?.amountKind ?? undefined,
     }));
   }, []);
 
@@ -383,7 +402,42 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     // reconcileTallyFull (not reconcileTally) so a ledger credit no office record
     // claims is not silently discarded — the checker must be able to see and
     // resolve it, the same way an unmatched office record already is.
-    const { rows: audited, surplusLedger } = reconcileTallyFull(parties, tally, null, maps);
+    //
+    // 24Q DUAL-LEDGER: some clients keep the Salary/Remuneration figure and
+    // the TDS figure in TWO SEPARATE Tally ledgers (tallyPdf.ts tags the
+    // Salary-ledger rows amountKind:"taxable_income" at parse time — see its
+    // own doc). A single-ledger client (every 26Q/27EQ filing, and any 24Q
+    // client with only one combined ledger) has NO such rows, so this whole
+    // branch is a no-op for them and reconcileTallyFull runs exactly as
+    // before. When present, run TWO independent, UNCHANGED
+    // reconcileTallyFull passes — one against the TDS-liability ledger rows
+    // (identical to today), one against the Salary-ledger rows with
+    // office.tds/office.section forced null in a COPY (so it can only ever
+    // match on office.amount, and the section-coverage gate/sectionEq become
+    // non-constraints — see reconcileTallyFull's own null-is-permissive
+    // handling) — then merge the two per-office verdicts into one combined
+    // result (mergeDualLedgerResults, tallyRecon.ts).
+    const salaryLedgerRows = tally.filter((t) => t.amountKind === "taxable_income");
+    const tdsLedgerRows = tally.filter((t) => t.amountKind !== "taxable_income");
+    const dualLedgerMode = salaryLedgerRows.length > 0;
+    let audited: TallyReconRow[]; let surplusLedger: TallyRow[];
+    if (dualLedgerMode) {
+      const partiesForAmount: OfficeTxn[] = parties.map((o) => ({ ...o, tds: null, section: null }));
+      const tdsResult = reconcileTallyFull(parties, tdsLedgerRows, null, maps);
+      const salaryResult = reconcileTallyFull(partiesForAmount, salaryLedgerRows, null, maps);
+      audited = mergeDualLedgerResults(tdsResult.rows, salaryResult.rows);
+      // Ledger-side surplus from EACH pass is tagged by which ledger it came
+      // from (rather than the generic single-ledger "Office Data Not Found")
+      // so a checker sees immediately whether it's the Taxable Income figure
+      // or the TDS figure sitting in Tally with no Office Data counterpart.
+      // Each surplus row already carries its own amountKind from parse time
+      // (salaryLedgerRows was filtered BY that exact tag above) — no
+      // re-tagging needed, just concatenate both passes' leftovers.
+      surplusLedger = [...tdsResult.surplusLedger, ...salaryResult.surplusLedger];
+    } else {
+      const single = reconcileTallyFull(parties, tally, null, maps);
+      audited = single.rows; surplusLedger = single.surplusLedger;
+    }
     // preserve overrides keyed by office_deductee_id
     const { data: prior } = await supabase.from("tds_tally_results").select("id, office_deductee_id, tally_party, tally_date, tally_credit, result, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", fId);
     const priorOffice = (prior || []).filter((p: any) => p.office_deductee_id);
@@ -400,11 +454,17 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const mappingCandidates: TallyReconRow[] = [];
     const newRows = audited.map((r) => {
       const c = pm.get(r.office_deductee_id ?? ""); const keep = !!c?.overridden && c.result === r.result;
-      if (!keep && r.result === "Party Name Mismatch" && r.suggested_party) mappingCandidates.push(r);
+      // "Name Mismatch" is the dual-ledger merge's own relabelling of exactly
+      // this same suggestion (mergeDualLedgerResults carries suggested_party
+      // through unchanged) — both must offer the proactive mapping dialog.
+      if (!keep && (r.result === "Party Name Mismatch" || r.result === "Name Mismatch") && r.suggested_party) mappingCandidates.push(r);
       return {
         filing_id: fId, batch_id: b?.[0]?.id ?? null, firm_id: firmId, quarter: selQuarter, office_deductee_id: r.office_deductee_id,
         office_name: r.office_name, office_date: r.office_date, office_amount: r.office_amount, office_tds: r.office_tds, office_section: r.office_section,
         tally_row_index: r.tally_row_index, tally_party: r.tally_party, tally_date: r.tally_date, tally_credit: r.tally_credit,
+        salary_tally_row_index: r.salary_tally_row_index ?? null, salary_tally_party: r.salary_tally_party ?? null,
+        salary_tally_date: r.salary_tally_date ?? null, salary_tally_credit: r.salary_tally_credit ?? null,
+        taxable_income_status: r.taxable_income_status ?? null, tds_status: r.tds_status ?? null,
         result: r.result, amount_basis: r.amount_basis, reason: r.reason, confidence: r.confidence, mapped: !!r.mapped,
         overridden: keep, override_reason: keep ? c.override_reason : null, overridden_by: keep ? c.overridden_by : null, overridden_at: keep ? c.overridden_at : null,
       };
@@ -418,17 +478,27 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     // best-effort match for the same convenience, not a correctness requirement
     // (worst case, a re-run asks the user to re-confirm one override).
     const surplusKey = (party: string | null, date: string | null, credit: number | null) => `${normalizeName(party)}|${date ?? ""}|${credit ?? ""}`;
-    const priorLedger = (prior || []).filter((p: any) => !p.office_deductee_id && p.result === "Office Data Not Found");
+    const priorLedger = (prior || []).filter((p: any) => !p.office_deductee_id
+      && (p.result === "Office Data Not Found" || p.result === "Taxable Income Missing from Office Data" || p.result === "TDS Missing from Office Data"));
     const lm = new Map<string, any>(); for (const p of priorLedger) lm.set(surplusKey(p.tally_party, p.tally_date, p.tally_credit), p);
     const surplusRows = surplusLedger.map((t) => {
       const key = surplusKey(t.party, t.date, t.credit);
-      const c = lm.get(key); const keep = !!c?.overridden && c.result === "Office Data Not Found";
+      // In dual-ledger mode, tag by WHICH ledger this credit sat in — a
+      // checker needs to know immediately whether it's the Taxable Income
+      // figure or the TDS figure with no Office Data counterpart, not just
+      // that "something" is unclaimed. A single-ledger client's surplus rows
+      // (t.amountKind always undefined there) keep the original generic label.
+      const result: TallyResult = dualLedgerMode
+        ? (t.amountKind === "taxable_income" ? "Taxable Income Missing from Office Data" : "TDS Missing from Office Data")
+        : "Office Data Not Found";
+      const c = lm.get(key); const keep = !!c?.overridden && c.result === result;
       return {
         filing_id: fId, batch_id: b?.[0]?.id ?? null, firm_id: firmId, quarter: selQuarter, office_deductee_id: null,
         office_name: null, office_date: null, office_amount: null, office_tds: null, office_section: null,
         tally_row_index: t.row_index, tally_party: t.party, tally_date: t.date, tally_credit: t.credit,
-        result: "Office Data Not Found" as TallyResult, amount_basis: null,
-        reason: "No office record matches this ledger entry.", confidence: 0, mapped: false,
+        result, amount_basis: null,
+        reason: `No office record matches this ${dualLedgerMode ? (t.amountKind === "taxable_income" ? "Salary ledger" : "TDS ledger") : "ledger"} entry.`,
+        confidence: 0, mapped: false,
         overridden: keep, override_reason: keep ? c.override_reason : null, overridden_by: keep ? c.overridden_by : null, overridden_at: keep ? c.overridden_at : null,
       };
     });
@@ -859,6 +929,14 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const overrideLabel = (r: ResultRow): string =>
     r.result === "Ledger Entry Not Found" ? "Keep as Office Data Only"
       : r.result === "Office Data Not Found" ? "Keep as Tally Ledger Only"
+      // 24Q dual-ledger surplus (ledger-anchored, genuinely one-sided for
+      // THAT figure) — the mirror image of "Office Data Not Found" above,
+      // just naming which ledger. "Missing from Salary/TDS Ledger" (office-
+      // anchored) stays plain "Override": that's a partial dispute — the
+      // OTHER figure may already be perfectly matched via the other
+      // ledger — never a wholesale one-sided declaration.
+      : r.result === "Taxable Income Missing from Office Data" ? "Keep as Salary Ledger Only"
+      : r.result === "TDS Missing from Office Data" ? "Keep as TDS Ledger Only"
       : "Override";
 
   /** The audit-facing label for an APPROVED one-sided override — reads as a
@@ -869,6 +947,8 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const oneSidedLabel = (r: ResultRow): string =>
     r.result === "Ledger Entry Not Found" ? "Office Data Only"
       : r.result === "Office Data Not Found" ? "Tally Ledger Only"
+      : r.result === "Taxable Income Missing from Office Data" ? "Salary Ledger Only"
+      : r.result === "TDS Missing from Office Data" ? "TDS Ledger Only"
       : r.result;
 
   /** "Matched" + a confirmed name mapping reads as "Matched & Mapped" — distinct
@@ -885,7 +965,31 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  flagged, so the checker sees BOTH sides at a glance instead of having to
    *  hunt for the ledger party buried in a sentence. */
   const disputeTable = (r: ResultRow) => {
-    const rows: { label: string; office: string; ledger: string; flagged: boolean }[] = [
+    // 24Q DUAL-LEDGER: taxable_income_status is only ever set by
+    // mergeDualLedgerResults, so its presence alone tells us this record has
+    // a SEPARATE Salary-ledger side worth its own row, rather than the
+    // single generic "Amount" row every other (single-ledger) client sees.
+    const dual = r.taxable_income_status != null;
+    const rows: { label: string; office: string; ledger: string; flagged: boolean }[] = dual ? [
+      {
+        label: "Party", office: r.office_name || "—",
+        ledger: r.tally_party === r.salary_tally_party ? (r.tally_party || "—") : `${r.salary_tally_party || "—"} (Salary) / ${r.tally_party || "—"} (TDS)`,
+        flagged: r.result === "Name Mismatch",
+      },
+      {
+        label: "Date", office: r.office_date || "—",
+        ledger: r.tally_date === r.salary_tally_date ? (r.tally_date || "—") : `${r.salary_tally_date || "—"} (Salary) / ${r.tally_date || "—"} (TDS)`,
+        flagged: r.result === "Date Mismatch",
+      },
+      {
+        label: "Taxable Income", office: inr(r.office_amount), ledger: inr(r.salary_tally_credit),
+        flagged: r.result === "Taxable Income Amount Mismatch" || r.result === "Taxable Income Missing from Salary Ledger",
+      },
+      {
+        label: "TDS", office: inr(r.office_tds), ledger: inr(r.tally_credit),
+        flagged: r.result === "TDS Amount Mismatch" || r.result === "TDS Missing from TDS Ledger",
+      },
+    ] : [
       { label: "Party", office: r.office_name || "—", ledger: r.tally_party || "—", flagged: r.result === "Party Name Mismatch" },
       { label: "Date", office: r.office_date || "—", ledger: r.tally_date || "—", flagged: r.result === "Date Mismatch" },
       { label: "Amount", office: inr(r.office_tds ?? r.office_amount), ledger: inr(r.tally_credit), flagged: r.result === "Credit Amount Mismatch" },
@@ -968,7 +1072,12 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             actually-wrong one flagged — not a subdued one-liner the ledger side
             can get lost in. A clean Match keeps the terser summary; nothing there
             needs highlighting. */}
-        {r.tally_party != null && r.result !== "Matched" ? disputeTable(r) : r.tally_party != null && (
+        {/* Gated on EITHER ledger side: in dual-ledger mode a record can be
+            paired on the Salary ledger while having no TDS-ledger row at all
+            (the routine zero-TDS 24Q employee). Requiring tally_party alone
+            hid the whole comparison for exactly those disputes — the generic
+            verdict with no evidence behind it. */}
+        {(r.tally_party != null || r.salary_tally_party != null) && r.result !== "Matched" ? disputeTable(r) : r.tally_party != null && (
           <p className="text-[11px] text-muted-foreground flex items-center gap-1.5 flex-wrap">
             <span>Ledger: <b className="text-foreground">{r.tally_party}</b> · {r.tally_date || "—"} · credit {inr(r.tally_credit)}</span>
             {r.mapped && <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">party mapped</Badge>}
@@ -1007,7 +1116,8 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
               </Button>
             </div>
           </div>
-        ) : r.result === "Ledger Entry Not Found" && !r.overridden && !r.mapped && r.office_name && (
+        ) : (r.result === "Ledger Entry Not Found" || r.result === "Taxable Income Missing from Salary Ledger" || r.result === "TDS Missing from TDS Ledger")
+          && !r.overridden && !r.mapped && r.office_name && (
           <div className="flex items-center gap-2 flex-wrap p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
             <Link2 size={13} className="text-amber-600 shrink-0" />
             <span className="text-foreground min-w-0">No automatic ledger match for <b>{r.office_name}</b> — it may be booked under a different name.</span>
