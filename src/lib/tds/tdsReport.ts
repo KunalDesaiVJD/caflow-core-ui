@@ -54,12 +54,48 @@ export function reasonFor(r: ReconResultLike): string {
   return `Mismatch — ${labels} ${diffs.length > 1 ? "differ" : "difference"}.`;
 }
 
-/** Readable error-TYPE label for the ErrorTypeBreakdown chips — the closest thing
- *  Stage-1 has to Stage-3's single "result" verdict, since a mismatch here is a
- *  per-FIELD diff rather than one overall reason. */
-export function errorTypeFor(r: Pick<ReconResultLike, "match_status">): string {
+/**
+ * Readable error-TYPE label for the ErrorTypeBreakdown chips — Stage 1's
+ * equivalent of Stage 3's single "result" verdict.
+ *
+ * NAMES THE FIGURE THAT ACTUALLY DIFFERS. This used to collapse every paired
+ * mismatch to a bare "Field Mismatch", even though Stage 1 already knows
+ * exactly which of the seven fields disagreed (comparePair emits a per-field
+ * diff with the exact amounts). Every dispute therefore landed in one
+ * undifferentiated bucket: a checker could not see, or filter by, whether the
+ * problem was the gross figure, the TDS figure, the name or the date — the
+ * generic verdict the engine had the evidence to avoid.
+ *
+ * Both 24Q and 26Q carry TWO independent money figures per record (24Q:
+ * Taxable Income + TDS; 26Q: Amount Paid + TDS), and each is compared
+ * separately, so each gets its own named category — the same vocabulary Stage 3
+ * reports for the two-ledger case.
+ *
+ * PRECEDENCE when several fields differ mirrors Stage 3's: identity first (PAN,
+ * then name — nothing below it means anything if the parties differ), then the
+ * money figures (gross before TDS), then date, then the softer classification
+ * fields. The FULL field list is never lost — it stays in field_diffs and in
+ * reasonFor()'s sentence; this is only which bucket the record is filed under.
+ */
+export function errorTypeFor(r: ReconResultLike, form?: string | null): string {
   if (r.match_status === "office_only") return "Office Data Only";
   if (r.match_status === "imported_only") return "Imported Data Only";
+  if (r.match_status === "matched") return "Matched";
+
+  const bad = new Set((r.field_diffs || []).filter((f) => f.matched === false).map((f) => f.field));
+  // 24Q's gross figure is the employee's TAXABLE INCOME; 26Q's is the amount
+  // paid to the deductee. Same comparison, different word on the return.
+  const gross = form === "24Q" ? "Taxable Income" : "Amount";
+
+  if (bad.has("pan")) return "PAN Mismatch";
+  if (bad.has("name")) return "Name Mismatch";
+  if (bad.has("amount")) return `${gross} Mismatch`;
+  if (bad.has("tds")) return "TDS Amount Mismatch";
+  if (bad.has("date")) return "Date Mismatch";
+  if (bad.has("section")) return "Section Mismatch";
+  if (bad.has("interest")) return "Interest Mismatch";
+  // Mismatched, but no field carries a diff — only reachable from a result
+  // stored before field_diffs existed. Keep the old generic label for those.
   return "Field Mismatch";
 }
 

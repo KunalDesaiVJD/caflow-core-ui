@@ -847,6 +847,12 @@ export function TdsValidateFinalise({
   // checker reviews ONE tab instead of clicking through Stages 1-3. Reuses each
   // stage's OWN already-computed data rather than re-deriving anything — a fix
   // to a stage's counts or categorisation lands here automatically.
+  /** errorTypeFor bound to THIS filing's form, so the gross figure is named the
+   *  way the return names it — "Taxable Income" on 24Q, "Amount" on 26Q. Used
+   *  everywhere a Stage-1 category is derived (the breakdown chips, the chip
+   *  filter and the Stage-4 audit rows) so all three always agree. */
+  const errType = useCallback((r: ReconResult) => errorTypeFor(r, selForm), [selForm]);
+
   const stage4Data = useMemo(() => {
     // One audit row per exception, across all 3 stages — grouped into a
     // per-stage section in the JSX below (not a flat table). Stage 1's rows are
@@ -858,7 +864,7 @@ export function TdsValidateFinalise({
       .map((r): AuditRow => ({
         stage: "Stage 1",
         record: r.record_label || "—",
-        errorType: errorTypeFor(r),
+        errorType: errType(r),
         status: r.overridden ? "Overridden" : "Unresolved",
         reason: r.overridden ? (r.override_note || "accepted") : reasonFor(r),
       }));
@@ -880,7 +886,9 @@ export function TdsValidateFinalise({
       totalOverridden: summary.overridden + (panStatus.applicable ? panStatus.overridden : 0) + (tallyStatus.applicable ? tallyStatus.overridden : 0),
       auditRows,
     };
-  }, [results, summary, panStatus, tallyStatus]);
+    // errType carries selForm — without it here a form switch would leave the
+    // Stage-4 audit rows labelled for the previous form.
+  }, [results, summary, panStatus, tallyStatus, errType]);
 
   // Distinct error types actually present, so the filter never lists a type that
   // matches nothing (and picks up a brand-new one automatically).
@@ -1421,10 +1429,10 @@ export function TdsValidateFinalise({
                   ) : (
                     <div className="space-y-3">
                       {activeFilter === "mismatched" && (
-                        <ErrorTypeBreakdown rows={cardFiltered} getType={errorTypeFor} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+                        <ErrorTypeBreakdown rows={cardFiltered} getType={errType} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
                       )}
                       {(activeFilter === "mismatched"
-                        ? filterByErrorType(cardFiltered.filter(r => r.match_status !== "matched"), errorTypeFor, errorTypeFilter)
+                        ? filterByErrorType(cardFiltered.filter(r => r.match_status !== "matched"), errType, errorTypeFilter)
                         : cardFiltered.filter(r => r.match_status !== "matched")
                       ).map(renderMismatchCard)}
                       {cardFiltered.some(r => r.match_status === "matched") && renderMatchedTable(cardFiltered.filter(r => r.match_status === "matched"))}
@@ -1453,8 +1461,8 @@ export function TdsValidateFinalise({
               ) : (
                 /* Default view → exceptions only. */
                 <div className="space-y-3">
-                  <ErrorTypeBreakdown rows={attention} getType={errorTypeFor} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
-                  {filterByErrorType(attention, errorTypeFor, errorTypeFilter).map(renderMismatchCard)}
+                  <ErrorTypeBreakdown rows={attention} getType={errType} activeType={errorTypeFilter} onSelectType={setErrorTypeFilter} />
+                  {filterByErrorType(attention, errType, errorTypeFilter).map(renderMismatchCard)}
                 </div>
               )}
             </div>

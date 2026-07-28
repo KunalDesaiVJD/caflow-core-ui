@@ -372,7 +372,10 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
     .map((r): AuditRow => ({
       stage: "Stage 1",
       record: r.record_label || "—",
-      errorType: errorTypeFor(r),
+      // Pass the form so the gross figure is named as the return names it
+      // ("Taxable Income" on 24Q, "Amount" on 26Q) — identical to the Stage-1
+      // tab, so the same record never carries two different category names.
+      errorType: errorTypeFor(r, ctx.formLabel),
       status: r.overridden ? "Overridden" : "Unresolved",
       reason: r.overridden ? (r.override_note || "accepted") : reasonFor(r),
     }));
