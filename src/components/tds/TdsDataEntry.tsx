@@ -1887,7 +1887,20 @@ export function TdsDataEntry({
                   <Card>
                     <CardContent className="p-0">
                       <div className="overflow-x-auto">
-                        <Table>
+                        {/* table-layout:fixed ONLY for 24Q — 24Q is the one form whose Employee
+                            Name/PAN autofit was visibly failing (both truncated regardless of the
+                            computed nameColWidth/panColWidth), because under the default
+                            table-layout:auto the browser treats a <th> width as a mere hint that
+                            competes with the row's other cells rather than a hard column width.
+                            26Q/27EQ already render correctly under auto layout (several of their
+                            own columns have no explicit width at all — Type/Amount/Date/Rate%/
+                            Interest/Reason — so forcing fixed layout there would redistribute
+                            their space too and risk changing an already-correct, already-shipped
+                            layout the user explicitly asked not to touch). Every other 24Q column
+                            gets an explicit width for the same reason Name/PAN need one: under
+                            fixed layout, an unspecified column's width is undefined behaviour
+                            (typically an equal share of whatever's left, not a considered size). */}
+                        <Table style={selForm === "24Q" ? { tableLayout: "fixed", width: "100%" } : undefined}>
                           <TableHeader>
                             <TableRow>
                               <TableHead className="w-8 text-xs">#</TableHead>
@@ -1895,11 +1908,11 @@ export function TdsDataEntry({
                                 <>
                                   <TableHead className="text-xs" style={{ width: nameColWidth, minWidth: nameColWidth }}>Employee Name</TableHead>
                                   <TableHead className="text-xs" style={{ width: panColWidth, minWidth: panColWidth }}>PAN</TableHead>
-                                  <TableHead className="text-xs text-right">Gross</TableHead>
-                                  <TableHead className="text-xs text-right">Std Ded</TableHead>
-                                  <TableHead className="text-xs text-right">Taxable</TableHead>
-                                  <TableHead className="text-xs text-right">TDS</TableHead>
-                                  <TableHead className="text-xs">Details</TableHead>
+                                  <TableHead className="text-xs text-right" style={{ width: 110, minWidth: 110 }}>Gross</TableHead>
+                                  <TableHead className="text-xs text-right" style={{ width: 90, minWidth: 90 }}>Std Ded</TableHead>
+                                  <TableHead className="text-xs text-right" style={{ width: 90, minWidth: 90 }}>Taxable</TableHead>
+                                  <TableHead className="text-xs text-right" style={{ width: 70, minWidth: 70 }}>TDS</TableHead>
+                                  <TableHead className="text-xs" style={{ width: 60, minWidth: 60 }}>Details</TableHead>
                                 </>
                               ) : selForm === "27EQ" ? (
                                 <>

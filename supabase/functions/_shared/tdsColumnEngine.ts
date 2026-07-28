@@ -107,6 +107,23 @@ export const HEADER_SYNONYMS: Record<CanonField, string[]> = {
   challan_no: ["challanno", "challannumber", "challanserialno", "challan"],
 };
 export const normaliseHeader = (h: string): string => h.toLowerCase().replace(/[^a-z0-9]/g, "");
+/** True for a header gridToRows/extractSheetRows SYNTHESISED ("Column7") because
+ *  the source cell was blank — never a header a client actually wrote. Confirmed
+ *  against a real client file: two UNRELATED tables pasted side-by-side on one
+ *  sheet (a real PAN/name table for one set of employees at columns A-C, a
+ *  SECOND, disjoint PAN/name table for entirely DIFFERENT people at columns J-K,
+ *  offset a few rows down) get flattened into ONE set of row objects keyed by
+ *  physical row — so an employee from table 1 whose OWN "PAN" cell is blank can
+ *  end up sharing a row with table 2's unrelated PAN in an auto-named "Column11"
+ *  slot purely by row-position coincidence. That auto-named column then has a
+ *  HIGHER fracPan than the real (but empty, for this file) "PAN" column and
+ *  wins the value-based pan/name pick — silently grafting a stranger's PAN onto
+ *  the wrong employee. See its use in resolveMapping's pan/deductee_name
+ *  detection: an auto-generated header is deprioritised below ANY genuinely-
+ *  named column (even an empty one), and used only as a last resort when no
+ *  named column exists at all — never excluded outright, since plenty of real
+ *  files have no header row and rely entirely on this positional fallback. */
+export const isAutoColumnHeader = (h: string): boolean => /^column\d+$/i.test(h.trim());
 function bestFieldForHeader(header: string): CanonField | null {
   const norm = normaliseHeader(header);
   if (!norm) return null;
@@ -183,8 +200,17 @@ export function resolveMapping(allRows: Record<string, unknown>[], aiMap?: Parti
     for (const c of cols) { if (claimed.has(c.header)) continue; const v = score(c); if (v > 0 && (!best || v > best.v)) best = { c, v }; }
     return best?.c ?? null;
   };
-  { const v = bestUnclaimed((c) => c.fracPan >= 0.6 ? c.fracPan : 0);
-    if (v) put("pan", v.header, "value"); else { const h = cols.find((c) => !claimed.has(c.header) && c.hfield === "pan"); if (h) put("pan", h.header, "header"); } }
+  // A column whose name was SYNTHESISED ("Column11") because its header cell was
+  // blank is deprioritised below any genuinely-named column, even an empty one —
+  // see isAutoColumnHeader's doc for the real cross-table contamination this
+  // guards against — and used only when no named column exists at all.
+  { const v = bestUnclaimed((c) => c.fracPan >= 0.6 && !isAutoColumnHeader(c.header) ? c.fracPan : 0);
+    if (v) put("pan", v.header, "value");
+    else {
+      const h = cols.find((c) => !claimed.has(c.header) && c.hfield === "pan");
+      if (h) put("pan", h.header, "header");
+      else { const v2 = bestUnclaimed((c) => c.fracPan >= 0.6 ? c.fracPan : 0); if (v2) put("pan", v2.header, "value-fallback"); }
+    } }
   { const h = cols.find((c) => !claimed.has(c.header) && c.hfield === "date_of_payment" && c.fracDate >= 0.3);
     if (h) put("date_of_payment", h.header, "header"); else { const v = bestUnclaimed((c) => c.fracDate >= 0.5 ? c.fracDate : 0); if (v) put("date_of_payment", v.header, "value"); } }
   { const codeCol = bestUnclaimed((c) => c.fracSecCode >= 0.5 ? c.fracSecCode : 0);
@@ -192,7 +218,12 @@ export function resolveMapping(allRows: Record<string, unknown>[], aiMap?: Parti
     else { const h = cols.find((c) => !claimed.has(c.header) && c.hfield === "section_code"); if (h) put("section_code", h.header, "header"); } }
   { const h = cols.find((c) => !claimed.has(c.header) && c.hfield === "deductee_name" && c.fracName >= 0.4);
     if (h) put("deductee_name", h.header, "header");
-    else { const v = bestUnclaimed((c) => (c.hfield === "__bank__" || /bank|branch|narration|challan|remark|address|description|nature|payment/.test(normaliseHeader(c.header))) ? 0 : (c.fracName >= 0.6 ? c.fracName : 0)); if (v) put("deductee_name", v.header, "value"); } }
+    else {
+      const nameScore = (c: ColProfile) => (c.hfield === "__bank__" || /bank|branch|narration|challan|remark|address|description|nature|payment/.test(normaliseHeader(c.header))) ? 0 : (c.fracName >= 0.6 ? c.fracName : 0);
+      const v = bestUnclaimed((c) => !isAutoColumnHeader(c.header) ? nameScore(c) : 0);
+      if (v) put("deductee_name", v.header, "value");
+      else { const v2 = bestUnclaimed(nameScore); if (v2) put("deductee_name", v2.header, "value-fallback"); }
+    } }
   for (const f of ["date_of_deduction", "challan_bsr", "challan_no"] as const) {
     const h = cols.find((c) => !claimed.has(c.header) && c.hfield === f); if (h) put(f, h.header, "header");
   }

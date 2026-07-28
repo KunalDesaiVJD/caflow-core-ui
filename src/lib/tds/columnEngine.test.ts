@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { explodeMonthlyColumns, resolveMapping, buildCanonicalRow } from "./columnEngine";
+import { explodeMonthlyColumns, resolveMapping, buildCanonicalRow, isAutoColumnHeader } from "./columnEngine";
 
 // Real client file (MICROCIRCUITS INNOVATIONS PVT LTD, 24Q Q1 FY 2026-27) —
 // reported bug: Stage 1 showed 0/70 matched despite PAN overlap on both
@@ -86,5 +86,69 @@ describe("explodeMonthlyColumns — repeating per-month layout", () => {
     const built = exploded.map((r) => buildCanonicalRow(r, map));
     const madhukantApril = built.find((r) => r.pan === "ACOPP5720C" && r.date_of_payment === "2026-04-30");
     expect(madhukantApril).toMatchObject({ amount_paid: 200000, tds_amount: 19800, deductee_name: "Madhukant Kanjibhai Patel - Salary" });
+  });
+});
+
+// User-reported (with screenshots): an imported record for "Nikhil Rajeshbhai
+// Bhoi - Salary" showed PAN "KYUPS2541N" — a PAN that belongs to nobody in
+// Office Data — producing a false "In the imported client file only" mismatch
+// even though Nikhil's real record (PAN "ATYPN4581C") exists there. Root
+// cause, confirmed against the real file's "Q1" sheet: TWO UNRELATED tables
+// are pasted side-by-side on one sheet — table 1 (SR NO/PAN/NAME/...) lists
+// one set of employees with their PAN column left BLANK; table 2, an entirely
+// different PAN/name list for DIFFERENT people, starts a few rows down at
+// column J. Flattening the sheet into row objects merges both tables by
+// physical row position, so Nikhil's row (table 1, blank PAN) ends up ALSO
+// carrying table 2's unrelated PAN in an auto-named "Column11" slot purely by
+// coincidence of row alignment. That auto-named column then has a HIGHER
+// fracPan than the real (but empty, in this file) "PAN" column and used to win
+// the value-based pick — grafting a stranger's PAN onto the wrong employee.
+describe("resolveMapping — an auto-generated 'ColumnN' header never outranks a genuinely-named one (real client data)", () => {
+  const HEADERS = ["SR NO ", "PAN", "NAME ", "JAN", "TDS", "FEB", "TDS_1", "MARCH", "TDS_2", "Column10", "Column11", "Column12"];
+  function rowFrom(values: unknown[]): Record<string, unknown> {
+    return Object.fromEntries(HEADERS.map((h, i) => [h, values[i]]));
+  }
+  const Q1_SHEET_ROWS = [
+    rowFrom([1, "", "Nevil Thummar - Salary", "", "", "", "", "", "", "", "", ""]),
+    rowFrom([4, "", "Nirali Kishorbhai Odedara - Salary", "", "", "", "", "", "", "", "PAN", "SALARY"]),
+    rowFrom([5, "", "Nikhil Rajeshbhai Bhoi - Salary", "", "", "", "", "", "", "", "KYUPS2541N", "Akshaykumar Bhaveshbhai Shingala - Salary"]),
+    rowFrom([6, "", "Devang Naimeshkumar Modi - Salary", "", "", "", "", "", "", "", "CPZPB6664P", "Bhankhar Shilpaben Ketanbhai - Salary"]),
+    rowFrom([7, "", "Raj Nagabhai Maliya - Salary", "", "", "", "", "", "", "", "FYGPM4821L", "Bhaumikumar Jiteshbhai Malani - Salary"]),
+  ];
+
+  it("isAutoColumnHeader recognises a synthesised 'ColumnN' name and nothing else", () => {
+    expect(isAutoColumnHeader("Column11")).toBe(true);
+    expect(isAutoColumnHeader("column7")).toBe(true);
+    expect(isAutoColumnHeader("PAN")).toBe(false);
+    expect(isAutoColumnHeader("Column")).toBe(false); // no trailing digits — a real header could be named this
+  });
+
+  it("resolves pan from the genuinely-named (but empty, in this file) 'PAN' column, not the coincidentally PAN-shaped 'Column11'", () => {
+    const { report } = resolveMapping(Q1_SHEET_ROWS);
+    expect(report.pan?.header).toBe("PAN");
+  });
+
+  it("never grafts table 2's unrelated PAN onto table 1's employees", () => {
+    const { map } = resolveMapping(Q1_SHEET_ROWS);
+    const built = Q1_SHEET_ROWS.map((r) => buildCanonicalRow(r, map));
+    const nikhil = built.find((r) => r.deductee_name === "Nikhil Rajeshbhai Bhoi - Salary")!;
+    const devang = built.find((r) => r.deductee_name === "Devang Naimeshkumar Modi - Salary")!;
+    const raj = built.find((r) => r.deductee_name === "Raj Nagabhai Maliya - Salary")!;
+    // The real bug: these used to come back "KYUPS2541N" / "CPZPB6664P" / "FYGPM4821L".
+    expect(nikhil.pan).not.toBe("KYUPS2541N");
+    expect(devang.pan).not.toBe("CPZPB6664P");
+    expect(raj.pan).not.toBe("FYGPM4821L");
+    // The real (blank, in this file) PAN column means these stay unresolved
+    // rather than fabricated — an honest "no PAN parsed", not a wrong one.
+    expect(nikhil.pan).toBeNull();
+  });
+
+  it("does NOT break the ordinary case: a file with no named header at all still finds PAN by value shape", () => {
+    const rows = [
+      { Column1: "ABC Traders", Column2: "AAAPA1111A", Column3: 50000, Column4: 500 },
+      { Column1: "XYZ Corp", Column2: "BBBPB2222B", Column3: 60000, Column4: 600 },
+    ];
+    const { report } = resolveMapping(rows);
+    expect(report.pan?.header).toBe("Column2");
   });
 });
