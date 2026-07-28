@@ -576,6 +576,8 @@ function VendorChecks({ v }: { v: VendorResult }) {
       {v.continuityOk
         ? <Badge variant="outline" className="text-[10px]">continuity ✓</Badge>
         : <Badge variant="destructive" className="text-[10px]">continuity ✗</Badge>}
+      {v.verified === true && <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600">cross-checked ✓</Badge>}
+      {v.verified === false && <Badge variant="destructive" className="text-[10px]" title={(v.verifyNotes || []).join(' | ')}>cross-check: review</Badge>}
       {v.reviewCount > 0 && <Badge variant="secondary" className="text-[10px]">{v.reviewCount} review</Badge>}
     </div>
   );

@@ -63,11 +63,15 @@ export const SETTLEMENT_SYNONYMS: Array<{ type: SettlementType; keywords: string
   },
   {
     type: 'KASAR_VATAV',
+    // Specific discount/write-off terms only. Bare words like "less", "diff",
+    // "short", "excess" were removed — they false-match bank/payment narrations
+    // and wrongly treat a payment as a non-cash discount (surfaced by the
+    // independent cross-check on a real kasar/vatav vendor).
     keywords: [
       'kasar', 'vatav', 'vatti', 'kasar vatav', 'kasar-vatav', 'kasar/vatav',
-      'discount', 'cash discount', 'trade discount', 'rebate', 'kasar & vatav',
-      'sundry balance', 'balance written', 'write off', 'write-off', 'w/off',
-      'w.off', 'short', 'excess', 'diff', 'difference', 'rate diff', 'less',
+      'kasar & vatav', 'discount', 'cash discount', 'trade discount', 'rebate',
+      'sundry balance', 'balance written', 'written off', 'write off', 'write-off',
+      'w/off', 'w.off', 'rate difference', 'rate diff',
     ],
   },
   {

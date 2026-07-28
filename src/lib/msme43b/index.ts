@@ -11,3 +11,5 @@ export { saveRun, listRuns, loadRun, renameRun, deleteRun, type Msme43bRunSummar
 export { computeCarryForward, type CarryForward, type CarryForwardInput } from './carryForward';
 export { reconcileLedger } from './reconcile';
 export { extractLedgersViaAI } from './aiExtract';
+export { crossCheckVendor, type CrossResult } from './crosscheck';
+export { verifyVendor, type VerifyOutcome } from './verify';

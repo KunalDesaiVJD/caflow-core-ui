@@ -19,6 +19,7 @@ import type {
 } from './types';
 import { classifyTxn, isCashTiming, isNonCashReduction } from './classify';
 import { DEFAULT_CONFIG, Msme43bConfig, fyEndDate, addDays } from './config';
+import { verifyVendor } from './verify';
 
 interface Alloc { date: string; amount: number; type: SettlementType; }
 interface WorkBill extends MatchedBill { allocs: Alloc[]; remaining: number; }
@@ -183,7 +184,7 @@ export function analyzeVendor(
   if (!continuityOk) warnings.push(`FY opening (₹${fy?.openingBalance}) ≠ CY closing (₹${cy.closingBalance}).`);
   if (!fy) warnings.push('Following-year ledger not provided — FY payment dates unknown; year-end outstanding shown as fully disallowed pending FY data.');
 
-  return {
+  const result: VendorResult = {
     vendorName: cy.vendorName,
     format: cy.format,
     cyReconciled: !!cy.balanceReconciled,
@@ -195,6 +196,14 @@ export function analyzeVendor(
     totalDisallowedCY, totalAllowedFY, totalStillOutstanding,
     warnings, reviewCount,
   };
+
+  // Independent cross-check + invariants (see verify.ts).
+  const v = verifyVendor(result, cy, fy, cfg);
+  result.verified = v.verified;
+  result.verifyNotes = v.notes;
+  if (!v.verified) warnings.push(...v.notes.map((n) => `Cross-check: ${n}`));
+
+  return result;
 }
 
 /** Pair CY and FY ledgers by normalised vendor name and build the full report. */
