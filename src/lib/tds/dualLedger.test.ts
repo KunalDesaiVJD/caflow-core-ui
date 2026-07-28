@@ -219,6 +219,28 @@ describe("dual-ledger — a ledger entry with no office counterpart is reported 
   });
 });
 
+// A real, likely operator mistake: the Salary ledger is imported but the TDS
+// ledger is forgotten. Dual-ledger mode still engages (a taxable_income row
+// exists), and the TDS pass runs against an EMPTY ledger — the answer must
+// stay honest on BOTH sides rather than collapsing to a blanket failure.
+describe("dual-ledger — only the Salary ledger was imported, the TDS ledger is missing", () => {
+  it("flags TDS only for employees who actually had tax deducted, and still Matches the zero-TDS staff", () => {
+    const { rows } = dualRecon(OFFICE, FULL_SALARY);
+    const r = byName(rows);
+
+    // Directors WITH real TDS: the figure genuinely cannot be verified.
+    expect(r["Madhukant Kanjibhai Patel"].result).toBe("TDS Missing from TDS Ledger");
+    expect(r["Nirmitkumar Madhukant Patel"].result).toBe("TDS Missing from TDS Ledger");
+    // …but their Taxable Income side is confirmed against the Salary ledger.
+    expect(r["Madhukant Kanjibhai Patel"].taxable_income_status).toBe("Matched");
+    expect(r["Madhukant Kanjibhai Patel"].salary_tally_credit).toBe(300000);
+
+    // Zero-TDS staff are NOT dragged into a false mismatch by the missing ledger.
+    expect(r["Devansiben Mukeshbhai Panchal"].result).toBe("Matched");
+    expect(r["Nevil Thummar"].result).toBe("Matched");
+  });
+});
+
 describe("dual-ledger — precedence when BOTH figures are wrong at once", () => {
   it("names the Taxable Income gap first, and still records the TDS sub-status on the same row", () => {
     const salary = FULL_SALARY.filter((s) => !s.party!.startsWith("Nirmit"));
