@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectHeaderRow, gridToRows, isTwoSheetTemplate, joinChallanTemplate } from "./tdsImportParsing";
+import { detectHeaderRow, gridToRows, isTwoSheetTemplate, joinChallanTemplate, TEMPLATE_EXAMPLE_CHALLAN_ID } from "./tdsImportParsing";
 
 // Fixture shape mirrors a real client TDS export (structure only — no real
 // client data): a company-name title row, a TAN/PAN summary strip, THEN the
@@ -160,5 +160,64 @@ describe("joinChallanTemplate", () => {
     ]);
     const result = joinChallanTemplate(noIdChallanRows, entryRows);
     expect(result).toEqual(entryRows);
+  });
+});
+
+// Regression: the template ships with a gray "worked example" row (row 4 on
+// both sheets) pre-filled with a realistic-looking deductee — a real name,
+// PAN, and amount — so a client can see the expected format. The in-sheet
+// note tells them to delete it, but nothing enforces that, and left in place
+// it is indistinguishable from real data by content alone. Confirms it is
+// dropped unconditionally by its reserved Challan ID, whether or not the
+// client removed it, whether alone or alongside genuine rows.
+describe("joinChallanTemplate — worked-example row exclusion", () => {
+  const challanGridWithExample: unknown[][] = [
+    ["Challan ID*", "BSR Code*", "Challan Serial No.*", "Date of Deposit*", "Total Challan Amount (Rs)*", "Bank Name", "Remarks"],
+    [TEMPLATE_EXAMPLE_CHALLAN_ID, "0510002", "24894", "04-06-2026", "5,558", "HDFC Bank", "Q1 salary TDS"],
+    ["CH-REAL-001", "0640123", "99887", "07-07-2026", "2,500", "ICICI Bank", ""],
+  ];
+  const entryGridWithExample: unknown[][] = [
+    ["Sr. No.", "Challan ID*", "Deductee Name*", "PAN*", "Section*", "Date of Payment/Credit*", "Amount Paid/Credited (Rs)*", "Rate of TDS (%)*", "TDS Amount (Rs)*", "Interest (Rs)", "Remarks"],
+    ["", TEMPLATE_EXAMPLE_CHALLAN_ID, "ADINATH PROCESSING INDUSTRIES PRIVATE LIMITED", "AACCP6899F", "194C", "31-05-2026", "5,558,172", "0.10", "5,558", "0", ""],
+    ["1", "CH-REAL-001", "Genuine Real Client Pvt Ltd", "AAACG1234H", "194C", "07-07-2026", "250,000", "1.00", "2,500", "0", ""],
+  ];
+
+  it("drops the example row entirely — never appears in the joined output", () => {
+    const challanRows = gridToRows(challanGridWithExample);
+    const entryRows = gridToRows(entryGridWithExample);
+    const joined = joinChallanTemplate(challanRows, entryRows);
+    expect(joined).toHaveLength(1);
+    expect(joined[0]["Deductee Name*"]).toBe("Genuine Real Client Pvt Ltd");
+    expect(joined.some((r) => r["Deductee Name*"] === "ADINATH PROCESSING INDUSTRIES PRIVATE LIMITED")).toBe(false);
+  });
+
+  it("still correctly resolves the real row's BSR Code/Challan No when the example row is present on both sheets", () => {
+    const challanRows = gridToRows(challanGridWithExample);
+    const entryRows = gridToRows(entryGridWithExample);
+    const joined = joinChallanTemplate(challanRows, entryRows);
+    expect(joined[0]["BSR Code"]).toBe("0640123");
+    expect(joined[0]["Challan No"]).toBe("99887");
+  });
+
+  it("drops the example row even if only ONE of the two sheets still has it", () => {
+    const challanRows = gridToRows(challanGridWithExample); // example present
+    const entryRows = gridToRows([
+      ["Sr. No.", "Challan ID*", "Deductee Name*", "PAN*", "Section*", "Date of Payment/Credit*", "Amount Paid/Credited (Rs)*", "Rate of TDS (%)*", "TDS Amount (Rs)*", "Interest (Rs)", "Remarks"],
+      ["1", "CH-REAL-001", "Genuine Real Client Pvt Ltd", "AAACG1234H", "194C", "07-07-2026", "250,000", "1.00", "2,500", "0", ""],
+    ]); // example already deleted here
+    const joined = joinChallanTemplate(challanRows, entryRows);
+    expect(joined).toHaveLength(1);
+    expect(joined[0]["BSR Code"]).toBe("0640123");
+  });
+
+  it("matches the sentinel case/whitespace-insensitively, same as any other Challan ID", () => {
+    const entryRows = gridToRows([
+      ["Sr. No.", "Challan ID*", "Deductee Name*", "PAN*", "Section*", "Date of Payment/Credit*", "Amount Paid/Credited (Rs)*", "Rate of TDS (%)*", "TDS Amount (Rs)*", "Interest (Rs)", "Remarks"],
+      ["", `  ${TEMPLATE_EXAMPLE_CHALLAN_ID.toLowerCase()}  `, "ADINATH PROCESSING INDUSTRIES PRIVATE LIMITED", "AACCP6899F", "194C", "31-05-2026", "5,558,172", "0.10", "5,558", "0", ""],
+      ["1", "CH-REAL-001", "Genuine Real Client Pvt Ltd", "AAACG1234H", "194C", "07-07-2026", "250,000", "1.00", "2,500", "0", ""],
+    ]);
+    const joined = joinChallanTemplate(gridToRows(challanGridWithExample), entryRows);
+    expect(joined).toHaveLength(1);
+    expect(joined[0]["Deductee Name*"]).toBe("Genuine Real Client Pvt Ltd");
   });
 });

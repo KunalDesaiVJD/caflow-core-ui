@@ -32,6 +32,46 @@ export type HeaderMap = Record<string, CanonField>;
 // ── Value parsers ────────────────────────────────────────────────────────────
 /** Robust money parser: ₹/Rs, Indian grouping, accounting negatives "(1,234)",
  * trailing sign "170-", "/-", unicode minus, Cr/Dr, numbers-stored-as-text. */
+/**
+ * ACCOUNTING NUMBERS ARE NOT PLAIN NUMBERS. Indian accounting exports write a
+ * money value with its SIDE attached — "563.00 Dr", "563.00 Cr", "1,234 DR",
+ * "Cr 500" — and Excel does this through a CUSTOM CELL FORMAT, so the cell is
+ * a real number on screen but arrives as that formatted STRING once the sheet
+ * is read for display text (which the importer must do, to preserve the
+ * client's own formatting of dates and ids).
+ *
+ * Every "is this column money?" test in this file used to reject such a value
+ * outright, because a bare `/[A-Za-z]{2,}/` test sees the "Dr" and calls the
+ * whole column text. On a real 26Q file whose Amount and TDS columns are BOTH
+ * formatted that way, that made both columns invisible as money: the
+ * amount/TDS pairing had nothing to pair, the narration rescue exited before
+ * it began, and all 87 records reported a false mismatch.
+ *
+ * Stripping the marker here — not at each call site — means every downstream
+ * test (column profiling, the money-pair search, the rescue) understands the
+ * notation automatically. Dr/Cr is a SIDE, not a sign: the engine's fields are
+ * magnitudes, and negation stays driven by the existing paren/minus rules.
+ */
+export function stripAccountingMarker(s: string): string {
+  let out = s.trim();
+  // The marker must be a STANDALONE token, never a word's first two letters —
+  // otherwise "Credit Note" would be shortened to "edit Note", turning a real
+  // text cell into something that looks parseable.
+  const lead = out.match(/^(?:dr|cr)\.?\s+(.*)$/i);
+  if (lead) out = lead[1].trim();
+  const trail = out.match(/^(.*?[\d)])\s*(?:dr|cr)\.?$/i);
+  if (trail) out = trail[1].trim();
+  return out === "" ? s : out;
+}
+
+/** True when a cell is a MONEY value once its Dr/Cr side-marker is set aside —
+ *  i.e. no residual words, not a date, and numerically parseable. */
+export function looksLikeMoneyCell(v: unknown): boolean {
+  if (typeof v === "number") return isFinite(v);
+  const bare = stripAccountingMarker(String(v ?? "").trim());
+  return !/[A-Za-z]{2,}/.test(bare) && !looksLikeDate(v) && toNum(bare) != null;
+}
+
 export function toNum(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null;
   if (typeof v === "number") return isFinite(v) ? v : null;
@@ -175,7 +215,8 @@ function profileColumns(allRows: Record<string, unknown>[]): ColProfile[] {
       if (looksLikeDate(v)) date++;
       if (looksLikeName(s)) name++;
       const sk = classifySectionCell(s); if (sk === "code") scode++; else if (sk === "keyword") skw++;
-      if (!/[A-Za-z]{2,}/.test(s) && !looksLikeDate(v)) { const n = toNum(v); if (n != null) nums.push(n); }
+      // A Dr/Cr-suffixed accounting value IS money — see looksLikeMoneyCell.
+      if (looksLikeMoneyCell(v)) { const n = toNum(v); if (n != null) nums.push(n); }
     }
     const sorted = [...nums].sort((a, b) => a - b);
     const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
@@ -347,8 +388,16 @@ const NARRATION_AMOUNT_RE = /\bRs\.?\s*([\d,]+(?:\.\d+)?)/i;
 
 function extractNarrationAmount(raw: unknown): number | null {
   if (typeof raw === "number") return isFinite(raw) ? raw : null;
-  const m = String(raw ?? "").match(NARRATION_AMOUNT_RE);
-  return m ? toNum(m[1]) : null;
+  const s = String(raw ?? "").trim();
+  const m = s.match(NARRATION_AMOUNT_RE);
+  if (m) return toNum(m[1]);
+  // Some rows state the taxable amount as a BARE figure with no prose at all
+  // — and, read as display text, it arrives carrying its accounting side
+  // ("19038.00 Dr"). Accept it only when the WHOLE cell is that one number,
+  // so a sentence that merely happens to contain digits is never mistaken
+  // for an amount.
+  const bare = stripAccountingMarker(s);
+  return /^[\d,]+(?:\.\d+)?$/.test(bare) ? toNum(bare) : null;
 }
 
 // The same narration that hides the taxable amount usually states the RATE too
@@ -378,7 +427,7 @@ export function rescueMirroredAmountFromNarration(allRows: Record<string, unknow
     let ne = 0, nums = 0;
     for (const r of allRows) {
       const v = r?.[h]; const s = v == null ? "" : String(v).trim(); if (!s) continue;
-      ne++; if (!/[A-Za-z]{2,}/.test(s) && !looksLikeDate(s) && toNum(v) != null) nums++;
+      ne++; if (looksLikeMoneyCell(v)) nums++;
     }
     if (ne > 0 && nums / ne >= 0.6) numeric.push(h);
   }

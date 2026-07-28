@@ -318,6 +318,28 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
     // line — so a failed attempt is buffered here and RETRIED once the next,
     // text-only continuation line completes the label.
     let pendingAmount: { amount: number; marker: string | null; text: string } | null = null;
+    // TAXABLE INCOME IS SPLIT ACROSS SEVERAL DEBIT LINES on a real salary
+    // voucher. Confirmed against a real one:
+    //
+    //   To (as per details)          Journal 11   Debit 31,372.00
+    //     Bonus Expense                20,000.00 Dr
+    //     Nevil Thummar - Salary       49,372.00 Cr
+    //     PF Employee                   1,800.00 Cr
+    //     Professional Tax - (AMC)        200.00 Cr
+    //
+    // Dr 31,372 + 20,000 = Cr 49,372 + 1,800 + 200 = 51,372. The voucher's
+    // own debit is only the SALARY-expense share; the bonus is booked to its
+    // own expense head on a separate Dr line. Reading the voucher debit alone
+    // reported 31,372 against Office Data's 51,372 — a false mismatch of
+    // exactly the bonus.
+    //
+    // Summing the Dr side is not a special case for "Bonus": on an expense
+    // voucher the DEBITS are the employer's total cost for that employee,
+    // which IS the gross taxable figure, and the CREDITS split it into net
+    // pay plus the employee's own statutory deductions (PF, PT, …). So this
+    // picks up any other taxable component a client books separately —
+    // arrears, incentive, leave encashment — with no list to maintain.
+    let extraTaxableDr = 0;
     const tryMatchBreakdown = (amount: number, marker: string | null | undefined, partyText: string): boolean => {
       if (
         current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
@@ -335,15 +357,40 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         // voucher (PF Employee, Professional Tax, VPF, Labour Welfare Fund,
         // …) by the ledger name itself always containing "- Salary" for the
         // employee's own line — the one signal invariant across clients —
-        // and once found, the voucher's own debit total (already inclusive
-        // of any Bonus Expense Dr line, since that's what was actually
-        // paid/expensed) is copied into credit so the rest of the pipeline
-        // (which reads only `credit`) treats it exactly like a normal row.
+        // and once found, the voucher's TOTAL taxable debit (its own debit
+        // PLUS every other Dr component on the voucher, see extraTaxableDr)
+        // is copied into credit so the rest of the pipeline (which reads
+        // only `credit`) treats it exactly like a normal row.
         current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
         current.credit == null && current.debit != null &&
         marker && /^cr$/i.test(marker) && /\bsalary\b/i.test(partyText)
       ) {
-        current.party = partyText; current.credit = current.debit; current.amountKind = "taxable_income"; return true;
+        current.party = partyText;
+        current.credit = current.debit + extraTaxableDr;
+        current.amountKind = "taxable_income";
+        return true;
+      }
+      // Any OTHER Dr line on a still-unresolved expense voucher is a further
+      // taxable component for the employee this voucher is about (Bonus
+      // Expense, arrears, incentive). Accumulate it so the salary line above
+      // can add it in — and, if it prints AFTER the salary line, fold it
+      // straight into the figure already committed. Only ever reached on an
+      // expense voucher (credit == null); a TDS-liability voucher's own
+      // expense-head Dr line is consumed by the deductee match above, and
+      // its credit is non-null so the salary branch can never fire.
+      if (
+        current && current.party && current.credit == null && current.debit != null &&
+        marker && /^dr$/i.test(marker) && amount > 0
+      ) {
+        extraTaxableDr += amount;
+        return false;   // not the deductee — keep searching for the salary line
+      }
+      if (
+        current && current.amountKind === "taxable_income" && current.credit != null &&
+        marker && /^dr$/i.test(marker) && amount > 0
+      ) {
+        current.credit += amount;
+        return true;    // consumed: a taxable component booked after the salary line
       }
       return false;
     };
@@ -402,6 +449,9 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         continue;
       }
       if (f.date) lastDate = f.date;
+      // A NEW voucher starts here — its taxable components are its own, so
+      // the previous voucher's extra Dr lines must never leak into it.
+      extraTaxableDr = 0;
       current = {
         row_index: pageNo * 100_000 + idx++,
         date: f.date ?? lastDate,          // inherit — Tally prints a date only when it changes

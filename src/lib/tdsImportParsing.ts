@@ -337,6 +337,28 @@ function findHeaderKey(row: Record<string, unknown> | undefined, targets: string
 const normaliseChallanId = (v: unknown): string => String(v ?? "").trim().toUpperCase();
 
 /**
+ * The official template's worked-example row (row 4 on both "Challan
+ * Details" and "TDS Entries") ships pre-filled with realistic-looking data —
+ * a real deductee name, PAN, and amount — so a client can see the expected
+ * format at a glance. The in-sheet note tells them to delete or overwrite it
+ * before submitting, but nothing stops them leaving it in place, and if they
+ * do, that row is indistinguishable from real data by content alone (it's
+ * DESIGNED to look real). Left unhandled, it would be silently imported as a
+ * fabricated deductee record into the client's actual TDS data — worse than
+ * a false mismatch, since nothing downstream would ever flag it as wrong.
+ * The template gives this row's Challan ID this exact reserved value on BOTH
+ * sheets (never a real Challan ID a client would type), so it can be dropped
+ * unconditionally regardless of whether the client remembered to delete it.
+ */
+export const TEMPLATE_EXAMPLE_CHALLAN_ID = "EXAMPLE-DO-NOT-IMPORT";
+
+/** Drops rows whose Challan ID is the template's reserved example-row sentinel. */
+function dropExampleRow(rows: Record<string, unknown>[], idKey: string | null): Record<string, unknown>[] {
+  if (!idKey) return rows;
+  return rows.filter((row) => normaliseChallanId(row[idKey]) !== TEMPLATE_EXAMPLE_CHALLAN_ID);
+}
+
+/**
  * Detects the official two-sheet TDS import template by its EXACT tab names
  * — "Challan Details" and "TDS Entries" (case- and whitespace-insensitive,
  * but NOT fuzzy) — so this only activates for that specific template and
@@ -376,22 +398,28 @@ export function joinChallanTemplate(
   entryRows: Record<string, unknown>[],
 ): Record<string, unknown>[] {
   const idKey = findHeaderKey(challanRows[0], ["challanid"]);
-  if (!idKey) return entryRows; // Challan Details has no Challan ID column — nothing to join
+  const entryIdKey = findHeaderKey(entryRows[0], ["challanid"]);
 
-  const bsrKey = findHeaderKey(challanRows[0], ["bsrcode", "bsr"]);
-  const noKey = findHeaderKey(challanRows[0], ["challanserialno", "challanno", "challannumber"]);
+  // Strip the worked-example row FIRST, on both sheets, regardless of whether
+  // the client deleted it as instructed — see TEMPLATE_EXAMPLE_CHALLAN_ID.
+  const cleanChallanRows = dropExampleRow(challanRows, idKey);
+  const cleanEntryRows = dropExampleRow(entryRows, entryIdKey);
+
+  if (!idKey) return cleanEntryRows; // Challan Details has no Challan ID column — nothing to join
+
+  const bsrKey = findHeaderKey(cleanChallanRows[0], ["bsrcode", "bsr"]);
+  const noKey = findHeaderKey(cleanChallanRows[0], ["challanserialno", "challanno", "challannumber"]);
 
   const byId = new Map<string, { bsr: unknown; no: unknown }>();
-  for (const row of challanRows) {
+  for (const row of cleanChallanRows) {
     const id = normaliseChallanId(row[idKey]);
     if (!id) continue; // blank Challan ID (e.g. the template's own placeholder row) — never a lookup target
     byId.set(id, { bsr: bsrKey ? row[bsrKey] : null, no: noKey ? row[noKey] : null });
   }
 
-  const entryIdKey = findHeaderKey(entryRows[0], ["challanid"]);
-  if (!entryIdKey) return entryRows; // TDS Entries has no Challan ID column — nothing to join
+  if (!entryIdKey) return cleanEntryRows; // TDS Entries has no Challan ID column — nothing to join
 
-  return entryRows.map((row) => {
+  return cleanEntryRows.map((row) => {
     const match = byId.get(normaliseChallanId(row[entryIdKey]));
     if (!match) return row;
     return { ...row, "BSR Code": match.bsr, "Challan No": match.no };

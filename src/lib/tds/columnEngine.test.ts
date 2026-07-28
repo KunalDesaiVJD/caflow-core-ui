@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { explodeMonthlyColumns, resolveMapping, buildCanonicalRow, isAutoColumnHeader, rescueMirroredAmountFromNarration } from "./columnEngine";
+import { explodeMonthlyColumns, resolveMapping, buildCanonicalRow, isAutoColumnHeader, rescueMirroredAmountFromNarration, stripAccountingMarker, looksLikeMoneyCell } from "./columnEngine";
 
 // Real client file (MICROCIRCUITS INNOVATIONS PVT LTD, 24Q Q1 FY 2026-27) —
 // reported bug: Stage 1 showed 0/70 matched despite PAN overlap on both
@@ -194,6 +194,57 @@ describe("resolveMapping — an auto-generated 'ColumnN' header never outranks a
 // gross amount survived only in a free-text "Narration" column, either as
 // prose ("BEING 1% TDS ON AMT RS 41415") or, for a few rows, as a bare number
 // outright. Rates seen in the real file: 1%, 2%, 10%.
+// THE FORMAT THAT BROKE EVERYTHING. The importer reads a sheet as DISPLAY
+// TEXT (raw:false, to preserve the client's own date/id formatting), so an
+// Excel cell with a Dr/Cr custom number format arrives as the STRING
+// "563.00 Dr" — not the number 563. Every "is this column money?" test used a
+// bare /[A-Za-z]{2,}/ rejection, saw the "Dr", and classified both money
+// columns as text: nothing to pair, the narration rescue never started, and
+// all 87 records of a real 26Q file reported a false mismatch.
+describe("Dr/Cr-formatted money columns (the real Sarjeet Construction cell format)", () => {
+  const HEADERS = ["Date", "Particulars", "PAN No.", "Narration", "Gross Total", "TDS on Contractors"];
+  const rowFrom = (values: unknown[]): Record<string, unknown> =>
+    Object.fromEntries(HEADERS.map((h, i) => [h, values[i]]));
+
+  // Verbatim from the real file, read the way the app reads it.
+  const ROWS = [
+    rowFrom(["01-Jun-26", "NILIMA VIJAY HIRAY BITPH4577H", "BITPH4577H", "BEING 1% TDS ON AMT RS 56295", "563.00 Dr", "563.00 Cr"]),
+    rowFrom(["01-Jun-26", "X HAWK MULTI SERVICES", "AWNPP5117A", "BEING 1% TDS ON AMT RS 33968", "340.00 Dr", "340.00 Cr"]),
+    rowFrom(["02-Jun-26", "HATHILA KAMCHANDBHAI SANIYABHAI", "RZGPS7245D", "BEING 1% TDS ON AMT RS 20000", "200.00 Dr", "200.00 Cr"]),
+    rowFrom(["03-Jun-26", "NILESH VINOD SANKLECHA", "CXGPS1857J", "BEING 1% TDS ON AMT RS 73950", "740.00 Dr", "740.00 Cr"]),
+    // A bare-figure narration ALSO carries its accounting side once read as text.
+    rowFrom(["27/04/2026", "Manisha Manoj Dudhat", "AERPD6644N", "19038.00 Dr", "1904.00 Dr", "1904.00 Dr"]),
+  ];
+
+  it("reads a Dr/Cr-formatted cell as money, so the amount/TDS pair resolves at all", () => {
+    const rescued = rescueMirroredAmountFromNarration(ROWS);
+    const { map } = resolveMapping(rescued);
+    const built = rescued.map((r) => buildCanonicalRow(r, map));
+
+    // The exact record reported three times: Office 56,295 vs an imported 563.
+    expect(built[0]).toMatchObject({ amount_paid: 56295, tds_amount: 563, rate: 1 });
+    expect(built[1]).toMatchObject({ amount_paid: 33968, tds_amount: 340 });
+    expect(built[2]).toMatchObject({ amount_paid: 20000, tds_amount: 200 });
+    expect(built[3]).toMatchObject({ amount_paid: 73950, tds_amount: 740 });
+    // …and the bare-figure narration resolves too, at its own 10% rate.
+    expect(built[4]).toMatchObject({ amount_paid: 19038, tds_amount: 1904, rate: 10 });
+
+    // NOT A SINGLE ROW LEFT BEHIND — the whole point of the reconciliation.
+    expect(built.every((b) => b.amount_paid != null && b.tds_amount != null)).toBe(true);
+  });
+
+  it("strips the side-marker without inventing a number where there is none", () => {
+    expect(stripAccountingMarker("563.00 Dr")).toBe("563.00");
+    expect(stripAccountingMarker("Cr 1,234.50")).toBe("1,234.50");
+    expect(stripAccountingMarker("563.00")).toBe("563.00");
+    // A real word is not a marker, and a lone marker is not a number.
+    expect(stripAccountingMarker("Credit Note")).toBe("Credit Note");
+    expect(looksLikeMoneyCell("563.00 Dr")).toBe(true);
+    expect(looksLikeMoneyCell("BEING 1% TDS ON AMT RS 56295")).toBe(false);
+    expect(looksLikeMoneyCell("NILIMA VIJAY HIRAY")).toBe(false);
+  });
+});
+
 describe("rescueMirroredAmountFromNarration — the 'Amount' column mirrors the TDS column (real Sarjeet Construction data)", () => {
   const HEADERS = ["Date", "Particulars", "PAN No.", "Narration", "Gross Total", "TDS on Contractors"];
   function rowFrom(values: unknown[]): Record<string, unknown> {

@@ -265,22 +265,63 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     expect(rows[0].credit).toBe(39705);
   });
 
-  it("ignores an optional 'Bonus Expense' Dr breakdown line ahead of the Cr lines", () => {
+  // TAXABLE INCOME IS SPLIT ACROSS SEVERAL Dr LINES. Reproduced verbatim from
+  // a real voucher (Nevil Thummar, April):
+  //
+  //   To (as per details)      Journal 11   Debit 31,372.00
+  //     Bonus Expense            20,000.00 Dr
+  //     Nevil Thummar - Salary   49,372.00 Cr
+  //     PF Employee               1,800.00 Cr
+  //     Professional Tax - (AMC)    200.00 Cr
+  //
+  // Dr 31,372 + 20,000 = Cr 49,372 + 1,800 + 200 = 51,372. The voucher's own
+  // debit is only the salary-expense share; reading it alone reported 31,372
+  // against Office Data's 51,372 — a false mismatch of exactly the bonus.
+  it("adds every taxable Dr component (Bonus Expense) to the employee's taxable income", () => {
     const page = [
       ...HEADER,
       ...salaryExpenseVoucherRows(485.5, {
-        vchNo: "3", debit: 45000,
-        bonusDr: { label: "Bonus Expense", amount: 5000 },
+        vchNo: "11", debit: 31372,
+        bonusDr: { label: "Bonus Expense", amount: 20000 },
         crLines: [
-          { label: "Urmi Bansi Patel - Salary", amount: 43000 },
-          { label: "PF Employee", amount: 2000 },
+          { label: "Nevil Thummar - Salary", amount: 49372 },
+          { label: "PF Employee", amount: 1800 },
+          { label: "Professional Tax - (AMC) - Employee", amount: 200 },
         ],
       }),
     ];
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].party).toBe("Urmi Bansi Patel - Salary");
-    expect(rows[0].credit).toBe(45000);
+    expect(rows[0].party).toBe("Nevil Thummar - Salary");
+    expect(rows[0].credit).toBe(51372);          // 31,372 + 20,000
+    expect(rows[0].amountKind).toBe("taxable_income");
+  });
+
+  // The sum must not leak across vouchers: the employee WITHOUT a bonus keeps
+  // their own figure even when a bonus voucher printed immediately above.
+  it("a bonus on one voucher never inflates the next employee's figure", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        date: "30-Apr-26", vchNo: "11", debit: 31372,
+        bonusDr: { label: "Bonus Expense", amount: 20000 },
+        crLines: [
+          { label: "Nevil Thummar - Salary", amount: 49372 },
+          { label: "PF Employee", amount: 1800 },
+        ],
+      }),
+      ...salaryExpenseVoucherRows(414.1, {
+        vchNo: "12", debit: 31372,
+        crLines: [
+          { label: "Urmi Bansi Patel - Salary", amount: 29572 },
+          { label: "PF Employee", amount: 1800 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ party: "Nevil Thummar - Salary", credit: 51372 });
+    expect(rows[1]).toMatchObject({ party: "Urmi Bansi Patel - Salary", credit: 31372 });
   });
 
   it("still drops the voucher entirely when NO Cr breakdown line is recoverable (no '- Salary' line at all)", () => {
