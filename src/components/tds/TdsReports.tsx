@@ -377,6 +377,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         <div className="flex justify-end gap-2 mb-3">
           <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Deductee_Wise", rows)}><Download size={14} /> Export Excel</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Deductee_Wise", rows)}><FileText size={14} /> Download as PDF</Button>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
