@@ -17,7 +17,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
   pdfToLines, parseLedgerPages, buildReport, downloadWorkpaper, msme43bToForm3cd,
-  saveRun, listRuns, loadRun, renameRun, deleteRun,
+  saveRun, listRuns, loadRun, renameRun, deleteRun, computeCarryForward,
   DEFAULT_CONFIG, type VendorLedger, type Msme43bReport, type VendorResult,
   type Msme43bRunSummary,
 } from '@/lib/msme43b';
@@ -53,6 +53,7 @@ export default function Msme43b() {
   const [persistOff, setPersistOff] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState('');
+  const [carryPriorId, setCarryPriorId] = useState<string>('');
 
   const clientName = clients.find((c) => c.id === clientId)?.name || '';
 
@@ -144,6 +145,26 @@ export default function Msme43b() {
 
   const clause26 = report ? msme43bToForm3cd(report).clause26 : null;
 
+  // Year-over-year carry-forward: prior runs that aren't the current year.
+  const priorRunOptions = report ? savedRuns.filter((r) => r.cy_label !== report.cyLabel) : [];
+  const priorRun = savedRuns.find((r) => r.id === carryPriorId);
+  const carry = report && priorRun
+    ? computeCarryForward(
+        {
+          cyLabel: priorRun.cy_label, fyLabel: priorRun.fy_label || '',
+          totalDisallowedCY: priorRun.total_disallowed_cy,
+          totalAllowedFY: priorRun.total_allowed_fy,
+          totalStillOutstanding: priorRun.total_still_outstanding,
+        },
+        {
+          cyLabel: report.cyLabel, fyLabel: report.fyLabel,
+          totalDisallowedCY: report.totalDisallowedCY,
+          totalAllowedFY: report.totalAllowedFY,
+          totalStillOutstanding: report.totalStillOutstanding,
+        },
+      )
+    : null;
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between">
@@ -172,7 +193,7 @@ export default function Msme43b() {
                 </Button>
               </>
             )}
-            <Button onClick={() => downloadWorkpaper(report)} variant="outline">
+            <Button onClick={() => downloadWorkpaper(report, carry)} variant="outline">
               <Download className="h-4 w-4 mr-2" /> Export working paper
             </Button>
           </div>
@@ -333,6 +354,58 @@ export default function Msme43b() {
             </Alert>
           )}
 
+          {/* ── Year-over-year carry-forward ── */}
+          {!persistOff && priorRunOptions.length > 0 && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <History className="h-4 w-4" /> Year-over-year carry-forward
+                </CardTitle>
+                <CardDescription>
+                  Link the previous year's saved run. Amounts disallowed then and <b>paid this year</b> become
+                  an allowable deduction in {report.cyLabel}.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <div className="max-w-md">
+                  <Select value={carryPriorId} onValueChange={setCarryPriorId}>
+                    <SelectTrigger><SelectValue placeholder="Select the prior-year run" /></SelectTrigger>
+                    <SelectContent>
+                      {priorRunOptions.map((r) => (
+                        <SelectItem key={r.id} value={r.id}>
+                          {(r.label ? r.label + ' · ' : '')}{r.cy_label} → {r.fy_label || '—'} · disallowed ₹{inr(r.total_disallowed_cy)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {carry && (
+                  <>
+                    {!carry.yearsAligned && (
+                      <div className="text-xs text-amber-600 flex items-center gap-1">
+                        <AlertTriangle className="h-3 w-3" />
+                        Years don't chain: prior FY ({carry.priorFyLabel}) ≠ current year ({carry.currentCyLabel}). Pick the run whose following year is {report.cyLabel}.
+                      </div>
+                    )}
+                    <Table>
+                      <TableBody>
+                        <CarryRow label={`Disallowance brought forward (added back in ${carry.priorCyLabel})`} value={carry.broughtForwardDisallowed} />
+                        <CarryRow label={`Less: paid in ${carry.currentCyLabel} → allowed now (deduction)`} value={-carry.allowedThisYearOnPayment} tone="ok" />
+                        <CarryRow label="Still carried forward (unpaid at prior year-end)" value={carry.stillCarriedForward} tone="warn" />
+                        <CarryRow label={`Add: fresh disallowance for ${carry.currentCyLabel}`} value={carry.currentYearDisallowance} tone="danger" />
+                        <CarryRow label={`Net s.43B(h) impact for ${carry.currentCyLabel}`} value={carry.netDisallowanceThisYear} bold />
+                      </TableBody>
+                    </Table>
+                    <p className="text-[11px] text-muted-foreground">
+                      Net impact = fresh disallowance this year − prior-year disallowance now paid. A negative figure is a net deduction.
+                    </p>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* ── Vendor table with drilldown ── */}
           <Card>
             <CardHeader><CardTitle className="text-lg">Vendor-wise result</CardTitle></CardHeader>
@@ -416,6 +489,19 @@ function FileDrop({ label, files, onChange }: { label: string; files: File[]; on
         </div>
       )}
     </div>
+  );
+}
+
+function CarryRow({ label, value, tone, bold }: { label: string; value: number; tone?: 'danger' | 'ok' | 'warn'; bold?: boolean }) {
+  const toneCls = tone === 'danger' ? 'text-red-600' : tone === 'ok' ? 'text-emerald-600' : tone === 'warn' ? 'text-amber-600' : '';
+  const sign = value < 0 ? '−' : '';
+  return (
+    <TableRow className={cn(bold && 'border-t-2 font-semibold')}>
+      <TableCell className={cn('text-sm', bold && 'font-semibold')}>{label}</TableCell>
+      <TableCell className={cn('text-right tabular-nums', toneCls, bold && 'text-base font-bold')}>
+        {sign}₹{inr(Math.abs(value))}
+      </TableCell>
+    </TableRow>
   );
 }
 

@@ -2,6 +2,7 @@
 
 import * as XLSX from 'xlsx';
 import type { Msme43bReport } from './types';
+import type { CarryForward } from './carryForward';
 
 const money = (n: number) => Math.round(n * 100) / 100;
 
@@ -23,7 +24,7 @@ export function msme43bToForm3cd(report: Msme43bReport) {
   };
 }
 
-export function buildWorkpaperWorkbook(report: Msme43bReport): XLSX.WorkBook {
+export function buildWorkpaperWorkbook(report: Msme43bReport, carry?: CarryForward | null): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
 
   // ── Summary ──
@@ -42,6 +43,22 @@ export function buildWorkpaperWorkbook(report: Msme43bReport): XLSX.WorkBook {
     ['Reported in Form 3CD', 'Clause 26 — sums covered u/s 43B(h)'],
   ];
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summary), 'Summary');
+
+  // ── Year-over-year carry-forward ──
+  if (carry) {
+    const cf: (string | number)[][] = [
+      ['Year-over-year carry-forward'],
+      [],
+      [`Disallowance brought forward (added back in ${carry.priorCyLabel})`, money(carry.broughtForwardDisallowed)],
+      [`Less: paid in ${carry.currentCyLabel} — allowed now (deduction)`, -money(carry.allowedThisYearOnPayment)],
+      ['Still carried forward (unpaid at prior year-end)', money(carry.stillCarriedForward)],
+      [`Add: fresh disallowance for ${carry.currentCyLabel}`, money(carry.currentYearDisallowance)],
+      [`Net s.43B(h) impact for ${carry.currentCyLabel}`, money(carry.netDisallowanceThisYear)],
+      [],
+      ['Years chained correctly (prior FY = current CY)', carry.yearsAligned ? 'Yes' : 'NO — check selection'],
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(cf), 'Carry-forward');
+  }
 
   // ── Vendor summary ──
   const vHead = ['Vendor', 'Format', 'CY Closing', 'FY Opening', 'Continuity OK',
@@ -80,8 +97,8 @@ export function buildWorkpaperWorkbook(report: Msme43bReport): XLSX.WorkBook {
   return wb;
 }
 
-export function downloadWorkpaper(report: Msme43bReport): void {
-  const wb = buildWorkpaperWorkbook(report);
+export function downloadWorkpaper(report: Msme43bReport, carry?: CarryForward | null): void {
+  const wb = buildWorkpaperWorkbook(report, carry);
   const name = `MSME_43B(h)_${(report.clientName || 'client').replace(/\s+/g, '_')}_${report.cyLabel}.xlsx`;
   XLSX.writeFile(wb, name);
 }
