@@ -363,7 +363,11 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
     // pay plus the employee's own statutory deductions (PF, PT, …). So this
     // picks up any other taxable component a client books separately —
     // arrears, incentive, leave encashment — with no list to maintain.
-    let extraTaxableDr = 0;
+    // Held as LABELLED components, not a running total, because whether a debit
+    // counts depends on WHOSE account it is — and the deciding line (the
+    // employee's own "- Salary" credit) is printed AFTER them.
+    let extraDr: { label: string; amount: number }[] = [];
+    const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
     const tryMatchBreakdown = (amount: number, marker: string | null | undefined, partyText: string): boolean => {
       if (
         current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
@@ -390,7 +394,15 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         marker && /^cr$/i.test(marker) && /\bsalary\b/i.test(partyText)
       ) {
         current.party = partyText;
-        current.credit = current.debit + extraTaxableDr;
+        // A debit posted to the DEDUCTEE'S OWN account is a contra entry —
+        // settling part of what is owed to them (the real voucher debits the
+        // employee's own "- Salary" account with the TDS, then credits
+        // "TDS 192 B" with the same figure). It is not additional income, so
+        // it is excluded here; only debits to OTHER heads (Bonus Expense,
+        // arrears, incentive) are further taxable components.
+        current.credit = current.debit + extraDr
+          .filter((d) => norm(d.label) !== norm(partyText))
+          .reduce((sum, d) => sum + d.amount, 0);
         current.amountKind = "taxable_income";
         return true;
       }
@@ -414,12 +426,16 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         current && current.party && current.credit == null && current.debit != null &&
         marker && /^dr$/i.test(marker) && amount > 0 && !isTaxLine(partyText)
       ) {
-        extraTaxableDr += amount;
+        // Recorded WITH its label — the deductee isn't known yet, so whether
+        // this is a contra entry can only be decided once the salary line
+        // names them (see the filter above).
+        extraDr.push({ label: partyText, amount });
         return false;   // not the deductee — keep searching for the salary line
       }
       if (
         current && current.amountKind === "taxable_income" && current.credit != null &&
-        marker && /^dr$/i.test(marker) && amount > 0 && !isTaxLine(partyText)
+        marker && /^dr$/i.test(marker) && amount > 0 && !isTaxLine(partyText) &&
+        norm(partyText) !== norm(current.party ?? "")
       ) {
         current.credit += amount;
         return true;    // consumed: a taxable component booked after the salary line
@@ -483,7 +499,7 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       if (f.date) lastDate = f.date;
       // A NEW voucher starts here — its taxable components are its own, so
       // the previous voucher's extra Dr lines must never leak into it.
-      extraTaxableDr = 0;
+      extraDr = [];
       current = {
         row_index: pageNo * 100_000 + idx++,
         date: f.date ?? lastDate,          // inherit — Tally prints a date only when it changes

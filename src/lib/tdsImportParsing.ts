@@ -133,6 +133,25 @@ const PAN_RE = /\b[A-Z]{5}[0-9]{4}[A-Z]\b/;
 // block — see extractSheetRows — so totals/labels/ledger rows stay excluded).
 const NO_PAN_RE = /pan\s*(not\s*av|applied|awaited|na\b|nil\b)/i;
 
+/**
+ * Reserved sentinel a template's worked-example row can carry in ANY cell, so
+ * a plain single-sheet template's example row is dropped unconditionally —
+ * regardless of column layout, and even though it deliberately carries a
+ * realistic PAN (so extractSheetRows's PAN-presence data-row test would
+ * otherwise admit it). Mirrors TEMPLATE_EXAMPLE_CHALLAN_ID's role for the
+ * two-sheet template: a client who leaves the gray example row in place must
+ * never have it silently imported as a fabricated deductee. A string this
+ * specific could never appear in a real client's data by accident.
+ */
+export const TEMPLATE_EXAMPLE_ROW_SENTINEL = "EXAMPLE ROW — DELETE BEFORE IMPORT";
+
+function isTemplateExampleRow(row: unknown[]): boolean {
+  for (const cell of row) {
+    if (String(cell ?? "").trim() === TEMPLATE_EXAMPLE_ROW_SENTINEL) return true;
+  }
+  return false;
+}
+
 /** "194C" → 194C · "94H" → 194H · "92B" → 192B · "194A " → 194A · else null. */
 export function sectionFromSheetName(name: string): string | null {
   const s = (name || "").trim().toUpperCase();
@@ -248,6 +267,7 @@ export function extractSheetRows(grid: unknown[][], sectionHint: string | null):
     let admit = hasPan;
     if (!admit && headers != null) { for (let i = 0; i < row.length; i++) { if (NO_PAN_RE.test(String(row[i] ?? ""))) { admit = true; break; } } }
     if (!admit) continue;
+    if (isTemplateExampleRow(row)) continue; // the flat template's worked-example row — see TEMPLATE_EXAMPLE_ROW_SENTINEL
     const obj: Record<string, unknown> = {};
     if (headers) for (let i = 0; i < headers.length; i++) obj[headers[i]] = row[i] ?? null;
     else for (let i = 0; i < row.length; i++) obj[`Column${i + 1}`] = row[i] ?? null;
@@ -284,6 +304,15 @@ export function extractWorkbookRows(
   const all: Record<string, unknown>[] = [];
   for (let i = 0; i < sheetNames.length; i++) {
     onProgress?.(i);
+    // A sheet literally named "Instructions" (case/whitespace-insensitive,
+    // exact match only — never fuzzy, so a real client sheet coincidentally
+    // starting with "Instr…" is unaffected) is documentation, never TDS data.
+    // Our own templates' Instructions tabs describe field formats using real
+    // PAN-shaped example text (e.g. "AACCP6899F") to show the exact expected
+    // shape — which is precisely what extractSheetRows's PAN-presence test
+    // looks for, so without this skip, prose describing the format would be
+    // misread as a genuine (fabricated) deductee row.
+    if (sheetNames[i].trim().toLowerCase() === "instructions") continue;
     const sec = sectionFromSheetName(sheetNames[i]);
     const rows = extractSheetRows(gridOf(sheetNames[i]), sec);
     // Tag every row with the sheet it came from. De-duplication downstream needs

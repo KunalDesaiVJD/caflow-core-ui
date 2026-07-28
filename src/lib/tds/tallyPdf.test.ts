@@ -297,11 +297,40 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     expect(rows[0].amountKind).toBe("taxable_income");
   });
 
-  // TAX IS NOT INCOME. A director-remuneration voucher books the remuneration
-  // AND its TDS together, so a blanket sum of the debit side added the tax to
-  // the income it was deducted from — reported as ₹2,19,800 against Office
-  // Data's ₹2,00,000, a false mismatch of exactly the ₹19,800 TDS.
-  it("never adds a TDS line into Taxable Income", () => {
+  // TAX IS NOT INCOME — and the tax line is NOT labelled "TDS". Reproduced
+  // verbatim from the real "Director Remuneration - RCM" ledger:
+  //
+  //   30-Apr-26 To (as per details)   Journal 30   Debit 2,00,000.00
+  //     Madhukant Kanjibhai Patel - Salary    19,800.00 Dr
+  //     Madhukant Kanjibhai Patel - Salary  1,99,800.00 Cr
+  //     Professional Tax - (AMC) - Employee     200.00 Cr
+  //     TDS 192 B                            19,800.00 Cr
+  //
+  // The TDS is DEBITED TO THE EMPLOYEE'S OWN ACCOUNT (settling part of what
+  // is owed to them) and credited to "TDS 192 B". So the extra debit carries
+  // the EMPLOYEE'S name, not the word TDS — a name-based tax filter never
+  // sees it. Summing it reported ₹2,19,800 against Office Data's ₹2,00,000,
+  // a false mismatch of exactly the TDS, on every director every month.
+  it("never adds a contra debit posted to the deductee's OWN account", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        vchNo: "30", debit: 200000,
+        bonusDr: { label: "Madhukant Kanjibhai Patel - Salary", amount: 19800 },
+        crLines: [
+          { label: "Madhukant Kanjibhai Patel - Salary", amount: 199800 },
+          { label: "Professional Tax - (AMC) - Employee", amount: 200 },
+          { label: "TDS 192 B", amount: 19800 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Madhukant Kanjibhai Patel - Salary");
+    expect(rows[0].credit).toBe(200000);   // NOT 219,800
+  });
+
+  it("never adds an explicitly TDS-labelled debit either", () => {
     const page = [
       ...HEADER,
       ...salaryExpenseVoucherRows(485.5, {
@@ -314,9 +343,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
       }),
     ];
     const { rows } = parseTallyPdfPages([page]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].party).toBe("Madhukant Kanjibhai Patel - Salary");
-    expect(rows[0].credit).toBe(200000);   // NOT 219,800
+    expect(rows[0].credit).toBe(200000);
   });
 
   it("a genuine taxable component is still added when a TDS line sits beside it", () => {
