@@ -276,7 +276,12 @@ export function resolveMapping(allRows: Record<string, unknown>[], aiMap?: Parti
   const addSecondary = (field: CanonField, isType: (c: ColProfile) => boolean) => {
     const primary = report[field]?.header; if (!primary) return;
     for (const c of cols) {
-      if (claimed.has(c.header) || !isType(c)) continue;
+      // Same guard as the primary pan/deductee_name detection above: an
+      // auto-generated "ColumnN" header must not become a value source for a
+      // field just because a genuinely-named primary column is EMPTY in this
+      // file — that is exactly the disjoint-side-by-side-table contamination
+      // this whole mechanism must not fall into via a second path.
+      if (claimed.has(c.header) || !isType(c) || isAutoColumnHeader(c.header)) continue;
       if (overlapNonEmpty(primary, c.header) < 0.2) { map[c.header] = field; claimed.add(c.header); }
     }
   };
