@@ -221,3 +221,65 @@ describe("joinChallanTemplate — worked-example row exclusion", () => {
     expect(joined[0]["Deductee Name*"]).toBe("Genuine Real Client Pvt Ltd");
   });
 });
+
+// Regression: the simpler, single-sheet "flat" TDS template has no Challan ID
+// column to key an example-row sentinel off of (that's the whole point — no
+// cross-sheet linking to get wrong), so its worked-example row instead carries
+// TEMPLATE_EXAMPLE_ROW_SENTINEL in its Remarks cell. Confirms extractSheetRows
+// — the function that actually processes this flat template, NOT gridToRows —
+// drops that row even though it deliberately carries a real-shaped PAN (the
+// same signal that makes extractSheetRows admit any other data row).
+describe("extractSheetRows — worked-example row exclusion (flat single-sheet template)", () => {
+  const FLAT_HEADER = ["Sr. No.", "Deductee Name*", "PAN*", "Section*", "Date of Payment/Credit*", "Amount Paid/Credited (Rs)*", "Rate of TDS (%)*", "TDS Amount (Rs)*", "Interest (Rs)", "BSR Code*", "Challan Serial No.*", "Date of Deposit*", "Remarks"];
+
+  it("drops a row carrying the sentinel, even though it has a real-shaped PAN", () => {
+    const grid: unknown[][] = [
+      FLAT_HEADER,
+      ["", "ADINATH PROCESSING INDUSTRIES PRIVATE LIMITED", "AACCP6899F", "194C", "31-05-2026", "5,558,172", "0.10", "5,558", "0", "0510002", "24894", "04-06-2026", TEMPLATE_EXAMPLE_ROW_SENTINEL],
+      ["1", "Genuine Real Client Pvt Ltd", "AAACG1234H", "194C", "07-07-2026", "250,000", "1.00", "2,500", "0", "0640123", "99887", "07-07-2026", ""],
+    ];
+    const rows = extractSheetRows(grid, null);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]["Deductee Name*"]).toBe("Genuine Real Client Pvt Ltd");
+  });
+
+  it("still admits an ordinary data row with a real PAN (no false positive from the new check)", () => {
+    const grid: unknown[][] = [
+      FLAT_HEADER,
+      ["1", "Genuine Real Client Pvt Ltd", "AAACG1234H", "194C", "07-07-2026", "250,000", "1.00", "2,500", "0", "0640123", "99887", "07-07-2026", ""],
+    ];
+    expect(extractSheetRows(grid, null)).toHaveLength(1);
+  });
+});
+
+// Regression: extractWorkbookRows must never scan an "Instructions" tab as
+// data. The Instructions sheet's field guide deliberately shows real-shaped
+// example values (e.g. a PAN) so a client sees the exact expected format —
+// exactly what extractSheetRows's PAN-presence test looks for, so without an
+// explicit skip, prose describing the format is misread as a fabricated
+// deductee row (confirmed by removing the skip locally and rerunning this
+// test — it fails without it).
+describe("extractWorkbookRows — skips an 'Instructions' sheet by exact name", () => {
+  const instructionsGrid: unknown[][] = [
+    ["How To Fill This Template"],
+    ["Field", "Guidance"],
+    ["PAN*", "10-character PAN, e.g. 5 letters + 4 digits + 1 letter, in UPPERCASE. Example: AACCP6899F"],
+  ];
+  const dataGrid: unknown[][] = [
+    ["Sr. No.", "Deductee Name*", "PAN*", "Section*", "Date of Payment/Credit*", "Amount Paid/Credited (Rs)*", "Rate of TDS (%)*", "TDS Amount (Rs)*", "Interest (Rs)"],
+    ["1", "Genuine Real Client Pvt Ltd", "AAACG1234H", "194C", "07-07-2026", "250,000", "1.00", "2,500", "0"],
+  ];
+  const gridOf = (name: string): unknown[][] => (name === "Instructions" ? instructionsGrid : dataGrid);
+
+  it("never returns a row sourced from the Instructions sheet", () => {
+    const rows = extractWorkbookRows(["Instructions", "TDS Entries"], gridOf);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]["Deductee Name*"]).toBe("Genuine Real Client Pvt Ltd");
+  });
+
+  it("matches the sheet name case/whitespace-insensitively", () => {
+    const rows = extractWorkbookRows([" INSTRUCTIONS ", "TDS Entries"], (name) =>
+      name.trim().toUpperCase() === "INSTRUCTIONS" ? instructionsGrid : dataGrid);
+    expect(rows).toHaveLength(1);
+  });
+});
