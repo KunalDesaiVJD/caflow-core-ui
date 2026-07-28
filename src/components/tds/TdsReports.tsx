@@ -22,12 +22,12 @@ import { cn } from "@/lib/utils";
 import {
   FileText, Users, Receipt, BarChart3, FileSpreadsheet,
   AlertTriangle, Award, Download, Printer, ArrowLeft,
-  ClipboardList, CalendarCheck, Shield, ShieldCheck, Loader2, Info,
+  ClipboardList, CalendarCheck, Shield, ShieldCheck, Loader2, Info, Eye,
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
 import { generateGeniusExport } from "@/lib/genius-export";
 import { clientHasTdsForm, isFilingTdsCompliant, getDefaultTdsQuarter } from "@/lib/tdsQuarter";
-import { reportFileName } from "@/lib/tds/tdsReport";
+import { reportFileName, type ReportMeta, type StageReport, type OverviewReport } from "@/lib/tds/tdsReport";
 import { buildOverviewWorkbook, downloadWorkbook } from "@/lib/tds/tdsReportExcel";
 import { exportOverviewPdf } from "@/lib/tds/tdsReportPdf";
 import { fetchFilingReport, mergeQuarterlyReports, type QuarterReportInput } from "@/lib/tds/tdsOverviewFetch";
@@ -81,6 +81,8 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const [loading, setLoading] = useState(false);
   const [reportData, setReportData] = useState<any[]>([]);
   const [exportingOverview, setExportingOverview] = useState(false);
+  const [overviewViewData, setOverviewViewData] = useState<{ meta: ReportMeta; stageReports: StageReport[]; overview: OverviewReport } | null>(null);
+  const [loadingOverviewView, setLoadingOverviewView] = useState(false);
 
   const toggleQuarter = (q: string) => {
     setSelQuarters(prev => prev.includes(q) ? prev.filter(x => x !== q) : [...prev, q]);
@@ -140,10 +142,60 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     if (selectedReport) fetchReportData();
   }, [selectedReport, selClient, selFy, selQuarters, selForm]);
 
+  // Overview's on-page "View in Software" data is filter-scoped — stale once the
+  // client/FY/quarters/form change, same as the other 9 reports' reportData.
+  useEffect(() => {
+    setOverviewViewData(null);
+  }, [selClient, selFy, selQuarters, selForm]);
+
   const handlePrint = () => window.print();
 
   const handleExportExcel = (sheetName: string, rows: Record<string, any>[]) => {
     exportToExcel([{ sheetName: sheetName.slice(0, 31), rows }], `TDS_${sheetName}_${selFy}.xlsx`);
+  };
+
+  // Shared PDF export for all 9 standard reports — jsPDF + jspdf-autotable
+  // (dynamic import, same convention as TdsReportGenerator.ts/AuditReportGenerator.ts),
+  // the vector table-PDF pattern already proven in this codebase (also used by
+  // tallyExport.ts's exportTrialBalancePDF), rather than the heavier html2pdf
+  // DOM-screenshot path the Overview Report uses. Takes the SAME `rows` array
+  // already built for handleExportExcel — one column per key, one row per record.
+  const handleExportPdf = async (title: string, rows: Record<string, any>[]) => {
+    if (rows.length === 0) {
+      toast({ title: "No data to export", variant: "destructive" });
+      return;
+    }
+    const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+      import("jspdf"),
+      import("jspdf-autotable"),
+    ]);
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const label = title.replace(/_/g, " ");
+
+    doc.setFont("helvetica", "bold"); doc.setFontSize(13); doc.setTextColor(30, 41, 59);
+    doc.text(label, pageWidth / 2, 12, { align: "center" });
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(120);
+    doc.text(`FY ${selFy}   |   Generated ${new Date().toLocaleString("en-IN")}`, pageWidth / 2, 18, { align: "center" });
+
+    const headers = Object.keys(rows[0]);
+    autoTable(doc, {
+      startY: 23,
+      head: [headers],
+      body: rows.map((r) => headers.map((h) => (typeof r[h] === "number" ? r[h].toLocaleString("en-IN") : String(r[h] ?? "—")))),
+      theme: "grid",
+      styles: { fontSize: 7.5, cellPadding: 1.8, lineColor: [180, 180, 180], lineWidth: 0.1, textColor: 30 },
+      headStyles: { fillColor: [31, 56, 100], textColor: 255, fontStyle: "bold" },
+      alternateRowStyles: { fillColor: [245, 247, 250] },
+      margin: { left: 8, right: 8 },
+      didDrawPage: (data) => {
+        const pageCount = (doc as any).internal.getNumberOfPages();
+        doc.setFontSize(8); doc.setTextColor(120);
+        doc.text(`Page ${data.pageNumber} of ${pageCount}`, pageWidth - 10, doc.internal.pageSize.getHeight() - 6, { align: "right" });
+      },
+    });
+
+    doc.save(`TDS_${title}_${selFy}.pdf`);
   };
 
   // Genius XLS export using template-based approach
@@ -212,6 +264,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         <div className="flex justify-end gap-2 mb-3">
           <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Filing_Status", rows)}><Download size={14} /> Export Excel</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Filing_Status", rows)}><FileText size={14} /> Download as PDF</Button>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -263,6 +316,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         <div className="flex justify-end gap-2 mb-3">
           <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Challan_Register", rows)}><Download size={14} /> Export Excel</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Challan_Register", rows)}><FileText size={14} /> Download as PDF</Button>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -319,6 +373,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         <div className="flex justify-end gap-2 mb-3">
           <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Section_Summary", rows)}><Download size={14} /> Export Excel</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Section_Summary", rows)}><FileText size={14} /> Download as PDF</Button>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -434,6 +489,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         <div className="flex justify-end gap-2 mb-3">
           <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Non_Filer_Alert", rows)}><Download size={14} /> Export Excel</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Non_Filer_Alert", rows)}><FileText size={14} /> Download as PDF</Button>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -481,6 +537,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         <div className="flex justify-end gap-2 mb-3">
           <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Lower_Cert", rows)}><Download size={14} /> Export Excel</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Lower_Cert", rows)}><FileText size={14} /> Download as PDF</Button>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -511,7 +568,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const renderAnnualSummary = () => {
     if (!reportData[0]) return <p className="text-muted-foreground">No data</p>;
     const { filings, challans, deductees } = reportData[0];
-    
+
     const clientMap = new Map<string, { q1Tds: number; q2Tds: number; q3Tds: number; q4Tds: number; total: number; deducteeCount: number }>();
     for (const d of deductees) {
       const filing = filings.find((f: any) => f.id === d.filing_id);
@@ -547,6 +604,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         <div className="flex justify-end gap-2 mb-3">
           <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Annual_Summary", rows)}><Download size={14} /> Export Excel</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Annual_Summary", rows)}><FileText size={14} /> Download as PDF</Button>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
@@ -756,52 +814,62 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   // filings/challans/deductees shape the other 9 cards share, and only runs when
   // the user explicitly clicks Generate (an on-demand multi-round-trip fetch,
   // not something to re-run on every filter keystroke).
-  const runOverviewReport = async (fmt: "xlsx" | "pdf") => {
+  //
+  // buildOverviewData() is the shared fetch/validate/merge core — reused by both
+  // the existing xlsx/pdf export path (runOverviewReport, unchanged behavior)
+  // and the new "View in Software" on-page action (viewOverviewInSoftware).
+  const buildOverviewData = async (): Promise<{ meta: ReportMeta; stageReports: StageReport[]; overview: OverviewReport } | null> => {
     if (selClient === "all") {
       toast({ title: "Select a specific client", description: "The Overview Report is per-client — pick one client before generating it.", variant: "destructive" });
-      return;
+      return null;
     }
     if (selQuarters.length === 0) {
       toast({ title: "Select at least one quarter", variant: "destructive" });
-      return;
+      return null;
     }
     const client = clients.find((c) => c.id === selClient);
-    if (!client) { toast({ title: "Client not found", variant: "destructive" }); return; }
+    if (!client) { toast({ title: "Client not found", variant: "destructive" }); return null; }
 
+    const firmId = await resolveFirmId();
+    const perQuarter: QuarterReportInput[] = [];
+    const skipped: string[] = [];
+
+    // Resolve each selected quarter's own tds_filings row — same client+FY+
+    // quarter+form resolution pattern loadAll() uses in TdsValidateFinalise.tsx —
+    // then apply the same TDS-compliance gate every other TDS screen applies
+    // before a filing may surface anywhere.
+    for (const q of selQuarters) {
+      let fq = supabase.from("tds_filings").select("*")
+        .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", q);
+      if (!isSuperadmin && firmId) fq = fq.eq("firm_id", firmId);
+      const { data } = await fq;
+      const filing = (data || []).find((f: any) => (f.tds_forms || []).includes(selForm));
+      if (!filing || !isFilingTdsCompliant(filing as any, client)) { skipped.push(q); continue; }
+
+      const rep = await fetchFilingReport(filing as any, {
+        clientName: client.name || "—", clientTan: client.tan_number, formLabel: selForm,
+      });
+      if (!rep) { skipped.push(q); continue; }
+      perQuarter.push({ quarter: q, ...rep });
+    }
+
+    if (!perQuarter.length) {
+      toast({ title: "No data to report", description: `No filing/validation data found for ${selForm} ${selQuarters.join(", ")} ${selFy}.`, variant: "destructive" });
+      return null;
+    }
+    if (skipped.length) {
+      toast({ title: `Skipped ${skipped.length} of ${selQuarters.length} quarter(s)`, description: `No filing or no validation data for: ${skipped.join(", ")}.` });
+    }
+
+    return mergeQuarterlyReports(perQuarter);
+  };
+
+  const runOverviewReport = async (fmt: "xlsx" | "pdf") => {
     setExportingOverview(true);
     try {
-      const firmId = await resolveFirmId();
-      const perQuarter: QuarterReportInput[] = [];
-      const skipped: string[] = [];
-
-      // Resolve each selected quarter's own tds_filings row — same client+FY+
-      // quarter+form resolution pattern loadAll() uses in TdsValidateFinalise.tsx —
-      // then apply the same TDS-compliance gate every other TDS screen applies
-      // before a filing may surface anywhere.
-      for (const q of selQuarters) {
-        let fq = supabase.from("tds_filings").select("*")
-          .eq("client_id", selClient).eq("financial_year", selFy).eq("quarter", q);
-        if (!isSuperadmin && firmId) fq = fq.eq("firm_id", firmId);
-        const { data } = await fq;
-        const filing = (data || []).find((f: any) => (f.tds_forms || []).includes(selForm));
-        if (!filing || !isFilingTdsCompliant(filing as any, client)) { skipped.push(q); continue; }
-
-        const rep = await fetchFilingReport(filing as any, {
-          clientName: client.name || "—", clientTan: client.tan_number, formLabel: selForm,
-        });
-        if (!rep) { skipped.push(q); continue; }
-        perQuarter.push({ quarter: q, ...rep });
-      }
-
-      if (!perQuarter.length) {
-        toast({ title: "No data to report", description: `No filing/validation data found for ${selForm} ${selQuarters.join(", ")} ${selFy}.`, variant: "destructive" });
-        return;
-      }
-      if (skipped.length) {
-        toast({ title: `Skipped ${skipped.length} of ${selQuarters.length} quarter(s)`, description: `No filing or no validation data for: ${skipped.join(", ")}.` });
-      }
-
-      const { meta, stageReports, overview } = mergeQuarterlyReports(perQuarter);
+      const result = await buildOverviewData();
+      if (!result) return;
+      const { meta, stageReports, overview } = result;
       if (fmt === "xlsx") await downloadWorkbook(buildOverviewWorkbook(overview, meta, stageReports), reportFileName(meta, "Validation Overview", "xlsx"));
       else await exportOverviewPdf(overview, meta, stageReports);
     } catch (e: any) {
@@ -809,6 +877,102 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     } finally {
       setExportingOverview(false);
     }
+  };
+
+  // "View in Software" — same buildOverviewData() core as the export path, but
+  // stores the result for on-page rendering instead of downloading a file.
+  const viewOverviewInSoftware = async () => {
+    setLoadingOverviewView(true);
+    try {
+      const result = await buildOverviewData();
+      if (result) setOverviewViewData(result);
+    } catch (e: any) {
+      toast({ title: "Failed to load Overview data", description: e?.message || String(e), variant: "destructive" });
+    } finally {
+      setLoadingOverviewView(false);
+    }
+  };
+
+  // On-page render of the Overview Report data — same visual language (shadcn
+  // Table per section) as the other 9 reports' on-page tables, plus its own
+  // Print button (shares handlePrint = window.print(), same as every other report).
+  const renderOverviewOnPage = () => {
+    if (!overviewViewData) return null;
+    const { meta, stageReports, overview } = overviewViewData;
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <p className="text-sm font-semibold text-foreground">{meta.client}{meta.tan ? ` · TAN ${meta.tan}` : ""}</p>
+            <p className="text-xs text-muted-foreground">{meta.form} · {meta.quarter} · FY {meta.fy}{meta.status ? ` · ${meta.status}` : ""}</p>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
+            <Button variant="ghost" size="sm" onClick={() => setOverviewViewData(null)}>Close</Button>
+          </div>
+        </div>
+
+        <Card><CardContent className="p-4">
+          <div className="flex flex-wrap gap-6">
+            {overview.overall.map((s) => (
+              <div key={s.label}>
+                <p className="text-xs text-muted-foreground">{s.label}</p>
+                <p className="font-semibold text-sm">{s.value}</p>
+              </div>
+            ))}
+          </div>
+        </CardContent></Card>
+
+        {stageReports.map((sr) => (
+          <Card key={sr.title}>
+            <CardHeader className="py-3 px-4">
+              <CardTitle className="text-sm">{sr.title}</CardTitle>
+              {sr.subtitle && <p className="text-xs text-muted-foreground mt-0.5">{sr.subtitle}</p>}
+            </CardHeader>
+            <CardContent className="p-4 space-y-4">
+              <div className="flex flex-wrap gap-6">
+                {sr.summary.map((s) => (
+                  <div key={s.label}>
+                    <p className="text-xs text-muted-foreground">{s.label}</p>
+                    <p className="font-semibold text-sm">{s.value}</p>
+                  </div>
+                ))}
+              </div>
+              {sr.sections.map((sec) => (
+                <div key={sec.title} className="space-y-1.5">
+                  <p className="text-xs font-semibold text-foreground">{sec.title} ({sec.rows.length})</p>
+                  {sec.rows.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-2">{sec.emptyNote || "No data"}</p>
+                  ) : (
+                    <div className="overflow-x-auto rounded-md border">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            {Object.keys(sec.rows[0]).map((k) => <TableHead key={k} className="text-xs whitespace-nowrap">{k}</TableHead>)}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {sec.rows.map((r, i) => (
+                            <TableRow key={i}>
+                              {Object.values(r).map((v, j) => <TableCell key={j} className="text-xs whitespace-nowrap">{v === null || v === undefined || v === "" ? "—" : String(v)}</TableCell>)}
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+              ))}
+              {sr.notes && sr.notes.length > 0 && (
+                <ul className="text-xs text-muted-foreground list-disc pl-4 space-y-0.5">
+                  {sr.notes.map((n, i) => <li key={i}>{n}</li>)}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+    );
   };
 
   const renderOverviewReport = () => {
@@ -835,7 +999,16 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
               one document. Same-titled sections are merged across quarters (each row tagged with its own Quarter), and the Overview
               sheet carries one ready-to-file row per quarter, since each quarter is filed separately.
             </p>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Button
+                variant="outline"
+                className="gap-2 font-semibold"
+                disabled={blocked || loadingOverviewView}
+                onClick={viewOverviewInSoftware}
+              >
+                {loadingOverviewView ? <Loader2 size={16} className="animate-spin" /> : <Eye size={16} />}
+                {loadingOverviewView ? "Loading…" : "View in Software"}
+              </Button>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button className="gap-2 font-semibold" disabled={blocked || exportingOverview}>
@@ -854,6 +1027,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
             </div>
           </CardContent>
         </Card>
+        {renderOverviewOnPage()}
       </div>
     );
   };
@@ -910,6 +1084,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         <div className="flex justify-end gap-2 mb-3">
           <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
           <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Cross_Quarter", rows)}><Download size={14} /> Export Excel</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Cross_Quarter", rows)}><FileText size={14} /> Download as PDF</Button>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
