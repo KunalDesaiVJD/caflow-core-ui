@@ -1132,24 +1132,35 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // a NIL return has no deductee records to run Stage 1-4 against at all.
   const isFiledLikeStatus = (s: string) => s === "Filed" || s === "Processed";
   const isReadyToFile = (filingId: string) => vfStatuses.get(filingId)?.ready ?? false;
+  // The ACK PDF itself is the authoritative signal — ackFiles is fetched from
+  // tds_ack_files and kept in sync by handleAttachAck (adds)/deleteAckFile
+  // (removes). filing.ack_file_url is a legacy column nothing in this app
+  // ever writes to anymore, so it can't be trusted here.
+  const hasAckAttached = (filingId: string) => ackFiles.has(filingId);
 
   const handleStatusChange = async (filing: TdsFiling, newStatus: string) => {
     const oldStatus = filing.work_status;
     if (oldStatus === newStatus) return;
 
-    if (isFiledLikeStatus(newStatus) && !isReadyToFile(filing.id)) {
-      toast({
-        title: "Not ready to file",
-        description: "Complete Stage 1-3 and the checker's Digital Signature in Validate & Finalise before marking this return Filed/Processed.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    // Issue 5 (CRITICAL OVERRIDE): ACK is COMPLETELY OPTIONAL — never block filing.
-    // Show a non-blocking yellow hint only if BOTH ack number AND ack file are absent.
-    if (newStatus === "Filed" && !filing.acknowledgment_number && !filing.ack_file_url) {
-      toast({ title: "Tip", description: "ACK number / file not uploaded yet — you can add them later.", variant: "default" });
+    if (isFiledLikeStatus(newStatus)) {
+      if (!isReadyToFile(filing.id)) {
+        toast({
+          title: "Not ready to file",
+          description: "Complete Stage 1-3 and the checker's Digital Signature in Validate & Finalise before marking this return Filed/Processed.",
+          variant: "destructive",
+        });
+        return;
+      }
+      // ACK upload is now mandatory before Filed/Processed — reversing the
+      // prior "ACK is completely optional" behaviour per explicit request.
+      if (!hasAckAttached(filing.id)) {
+        toast({
+          title: "ACK upload required",
+          description: "Attach the acknowledgement (ACK) PDF before marking this return Filed/Processed.",
+          variant: "destructive",
+        });
+        return;
+      }
     }
 
     const updatePayload: Record<string, any> = {
@@ -1236,10 +1247,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       // Same gate as the per-row Status dropdown — a bulk action must never be
       // able to mark a return Filed/Processed that individually couldn't be.
       let skippedNotReady = 0;
+      let skippedNoAck = 0;
       for (const id of ids) {
         const filing = filings.find(f => f.id === id);
         if (filing) {
-          if (isFiledLikeStatus(newStatus) && !isReadyToFile(id)) { skippedNotReady++; continue; }
+          if (isFiledLikeStatus(newStatus)) {
+            if (!isReadyToFile(id)) { skippedNotReady++; continue; }
+            if (!hasAckAttached(id)) { skippedNoAck++; continue; }
+          }
           const payload: any = {
             work_status: newStatus,
             last_updated_by: user?.id,
@@ -1265,13 +1280,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           }
         }
       }
-      const updated = ids.length - skippedNotReady;
+      const updated = ids.length - skippedNotReady - skippedNoAck;
+      const skipParts: string[] = [];
+      if (skippedNotReady) skipParts.push(`${skippedNotReady} not ready to file (complete Validate & Finalise first)`);
+      if (skippedNoAck) skipParts.push(`${skippedNoAck} missing ACK upload`);
       toast({
         title: `${updated} filing${updated === 1 ? "" : "s"} updated to ${newStatus}`,
-        description: skippedNotReady
-          ? `${skippedNotReady} skipped — not ready to file (complete Validate & Finalise first).`
-          : undefined,
-        ...(skippedNotReady ? { variant: "default" as const } : {}),
+        description: skipParts.length ? `${skipParts.join("; ")} — skipped.` : undefined,
+        ...(skipParts.length ? { variant: "default" as const } : {}),
       });
     }
     setSelectedIds(new Set());
@@ -1604,11 +1620,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                           </SelectTrigger>
                           <SelectContent>
                             {FILING_STATUSES.map(s => {
-                              const blocked = isFiledLikeStatus(s) && !isReadyToFile(f.id);
+                              const notReady = isFiledLikeStatus(s) && !isReadyToFile(f.id);
+                              const noAck = isFiledLikeStatus(s) && !hasAckAttached(f.id);
+                              const blocked = notReady || noAck;
+                              const reason = notReady && noAck
+                                ? " (complete Validate & Finalise + upload ACK first)"
+                                : notReady
+                                ? " (complete Validate & Finalise first)"
+                                : noAck
+                                ? " (upload ACK first)"
+                                : "";
                               return (
                                 <SelectItem key={s} value={s} disabled={blocked}>
                                   <span className={cn(blocked && "text-muted-foreground")}>
-                                    {statusLabel(s)}{blocked && " (complete Validate & Finalise first)"}
+                                    {statusLabel(s)}{reason}
                                   </span>
                                 </SelectItem>
                               );
