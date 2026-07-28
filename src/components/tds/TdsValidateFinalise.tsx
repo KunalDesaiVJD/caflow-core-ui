@@ -1304,6 +1304,10 @@ export function TdsValidateFinalise({
                     </span>
                   )}
                   <div className="flex-1" />
+                  <a href="/templates/TDS_Data_Entry_Client_Template.xlsx" download
+                    className="inline-flex items-center gap-1 h-6 px-2 text-[11px] rounded-md border shrink-0 hover:bg-muted transition-colors">
+                    <Download size={12} /> Download Template
+                  </a>
                   <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
                     onChange={(e) => {
                       const picked = Array.from(e.target.files ?? []);
