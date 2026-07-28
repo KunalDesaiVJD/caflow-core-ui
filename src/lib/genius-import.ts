@@ -483,12 +483,42 @@ export async function parseGeniusXls(file: File): Promise<ParsedGeniusFile> {
   // columns at all, unlike 26Q/27Q — the 26Q-shaped fallback positions for those
   // fields would otherwise silently read whatever unrelated column sits there
   // (e.g. the Email column) instead of correctly staying unmapped. See buildColMap.
+  // EVERY field after "name" is skipped, not just the five columns 24Q lacks.
+  // The fallback indices encode the 26Q layout; 24Q's Annex-I is a SHORTER,
+  // DIFFERENTLY-ORDERED sheet, so applying any of them to a 24Q file reads a
+  // column that means something else entirely. That is not hypothetical: a
+  // real client's Q1 imported with amount_paid_credited = 0 for every employee
+  // because "Taxable amount on which Tax Deducted" did not match the header
+  // matcher of the day, and fallback 12 — the Amount column in 26Q — is the
+  // "Reason for Non-deduction" TEXT column in 24Q. It read text as money,
+  // stored 0, and reported success. A field left UNMAPPED is recoverable and
+  // is reported below; a field silently bound to the wrong column is not.
   const is24Q = deductor.formNo.toUpperCase() === "24Q";
   const deSkipFallback = is24Q
-    ? new Set(["deducteeType", "rateOfTds", "surchargeRate", "cessRate", "surchargeAmount", "cessAmount"])
+    ? new Set([
+        "deducteeType", "rateOfTds", "surchargeRate", "cessRate", "surchargeAmount", "cessAmount",
+        "amountPaid", "datePaid", "tdsAmount", "totalTaxDeducted", "dateOfDeduction", "reason", "certificateNo",
+      ])
     : undefined;
   const deductees: ParsedDeductee[] = [];
   const deMap = buildColMap(readHeaderRow(deducteeSheet), DEDUCTEE_COLS, deSkipFallback);
+
+  // VALIDATE THE MAPPING BEFORE READING A SINGLE ROW. On 24Q the taxable
+  // figure is the return's core number; importing without it produces a file
+  // full of blanks that reads as "the software lost my data". Failing loudly
+  // here, naming the headers actually present, is always better than importing
+  // zeros — and it is how a genuinely new Genius layout announces itself
+  // instead of silently corrupting a filing.
+  if (is24Q && deMap.amountPaid === undefined) {
+    const headers = readHeaderRow(deducteeSheet)
+      .map((h) => (h == null ? "" : String(h).replace(/\s+/g, " ").trim()))
+      .filter(Boolean);
+    throw new Error(
+      `Could not identify the Taxable Amount column in this file's Annex-I sheet, so the import was stopped ` +
+      `rather than storing zeros. Expected a header like "Taxable amount on which Tax Deducted" or ` +
+      `"Amount of Payment". Headers found: ${headers.join(" | ")}`
+    );
+  }
   const deRange = XLSX.utils.decode_range(deducteeSheet["!ref"] || "A1:Z1");
   for (let r = 1; r <= deRange.e.r; r++) {
     // Stop at the first FULLY-empty deductee row (no serial, PAN or name).

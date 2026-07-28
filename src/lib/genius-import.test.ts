@@ -409,6 +409,39 @@ describe("parseGeniusXls — 24Q Annex-I: real Genius header phrasing, not 26Q's
   });
 });
 
+// A 24Q import that cannot find the taxable column must STOP, not store zeros.
+// This is exactly how a real client's Q1 went in: every employee imported with
+// amount_paid_credited = 0 because the header of the day did not match and the
+// 26Q positional fallback (col 12 = "Amount") is 24Q's "Reason for Non-deduction"
+// TEXT column. It read text as money, wrote 0, and reported a successful import
+// — the CA saw a Taxable column full of blanks with nothing to explain it.
+describe("parseGeniusXls — 24Q refuses to guess the Taxable column", () => {
+  it("throws, naming the headers it did find, instead of importing zeros", async () => {
+    // Same sheet, but the taxable header renamed to something unrecognised —
+    // standing in for the next Genius wording change.
+    const renamed = ANNEX_I_24Q.map((row, i) =>
+      i === 0 ? row.map((h) => (/taxable amount/i.test(String(h ?? "")) ? "Consideration Value" : h)) : row);
+    const file = workbookToFile(buildWorkbook({
+      EmployerDetails: EMPLOYER_DETAILS_24Q,
+      ChallanDetails: CHALLAN_DETAILS_24Q,
+      "Annex-I_DeducteeDetails": renamed,
+    }));
+    await expect(parseGeniusXls(file)).rejects.toThrow(/Taxable Amount column/i);
+    // The message must list what WAS there, so the next layout is one glance away.
+    await expect(parseGeniusXls(file)).rejects.toThrow(/Consideration Value/);
+  });
+
+  it("still imports normally when the header IS recognised", async () => {
+    const file = workbookToFile(buildWorkbook({
+      EmployerDetails: EMPLOYER_DETAILS_24Q,
+      ChallanDetails: CHALLAN_DETAILS_24Q,
+      "Annex-I_DeducteeDetails": ANNEX_I_24Q,
+    }));
+    const parsed = await parseGeniusXls(file);
+    expect(parsed.deductees.find((d) => d.name === "KRUNAL NAYAK")!.amountPaid).toBe(32261);
+  });
+});
+
 describe("parseGeniusXls — 26Q Annex-I: unaffected by the 24Q header additions", () => {
   const ANNEX_I_26Q = [
     ["Challan Serial No.", "Section Code", "Deductee Code", "PAN of the Deductee", "Name of the Deductee", "Amount Paid/Credited", "Date of Payment/Credit", "Rate at which Tax Deducted", "Amount of Tax Deducted", "Total Tax Deposited"],
