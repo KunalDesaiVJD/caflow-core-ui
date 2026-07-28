@@ -37,6 +37,7 @@ const STATUS_COLORS: Record<string, string> = {
   "QUERIES GIVEN TO CLIENT": "bg-yellow-100 text-yellow-700",
   "PREPARE PENDING":         "bg-orange-100 text-orange-700",
   "VERIFICATION PENDING":    "bg-blue-100 text-blue-700",
+  "REPORT SENT TO CLIENT FOR VERIFICATION": "bg-cyan-100 text-cyan-700",
   "REPORT WITH VJD":         "bg-violet-100 text-violet-700",
   "REPORT WITH KVD":         "bg-purple-100 text-purple-700",
   "REPORT SENT TO CLIENT":   "bg-teal-100 text-teal-700",
