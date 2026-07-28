@@ -224,6 +224,27 @@ describe("rescueMirroredAmountFromNarration — the 'Amount' column mirrors the 
     expect(built[2]).toMatchObject({ amount_paid: 709438, tds_amount: 7094 });
   });
 
+  // Reported three times against the SAME real file: Office 56,295 vs an
+  // imported "Amount" of 563 (the TDS, at 1%). The narration states BOTH the
+  // taxable amount and the rate; the record must carry both so a reviewer can
+  // see the basis of the figure the engine reconstructed.
+  it("carries the RATE and the narration text alongside the recovered amount", () => {
+    const rescued = rescueMirroredAmountFromNarration(ROWS);
+    const { map } = resolveMapping(rescued);
+
+    const nilima = buildCanonicalRow(rescued[4], map);
+    expect(nilima).toMatchObject({ amount_paid: 56295, tds_amount: 563, rate: 1 });
+    expect(rescued[4].narration).toBe("BEING 1% TDS ON AMT RS 56295");
+
+    // Rates vary by section — each row keeps the rate ITS OWN narration states.
+    expect(buildCanonicalRow(rescued[5], map).rate).toBe(2);
+    expect(buildCanonicalRow(rescued[6], map).rate).toBe(10);
+
+    // A bare-number narration states no rate, so it is DERIVED from the two
+    // figures rather than left blank (1904 / 19038 = 10%).
+    expect(buildCanonicalRow(rescued[3], map).rate).toBe(10);
+  });
+
   it("recovers the amount from a BARE-NUMBER narration cell (no 'BEING...RS' prose)", () => {
     const rescued = rescueMirroredAmountFromNarration(ROWS);
     const { map } = resolveMapping(rescued);

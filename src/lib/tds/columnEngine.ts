@@ -351,6 +351,21 @@ function extractNarrationAmount(raw: unknown): number | null {
   return m ? toNum(m[1]) : null;
 }
 
+// The same narration that hides the taxable amount usually states the RATE too
+// ("BEING 1% TDS ON AMT RS 56295"). Capturing it means the record carries the
+// deduction rate the client actually applied, so a reviewer can see the basis
+// of the figure — and a wrong rate becomes visible — instead of having to
+// re-read the source file. Deliberately conservative: a plain percentage
+// token only, and only a statutorily plausible one, so a stray "100%" or a
+// year fragment is never mistaken for a rate.
+const NARRATION_RATE_RE = /(\d{1,2}(?:\.\d{1,2})?)\s*%/;
+function extractNarrationRate(raw: unknown): number | null {
+  const m = String(raw ?? "").match(NARRATION_RATE_RE);
+  if (!m) return null;
+  const v = toNum(m[1]);
+  return v != null && v > 0 && v <= 30 ? v : null;
+}
+
 export function rescueMirroredAmountFromNarration(allRows: Record<string, unknown>[]): Record<string, unknown>[] {
   const headers = new Set<string>();
   for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) if (!INTERNAL_KEYS.has(k)) headers.add(k);
@@ -404,7 +419,19 @@ export function rescueMirroredAmountFromNarration(allRows: Record<string, unknow
       return allRows.map((r) => {
         const tv = toNum(r?.[mirrorTds as string]);
         const amt = tv != null && tv > 0 ? extractNarrationAmount(r?.[h]) : null;
-        return amt != null && amt > 0 ? { ...r, amount_paid: amt } : r;
+        if (amt == null || amt <= 0) return r;
+        // Carry the RATE the narration states, and the narration text itself,
+        // alongside the recovered amount: the row's own words are the evidence
+        // for the figure the engine just reconstructed, so a reviewer can see
+        // WHY it reads 56,295 rather than the 563 printed in the column.
+        // Prefer the stated rate; fall back to the one the two figures imply.
+        const stated = extractNarrationRate(r?.[h]);
+        const implied = Math.round((tv / amt) * 10000) / 100;
+        const rate = stated ?? (implied > 0 && implied <= 30 ? implied : null);
+        const out: Record<string, unknown> = { ...r, amount_paid: amt };
+        if (rate != null) out.rate = rate;
+        if (typeof r?.[h] === "string" && r[h]) out.narration = r[h];
+        return out;
       });
     }
   }
@@ -556,6 +583,19 @@ export function buildCanonicalRow(row: Record<string, unknown>, map: HeaderMap):
   for (const [header, field] of Object.entries(map)) {
     if (out[field] !== null) continue;
     const v = coerceField(field, row[header]);
+    if (v !== undefined) (out as Record<string, unknown>)[field] = v;
+  }
+  // A key that is ALREADY the canonical field name needs no mapping — it was
+  // put there by a pre-processing pass that had evidence the header engine
+  // cannot see (explodeMonthlyColumns' per-month split, or the narration
+  // rescue's recovered amount/rate). Those passes should not have to also win
+  // a column-profiling contest against the client's own columns to be
+  // believed: resolveMapping is a heuristic over UNKNOWN headers, and a
+  // synthesized field is not unknown. Only fills a field the map left empty,
+  // so a real mapped column always wins.
+  for (const field of Object.keys(out) as CanonField[]) {
+    if (out[field] !== null || !(field in row)) continue;
+    const v = coerceField(field, row[field]);
     if (v !== undefined) (out as Record<string, unknown>)[field] = v;
   }
   return out;

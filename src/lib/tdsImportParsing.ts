@@ -302,6 +302,102 @@ export function extractWorkbookRows(
  *  it, and nothing maps it to a canonical field. */
 export const SHEET_KEY = "__sheet";
 
+// ── Official two-sheet TDS import template (Challan Details + TDS Entries) ─
+// The new official template splits challan-level fields (BSR Code, Challan
+// Serial No.) onto their OWN "Challan Details" sheet, separate from the
+// per-deductee "TDS Entries" sheet, linked by a shared "Challan ID" column on
+// both. Every OTHER field on "TDS Entries" already lands on a canonical field
+// via tds-recon-import's existing HEADER_SYNONYMS (verified: e.g. "Date of
+// Payment/Credit*" → "dateofpaymentcredit" is already an exact-match synonym
+// for date_of_payment). The only gap is BSR Code / Challan No, which this join
+// resolves BEFORE the rows ever reach that pipeline, by reusing gridToRows /
+// detectHeaderRow on each sheet (both are a single clean table — the
+// multi-block/PAN-scanning extractSheetRows machinery above is not needed
+// here) and stitching the two sheets' rows together in memory.
+
+/** Finds the actual object key in `row` whose header text — normalised the
+ * same way normaliseCell already normalises values elsewhere in this file
+ * (lowercase, strip everything but letters/digits) — matches one of
+ * `targets`. Tolerates a trailing "*" (required-field marker), punctuation
+ * (e.g. "Challan Serial No." vs "Challan Serial No"), and case/whitespace —
+ * so this never depends on an exact literal header string. */
+function findHeaderKey(row: Record<string, unknown> | undefined, targets: string[]): string | null {
+  if (!row) return null;
+  for (const key of Object.keys(row)) {
+    if (targets.includes(normaliseCell(key))) return key;
+  }
+  return null;
+}
+
+/** Normalises a Challan ID VALUE for tolerant matching between the "Challan
+ * Details" and "TDS Entries" sheets: trim + uppercase only. Unlike header-name
+ * normalisation above, punctuation is DELIBERATELY kept — a Challan ID like
+ * "CH-Q1-001" carries meaningful structure, not noise, so two differently
+ * punctuated IDs must NOT be folded into the same key. */
+const normaliseChallanId = (v: unknown): string => String(v ?? "").trim().toUpperCase();
+
+/**
+ * Detects the official two-sheet TDS import template by its EXACT tab names
+ * — "Challan Details" and "TDS Entries" (case- and whitespace-insensitive,
+ * but NOT fuzzy) — so this only activates for that specific template and
+ * never misfires on an unrelated client workbook that happens to have
+ * multiple sheets (e.g. one sheet per TDS section, already handled by
+ * extractWorkbookRows above).
+ */
+export function isTwoSheetTemplate(sheetNames: string[]): { challanSheet: string; entriesSheet: string } | null {
+  const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
+  let challanSheet: string | null = null;
+  let entriesSheet: string | null = null;
+  for (const name of sheetNames) {
+    const n = norm(name);
+    if (n === "challan details") challanSheet = name;
+    else if (n === "tds entries") entriesSheet = name;
+  }
+  return challanSheet && entriesSheet ? { challanSheet, entriesSheet } : null;
+}
+
+/**
+ * Joins the official two-sheet template's already-parsed "Challan Details"
+ * and "TDS Entries" rows (each produced by gridToRows) into ONE row set the
+ * existing single-sheet import pipeline can consume: every entry row gets the
+ * BSR Code / Challan No. of the challan its "Challan ID" links to, added under
+ * the EXACT literal keys "BSR Code" and "Challan No" — the same strings
+ * tds-recon-import's HEADER_SYNONYMS already recognises by exact match
+ * ("bsrcode" → challan_bsr, "challanno" → challan_no; verified directly
+ * against that file), so no edge-function change is needed.
+ *
+ * An entry whose Challan ID doesn't match any known challan (typo, deleted
+ * challan, blank) is returned UNCHANGED — no "BSR Code"/"Challan No" keys are
+ * added — so it never looks like a confident-but-wrong deterministic mapping;
+ * the existing pipeline already tolerates a row with no challan_bsr/challan_no.
+ */
+export function joinChallanTemplate(
+  challanRows: Record<string, unknown>[],
+  entryRows: Record<string, unknown>[],
+): Record<string, unknown>[] {
+  const idKey = findHeaderKey(challanRows[0], ["challanid"]);
+  if (!idKey) return entryRows; // Challan Details has no Challan ID column — nothing to join
+
+  const bsrKey = findHeaderKey(challanRows[0], ["bsrcode", "bsr"]);
+  const noKey = findHeaderKey(challanRows[0], ["challanserialno", "challanno", "challannumber"]);
+
+  const byId = new Map<string, { bsr: unknown; no: unknown }>();
+  for (const row of challanRows) {
+    const id = normaliseChallanId(row[idKey]);
+    if (!id) continue; // blank Challan ID (e.g. the template's own placeholder row) — never a lookup target
+    byId.set(id, { bsr: bsrKey ? row[bsrKey] : null, no: noKey ? row[noKey] : null });
+  }
+
+  const entryIdKey = findHeaderKey(entryRows[0], ["challanid"]);
+  if (!entryIdKey) return entryRows; // TDS Entries has no Challan ID column — nothing to join
+
+  return entryRows.map((row) => {
+    const match = byId.get(normaliseChallanId(row[entryIdKey]));
+    if (!match) return row;
+    return { ...row, "BSR Code": match.bsr, "Challan No": match.no };
+  });
+}
+
 /**
  * GROUND TRUTH for the never-lose-a-record safety net: every distinct PAN that
  * appears in ANY cell of the workbook.

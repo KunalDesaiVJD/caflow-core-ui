@@ -23,7 +23,7 @@
  */
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
-import { extractWorkbookRows, extractSheetRows } from "@/lib/tdsImportParsing";
+import { extractWorkbookRows, extractSheetRows, gridToRows, isTwoSheetTemplate, joinChallanTemplate } from "@/lib/tdsImportParsing";
 
 const MAX_ROWS = 50000;   // hard ceiling on rows processed per sheet
 const MAX_COLS = 100;     // hard ceiling on columns processed per sheet
@@ -117,9 +117,29 @@ export function parseWorkbookRows(buffer: ArrayBuffer, onProgress?: (p: ParsePro
   onProgress?.({ stage: "reading", elapsedMs: 0 });
   const wb = XLSX.read(buffer, { type: "array", cellDates: true });
   const tRead = perfNow();
+  const gridOf = makeGridOf(wb);
+
+  // The official two-sheet TDS import template ("Challan Details" + "TDS
+  // Entries") splits challan-level fields onto a sheet separate from the
+  // deductee-transaction rows, joined by a shared "Challan ID" — a shape
+  // extractWorkbookRows (one independent section per sheet) isn't built for.
+  // Detect it FIRST, by exact tab name only, so an ordinary multi-sheet client
+  // file (handled below) is never affected; anything that doesn't match this
+  // exact template falls through to the existing behaviour unchanged.
+  const twoSheet = isTwoSheetTemplate(wb.SheetNames);
+  if (twoSheet) {
+    onProgress?.({ stage: "sheets", totalSheets: 2, elapsedMs: Math.round(tRead - t0) });
+    const challanRows = gridToRows(gridOf(twoSheet.challanSheet));
+    const entryRows = gridToRows(gridOf(twoSheet.entriesSheet));
+    const rows = joinChallanTemplate(challanRows, entryRows);
+    const tEnd = perfNow();
+    try { console.debug(`[tds-import] read ${Math.round(tRead - t0)}ms · extract ${Math.round(tEnd - tRead)}ms · ${rows.length} rows · 2 sheet(s) (two-sheet template)`); } catch { /* ignore */ }
+    onProgress?.({ stage: "extracted", rows: rows.length, elapsedMs: Math.round(tEnd - t0) });
+    return rows;
+  }
+
   const names = visibleSheetNames(wb);
   onProgress?.({ stage: "sheets", totalSheets: names.length, elapsedMs: Math.round(tRead - t0) });
-  const gridOf = makeGridOf(wb);
   let rows = extractWorkbookRows(names, gridOf, (sheet) => onProgress?.({ stage: "extracting", sheet, totalSheets: names.length, elapsedMs: Math.round(perfNow() - t0) }));
   // If hidden-sheet filtering removed the only data, retry including hidden —
   // REUSE the same gridOf so already-parsed visible sheets come from the cache.
