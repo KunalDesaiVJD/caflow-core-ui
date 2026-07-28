@@ -110,6 +110,16 @@ export interface TallyPdfRow {
   // Stage 3 card can read the rate/period without reopening the source PDF.
   // null for a simple (non-compound) row: those don't reach this capture path.
   narration: string | null;
+  // Set ONLY for the expense-ledger case above (credit copied from debit) —
+  // this row's credit is a TAXABLE INCOME / gross-salary figure, never a TDS
+  // amount, structurally guaranteed by WHICH branch captured it (not a guess
+  // from section text, which a client's own Tally naming convention can't be
+  // relied on for — e.g. "TDS 192 B" vs a salary ledger both existing for the
+  // same 24Q client). undefined for every other row (liability-ledger "By"
+  // entries, simple rows) — those are untouched and keep behaving exactly as
+  // before this field existed (see tallyRecon.ts's use of it for why a
+  // SEPARATE reconciliation pass, not a section guess, is what this enables).
+  amountKind?: "taxable_income";
 }
 
 export interface TallyPdfParse {
@@ -333,7 +343,7 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         current.credit == null && current.debit != null &&
         marker && /^cr$/i.test(marker) && /\bsalary\b/i.test(partyText)
       ) {
-        current.party = partyText; current.credit = current.debit; return true;
+        current.party = partyText; current.credit = current.debit; current.amountKind = "taxable_income"; return true;
       }
       return false;
     };

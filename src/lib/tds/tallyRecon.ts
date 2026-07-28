@@ -49,6 +49,16 @@ export interface TallyRow {
   // one ledger PER SECTION — spread across several sheets AND several files — and
   // an office 194A record must only ever be reconciled against 194A ledger rows.
   section: string | null;
+  // Set ONLY for a 24Q expense-ledger row (tallyPdf.ts's "Staff Salary
+  // Expense" case) whose credit is a TAXABLE INCOME figure, never TDS —
+  // structurally guaranteed at parse time, not inferred from section text.
+  // The caller (TdsTallyRecon.tsx) uses this to run a SEPARATE reconciliation
+  // pass for the Salary/Remuneration ledger against office.amount, alongside
+  // the unchanged pass for the TDS-liability ledger against office.tds — see
+  // that file's runAudit() for the combined-verdict merge. Every row without
+  // this tag (every 26Q/27EQ row, every plain liability-ledger "By" row)
+  // behaves EXACTLY as before this field existed.
+  amountKind?: "taxable_income";
 }
 
 // ── Reconciliation ───────────────────────────────────────────────────────────
@@ -78,7 +88,21 @@ export type TallyResult =
   // when it turns a surplusLedger entry into its own displayed/persisted row, so
   // the checker can review and map a ledger-side record with no office counterpart
   // the same way an unmatched office record is reviewed and mapped today.
-  | "Office Data Not Found";
+  | "Office Data Not Found"
+  // ── 24Q DUAL-LEDGER combined verdicts (mergeDualLedgerResults below) ───────
+  // Produced ONLY when a filing's Tally rows include at least one
+  // amountKind:"taxable_income" row (a Salary/Remuneration ledger was
+  // imported alongside a TDS Deducted ledger) — a single-ledger client
+  // (every 26Q/27EQ filing, and any 24Q client with only one combined
+  // ledger) never sees these; its results stay exactly the categories above.
+  | "Name Mismatch"
+  | "Taxable Income Missing from Salary Ledger" | "Taxable Income Missing from Office Data" | "Taxable Income Amount Mismatch"
+  | "TDS Missing from TDS Ledger" | "TDS Missing from Office Data" | "TDS Amount Mismatch";
+
+/** Per-figure sub-verdict for ONE side of a dual-ledger comparison — what a
+ *  checker sees next to "Taxable Income" or "TDS" specifically, independent
+ *  of which one the OVERALL combined result names (see mergeDualLedgerResults). */
+export type SubStatus = "Matched" | "Missing from Ledger" | "Missing from Office Data" | "Amount Mismatch" | "Date Mismatch" | "Name Mismatch" | "Needs Review";
 
 export interface TallyReconRow {
   office_deductee_id: string;
@@ -90,6 +114,16 @@ export interface TallyReconRow {
   confidence: number;                       // 0..100
   suggested_party?: string;                 // for Party Name Mismatch → possible mapping
   mapped?: boolean;                         // a saved party mapping was used
+  // ── 24Q DUAL-LEDGER fields — undefined for every single-ledger row ─────────
+  // The existing tally_* fields above hold the TDS-ledger side in dual-ledger
+  // mode (matching amount_basis:"tds" convention); these hold the SEPARATE
+  // Salary/Remuneration ledger side. See mergeDualLedgerResults.
+  salary_tally_row_index?: number | null;
+  salary_tally_party?: string | null;
+  salary_tally_date?: string | null;
+  salary_tally_credit?: number | null;
+  taxable_income_status?: SubStatus | null;
+  tds_status?: SubStatus | null;
 }
 
 /** Saved per-client party mappings: normalised office name → tally party name. */
@@ -183,6 +217,118 @@ export function reconcileTallyFull(
   });
 
   return { rows: applySplitEntryGrouping(rows, office), surplusLedger: surplus.map(rowAt) };
+}
+
+/** Reduce ONE single-ledger TallyReconRow (from a dual-ledger PASS — either
+ *  the TDS-ledger call or the Salary-ledger call, both unchanged
+ *  reconcileTallyFull() runs) to the sub-verdict that pass's own result
+ *  implies. "Needs Review" covers the rare escalations (Section Mismatch /
+ *  Multiple Possible Matches) rather than force-fitting them into one of the
+ *  six ordinary buckets — those are surfaced as-is by mergeDualLedgerResults.
+ *
+ *  `officeFigure` is THIS side's own office field (office_tds for the TDS
+ *  pass, office_amount for the Salary pass) — a 24Q filing lists EVERY
+ *  employee for EVERY month regardless of whether TDS was actually deducted
+ *  that month (unlike 26Q/27EQ, which only ever list real transactions), so
+ *  an office_tds of 0/null is completely routine, not a data gap. Without
+ *  this check, "Missing from Ledger" would fire for every zero-TDS employee
+ *  on every 24Q filing that has a Salary ledger — a FALSE mismatch on a
+ *  colossal scale, worse than the one this whole feature exists to fix.
+ *  "No ledger row, and nothing was expected" is the SAME as "Matched": both
+ *  sides genuinely agree there is nothing to reconcile here. */
+function subStatusFor(r: TallyReconRow, officeFigure: number | null): SubStatus {
+  if (r.result === "Ledger Entry Not Found" || r.result === "No Ledger for Section") {
+    return officeFigure == null || officeFigure === 0 ? "Matched" : "Missing from Ledger";
+  }
+  switch (r.result) {
+    case "Matched": return "Matched";
+    case "Credit Amount Mismatch": return "Amount Mismatch";
+    case "Date Mismatch": return "Date Mismatch";
+    case "Party Name Mismatch": return "Name Mismatch";
+    default: return "Needs Review";
+  }
+}
+
+/**
+ * DUAL-LEDGER MERGE — combines TWO INDEPENDENT, UNCHANGED reconcileTallyFull()
+ * runs (one against the TDS-liability ledger exactly as today, one against
+ * the Salary/Remuneration ledger with office.tds/office.section forced null
+ * so it can only ever match on office.amount — see TdsTallyRecon.tsx's
+ * runAudit for how each is built) into ONE verdict per office record.
+ *
+ * Deliberately NOT a change to assign()/render()/reconcileTallyFull() — every
+ * one of THOSE stays pure single-ledger and fully unchanged, so a
+ * single-ledger client (every 26Q/27EQ filing, and any 24Q client with only
+ * one combined ledger) is provably unaffected: this function is never even
+ * called for them. `tdsRows`/`salaryRows` must be the SAME LENGTH, in the
+ * SAME office order, as both came from reconcileTallyFull() calls over the
+ * identical office array.
+ *
+ * PRECEDENCE (worst-first, generalising render()'s own "escalation → name →
+ * money → date" ordering across two figures): an escalation on EITHER side
+ * wins outright; then a name problem on either side (reported as its own
+ * "Name Mismatch", per instruction — each pass already applied the SAME
+ * name-mapping/partyMap logic render() always has); then a missing
+ * counterpart (Taxable Income before TDS); then an amount mismatch (Taxable
+ * Income before TDS); then a date mismatch on either side; only once ALL of
+ * that is clean is the combined verdict Matched.
+ */
+export function mergeDualLedgerResults(tdsRows: TallyReconRow[], salaryRows: TallyReconRow[]): TallyReconRow[] {
+  const ESCALATIONS: TallyResult[] = ["Multiple Possible Matches", "Section Mismatch"];
+  return tdsRows.map((tdsRow, i) => {
+    const salaryRow = salaryRows[i];
+    const taxableStatus = subStatusFor(salaryRow, salaryRow.office_amount);
+    const tdsStatus = subStatusFor(tdsRow, tdsRow.office_tds);
+    const base: TallyReconRow = {
+      ...tdsRow,
+      salary_tally_row_index: salaryRow.tally_row_index,
+      salary_tally_party: salaryRow.tally_party,
+      salary_tally_date: salaryRow.tally_date,
+      salary_tally_credit: salaryRow.tally_credit,
+      taxable_income_status: taxableStatus,
+      tds_status: tdsStatus,
+    };
+    if (ESCALATIONS.includes(tdsRow.result)) {
+      return { ...base, result: tdsRow.result, reason: `TDS ledger: ${tdsRow.reason}`, confidence: tdsRow.confidence, suggested_party: tdsRow.suggested_party };
+    }
+    if (ESCALATIONS.includes(salaryRow.result)) {
+      return { ...base, result: salaryRow.result, reason: `Salary ledger: ${salaryRow.reason}`, confidence: salaryRow.confidence, suggested_party: salaryRow.suggested_party };
+    }
+    if (taxableStatus === "Name Mismatch" || tdsStatus === "Name Mismatch") {
+      const src = taxableStatus === "Name Mismatch" ? salaryRow : tdsRow;
+      const label = taxableStatus === "Name Mismatch" ? "Salary ledger" : "TDS ledger";
+      return { ...base, result: "Name Mismatch", reason: `${label}: ${src.reason}`, confidence: src.confidence, suggested_party: src.suggested_party, mapped: src.mapped };
+    }
+    if (taxableStatus === "Missing from Ledger") {
+      return { ...base, result: "Taxable Income Missing from Salary Ledger", reason: `Salary ledger: ${salaryRow.reason}`, confidence: salaryRow.confidence };
+    }
+    if (tdsStatus === "Missing from Ledger") {
+      return { ...base, result: "TDS Missing from TDS Ledger", reason: `TDS ledger: ${tdsRow.reason}`, confidence: tdsRow.confidence };
+    }
+    if (taxableStatus === "Amount Mismatch") {
+      return { ...base, result: "Taxable Income Amount Mismatch", reason: `Salary ledger: ${salaryRow.reason}`, confidence: salaryRow.confidence, amount_basis: "amount" };
+    }
+    if (tdsStatus === "Amount Mismatch") {
+      return { ...base, result: "TDS Amount Mismatch", reason: `TDS ledger: ${tdsRow.reason}`, confidence: tdsRow.confidence, amount_basis: "tds" };
+    }
+    if (taxableStatus === "Date Mismatch" || tdsStatus === "Date Mismatch") {
+      const src = taxableStatus === "Date Mismatch" ? salaryRow : tdsRow;
+      const label = taxableStatus === "Date Mismatch" ? "Salary ledger" : "TDS ledger";
+      return { ...base, result: "Date Mismatch", reason: `${label}: ${src.reason}`, confidence: src.confidence };
+    }
+    // Both sides clean — which may mean a genuine ledger match on BOTH, or
+    // (routinely, for a zero-TDS 24Q employee) that one side had nothing to
+    // reconcile at all and subStatusFor already called that "Matched" too;
+    // word the reason to reflect whichever actually happened on each side.
+    const taxableClause = salaryRow.tally_party ? `Taxable Income matches the Salary/Remuneration ledger ("${salaryRow.tally_party}")` : "no Taxable Income was expected in the Salary ledger";
+    const tdsClause = tdsRow.tally_party ? `TDS matches the TDS Deducted ledger ("${tdsRow.tally_party}")` : "no TDS was expected in the TDS ledger";
+    return {
+      ...base, result: "Matched",
+      reason: `${taxableClause} and ${tdsClause}.`,
+      confidence: Math.min(tdsRow.confidence, salaryRow.confidence),
+      mapped: tdsRow.mapped || salaryRow.mapped,
+    };
+  });
 }
 
 // A flat ₹1 floor — never a percentage of the transaction — because this is
