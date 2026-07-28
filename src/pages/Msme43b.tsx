@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { MultiYearTrend } from '@/components/msme43b/MultiYearTrend';
 import {
   pdfToLines, parseLedgerPages, buildReport, downloadWorkpaper, msme43bToForm3cd,
   saveRun, listRuns, loadRun, renameRun, deleteRun, computeCarryForward,
@@ -331,6 +332,9 @@ export default function Msme43b() {
           </CardContent>
         </Card>
       )}
+
+      {/* ── Multi-year trend (self-hides with < 2 saved years) ── */}
+      {clientId && !persistOff && <MultiYearTrend runs={savedRuns} />}
 
       {report && (
         <>
