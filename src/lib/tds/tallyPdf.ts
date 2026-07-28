@@ -235,10 +235,22 @@ function readBand(band: PdfTextItem[], a: Anchors): BandFields {
       continue;
     }
     if (MARKER_RE.test(s)) { out.marker = s; sawNonParticulars = true; continue; }
-    // Non-numeric text → nearest text column by left edge.
+    // Non-numeric text → nearest text column by left edge. "particulars" is
+    // listed FIRST so a TIE resolves to it, never to "date": confirmed on a
+    // real ledger (Microcircuits "salary expense.pdf") where the Date/
+    // Particulars header anchors sat exactly 56px apart (66 and 122) and
+    // every breakdown line's indented text printed at their exact midpoint
+    // (94) — an equal-distance tie that used to resolve to "date" (listed
+    // first there), silently swallowing the employee's own name as a
+    // garbage date value. That corrupted `lastDate` for every row for the
+    // REST of the ledger and derailed awaitingCompoundParty's state machine,
+    // cascading into total parse failure from that voucher on. A genuine
+    // date value never needs this tiebreak in practice — it prints at (or
+    // very near) the Date header's own x, not at the midpoint between it and
+    // Particulars — so preferring particulars on an exact tie is safe.
     const d = (x: number) => Math.abs(it.x - x);
     const best = [
-      { k: "date", v: d(a.date) }, { k: "particulars", v: d(a.particulars) },
+      { k: "particulars", v: d(a.particulars) }, { k: "date", v: d(a.date) },
       { k: "vchType", v: d(a.vchType) }, { k: "vchNo", v: d(a.vchNo) },
     ].sort((p, q) => p.v - q.v)[0].k;
     if (best === "date") { out.date = s; sawNonParticulars = true; }
@@ -284,6 +296,47 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
     // why the real deductee has to be recovered from the breakdown lines
     // that follow, rather than treating the header row's own text as final.
     let awaitingCompoundParty = false;
+    // A long breakdown-line label WRAPS onto a SECOND baseline below it, but
+    // (confirmed on a real salary-expense ledger) the AMOUNT stays pinned to
+    // the FIRST baseline, printed alongside only the first half of the text
+    // — e.g. "Keshviben Hasmukhbhau  23,000.00 Cr" on one line, "Gami -
+    // Salary" alone on the next (the same shape hits "Professional Tax -
+    // (AMC) -" / "Employee" too, on lines that don't need matching so it's
+    // invisible there). Trying the match on the first line's own fragment
+    // alone would wrongly fail (no "- Salary" in "Keshviben Hasmukhbhau"),
+    // permanently losing the amount as if it were an unrecognised breakdown
+    // line — so a failed attempt is buffered here and RETRIED once the next,
+    // text-only continuation line completes the label.
+    let pendingAmount: { amount: number; marker: string | null; text: string } | null = null;
+    const tryMatchBreakdown = (amount: number, marker: string | null | undefined, partyText: string): boolean => {
+      if (
+        current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
+        marker && /^dr$/i.test(marker) &&
+        current.credit != null && Math.abs(amount - current.credit) < 0.005
+      ) {
+        current.party = partyText; return true;
+      }
+      if (
+        // A pure EXPENSE ledger (e.g. "Staff Salary Expense") books every
+        // voucher as a DEBIT — there is no credit for the amount-match above
+        // to key on, so the row would otherwise be dropped as a "payment"
+        // (see the credit==null filter below). Here the deductee instead has
+        // to be told apart from the OTHER Cr breakdown lines on the same
+        // voucher (PF Employee, Professional Tax, VPF, Labour Welfare Fund,
+        // …) by the ledger name itself always containing "- Salary" for the
+        // employee's own line — the one signal invariant across clients —
+        // and once found, the voucher's own debit total (already inclusive
+        // of any Bonus Expense Dr line, since that's what was actually
+        // paid/expensed) is copied into credit so the rest of the pipeline
+        // (which reads only `credit`) treats it exactly like a normal row.
+        current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
+        current.credit == null && current.debit != null &&
+        marker && /^cr$/i.test(marker) && /\bsalary\b/i.test(partyText)
+      ) {
+        current.party = partyText; current.credit = current.debit; return true;
+      }
+      return false;
+    };
     for (const band of bands) {
       const f = readBand(band, a);
 
@@ -302,43 +355,35 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
           // instead, and the duplicate Cr line repeats the gross again, so
           // matching on the row's own credit is what tells the two apart,
           // for any expense head or section, not just this one client's.
-          if (
-            current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
-            f.party && f.marker && /^dr$/i.test(f.marker) &&
-            current.credit != null && Math.abs(breakdownAmount - current.credit) < 0.005
-          ) {
-            current.party = f.party;
-          } else if (
-            // A pure EXPENSE ledger (e.g. "Staff Salary Expense") books every
-            // voucher as a DEBIT — there is no credit for the amount-match
-            // above to key on, so the row would otherwise be dropped as a
-            // "payment" (see the credit==null filter below). Here the
-            // deductee instead has to be told apart from the OTHER Cr
-            // breakdown lines on the same voucher (PF Employee, Professional
-            // Tax, VPF, Labour Welfare Fund, …) by the ledger name itself
-            // always containing "- Salary" for the employee's own line — the
-            // one signal invariant across clients — and once found, the
-            // voucher's own debit total (already inclusive of any Bonus
-            // Expense Dr line, since that's what was actually paid/expensed)
-            // is copied into credit so the rest of the pipeline (which reads
-            // only `credit`) treats it exactly like a normal deduction row.
-            current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
-            current.credit == null && current.debit != null &&
-            f.party && f.marker && /^cr$/i.test(f.marker) && /\bsalary\b/i.test(f.party)
-          ) {
-            current.party = f.party;
-            current.credit = current.debit;
-          }
+          const matched = tryMatchBreakdown(breakdownAmount, f.marker, f.party ?? "");
+          // Only worth buffering while the deductee is STILL unresolved — a
+          // failed match after it's already been found (e.g. the duplicate
+          // Cr-gross line that repeats a non-"- Salary" deductee name) has
+          // nothing left to complete, and must not survive to wrongly
+          // intercept the narration lines that follow it as a retry attempt.
+          const stillSearching = !matched && current && current.party && AS_PER_DETAILS_RE.test(current.party);
+          pendingAmount = stillSearching ? { amount: breakdownAmount, marker: f.marker ?? null, text: f.party ?? "" } : null;
           continue;   // breakdown line either way — never a new row
         }
         if (f.onlyParticulars) {
-          // The narration line ("BEING THE INTEREST PAID @ 6% …") — not a
-          // party continuation here (see the field's own doc on TallyPdfRow
-          // for why this is captured for display only, never for matching).
-          if (current && f.party) current.narration = current.narration ? `${current.narration} ${f.party}` : f.party;
+          if (pendingAmount && f.party) {
+            // Completes a wrapped label whose amount sat with its FIRST
+            // line — retry with the two fragments joined, using the SAME
+            // amount/marker seen back then (this line carries neither).
+            tryMatchBreakdown(pendingAmount.amount, pendingAmount.marker, `${pendingAmount.text} ${f.party}`.trim());
+            pendingAmount = null;
+          } else if (current && current.party && !AS_PER_DETAILS_RE.test(current.party) && f.party) {
+            // The narration line ("BEING THE INTEREST PAID @ 6% …") — only
+            // once the deductee is ALREADY resolved (see the field's own doc
+            // on TallyPdfRow for why this is captured for display only,
+            // never for matching); before that, an orphan text-only line
+            // with no pending amount to complete has nothing to attach to.
+            current.narration = current.narration ? `${current.narration} ${f.party}` : f.party;
+          }
           continue;
         }
         awaitingCompoundParty = false;     // anything else starts the NEXT real entry
+        pendingAmount = null;               // and any unconsumed amount belonged to nothing
       }
 
       if (f.onlyParticulars) {

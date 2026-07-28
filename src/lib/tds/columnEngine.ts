@@ -164,10 +164,18 @@ function profileColumns(allRows: Record<string, unknown>[]): ColProfile[] {
       const v = r?.[h]; const s = v == null ? "" : String(v).trim();
       if (!s) continue; ne++;
       if (looksLikePan(s)) pan++;
-      if (looksLikeDate(s)) date++;
+      // Pass the RAW value, not the pre-stringified s: a cellDates:true XLSX
+      // read hands profileColumns a real Date object, and looksLikeDate's own
+      // `v instanceof Date` check only fires on that raw value — stringifying
+      // first (String(dateObj) → "Sun Apr 05 2026 18:29:50 GMT+0000 (…)")
+      // matches neither date regex, so date_of_payment silently failed to
+      // resolve on every real client file read with cellDates (confirmed on
+      // the same Sarjeet Construction 26Q file as the amount/TDS mirroring
+      // bug above — a separate, independent defect this happened to surface).
+      if (looksLikeDate(v)) date++;
       if (looksLikeName(s)) name++;
       const sk = classifySectionCell(s); if (sk === "code") scode++; else if (sk === "keyword") skw++;
-      if (!/[A-Za-z]{2,}/.test(s) && !looksLikeDate(s)) { const n = toNum(v); if (n != null) nums.push(n); }
+      if (!/[A-Za-z]{2,}/.test(s) && !looksLikeDate(v)) { const n = toNum(v); if (n != null) nums.push(n); }
     }
     const sorted = [...nums].sort((a, b) => a - b);
     const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : null;
@@ -314,6 +322,95 @@ export function resolveMapping(allRows: Record<string, unknown>[], aiMap?: Parti
   return { map, report, issues, notes };
 }
 
+// ── Mirrored amount/TDS columns — the "Amount" column IS the TDS column ─────
+// Some clients export a ledger where the "Amount"/"Gross Total" column was
+// mistakenly populated with the TDS figure itself — IDENTICAL to the real TDS
+// column on every row. Confirmed on a real client file (Sarjeet Construction,
+// 26Q Q1): "Gross Total" and "TDS on Contractors" held the exact same value
+// on every single row (e.g. both 563, for what was really a ₹56,295 payment
+// at 1% — 563 ≈ 56295 × 0.01). resolveMapping's ratio-based amount/TDS
+// pairing correctly REFUSES to treat two identical columns as a valid pair —
+// no real TDS rate is ~100%, so its `ratio <= 0.40` gate rejects it — leaving
+// BOTH fields unmapped, which upstream then has nothing better to fall back
+// on than misreading the TDS-duplicate column as Amount.
+//
+// The true gross amount there survived only in a free-text column, either as
+// prose ("BEING 1% TDS ON AMT RS 41415") or as a bare number outright (a few
+// rows had the narration column hold just the number, no prose). This runs
+// BEFORE resolveMapping and adds a literal "amount_paid" key to each row —
+// already an exact HEADER_SYNONYMS match — so resolveMapping's OWN ratio-
+// based pairing picks it up naturally against the TDS-like column with no
+// special-casing needed downstream. A no-op unless this exact anomaly (two
+// near-identical numeric columns AND a recoverable free-text column) is
+// actually present, so it can only recover an otherwise-unreconcilable file.
+const NARRATION_AMOUNT_RE = /\bRs\.?\s*([\d,]+(?:\.\d+)?)/i;
+
+function extractNarrationAmount(raw: unknown): number | null {
+  if (typeof raw === "number") return isFinite(raw) ? raw : null;
+  const m = String(raw ?? "").match(NARRATION_AMOUNT_RE);
+  return m ? toNum(m[1]) : null;
+}
+
+export function rescueMirroredAmountFromNarration(allRows: Record<string, unknown>[]): Record<string, unknown>[] {
+  const headers = new Set<string>();
+  for (const r of allRows) if (r && typeof r === "object") for (const k of Object.keys(r)) if (!INTERNAL_KEYS.has(k)) headers.add(k);
+  const hs = [...headers];
+
+  // Columns that look like pure numbers (money), the same shape check
+  // profileColumns uses elsewhere in this file.
+  const numeric: string[] = [];
+  for (const h of hs) {
+    let ne = 0, nums = 0;
+    for (const r of allRows) {
+      const v = r?.[h]; const s = v == null ? "" : String(v).trim(); if (!s) continue;
+      ne++; if (!/[A-Za-z]{2,}/.test(s) && !looksLikeDate(s) && toNum(v) != null) nums++;
+    }
+    if (ne > 0 && nums / ne >= 0.6) numeric.push(h);
+  }
+  if (numeric.length < 2) return allRows;
+
+  // Do any two numeric columns MIRROR each other (near-identical) on most rows?
+  let mirrorTds: string | null = null;
+  outer: for (let i = 0; i < numeric.length; i++) for (let j = i + 1; j < numeric.length; j++) {
+    const [a, b] = [numeric[i], numeric[j]];
+    let both = 0, same = 0;
+    for (const r of allRows) {
+      const av = toNum(r[a]), bv = toNum(r[b]);
+      if (av == null || bv == null || av <= 0 || bv <= 0) continue;
+      both++; if (Math.abs(av - bv) < 0.01) same++;
+    }
+    if (both >= Math.max(3, allRows.length * 0.5) && same / both >= 0.9) {
+      mirrorTds = normaliseHeader(a).includes("tds") ? a : normaliseHeader(b).includes("tds") ? b : a;
+      break outer;
+    }
+  }
+  if (!mirrorTds) return allRows;
+
+  // Is there a free-text column that yields a LARGER, rate-plausible figure
+  // (vs the mirrored TDS-like value) for most of the same rows?
+  for (const h of hs) {
+    if (h === mirrorTds) continue;
+    let checked = 0, ok = 0, rateOk = 0;
+    for (const r of allRows) {
+      const tv = toNum(r[mirrorTds]);
+      if (tv == null || tv <= 0) continue;
+      const amt = extractNarrationAmount(r[h]);
+      if (amt == null || amt <= 0) continue;
+      checked++;
+      const ratio = tv / amt;
+      if (ratio > 0 && ratio <= 0.40) { ok++; if (nearTdsRate(ratio)) rateOk++; }
+    }
+    if (checked >= Math.max(3, allRows.length * 0.5) && ok / checked >= 0.8 && rateOk / checked >= 0.5) {
+      return allRows.map((r) => {
+        const tv = toNum(r?.[mirrorTds as string]);
+        const amt = tv != null && tv > 0 ? extractNarrationAmount(r?.[h]) : null;
+        return amt != null && amt > 0 ? { ...r, amount_paid: amt } : r;
+      });
+    }
+  }
+  return allRows;
+}
+
 // ── Repeating-month ("wide") layout — a common real-world CA-office format ──
 // Some clients hand over ONE ROW PER EMPLOYEE with a repeating group of
 // columns per calendar month ("APRIL","APRIL - BONUS","APRIL-TDS","MAY",...)
@@ -437,6 +534,13 @@ function coerceField(field: CanonField, v: unknown): string | number | undefined
   if (field === "pan") return String(v).trim().toUpperCase();
   if (field === "amount_paid" || field === "tds_amount" || field === "interest" || field === "rate") {
     const n = toNum(v); return n === null ? undefined : n;
+  }
+  // A cellDates:true XLSX read hands this a real Date object (see profileColumns'
+  // own matching fix) — String(dateObj) is a verbose non-ISO string ("Sun Apr 05
+  // 2026 18:29:50 GMT+0000 (…)") that no downstream date parser expects, so format
+  // it as a clean yyyy-mm-dd instead of falling through to the generic stringify.
+  if ((field === "date_of_payment" || field === "date_of_deduction") && v instanceof Date && !isNaN(v.getTime())) {
+    return `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}-${String(v.getDate()).padStart(2, "0")}`;
   }
   return String(v).trim();
 }

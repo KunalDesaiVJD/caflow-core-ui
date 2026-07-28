@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { explodeMonthlyColumns, resolveMapping, buildCanonicalRow, isAutoColumnHeader } from "./columnEngine";
+import { explodeMonthlyColumns, resolveMapping, buildCanonicalRow, isAutoColumnHeader, rescueMirroredAmountFromNarration } from "./columnEngine";
 
 // Real client file (MICROCIRCUITS INNOVATIONS PVT LTD, 24Q Q1 FY 2026-27) —
 // reported bug: Stage 1 showed 0/70 matched despite PAN overlap on both
@@ -183,5 +183,101 @@ describe("resolveMapping — an auto-generated 'ColumnN' header never outranks a
     ];
     const { report } = resolveMapping(rows);
     expect(report.pan?.header).toBe("Column2");
+  });
+});
+
+// Real client file (Sarjeet Construction, 26Q Q1 FY 2026-27) — reported bug:
+// Stage 1 showed a false "Amount" mismatch, e.g. Office Data 56295 vs
+// Imported Excel 563 (563 ≈ 56295 × 0.01). Root cause: the client's own
+// "Gross Total" column was mistakenly populated with the TDS figure itself —
+// IDENTICAL to the real "TDS on Contractors" column on every row. The true
+// gross amount survived only in a free-text "Narration" column, either as
+// prose ("BEING 1% TDS ON AMT RS 41415") or, for a few rows, as a bare number
+// outright. Rates seen in the real file: 1%, 2%, 10%.
+describe("rescueMirroredAmountFromNarration — the 'Amount' column mirrors the TDS column (real Sarjeet Construction data)", () => {
+  const HEADERS = ["Date", "Particulars", "PAN No.", "Narration", "Gross Total", "TDS on Contractors"];
+  function rowFrom(values: unknown[]): Record<string, unknown> {
+    return Object.fromEntries(HEADERS.map((h, i) => [h, values[i]]));
+  }
+  const ROWS = [
+    rowFrom(["2026-04-05", "RAMBABU YADAV ATGPY7463E", "ATGPY7463E", "BEING 1% TDS ON AMT RS 41415", 414, 414]),
+    rowFrom(["2026-04-07", "RAMBABU YADAV ATGPY7463E", "ATGPY7463E", "BEING 1% TDS ON AMT RS 12255", 123, 123]),
+    rowFrom(["2026-04-28", "Bharat Bavchandbhai Togadiya A/c. ALXPT 8325 K", "ALXPT8325K", "BEING 1% TDS ON AMT RS 709438", 7094, 7094]),
+    // A few real rows carry the true amount as a BARE NUMBER in Narration —
+    // no "BEING...RS" prose at all — at a 10% rate (a different section).
+    rowFrom(["2026-04-30", "Manisha Manoj Dudhat", "AERPD6644N", 19038, 1904, 1904]),
+    rowFrom(["2026-06-01", "NILIMA VIJAY HIRAY", "BITPH4577H", "BEING 1% TDS ON AMT RS 56295", 563, 563]),
+    // Real rates vary — 2% and 10% must resolve just as well as 1%.
+    rowFrom(["2026-06-15", "DHANI CONSTRUCTION", "AAVFD2284J", "BEING 2% TDS ON AMT RS 24312338", 486247, 486247]),
+    rowFrom(["2026-06-20", "ACCUMEN CONSULTING ENGINEERS", "APNPP0163M", "BEING 10% TDS ON AMT RS 35000.00", 3500, 3500]),
+  ];
+
+  it("recovers the true amount from Narration and lets resolveMapping pair it against the TDS-like column", () => {
+    const rescued = rescueMirroredAmountFromNarration(ROWS);
+    const { map, report } = resolveMapping(rescued);
+    expect(report.amount_paid?.header).toBe("amount_paid");
+    expect(report.tds_amount?.header).toBe("Gross Total");
+
+    const built = rescued.map((r) => buildCanonicalRow(r, map));
+    expect(built[0]).toMatchObject({ amount_paid: 41415, tds_amount: 414 });
+    expect(built[1]).toMatchObject({ amount_paid: 12255, tds_amount: 123 });
+    expect(built[2]).toMatchObject({ amount_paid: 709438, tds_amount: 7094 });
+  });
+
+  it("recovers the amount from a BARE-NUMBER narration cell (no 'BEING...RS' prose)", () => {
+    const rescued = rescueMirroredAmountFromNarration(ROWS);
+    const { map } = resolveMapping(rescued);
+    const built = buildCanonicalRow(rescued[3], map);
+    expect(built.amount_paid).toBe(19038);
+    expect(built.tds_amount).toBe(1904);
+  });
+
+  it("reproduces the exact reported case: NILIMA VIJAY's Amount is 56295, not 563", () => {
+    const rescued = rescueMirroredAmountFromNarration(ROWS);
+    const { map } = resolveMapping(rescued);
+    const nilima = buildCanonicalRow(rescued[4], map);
+    expect(nilima.amount_paid).toBe(56295);
+    expect(nilima.tds_amount).toBe(563);
+  });
+
+  it("handles a 2% rate and a 10% rate exactly like the 1% cases", () => {
+    const rescued = rescueMirroredAmountFromNarration(ROWS);
+    const { map } = resolveMapping(rescued);
+    const dhani = buildCanonicalRow(rescued[5], map);
+    const accumen = buildCanonicalRow(rescued[6], map);
+    expect(dhani).toMatchObject({ amount_paid: 24312338, tds_amount: 486247 });
+    expect(accumen).toMatchObject({ amount_paid: 35000, tds_amount: 3500 });
+  });
+
+  it("is a no-op on an ordinary file where Amount and TDS are genuinely different columns", () => {
+    const normal = [
+      { Party: "ABC Traders", PAN: "AAAPA1111A", Amount: 50000, TDS: 500 },
+      { Party: "XYZ Corp", PAN: "BBBPB2222B", Amount: 60000, TDS: 600 },
+    ];
+    expect(rescueMirroredAmountFromNarration(normal)).toBe(normal);
+  });
+
+  it("does not fire when there is only ONE numeric column (nothing to mirror against)", () => {
+    const rows = [{ Party: "ABC Traders", PAN: "AAAPA1111A", Amount: 50000 }];
+    expect(rescueMirroredAmountFromNarration(rows)).toBe(rows);
+  });
+});
+
+// Companion bug found while investigating the above: a cellDates:true XLSX
+// read (the app's own default) hands profileColumns a real Date OBJECT, not
+// a string — but the date-detection check stringified the cell BEFORE
+// testing it, so looksLikeDate's `instanceof Date` branch never fired and
+// date_of_payment silently failed to resolve on every such file.
+describe("resolveMapping / buildCanonicalRow — a real Date object (cellDates:true) is recognised and formatted cleanly", () => {
+  it("detects the date column and stores a clean yyyy-mm-dd string, not Date's verbose toString()", () => {
+    const rows = [
+      { Name: "ABC Traders", PAN: "AAAPA1111A", Date: new Date(2026, 3, 5), Amount: 50000, TDS: 500 },
+      { Name: "XYZ Corp", PAN: "BBBPB2222B", Date: new Date(2026, 4, 31), Amount: 60000, TDS: 600 },
+    ];
+    const { map, report } = resolveMapping(rows);
+    expect(report.date_of_payment?.header).toBe("Date");
+    const built = rows.map((r) => buildCanonicalRow(r, map));
+    expect(built[0].date_of_payment).toBe("2026-04-05");
+    expect(built[1].date_of_payment).toBe("2026-05-31");
   });
 });

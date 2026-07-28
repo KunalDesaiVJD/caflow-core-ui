@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from "vitest";
 import { nameCompare, nameEvidence, rank, canonicalSection, amountsMatch, normalizeName } from "./match";
-import { TIERS, AUTO_MATCH_MAX_RANK } from "./assignment";
+import { TIERS, AUTO_MATCH_MAX_RANK, assign, type AsgOffice, type AsgLedger } from "./assignment";
 import { reconcileTally, reconcileTallyFull, type OfficeTxn, type TallyRow, type PartyMap } from "./tallyRecon";
 
 describe("nameCompare — spelling variants vs genuinely different names", () => {
@@ -1057,6 +1057,40 @@ describe("amountsMatch — rounding, not an unbounded percentage", () => {
     const out = reconcileTally([txn("a", "ACME TRADING", "2026-03-05", 200000)],
       [row(0, "Acme Trading", "2026-03-05", 199100)], null);
     expect(out[0].result).not.toBe("Matched");
+  });
+});
+
+describe("assign — a NULL imported credit must never fabricate a pairing against a genuine zero-TDS office record", () => {
+  // Real bug (MICROCIRCUITS 24Q, Devansiben Mukeshbhai Panchal): her office
+  // record (tds=0, a low-salary employee under the 192B threshold) got paired
+  // to a completely blank/garbage imported row (name/PAN/date all null) and
+  // reported as "Mismatch — Name, PAN, Date, Amount differ" instead of the
+  // correct "Office Data Only" — because amountsMatch() coalesces null to 0,
+  // so a null credit spuriously satisfied moneyEq against her genuine 0 tds,
+  // and the RESIDUE closer force-paired the only surviving candidate for her
+  // PAN without requiring section agreement.
+  const devansiben: AsgOffice = { id: "devansiben", name: "DEVANSIBEN MUKESHBHAI PANCHAL", dateIso: "2026-06-30", amount: 23038, tds: 0, section: "192B", pan: "DTMPP2980Q", assignable: true };
+  const uttamkumar: AsgOffice = { id: "uttamkumar", name: "UTTAMKUMAR VINODBHAI THUMMAR", dateIso: "2026-05-31", amount: 73038, tds: 500, section: "192B", pan: "AZAPT9465D", assignable: true };
+  const ghostRow: AsgLedger = { pos: 0, party: null, iso: null, credit: null, section: null, pan: null };
+  const uttamkumarLedger: AsgLedger = { pos: 1, party: "Uttamkumar Vinodbhai Thummar - Salary", iso: "2026-05-31", credit: 500, section: "192B", pan: null };
+
+  it("leaves the zero-TDS office record UNMATCHED (office_only) rather than pairing it to a null-credit ghost row", () => {
+    const { outcomes } = assign([devansiben, uttamkumar], [ghostRow, uttamkumarLedger]);
+    const out = outcomes.find((o) => o.oi === 0)!;
+    expect(out.ti).toBeNull();       // must NOT pair to the ghost row
+  });
+
+  it("still pairs a genuinely non-zero-TDS office record to its own row (Uttamkumar unaffected)", () => {
+    const { outcomes } = assign([devansiben, uttamkumar], [ghostRow, uttamkumarLedger]);
+    const out = outcomes.find((o) => o.oi === 1)!;
+    expect(out.ti).toBe(1);
+  });
+
+  it("still allows a GENUINELY zero credit (not null) to match a genuine zero office figure via moneyEq alone", () => {
+    const officeNoPan: AsgOffice = { id: "x", name: "Some Employee", dateIso: null, amount: 5000, tds: 0, section: "192B", assignable: true };
+    const zeroCredit: AsgLedger = { pos: 0, party: "Some Employee - Salary", iso: null, credit: 0, section: "192B" };
+    const { outcomes } = assign([officeNoPan], [zeroCredit]);
+    expect(outcomes[0].ti).toBe(0);
   });
 });
 

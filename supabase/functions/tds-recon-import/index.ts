@@ -34,6 +34,7 @@ import {
   resolveMapping,
   buildCanonicalRow as buildCanonicalFromMap,
   explodeMonthlyColumns,
+  rescueMirroredAmountFromNarration,
 } from "../_shared/tdsColumnEngine.ts";
 
 // Reflect the browser's requested headers on the preflight. Newer supabase-js
@@ -420,7 +421,12 @@ serve(async (req) => {
       // (MICROCIRCUITS INNOVATIONS), so scoping here can't regress it while
       // fully protecting every other form's already-correct behaviour.
       const rawRows = (rows as Record<string, unknown>[]).slice(0, 20000);
-      const allRows = resolvedForm === "24Q" ? explodeMonthlyColumns(rawRows, filing.quarter, filing.financial_year) : rawRows;
+      const monthExploded = resolvedForm === "24Q" ? explodeMonthlyColumns(rawRows, filing.quarter, filing.financial_year) : rawRows;
+      // Runs for every form (not gated like explodeMonthlyColumns above): it
+      // only ever fires on the narrow, specific anomaly of two near-identical
+      // money columns plus a recoverable free-text column, so it can only
+      // recover an otherwise-unreconcilable file — see its own doc comment.
+      const allRows = rescueMirroredAmountFromNarration(monthExploded);
 
       // 1) Resolve the header→field map with the CONFIDENCE-SCORED, VALIDATED
       //    engine: every column is profiled by the shape of its VALUES, fields are

@@ -78,8 +78,12 @@ function compoundJournalRows(y: number, opts: {
 function salaryExpenseVoucherRows(y: number, opts: {
   date?: string; vchNo: string; debit: number;
   /** Cr breakdown lines in the order Tally actually prints them, e.g.
-   *  [{ label: "Nevil Thummar - Salary", amount: 49372 }, { label: "PF Employee", amount: 1800 }]. */
-  crLines: { label: string; amount: number }[];
+   *  [{ label: "Nevil Thummar - Salary", amount: 49372 }, { label: "PF Employee", amount: 1800 }].
+   *  A long label WRAPS onto its own line below — confirmed on a real ledger
+   *  that the amount stays with the FIRST line and the continuation prints
+   *  alone on the next, e.g. "Keshviben Hasmukhbhau" (+amount), "Gami -
+   *  Salary" (alone) — set `wrap` to reproduce that exact shape. */
+  crLines: { label: string; amount: number; wrap?: string }[];
   /** Optional Dr breakdown line ("Bonus Expense") before the Cr lines. */
   bonusDr?: { label: string; amount: number };
 }): PdfTextItem[] {
@@ -101,6 +105,10 @@ function salaryExpenseVoucherRows(y: number, opts: {
     items.push({ x: 105.0, y: lineY, w: cr.label.length * 4.3, str: cr.label });
     items.push({ x: 291.8, y: lineY, w: 52.8, str: `${fmt(cr.amount)} Cr` });
     lineY -= 10.8;
+    if (cr.wrap) {
+      items.push({ x: 105.0, y: lineY, w: cr.wrap.length * 4.3, str: cr.wrap });
+      lineY -= 10.8;
+    }
   }
   return items;
 }
@@ -317,6 +325,104 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
       { party: "Nevil Thummar - Salary", credit: 31372, date: "30-Apr-26" },
       { party: "Kunjal Hasmukhbhai Gami - Salary", credit: 39705, date: "30-Apr-26" }, // inherited
     ]);
+  });
+
+  // REGRESSION — real MICROCIRCUITS "salary expense.pdf" (all 7 pages read):
+  // an employee whose full name is too long for one line wraps onto a SECOND
+  // baseline, but the AMOUNT stays pinned to the FIRST line alongside only
+  // half the name (e.g. "Keshviben Hasmukhbhau  23,000.00 Cr" then "Gami -
+  // Salary" alone below) — confirmed against the real PDF's own pdfjs
+  // coordinates. The wrap must not lose the row, and the reassembled name
+  // must be the FULL name, not just whichever half happened to sit with the
+  // amount or the "- Salary" word.
+  it("reassembles a wrapped employee name whose amount sits with the FIRST half, not the half containing '- Salary'", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        date: "30-Apr-26", vchNo: "18", debit: 25000,
+        crLines: [
+          { label: "Keshviben Hasmukhbhau", amount: 23000, wrap: "Gami - Salary" },
+          { label: "PF Employee", amount: 1800 },
+          { label: "Professional Tax - (AMC) -", amount: 200, wrap: "Employee" },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Keshviben Hasmukhbhau Gami - Salary");
+    expect(rows[0].credit).toBe(25000);   // the voucher's own debit total
+  });
+
+  it("does the same across two consecutive wrapped-name vouchers with no cross-contamination (real Devansiben/Uttamkumar case)", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        vchNo: "22", debit: 73038,
+        crLines: [
+          { label: "Uttamkumar Vinodbhai", amount: 71038, wrap: "Thummar - Salary" },
+          { label: "PF Employee", amount: 1800 },
+          { label: "Professional Tax - (AMC) -", amount: 200, wrap: "Employee" },
+        ],
+      }),
+      ...salaryExpenseVoucherRows(414.1, {
+        vchNo: "23", debit: 23038,
+        crLines: [
+          { label: "Devansiben Mukeshbhai", amount: 21038, wrap: "Panchal - Salary" },
+          { label: "PF Employee", amount: 1800 },
+          { label: "Professional Tax - (AMC) -", amount: 200, wrap: "Employee" },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows.map(r => ({ party: r.party, credit: r.credit }))).toEqual([
+      { party: "Uttamkumar Vinodbhai Thummar - Salary", credit: 73038 },
+      { party: "Devansiben Mukeshbhai Panchal - Salary", credit: 23038 },
+    ]);
+  });
+});
+
+// REGRESSION — real MICROCIRCUITS ledger, continuation pages (2 onward): the
+// "Date" and "Particulars" header labels sat exactly 56px apart (66 and 122)
+// and EVERY breakdown line's indented text printed at their exact midpoint
+// (94) — an equal-distance tie in readBand's nearest-text-column heuristic
+// that used to resolve to "date", silently swallowing the employee's own
+// name as a garbage date value. That corrupted `lastDate` for every
+// following row on the page and derailed the compound-party state machine,
+// losing every voucher on the page from that point on (confirmed: an entire
+// 7-page real ledger dropped from 54 real vouchers to 6 before this fix).
+describe("parseTallyPdfPages — a Date/Particulars anchor tie never swallows breakdown text as a date (real MICROCIRCUITS page-2+ geometry)", () => {
+  const TIE_HEADER: PdfTextItem[] = [
+    { x: 39, y: 795, w: 224.8, str: "MICROCIRCUITS INNOVATIONS PRIVATE LIMITED" },
+    { x: 39, y: 782, w: 86.8, str: "Staff Salary Expense" },
+    { x: 143, y: 782, w: 65.1, str: "Ledger Account" },
+    { x: 232, y: 782, w: 91.0, str: "1-Apr-26 to 30-Jun-26" },
+    { x: 66, y: 767, w: 19.6, str: "Date" },
+    { x: 122, y: 768, w: 48.1, str: "Particulars" },
+    { x: 545, y: 768, w: 26.9, str: "Credit" },
+    { x: 459, y: 768, w: 23.3, str: "Debit" },
+    { x: 357, y: 767, w: 33.1, str: "Vch No." },
+    { x: 213, y: 767, w: 39.3, str: "Vch Type" },
+  ];
+  it("resolves a voucher on a page whose Date/Particulars anchors are 56px apart and whose breakdown text sits at the exact midpoint (x=94)", () => {
+    const page: PdfTextItem[] = [
+      ...TIE_HEADER,
+      { x: 44, y: 716, w: 37.2, str: "30-Apr-26" },
+      { x: 88, y: 715, w: 8.1, str: "To" },
+      { x: 102, y: 716, w: 65.6, str: "(as per details)" },
+      { x: 462, y: 715, w: 41.4, str: "25,000.00" },
+      { x: 435, y: 716, w: 9.3, str: "18" },
+      { x: 314, y: 717, w: 30.2, str: "Journal" },
+      { x: 94, y: 702, w: 102.3, str: "Keshviben Hasmukhbhau" },
+      { x: 259, y: 702, w: 27.8, str: "23,000.00 Cr" },
+      { x: 94, y: 691, w: 53.5, str: "Gami - Salary" },
+      { x: 94, y: 678, w: 52.6, str: "PF Employee" },
+      { x: 259, y: 678, w: 28.0, str: "1,800.00 Cr" },
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].date).toBe("30-Apr-26");                              // not "Keshviben Hasmukhbhau"
+    expect(rows[0].party).toBe("Keshviben Hasmukhbhau Gami - Salary");
+    expect(rows[0].credit).toBe(25000);
   });
 });
 

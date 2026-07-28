@@ -444,7 +444,16 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
       if (oPan && tPan && oPan !== tPan) continue;
       const panEq = !!oPan && !!tPan && oPan === tPan;
       const dateEq = !!o.dateIso && !!t.iso && o.dateIso === t.iso;
-      const moneyEq = amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount);
+      // A NULL imported credit must never manufacture an edge on its own: amountsMatch
+      // coalesces null to 0, so without this guard a completely blank/garbage ledger
+      // row (credit=null) spuriously "matches" any office record whose own tds/amount
+      // is genuinely 0 (e.g. a low-salary employee under the 192B threshold) — and once
+      // that's the only surviving candidate for a PAN, the RESIDUE closer force-pairs it
+      // (no sectionEq required), producing a fabricated "Name/PAN/Date/Amount differ"
+      // report instead of correctly falling through to office_only. A genuinely-zero
+      // credit (t.credit === 0, not null) must still be free to match a zero office
+      // figure — only null is excluded here.
+      const moneyEq = t.credit != null && (amountsMatch(t.credit, o.tds) || amountsMatch(t.credit, o.amount));
       const isMapped = !!mappedTo && norm(t.party) === norm(mappedTo);
       // PAN equality is proof of identity, so — like a saved mapping — it earns an edge
       // on its own even with no date/amount corroboration (the figures are then compared
