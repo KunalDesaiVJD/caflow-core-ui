@@ -75,6 +75,7 @@ const RequiredDocsMaster       = lazy(() => import("./pages/RequiredDocsMaster")
 const TaxAuditTemplateSettings = lazy(() => import("./pages/TaxAuditTemplateSettings"));
 const Chat                     = lazy(() => import("./pages/Chat"));
 const Depreciation             = lazy(() => import("./pages/Depreciation"));
+const Msme43b                  = lazy(() => import("./pages/Msme43b"));
 const AuditPipeline            = lazy(() => import("./pages/AuditPipeline"));
 const AuditMasterConfig        = lazy(() => import("./pages/AuditMasterConfig"));
 const AuditWorksheetPageWrapper = lazy(() => import("./pages/AuditWorksheetPageWrapper"));
@@ -295,6 +296,7 @@ const App = () => (
               <Route path="/notices/:id" element={<NoticeDetail />} />
               <Route path="/chat" element={<Chat />} />
               <Route path="/depreciation" element={<Depreciation />} />
+              <Route path="/msme-43b" element={<Msme43b />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/users" element={<UserManagement />} />
