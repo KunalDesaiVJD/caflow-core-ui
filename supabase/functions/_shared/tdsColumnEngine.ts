@@ -368,19 +368,31 @@ export function explodeMonthlyColumns(
     const m = MONTH_PREFIX_RE.exec(norm);
     if (!m) continue;
     const monthNum = MONTH_TOKENS[m[1]];
+    // EXACT suffix match only ("", "tds", "bonus") — not .includes(). A real
+    // per-transaction file's multi-row header merge (extractSheetRows) can
+    // legitimately produce a header like "Feb-26 … TDS PAID DATE CHALLAN BSR"
+    // (normalises to "feb26tdspaiddatechallanbsr"), which still starts with a
+    // month token and still .includes("tds") — that used to be enough to
+    // count as a real month/TDS column group and (combined with ≥2 such
+    // headers) wrongly explode a normal 26Q file, stripping its own "Total"
+    // amount column and leaving the TDS column to be misread as Amount.
     const rest = norm.slice(m[1].length);
-    const kind = rest.includes("tds") ? "tds" : rest.includes("bonus") ? "bonus" : rest === "" ? "base" : null;
-    if (!kind) continue; // an unrecognised suffix on a month-prefixed header — leave it alone rather than guess
+    const kind = rest === "" ? "base" : rest === "tds" ? "tds" : rest === "bonus" ? "bonus" : null;
+    if (!kind) continue; // an unrecognised/merged suffix on a month-prefixed header — leave it alone rather than guess
     const g = monthCols.get(monthNum) ?? {};
     g[kind] = h;
     monthCols.set(monthNum, g);
   }
 
-  // Require at least TWO distinct months to actually be present before treating
-  // this as a wide-monthly layout — a single stray column that happens to start
-  // with a month name (e.g. "March closing balance" on an unrelated sheet) must
-  // never trigger this transformation.
-  const monthsWithData = [...monthCols.entries()].filter(([, g]) => g.base || g.tds);
+  // Require at least TWO distinct months to actually carry a BASE ("APRIL",
+  // not just "APRIL-TDS") column before treating this as a wide-monthly
+  // layout — a genuine per-employee-per-month salary sheet always has a base
+  // pay column per month; requiring it (rather than accepting a lone "-TDS"
+  // group on its own) is a second, independent guard against the same
+  // false-trigger the exact-suffix-match above already closes, and a single
+  // stray column that happens to start with a month name (e.g. "March
+  // closing balance" on an unrelated sheet) still never trips this either way.
+  const monthsWithData = [...monthCols.entries()].filter(([, g]) => g.base);
   if (monthsWithData.length < 2) return allRows;
 
   const relevantMonths = monthsWithData.filter(([m]) => quarterMonths.includes(m));

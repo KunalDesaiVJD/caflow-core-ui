@@ -407,7 +407,20 @@ serve(async (req) => {
       // "APRIL-TDS", "MAY", "MAY-TDS", ... one row per employee for the whole
       // year) into row-per-employee-per-month, matching Office Data's own
       // shape — a no-op for every other layout (see its own doc comment).
-      const allRows = explodeMonthlyColumns((rows as Record<string, unknown>[]).slice(0, 20000), filing.quarter, filing.financial_year);
+      // Gated to 24Q ONLY: a 26Q/27EQ per-transaction file's multi-row header
+      // merge (extractSheetRows) can legitimately produce a header literally
+      // containing a month name plus "tds" (e.g. a merged "Feb-26 … TDS PAID
+      // DATE CHALLAN BSR"), which — even though it isn't a real wide-monthly
+      // salary layout — was enough to trip the detector, strip the file's own
+      // "Total"-prefixed amount column, and leave the TDS column as the last
+      // numeric candidate standing, silently read as Amount (confirmed: a
+      // real 26Q file showed Office Amount 56295 vs a wrongly-read imported
+      // "Amount" of 563 — exactly 1% of 56295, i.e. the TDS-at-194C-rate
+      // figure). 24Q is the only form this layout has ever been seen on
+      // (MICROCIRCUITS INNOVATIONS), so scoping here can't regress it while
+      // fully protecting every other form's already-correct behaviour.
+      const rawRows = (rows as Record<string, unknown>[]).slice(0, 20000);
+      const allRows = resolvedForm === "24Q" ? explodeMonthlyColumns(rawRows, filing.quarter, filing.financial_year) : rawRows;
 
       // 1) Resolve the header→field map with the CONFIDENCE-SCORED, VALIDATED
       //    engine: every column is profiled by the shape of its VALUES, fields are
@@ -474,11 +487,29 @@ serve(async (req) => {
       console.log(`tds-recon-import: ${mappingSource} mapping — ${tabularMappedRows}/${inputRows} rows mapped →`, JSON.stringify(mappingReport));
     }
 
-    // drop wholly-empty rows the model may echo — keeping each row paired with its
-    // source sheet, which the de-duplication below depends on.
+    // Drop wholly-empty rows the model may echo, AND rows carrying a name and
+    // NOTHING else — no PAN, no amount, no TDS, no date. A genuine deductee
+    // transaction always has at least one of those; a name-only row is noise
+    // from a structurally-unrelated column winning the deductee_name slot
+    // (e.g. a ledger-name list or an index sheet's row bleeding into a messy
+    // multi-block workbook via columnEngine's addSecondary() name fallback —
+    // verified on a real MICROCIRCUITS file where "{Employee} - Salary" rows
+    // with every other field blank surfaced as a false "imported file only"
+    // mismatch even though the real employee was correctly in Office Data).
+    // Keeping each row paired with its source sheet, which the de-duplication
+    // below depends on.
+    let noiseRowsRemoved = 0;
     const mappedWithSheet = collected
       .map((r, i) => ({ r, sheet: collectedSheets[i] ?? "" }))
-      .filter(({ r }) => r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null);
+      .filter(({ r }) => {
+        const hasAnySignal = r.deductee_name || r.pan || r.amount_paid != null || r.tds_amount != null;
+        if (!hasAnySignal) return false;
+        const hasPlausibilitySignal = (r.pan != null && String(r.pan).trim() !== "")
+          || r.amount_paid != null || r.tds_amount != null
+          || (r.date_of_payment != null && String(r.date_of_payment).trim() !== "");
+        if (!hasPlausibilitySignal) { noiseRowsRemoved++; return false; }
+        return true;
+      });
     const mapped = mappedWithSheet.map(({ r }) => r);
 
     // CROSS-SHEET ECHO DE-DUPLICATION.
@@ -529,7 +560,7 @@ serve(async (req) => {
     // and — when the caller passes the Office Data count — a warning on a big gap.
     const PAN_OK = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
     const distinctPans = new Set(canonical.map(r => String(r.pan ?? "").toUpperCase().replace(/\s+/g, "")).filter(p => PAN_OK.test(p))).size;
-    const reconciliation: Record<string, unknown> = { imported: canonical.length, distinct_pans: distinctPans, duplicates_removed: duplicatesRemoved };
+    const reconciliation: Record<string, unknown> = { imported: canonical.length, distinct_pans: distinctPans, duplicates_removed: duplicatesRemoved, noise_rows_removed: noiseRowsRemoved };
     if (tabularInputRows != null) {
       reconciliation.input_rows = tabularInputRows;
       reconciliation.dropped = Math.max(0, tabularInputRows - (tabularMappedRows ?? 0));

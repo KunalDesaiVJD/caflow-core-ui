@@ -59,6 +59,17 @@
  *     is always the deductee, never the generic expense head above it,
  *     regardless of what that head is called for a given section.
  *
+ *     A pure EXPENSE ledger (e.g. "Staff Salary Expense") books the SAME
+ *     "(as per details)" Journal shape, but the voucher is a DEBIT (there is
+ *     no TDS credit to key on — this ledger doesn't record deductions, it
+ *     records what was paid/expensed). There, the deductee is whichever Cr
+ *     breakdown line's own text contains "- Salary" (e.g. "Nevil Thummar -
+ *     Salary … Cr"), told apart from the OTHER Cr lines on the same voucher
+ *     (PF Employee, Professional Tax, VPF, Labour Welfare Fund, …) purely by
+ *     that suffix — and the voucher's own debit total (not that Cr line's
+ *     amount, which is a net-payable figure) is copied into `credit` so the
+ *     rest of the pipeline reads it exactly like a normal deduction row.
+ *
  * Amount columns are told apart by RIGHT EDGE (Tally right-aligns figures), using
  * the Debit/Credit header labels as the reference — not a hard-coded x.
  */
@@ -80,7 +91,12 @@ export interface TallyPdfRow {
   iso: string | null;         // normalised yyyy-mm-dd
   party: string | null;       // full party, continuation lines joined
   debit: number | null;
-  credit: number | null;      // the TDS amount for a "By" deduction row
+  credit: number | null;      // the TDS amount for a "By" deduction row, OR
+                               // (for a pure expense ledger like "Staff Salary
+                               // Expense", which only ever books a Dr) the
+                               // voucher's own debit total, copied across —
+                               // see the "- Salary" breakdown-line branch in
+                               // parseTallyPdfPages below
   vch_type: string | null;    // captured for display only — NEVER reconciled on
   vch_no: string | null;      // captured for display only — NEVER reconciled on
   section: string | null;     // from this ledger's name
@@ -292,6 +308,26 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
             current.credit != null && Math.abs(breakdownAmount - current.credit) < 0.005
           ) {
             current.party = f.party;
+          } else if (
+            // A pure EXPENSE ledger (e.g. "Staff Salary Expense") books every
+            // voucher as a DEBIT — there is no credit for the amount-match
+            // above to key on, so the row would otherwise be dropped as a
+            // "payment" (see the credit==null filter below). Here the
+            // deductee instead has to be told apart from the OTHER Cr
+            // breakdown lines on the same voucher (PF Employee, Professional
+            // Tax, VPF, Labour Welfare Fund, …) by the ledger name itself
+            // always containing "- Salary" for the employee's own line — the
+            // one signal invariant across clients — and once found, the
+            // voucher's own debit total (already inclusive of any Bonus
+            // Expense Dr line, since that's what was actually paid/expensed)
+            // is copied into credit so the rest of the pipeline (which reads
+            // only `credit`) treats it exactly like a normal deduction row.
+            current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
+            current.credit == null && current.debit != null &&
+            f.party && f.marker && /^cr$/i.test(f.marker) && /\bsalary\b/i.test(f.party)
+          ) {
+            current.party = f.party;
+            current.credit = current.debit;
           }
           continue;   // breakdown line either way — never a new row
         }

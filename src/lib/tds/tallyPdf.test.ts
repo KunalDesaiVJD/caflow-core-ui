@@ -68,6 +68,43 @@ function compoundJournalRows(y: number, opts: {
   return items;
 }
 
+/** A pure EXPENSE-ledger compound "(as per details)" Journal voucher — e.g.
+ *  Tally's "Staff Salary Expense" ledger, which books every voucher as a
+ *  DEBIT (there is no credit for compoundJournalRows' amount-match to key
+ *  on). The employee is identified by whichever Cr breakdown line's own text
+ *  contains "- Salary" — told apart from the OTHER Cr lines on the same
+ *  voucher (PF Employee, Professional Tax, …) purely by that suffix — exactly
+ *  reproducing the real Microcircuits "salary expense.pdf" ledger's layout. */
+function salaryExpenseVoucherRows(y: number, opts: {
+  date?: string; vchNo: string; debit: number;
+  /** Cr breakdown lines in the order Tally actually prints them, e.g.
+   *  [{ label: "Nevil Thummar - Salary", amount: 49372 }, { label: "PF Employee", amount: 1800 }]. */
+  crLines: { label: string; amount: number }[];
+  /** Optional Dr breakdown line ("Bonus Expense") before the Cr lines. */
+  bonusDr?: { label: string; amount: number };
+}): PdfTextItem[] {
+  const items: PdfTextItem[] = [];
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+  if (opts.date) items.push({ x: 40.8, y, w: 57.7, str: `${opts.date} To` });
+  else items.push({ x: 86.6, y, w: 11.6, str: "To" });
+  items.push({ x: 426.2, y, w: 10.0, str: opts.vchNo });
+  items.push({ x: 280.7, y: y - 0.3, w: 32.6, str: "Journal" });
+  items.push({ x: 456.0, y: y - 0.8, w: 58.0, str: fmt(opts.debit) });
+  items.push({ x: 104.3, y: y - 1.2, w: 70.2, str: "(as per details)" });
+  let lineY = y - 11;
+  if (opts.bonusDr) {
+    items.push({ x: 105.0, y: lineY, w: opts.bonusDr.label.length * 5.2, str: opts.bonusDr.label });
+    items.push({ x: 291.8, y: lineY, w: 52.8, str: `${fmt(opts.bonusDr.amount)} Dr` });
+    lineY -= 10.8;
+  }
+  for (const cr of opts.crLines) {
+    items.push({ x: 105.0, y: lineY, w: cr.label.length * 4.3, str: cr.label });
+    items.push({ x: 291.8, y: lineY, w: 52.8, str: `${fmt(cr.amount)} Cr` });
+    lineY -= 10.8;
+  }
+  return items;
+}
+
 function challanPaymentRow(y: number, opts: { date: string; bank: string; vchNo: string; debit: number }): PdfTextItem[] {
   return [
     { x: 40.8, y, w: 57.7, str: `${opts.date} To` },
@@ -179,6 +216,107 @@ describe("parseTallyPdfPages — compound '(as per details)' Journal rows", () =
     expect(rows).toHaveLength(1);           // only the genuine deduction
     expect(rows[0].party).toBe("Nikhilbhai Bhikhabhai Patel (UK)");
     expect(skipped.payments).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound rows (real Microcircuits data)", () => {
+  it("identifies the Cr breakdown line containing '- Salary' as the deductee, and copies the voucher's own DEBIT total (not that line's net-payable amount) into credit", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        date: "30-Apr-26", vchNo: "1", debit: 31372,
+        crLines: [
+          { label: "Nevil Thummar - Salary", amount: 49372 },
+          { label: "PF Employee", amount: 1800 },
+          { label: "Professional Tax - (AMC) - Employee", amount: 200 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Nevil Thummar - Salary");
+    expect(rows[0].credit).toBe(31372);      // the voucher's own debit — NOT 49372
+    expect(rows[0].date).toBe("30-Apr-26");
+  });
+
+  it("is unaffected by breakdown-line ORDER — the '- Salary' line still wins when PF/Professional Tax print first", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        vchNo: "2", debit: 39705,
+        crLines: [
+          { label: "PF Employee", amount: 1800 },
+          { label: "Professional Tax - (AMC) - Employee", amount: 200 },
+          { label: "Kunjal Hasmukhbhai Gami - Salary", amount: 37705 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Kunjal Hasmukhbhai Gami - Salary");
+    expect(rows[0].credit).toBe(39705);
+  });
+
+  it("ignores an optional 'Bonus Expense' Dr breakdown line ahead of the Cr lines", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        vchNo: "3", debit: 45000,
+        bonusDr: { label: "Bonus Expense", amount: 5000 },
+        crLines: [
+          { label: "Urmi Bansi Patel - Salary", amount: 43000 },
+          { label: "PF Employee", amount: 2000 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Urmi Bansi Patel - Salary");
+    expect(rows[0].credit).toBe(45000);
+  });
+
+  it("still drops the voucher entirely when NO Cr breakdown line is recoverable (no '- Salary' line at all)", () => {
+    // A voucher whose breakdown is only deductions (PF/Professional Tax), no
+    // named employee "- Salary" line — must stay a dropped "payment" row, the
+    // same guarantee the pre-existing challan/payment tests rely on.
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        vchNo: "4", debit: 2000,
+        crLines: [
+          { label: "PF Employee", amount: 1800 },
+          { label: "Professional Tax - (AMC) - Employee", amount: 200 },
+        ],
+      }),
+    ];
+    const { rows, skipped } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(0);
+    expect(skipped.payments).toBeGreaterThanOrEqual(1);
+  });
+
+  it("processes multiple employees' vouchers on one page independently, no cross-contamination", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        date: "30-Apr-26", vchNo: "1", debit: 31372,
+        crLines: [
+          { label: "Nevil Thummar - Salary", amount: 49372 },
+          { label: "PF Employee", amount: 1800 },
+        ],
+      }),
+      ...salaryExpenseVoucherRows(414.1, {
+        vchNo: "2", debit: 39705,
+        crLines: [
+          { label: "Kunjal Hasmukhbhai Gami - Salary", amount: 37705 },
+          { label: "PF Employee", amount: 1800 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows.map(r => ({ party: r.party, credit: r.credit, date: r.date }))).toEqual([
+      { party: "Nevil Thummar - Salary", credit: 31372, date: "30-Apr-26" },
+      { party: "Kunjal Hasmukhbhai Gami - Salary", credit: 39705, date: "30-Apr-26" }, // inherited
+    ]);
   });
 });
 

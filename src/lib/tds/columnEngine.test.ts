@@ -75,6 +75,39 @@ describe("explodeMonthlyColumns — repeating per-month layout", () => {
     expect(exploded).toContainEqual(otherSheetRow);
   });
 
+  // REGRESSION (26Q false mismatch, e.g. Office Amount 56295 vs a wrongly-read
+  // imported "Amount" of 563 — exactly 1% of 56295, the TDS-at-194C-rate
+  // figure): a genuine per-transaction 26Q file was wrongly treated as a
+  // wide-monthly layout because its multi-row header merge (extractSheetRows)
+  // produces headers like "Feb-26 TDS PAID DATE CHALLAN BSR" — these still
+  // START with a month token and used to still .includes("tds"), which (with
+  // ≥2 such headers) was enough to trigger explosion: the file's own "Total"
+  // amount column got dropped and the TDS column was left to be misread as
+  // Amount. Two independent guards now close this: an EXACT suffix match
+  // ("", "tds", "bonus" only, not a substring check) and requiring a real
+  // base ("APR") column — not a lone "-TDS" group — before counting a month
+  // as data at all.
+  it("does NOT explode a normal per-transaction file whose multi-row header merge produced month-token-prefixed TDS labels (no base salary columns)", () => {
+    const row = {
+      "Party Name": "NILIMA VIJAY", "PAN": "AAAPV1234K", "Section": "194C",
+      "Amount": 56295, "TDS": 563,
+      "Feb-26 TDS PAID DATE CHALLAN BSR": "10/02/2026", "Mar-26 TDS PAID DATE CHALLAN BSR": "10/03/2026",
+    };
+    const exploded = explodeMonthlyColumns([row], "Q4", "2025-26");
+    expect(exploded).toEqual([row]);
+    const { map, report } = resolveMapping(exploded);
+    expect(report.amount_paid?.header).toBe("Amount");
+    expect(report.tds_amount?.header).toBe("TDS");
+    const built = buildCanonicalRow(exploded[0], map);
+    expect(built.amount_paid).toBe(56295);
+    expect(built.tds_amount).toBe(563);
+  });
+
+  it("does NOT treat a lone '-TDS' column group (no matching base 'APRIL'/'MAY' column) as wide-monthly data", () => {
+    const rows = [{ "PAN": "AAAPV1234K", "Name": "Some Employee", "APR-TDS": 100, "MAY-TDS": 120 }];
+    expect(explodeMonthlyColumns(rows, "Q1", "2026-27")).toBe(rows);
+  });
+
   it("end-to-end: resolveMapping + buildCanonicalRow now correctly resolve amount_paid/tds_amount/date_of_payment for every employee", () => {
     const exploded = explodeMonthlyColumns(SALARY_ROWS, "Q1", "2026-27");
     const { map, report } = resolveMapping(exploded);
