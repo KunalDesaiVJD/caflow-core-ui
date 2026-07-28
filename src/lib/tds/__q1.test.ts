@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import * as XLSX from "xlsx";
 
-const FILE = "K:/eTDS202627/ca flow TDS 26-27/MICROCIRCUTS INNOVATION PRIVATE LIMITED/Q1.xls";
+const FILE = "K:/eTDS202627/ca flow TDS 26-27/KWIK TEAM SUPPORT SERVICE PRIVATE LIMITED/24 Q/Q1.xls";
 
 describe("REAL FILE — Genius Q1.xls (24Q)", () => {
   it("dumps sheet names and the rows around the salary/taxable detail", () => {
