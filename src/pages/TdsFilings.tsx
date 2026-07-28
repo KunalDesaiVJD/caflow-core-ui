@@ -154,7 +154,13 @@ const TdsFilings = () => {
 
   const fetchUsers = useCallback(async () => {
     const firmId = await resolveFirmId();
-    let q = supabase.from("users").select("id, name").eq("is_active", true);
+    // Excludes client-portal users — the SAME "users" table also holds one row
+    // per client (their portal login), so every other user-picker in the app
+    // filters these out (Clients.tsx, Billing.tsx, AuditPipeline.tsx, etc.).
+    // This query was the one place missing it, which is why the Audit Log's
+    // "User" filter (staff who performed an action) was listing client/company
+    // names instead of staff names.
+    let q = supabase.from("users").select("id, name").eq("is_active", true).neq("role", "client");
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
     const { data } = await q;
     setUsers((data as UserOption[]) || []);
