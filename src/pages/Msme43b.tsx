@@ -3,6 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -10,13 +11,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
   Scale, Upload, FileText, Download, Loader2, AlertTriangle, CheckCircle2,
-  ChevronRight, ChevronDown, Info, Landmark, Save, Trash2, History,
+  ChevronRight, ChevronDown, Info, Landmark, Save, Trash2, History, Pencil, Check, X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
   pdfToLines, parseLedgerPages, buildReport, downloadWorkpaper, msme43bToForm3cd,
-  saveRun, listRuns, loadRun, deleteRun,
+  saveRun, listRuns, loadRun, renameRun, deleteRun,
   DEFAULT_CONFIG, type VendorLedger, type Msme43bReport, type VendorResult,
   type Msme43bRunSummary,
 } from '@/lib/msme43b';
@@ -47,8 +48,11 @@ export default function Msme43b() {
   const [report, setReport] = useState<Msme43bReport | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
+  const [saveLabel, setSaveLabel] = useState('');
   const [savedRuns, setSavedRuns] = useState<Msme43bRunSummary[]>([]);
   const [persistOff, setPersistOff] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingLabel, setEditingLabel] = useState('');
 
   const clientName = clients.find((c) => c.id === clientId)?.name || '';
 
@@ -99,14 +103,22 @@ export default function Msme43b() {
     setSaving(true);
     const res = await saveRun({
       clientId, firmId: user?.firm_id, userId: user?.id,
-      userName: user?.name || user?.email || null, report,
+      userName: user?.name || user?.email || null, label: saveLabel, report,
     });
     setSaving(false);
     if (res.unavailable) { setPersistOff(true); toast.error('Saved-runs table not deployed yet — apply the migration first.'); return; }
     if (res.error) { toast.error(`Save failed: ${res.error}`); return; }
     toast.success('Run saved.');
+    setSaveLabel('');
     refreshRuns(clientId);
-  }, [report, clientId, user, refreshRuns]);
+  }, [report, clientId, user, saveLabel, refreshRuns]);
+
+  const commitRename = useCallback(async (id: string) => {
+    setEditingId(null);
+    const res = await renameRun(id, editingLabel);
+    if (res.error) { toast.error(`Rename failed: ${res.error}`); return; }
+    setSavedRuns((rows) => rows.map((r) => (r.id === id ? { ...r, label: editingLabel.trim() || null } : r)));
+  }, [editingLabel]);
 
   const doLoad = useCallback(async (id: string) => {
     const res = await loadRun(id);
@@ -145,13 +157,20 @@ export default function Msme43b() {
           </p>
         </div>
         {report && (
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
             {!persistOff && (
-              <Button onClick={doSave} variant="outline" disabled={saving || !clientId}
-                title={!clientId ? 'Select a client first' : 'Save this run against the selected client'}>
-                {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
-                Save run
-              </Button>
+              <>
+                <Input
+                  value={saveLabel} onChange={(e) => setSaveLabel(e.target.value)}
+                  placeholder="Label (optional)" className="h-9 w-44"
+                  onKeyDown={(e) => { if (e.key === 'Enter' && clientId) doSave(); }}
+                />
+                <Button onClick={doSave} variant="outline" disabled={saving || !clientId}
+                  title={!clientId ? 'Select a client first' : 'Save this run against the selected client'}>
+                  {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
+                  Save run
+                </Button>
+              </>
             )}
             <Button onClick={() => downloadWorkpaper(report)} variant="outline">
               <Download className="h-4 w-4 mr-2" /> Export working paper
@@ -232,6 +251,7 @@ export default function Msme43b() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead>Label</TableHead>
                   <TableHead>Saved</TableHead>
                   <TableHead>Period</TableHead>
                   <TableHead className="text-right">Disallowed</TableHead>
@@ -243,6 +263,35 @@ export default function Msme43b() {
               <TableBody>
                 {savedRuns.map((r) => (
                   <TableRow key={r.id}>
+                    <TableCell className="text-xs min-w-[160px]">
+                      {editingId === r.id ? (
+                        <div className="flex items-center gap-1">
+                          <Input
+                            autoFocus value={editingLabel} onChange={(e) => setEditingLabel(e.target.value)}
+                            className="h-7 text-xs"
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') commitRename(r.id);
+                              if (e.key === 'Escape') setEditingId(null);
+                            }}
+                          />
+                          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => commitRename(r.id)}>
+                            <Check className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setEditingId(null)}>
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <button
+                          className="group inline-flex items-center gap-1 text-left hover:text-foreground"
+                          onClick={() => { setEditingId(r.id); setEditingLabel(r.label || ''); }}
+                          title="Rename"
+                        >
+                          <span className={cn(!r.label && 'italic text-muted-foreground')}>{r.label || 'Unnamed run'}</span>
+                          <Pencil className="h-3 w-3 opacity-0 group-hover:opacity-60" />
+                        </button>
+                      )}
+                    </TableCell>
                     <TableCell className="text-xs">{new Date(r.created_at).toLocaleString('en-IN')}</TableCell>
                     <TableCell className="text-xs">{r.cy_label} → {r.fy_label || '—'} · {r.window_days}d</TableCell>
                     <TableCell className="text-right tabular-nums text-red-600">₹{inr(r.total_disallowed_cy)}</TableCell>

@@ -16,6 +16,7 @@ const db = () => (supabase as any).from(TABLE);
 export interface Msme43bRunSummary {
   id: string;
   client_id: string;
+  label: string | null;
   cy_label: string;
   fy_label: string | null;
   window_days: number;
@@ -32,6 +33,7 @@ export interface SaveRunInput {
   firmId?: string | null;
   userId?: string | null;
   userName?: string | null;
+  label?: string | null;
   report: Msme43bReport;
 }
 
@@ -53,6 +55,7 @@ export async function saveRun(input: SaveRunInput): Promise<PersistResult<string
   const row = {
     firm_id: input.firmId ?? null,
     client_id: input.clientId,
+    label: input.label?.trim() || null,
     cy_label: report.cyLabel,
     fy_label: report.fyLabel,
     window_days: report.windowDays,
@@ -71,7 +74,7 @@ export async function saveRun(input: SaveRunInput): Promise<PersistResult<string
 
 export async function listRuns(clientId: string): Promise<PersistResult<Msme43bRunSummary[]>> {
   const { data, error } = await db()
-    .select('id, client_id, cy_label, fy_label, window_days, total_disallowed_cy, total_allowed_fy, total_still_outstanding, vendor_count, created_by_name, created_at')
+    .select('id, client_id, label, cy_label, fy_label, window_days, total_disallowed_cy, total_allowed_fy, total_still_outstanding, vendor_count, created_by_name, created_at')
     .eq('client_id', clientId)
     .order('created_at', { ascending: false });
   if (error) return { data: null, error: error.message, unavailable: isMissingTable(error) };
@@ -82,6 +85,12 @@ export async function loadRun(id: string): Promise<PersistResult<Msme43bReport>>
   const { data, error } = await db().select('report').eq('id', id).single();
   if (error) return { data: null, error: error.message, unavailable: isMissingTable(error) };
   return { data: (data.report as Msme43bReport) ?? null, error: null, unavailable: false };
+}
+
+export async function renameRun(id: string, label: string): Promise<PersistResult<true>> {
+  const { error } = await db().update({ label: label.trim() || null }).eq('id', id);
+  if (error) return { data: null, error: error.message, unavailable: isMissingTable(error) };
+  return { data: true, error: null, unavailable: false };
 }
 
 export async function deleteRun(id: string): Promise<PersistResult<true>> {
