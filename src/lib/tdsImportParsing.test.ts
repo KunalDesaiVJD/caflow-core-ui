@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectHeaderRow, gridToRows, isTwoSheetTemplate, joinChallanTemplate, TEMPLATE_EXAMPLE_CHALLAN_ID } from "./tdsImportParsing";
+import { detectHeaderRow, gridToRows, isTwoSheetTemplate, joinChallanTemplate, TEMPLATE_EXAMPLE_CHALLAN_ID, extractSheetRows, extractWorkbookRows, TEMPLATE_EXAMPLE_ROW_SENTINEL } from "./tdsImportParsing";
 
 // Fixture shape mirrors a real client TDS export (structure only — no real
 // client data): a company-name title row, a TAN/PAN summary strip, THEN the
