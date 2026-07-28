@@ -297,6 +297,44 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     expect(rows[0].amountKind).toBe("taxable_income");
   });
 
+  // TAX IS NOT INCOME. A director-remuneration voucher books the remuneration
+  // AND its TDS together, so a blanket sum of the debit side added the tax to
+  // the income it was deducted from — reported as ₹2,19,800 against Office
+  // Data's ₹2,00,000, a false mismatch of exactly the ₹19,800 TDS.
+  it("never adds a TDS line into Taxable Income", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        vchNo: "7", debit: 200000,
+        bonusDr: { label: "TDS 192 B", amount: 19800 },
+        crLines: [
+          { label: "Madhukant Kanjibhai Patel - Salary", amount: 180200 },
+          { label: "PF Employee", amount: 1800 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Madhukant Kanjibhai Patel - Salary");
+    expect(rows[0].credit).toBe(200000);   // NOT 219,800
+  });
+
+  it("a genuine taxable component is still added when a TDS line sits beside it", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        vchNo: "8", debit: 31372,
+        bonusDr: { label: "Bonus Expense", amount: 20000 },
+        crLines: [
+          { label: "TDS 192 B", amount: 1500 },
+          { label: "Nevil Thummar - Salary", amount: 49872 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows[0].credit).toBe(51372);    // bonus in, no tax added
+  });
+
   // The sum must not leak across vouchers: the employee WITHOUT a bonus keeps
   // their own figure even when a bonus voucher printed immediately above.
   it("a bonus on one voucher never inflates the next employee's figure", () => {

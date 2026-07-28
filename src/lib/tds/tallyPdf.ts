@@ -138,6 +138,30 @@ const BAND_TOL = 4;             // px: lines this close vertically are one entry
 const MARKER_RE = /^(by|to|dr|cr)$/i;
 const SKIP_PARTY_RE = /^(opening|closing)\s*balance$|^(grand\s*)?total$|carried\s*(over|forward)|brought\s*forward/i;
 const AS_PER_DETAILS_RE = /^\(as per details\)$/i;
+
+/**
+ * TAX IS NOT INCOME. True for a breakdown line that books a TAX, not a
+ * taxable component — "TDS 192 B", "T.D.S. on Salary", "Income Tax Payable".
+ *
+ * A director-remuneration voucher commonly books the remuneration AND its TDS
+ * in the same voucher, so summing the debit side without this test added the
+ * tax to the very income it was deducted from (₹2,00,000 + ₹19,800 =
+ * ₹2,19,800 against Office Data's ₹2,00,000 — a false mismatch of exactly the
+ * TDS). TDS reconciles against the TDS ledger as its own figure; it must
+ * never inflate Taxable Income.
+ *
+ * PROFESSIONAL TAX IS DELIBERATELY NOT MATCHED HERE. It is an employee
+ * deduction that appears on the CREDIT side (never summed by this path), and
+ * excluding it by name would be wrong anyway — it is deducted FROM taxable
+ * salary, not added to it.
+ */
+function isTaxLine(label: string): boolean {
+  const s = label.toLowerCase();
+  if (/\bprofession(al)?\s*tax\b|\bp\.?\s*tax\b/.test(s)) return false;
+  return /\bt\.?\s*d\.?\s*s\.?\b/.test(s)
+    || /\btax\s*deducted\b/.test(s)
+    || /\bincome\s*tax\b/.test(s);
+}
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 // pdfjs frequently merges a token with the marker printed right after it on
@@ -371,23 +395,31 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         return true;
       }
       // Any OTHER Dr line on a still-unresolved expense voucher is a further
-      // taxable component for the employee this voucher is about (Bonus
+      // TAXABLE component for the employee this voucher is about (Bonus
       // Expense, arrears, incentive). Accumulate it so the salary line above
       // can add it in — and, if it prints AFTER the salary line, fold it
       // straight into the figure already committed. Only ever reached on an
       // expense voucher (credit == null); a TDS-liability voucher's own
       // expense-head Dr line is consumed by the deductee match above, and
       // its credit is non-null so the salary branch can never fire.
+      //
+      // TAX IS NEVER A TAXABLE COMPONENT. A director-remuneration voucher
+      // books the TDS in the SAME voucher, so a blanket sum of the debits
+      // silently added the tax to the income it was deducted from
+      // (₹2,00,000 + ₹19,800 = ₹2,19,800 against Office Data's ₹2,00,000 —
+      // a false mismatch of exactly the TDS). TDS is a separate figure that
+      // reconciles against the TDS ledger on its own; it must never inflate
+      // Taxable Income.
       if (
         current && current.party && current.credit == null && current.debit != null &&
-        marker && /^dr$/i.test(marker) && amount > 0
+        marker && /^dr$/i.test(marker) && amount > 0 && !isTaxLine(partyText)
       ) {
         extraTaxableDr += amount;
         return false;   // not the deductee — keep searching for the salary line
       }
       if (
         current && current.amountKind === "taxable_income" && current.credit != null &&
-        marker && /^dr$/i.test(marker) && amount > 0
+        marker && /^dr$/i.test(marker) && amount > 0 && !isTaxLine(partyText)
       ) {
         current.credit += amount;
         return true;    // consumed: a taxable component booked after the salary line
