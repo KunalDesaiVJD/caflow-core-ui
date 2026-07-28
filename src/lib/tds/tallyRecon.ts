@@ -129,6 +129,29 @@ export interface TallyReconRow {
 /** Saved per-client party mappings: normalised office name → tally party name. */
 export type PartyMap = Record<string, string>;
 
+/**
+ * The audit-facing label for an APPROVED one-sided override — a record the
+ * checker has accepted as legitimately existing on ONE side only.
+ *
+ * EXPORTED and shared deliberately. This used to be duplicated verbatim in
+ * TdsTallyRecon.tsx and again in tdsOverviewFetch.ts (which also kept its own
+ * stale copy of the TallyResult union, so new members never failed to
+ * compile). The copies drifted the moment dual-ledger added its one-sided
+ * results, and the SAME overridden row then read "Salary Ledger Only" on the
+ * Stage-3 tab but "Taxable Income Missing from Office Data" in the Overview
+ * Report and Stage-4 audit — one of which reads as an open problem. One
+ * definition, imported by both.
+ */
+export function oneSidedLabel(r: { result: TallyResult }): string {
+  switch (r.result) {
+    case "Ledger Entry Not Found": return "Office Data Only";
+    case "Office Data Not Found": return "Tally Ledger Only";
+    case "Taxable Income Missing from Office Data": return "Expense Ledger Only";
+    case "TDS Missing from Office Data": return "TDS Ledger Only";
+    default: return r.result;
+  }
+}
+
 const inr = (v: number | null | undefined) => (v == null ? "—" : `₹${Math.round(v).toLocaleString("en-IN")}`);
 const days = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
 
@@ -238,7 +261,14 @@ export function reconcileTallyFull(
  *  sides genuinely agree there is nothing to reconcile here. */
 function subStatusFor(r: TallyReconRow, officeFigure: number | null): SubStatus {
   if (r.result === "Ledger Entry Not Found" || r.result === "No Ledger for Section") {
-    return officeFigure == null || officeFigure === 0 ? "Matched" : "Missing from Ledger";
+    // Only an AFFIRMATIVE zero certifies "nothing was due here". A NULL is the
+    // ABSENCE of a figure — an import gap or a blank data-entry cell (note
+    // TdsDataEntry writes `parseFloat(...) || null`, so even a typed 0 can land
+    // as NULL) — and must never be reported as agreement, or the return
+    // certifies "no TDS was deducted" on the strength of a missing value while
+    // a real ledger credit for that employee sits unclaimed in surplus.
+    if (officeFigure === 0) return "Matched";
+    return officeFigure == null ? "Needs Review" : "Missing from Ledger";
   }
   switch (r.result) {
     case "Matched": return "Matched";
@@ -274,7 +304,30 @@ function subStatusFor(r: TallyReconRow, officeFigure: number | null): SubStatus 
  * that is clean is the combined verdict Matched.
  */
 export function mergeDualLedgerResults(tdsRows: TallyReconRow[], salaryRows: TallyReconRow[]): TallyReconRow[] {
-  const ESCALATIONS: TallyResult[] = ["Multiple Possible Matches", "Section Mismatch"];
+  // "No Ledger for Section" escalates rather than collapsing into "Missing from
+  // Ledger": the action is "import that section's ledger", not "hunt for a row
+  // that was never in scope". Folding it in told a 24Q client whose TDS ledger
+  // is titled without the sub-letter (canonicalising to 192 against an office
+  // 192B) that TDS was missing for every director, when nothing is missing at all.
+  const ESCALATIONS: TallyResult[] = ["Multiple Possible Matches", "Section Mismatch", "No Ledger for Section"];
+
+  /** State the figure THIS pass is actually about, with the exact gap.
+   *
+   *  render() writes its reason for a SINGLE-ledger client, where one credit is
+   *  weighed against whichever office figure the section's basis vote chose. In
+   *  the salary pass that vote has no usable input (office.tds is forced null,
+   *  so the "tds" default survives) and the sentence comes out naming "the
+   *  office TDS (—)" for what is really a TAXABLE INCOME discrepancy — the
+   *  exact "generic mismatch when we can name the precise reason" this feature
+   *  exists to eliminate. The merge knows which figure each pass compared, so
+   *  it states it here instead of forwarding render's wording. */
+  const amountReason = (ledger: "Salary" | "TDS", officeFigure: number | null, credit: number | null): string => {
+    const label = ledger === "Salary" ? "Taxable Income" : "TDS";
+    const source = ledger === "Salary" ? "Salary/Remuneration ledger" : "TDS Deducted ledger";
+    const diff = officeFigure != null && credit != null ? Math.abs(credit - officeFigure) : null;
+    return `${ledger} ledger: the ${source} shows ${inr(credit)} but Office Data's ${label} is ${inr(officeFigure)}`
+      + `${diff != null ? ` — a difference of ${inr(diff)}` : ""}.`;
+  };
   return tdsRows.map((tdsRow, i) => {
     const salaryRow = salaryRows[i];
     const taxableStatus = subStatusFor(salaryRow, salaryRow.office_amount);
@@ -305,11 +358,39 @@ export function mergeDualLedgerResults(tdsRows: TallyReconRow[], salaryRows: Tal
     if (tdsStatus === "Missing from Ledger") {
       return { ...base, result: "TDS Missing from TDS Ledger", reason: `TDS ledger: ${tdsRow.reason}`, confidence: tdsRow.confidence };
     }
+    // Office Data carries NO figure at all for this side (a blank cell, or an
+    // import that never populated it). That is not agreement and it is not a
+    // missing LEDGER entry — the figure is missing from OFFICE DATA, which is
+    // its own category. Without these two branches a "Needs Review" sub-status
+    // fell through the whole chain and the row was reported "Matched",
+    // certifying a figure nobody ever supplied.
+    if (taxableStatus === "Needs Review") {
+      return {
+        ...base, result: "Taxable Income Missing from Office Data",
+        reason: `Office Data has no Taxable Income figure for this record, so it cannot be reconciled against the Salary/Remuneration ledger. Enter the figure (or confirm it is genuinely nil) and re-run.`,
+        confidence: 0,
+      };
+    }
+    if (tdsStatus === "Needs Review") {
+      return {
+        ...base, result: "TDS Missing from Office Data",
+        reason: `Office Data has no TDS figure for this record, so it cannot be reconciled against the TDS Deducted ledger. Enter the figure (or confirm it is genuinely nil) and re-run.`,
+        confidence: 0,
+      };
+    }
     if (taxableStatus === "Amount Mismatch") {
-      return { ...base, result: "Taxable Income Amount Mismatch", reason: `Salary ledger: ${salaryRow.reason}`, confidence: salaryRow.confidence, amount_basis: "amount" };
+      return {
+        ...base, result: "Taxable Income Amount Mismatch",
+        reason: amountReason("Salary", salaryRow.office_amount, salaryRow.tally_credit),
+        confidence: salaryRow.confidence, amount_basis: "amount",
+      };
     }
     if (tdsStatus === "Amount Mismatch") {
-      return { ...base, result: "TDS Amount Mismatch", reason: `TDS ledger: ${tdsRow.reason}`, confidence: tdsRow.confidence, amount_basis: "tds" };
+      return {
+        ...base, result: "TDS Amount Mismatch",
+        reason: amountReason("TDS", tdsRow.office_tds, tdsRow.tally_credit),
+        confidence: tdsRow.confidence, amount_basis: "tds",
+      };
     }
     if (taxableStatus === "Date Mismatch" || tdsStatus === "Date Mismatch") {
       const src = taxableStatus === "Date Mismatch" ? salaryRow : tdsRow;
@@ -322,10 +403,26 @@ export function mergeDualLedgerResults(tdsRows: TallyReconRow[], salaryRows: Tal
     // word the reason to reflect whichever actually happened on each side.
     const taxableClause = salaryRow.tally_party ? `Taxable Income matches the Salary/Remuneration ledger ("${salaryRow.tally_party}")` : "no Taxable Income was expected in the Salary ledger";
     const tdsClause = tdsRow.tally_party ? `TDS matches the TDS Deducted ledger ("${tdsRow.tally_party}")` : "no TDS was expected in the TDS ledger";
+    // Average ONLY over the sides that actually paired. render() stamps 0 on
+    // every unmatched branch, so a plain min() reported "Matched · 0%" for the
+    // routine zero-TDS employee (no TDS-ledger row to pair) — i.e. most of a
+    // 24Q roster reading as no-confidence matches. A side with nothing to
+    // reconcile is not evidence AGAINST the match, so it must not drag the
+    // score down; if neither side paired, both figures were genuinely nil and
+    // the agreement is exact.
+    const scores = [
+      salaryRow.tally_party ? salaryRow.confidence : null,
+      tdsRow.tally_party ? tdsRow.confidence : null,
+    ].filter((c): c is number => c != null);
+    const merged = scores.length ? Math.min(...scores) : 96;
     return {
       ...base, result: "Matched",
       reason: `${taxableClause} and ${tdsClause}.`,
-      confidence: Math.min(tdsRow.confidence, salaryRow.confidence),
+      // Never emit SPLIT_FOLD_CONFIDENCE by coincidence: the picker's
+      // claim-counting reads that exact value as the signature for "this row
+      // shares one physical ledger credit with its siblings", so a merged row
+      // landing on it would make distinct office rows count as a single claim.
+      confidence: merged === SPLIT_FOLD_CONFIDENCE ? merged - 1 : merged,
       mapped: tdsRow.mapped || salaryRow.mapped,
     };
   });

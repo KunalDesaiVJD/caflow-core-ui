@@ -23,7 +23,7 @@ import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
 import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
-  reconcileTallyFull, mergeDualLedgerResults, SPLIT_FOLD_CONFIDENCE,
+  reconcileTallyFull, mergeDualLedgerResults, SPLIT_FOLD_CONFIDENCE, oneSidedLabel,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
 } from "@/lib/tds/tallyRecon";
 
@@ -175,10 +175,16 @@ const mappingOffer = (r: ResultRow): string | null => {
   if (r.overridden || r.mapped || r.result === "Matched") return null;
   if (!r.office_name) return null;
   // 24Q dual-ledger's own relabelling of "Party Name Mismatch" (see
-  // mergeDualLedgerResults) — the mismatching side may be EITHER ledger, so
-  // prefer whichever one actually has a party (a "Missing from Ledger" side
-  // has none), falling back to the TDS-ledger party as the default.
-  if (r.result === "Name Mismatch" || r.result === "Party Name Mismatch") return r.tally_party || r.salary_tally_party || null;
+  // mergeDualLedgerResults). The mismatching side may be EITHER ledger, and the
+  // per-figure sub-statuses say WHICH — read them rather than defaulting to the
+  // TDS party, or an employee whose TDS ledger matched cleanly while the SALARY
+  // name differs would offer a mapping to the already-correct TDS party,
+  // saving a mapping that resolves nothing and leaving the mismatch for ever.
+  if (r.result === "Name Mismatch" || r.result === "Party Name Mismatch") {
+    if (r.taxable_income_status === "Name Mismatch") return r.salary_tally_party || null;
+    if (r.tds_status === "Name Mismatch") return r.tally_party || null;
+    return r.tally_party || r.salary_tally_party || null;
+  }
   if (!r.tally_party) return null;
   const cmp = nameCompare(r.office_name, r.tally_party);
   return cmp === "match" || cmp === "unknown" ? null : r.tally_party;
@@ -417,8 +423,33 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     // non-constraints — see reconcileTallyFull's own null-is-permissive
     // handling) — then merge the two per-office verdicts into one combined
     // result (mergeDualLedgerResults, tallyRecon.ts).
-    const salaryLedgerRows = tally.filter((t) => t.amountKind === "taxable_income");
-    const tdsLedgerRows = tally.filter((t) => t.amountKind !== "taxable_income");
+    //
+    // Applies to 24Q AND 26Q: both carry TWO independent office figures per
+    // record (24Q: Taxable Income + TDS; 26Q: Amount Paid + TDS), and either
+    // can be kept in two separate Tally ledgers — an expense/gross ledger
+    // ("Staff Salary Expense", "Contractor Expense") and a TDS-liability
+    // ledger ("TDS 192B", "TDS 194C").
+    //
+    // THE TAG ALONE IS NOT ENOUGH TO ENGAGE. tallyPdf's expense-ledger branch
+    // keys on a gross-bearing Cr line inside a compound voucher — a shape a
+    // 194J/194C liability journal can legitimately have once. Engaging on a
+    // single such row would be catastrophic: a missing gross figure outranks
+    // every money/date verdict below it, so EVERY office record without an
+    // expense-ledger counterpart would be relabelled "…Missing from … Ledger".
+    // One stray row, a wall of false mismatches. So require the tagged rows to
+    // actually CONSTITUTE a ledger — to outnumber the untagged credits in
+    // their own section — which is true for a real imported expense ledger and
+    // false for an odd row sitting inside a liability ledger.
+    const DUAL_LEDGER_FORMS = ["24Q", "26Q"];
+    const taggedRows = DUAL_LEDGER_FORMS.includes(selForm) ? tally.filter((t) => t.amountKind === "taxable_income") : [];
+    const creditsIn = (rows: TallyRow[], sec: string | null) =>
+      rows.filter((t) => t.credit != null && t.credit !== 0 && (canonicalSection(t.section) ?? null) === sec).length;
+    const taggedSections = new Set(taggedRows.map((t) => canonicalSection(t.section) ?? null));
+    const isRealExpenseLedger = [...taggedSections].some(
+      (sec) => creditsIn(taggedRows, sec) > creditsIn(tally.filter((t) => t.amountKind !== "taxable_income"), sec),
+    );
+    const salaryLedgerRows = isRealExpenseLedger ? taggedRows : [];
+    const tdsLedgerRows = isRealExpenseLedger ? tally.filter((t) => t.amountKind !== "taxable_income") : tally;
     const dualLedgerMode = salaryLedgerRows.length > 0;
     let audited: TallyReconRow[]; let surplusLedger: TallyRow[];
     if (dualLedgerMode) {
@@ -521,7 +552,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     setTallyRows(tally);
     setResults((res as ResultRow[]) || []);
     return { audited, mappingCandidates };
-  }, [loadOffice, loadMaps, fetchTallyRows, resolveFirmId, selQuarter, user?.id, userMap]);
+    // selForm gates dual-ledger mode above — omitting it here would let a stale
+    // closure run a 26Q filing with a previously-selected 24Q form value.
+  }, [loadOffice, loadMaps, fetchTallyRows, resolveFirmId, selQuarter, selForm, user?.id, userMap]);
 
   const runValidation = useCallback(async () => {
     if (!filing || !batches.length || validating) return; setValidating(true);
@@ -691,11 +724,20 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   /** Stage-3 report — the ledger reconciliation as it stands right now. */
   const stage3Report = (): StageReport => {
     const rs = results || [];
+    // The dual-ledger columns are carried for EVERY row (blank on single-ledger
+    // clients). Without them an exported "Taxable Income Amount Mismatch" line
+    // showed Office TDS and Ledger Credit in perfect agreement and simply
+    // omitted the figure that actually disagreed — a reviewer reading the
+    // export alone would see a mismatch verdict with no visible cause.
     const row = (r: ResultRow) => ({
       "Office Party": r.office_name || "—",
       "Office Date": r.office_date || "—",
+      "Office Amount": r.office_amount ?? "",
       "Office TDS": r.office_tds ?? "",
       Section: r.office_section || "—",
+      "Expense Ledger Party": r.salary_tally_party || "",
+      "Expense Ledger Date": r.salary_tally_date || "",
+      "Expense Ledger Credit": r.salary_tally_credit ?? "",
       "Ledger Party": r.tally_party || "—",
       "Ledger Date": r.tally_date || "—",
       "Ledger Credit": r.tally_credit ?? "",
@@ -854,16 +896,30 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const claimedCounts = new Map<string, number>();
     const foldGroupCounted = new Set<string>();
     for (const r of results || []) {
-      if (r.id === pickTarget?.id || !r.tally_party || r.tally_date == null || r.tally_credit == null || isOpenRow(r)) continue;
+      if (r.id === pickTarget?.id || isOpenRow(r)) continue;
       const rSection = confirmedRowSection(r);
       if (targetSection && rSection && rSection !== targetSection) continue;
-      const key = `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}`;
       const isFold = r.result === "Matched" && r.confidence === SPLIT_FOLD_CONFIDENCE;
-      if (isFold) {
-        if (foldGroupCounted.has(key)) continue;
-        foldGroupCounted.add(key);
+      // BOTH ledgers' claims count. A dual-ledger row holds its Salary-ledger
+      // counterpart in the salary_tally_* columns; ignoring those left a salary
+      // credit already matched to employee B still on offer while resolving
+      // employee A — and a confirmed mapping is permanent, so that is a wrong
+      // mapping the checker cannot easily undo. The fold-group rule is applied
+      // per key, exactly as before, independently on each side.
+      const claims: (string | null)[] = [
+        r.tally_party && r.tally_date != null && r.tally_credit != null
+          ? `${normalizeName(r.tally_party)}|${r.tally_date}|${r.tally_credit}` : null,
+        r.salary_tally_party && r.salary_tally_date != null && r.salary_tally_credit != null
+          ? `${normalizeName(r.salary_tally_party)}|${r.salary_tally_date}|${r.salary_tally_credit}` : null,
+      ];
+      for (const key of claims) {
+        if (!key) continue;
+        if (isFold) {
+          if (foldGroupCounted.has(key)) continue;
+          foldGroupCounted.add(key);
+        }
+        claimedCounts.set(key, (claimedCounts.get(key) || 0) + 1);
       }
-      claimedCounts.set(key, (claimedCounts.get(key) || 0) + 1);
     }
     const rows = tallyRows
       .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0)
@@ -874,7 +930,16 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       // when EITHER side's section is unknown, matching the engine's own
       // sectionEqOf() convention (assignment.ts) — never exclude a candidate
       // just because section metadata happens to be missing.
+      // An EXPENSE-ledger row is exempt: its section comes from the expense
+      // ledger's own title ("Staff Salary Expense" canonicalises to 192) while
+      // the office record says 192B, so both are truthy and unequal and the
+      // gate silently dropped EVERY salary row — leaving the manual picker
+      // permanently empty for exactly the "…Missing from … Ledger" cases this
+      // feature added the picker for. The engine's own salary pass already
+      // treats section as a non-constraint (office section is nulled); mirror
+      // that here rather than re-imposing it in the UI.
       .filter((t) => {
+        if (t.amountKind === "taxable_income") return true;
         const tSection = canonicalSection(t.section);
         return !targetSection || !tSection || tSection === targetSection;
       })
@@ -944,12 +1009,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  "... Not Found" problem. Only meaningful once `overridden` is true; every
    *  other override keeps the engine's own result label, since that IS a
    *  genuine accepted dispute over a real pairing, not a one-sided entry. */
-  const oneSidedLabel = (r: ResultRow): string =>
-    r.result === "Ledger Entry Not Found" ? "Office Data Only"
-      : r.result === "Office Data Not Found" ? "Tally Ledger Only"
-      : r.result === "Taxable Income Missing from Office Data" ? "Salary Ledger Only"
-      : r.result === "TDS Missing from Office Data" ? "TDS Ledger Only"
-      : r.result;
+  // Imported from tallyRecon.ts, NOT redefined here — the Overview Report and
+  // Stage-4 audit read the same function, so an overridden row can never be
+  // labelled one way on this tab and another way in the export.
 
   /** "Matched" + a confirmed name mapping reads as "Matched & Mapped" — distinct
    *  from an ordinary Matched, where the name itself already agreed with no
@@ -1047,7 +1109,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     </Card>
   );
 
-  const renderCard = (r: ResultRow) => r.office_name == null ? renderLedgerOnlyCard(r) : (
+  const renderCard = (r: ResultRow) => r.office_name == null ? renderLedgerOnlyCard(r) : (() => {
+  // Resolved ONCE per card — see the offer/save comment below for the bug that
+  // re-reading r.tally_party independently caused.
+  const offer = mappingOffer(r);
+  return (
     <Card key={r.id} className={cn(r.overridden ? "border-blue-200 dark:border-blue-900 opacity-80" : r.result === "Matched" ? "border-emerald-200 dark:border-emerald-900" : "border-destructive/30")}>
       <CardContent className="p-4 space-y-1.5">
         <div className="flex items-start justify-between gap-2">
@@ -1101,15 +1167,22 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             has no auto-suggested candidate (tally_party is null — nothing paired):
             the office record may still be sitting in the ledger under a name the
             engine's search missed, so offer a manual pick rather than nothing. */}
-        {mappingOffer(r) ? (
+        {/* Read the offer ONCE and use that exact value in both the label and
+            the save. Re-reading r.tally_party here instead silently diverged
+            from what mappingOffer chose: for a dual-ledger row whose name
+            problem is on the SALARY side, tally_party is either null (blank
+            label, and saveMapping's own null-guard makes Confirm a no-op with
+            no feedback at all) or the already-correct TDS party (saving a
+            mapping to the wrong ledger). */}
+        {offer ? (
           <div className="flex items-center gap-2 flex-wrap p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
             <Link2 size={13} className="text-amber-600 shrink-0" />
-            <span className="text-foreground min-w-0">Suggested mapping: <b>{r.office_name}</b> ↔ <b>{r.tally_party}</b></span>
+            <span className="text-foreground min-w-0">Suggested mapping: <b>{r.office_name}</b> ↔ <b>{offer}</b></span>
             <div className="flex-1" />
             {/* A suggestion, never an assumption: the same date + TDS amount can
                 belong to two different parties, so the user decides. */}
             <div className="flex items-center gap-2 shrink-0">
-              <Button size="sm" className="h-6 text-xs px-2" disabled={disabled || validating} onClick={() => saveMapping(r.office_name, r.tally_party)}>Confirm mapping</Button>
+              <Button size="sm" className="h-6 text-xs px-2" disabled={disabled || validating} onClick={() => saveMapping(r.office_name, offer)}>Confirm mapping</Button>
               <Button size="sm" variant="outline" className="h-6 text-xs px-2 gap-1" disabled={disabled || validating}
                 onClick={() => openPicker(r)} title="The suggestion is based on date and amount only — pick the correct ledger record yourself">
                 <Search size={11} /> Choose another record
@@ -1130,6 +1203,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       </CardContent>
     </Card>
   );
+  })();
 
   /** True two-sided reconciliation display: every record from BOTH sources
    *  stays independently visible in its OWN section until it has its own

@@ -32,6 +32,7 @@ import {
   type OfficeParty, type TracesPanRow, type PanValidationResult, type PanCheckDetail,
 } from "@/lib/tdsPanVerification";
 import { canonicalSection } from "@/lib/tds/match";
+import { oneSidedLabel, type TallyResult } from "@/lib/tds/tallyRecon";
 
 // ── Row shapes read back from each stage's results table ─────────────────────
 // Structurally identical to the (module-local) interfaces in
@@ -69,10 +70,10 @@ interface PanResult {
   override_reason: string | null;
 }
 
-type TallyResult =
-  | "Matched" | "Ledger Entry Not Found" | "Office Data Not Found" | "Party Name Mismatch"
-  | "Date Mismatch" | "Credit Amount Mismatch" | "Section Mismatch" | "Multiple Possible Matches"
-  | "Duplicate Ledger Entries" | "No Ledger for Section";
+// IMPORTED, never re-declared. The local copy of this union went stale the
+// moment Stage 3 gained a new result (it is only ever populated via a cast, so
+// a missing member never failed to compile) and the report then labelled rows
+// differently from the tab they came from.
 interface TallyResultRow {
   id: string;
   office_name: string | null;
@@ -83,6 +84,9 @@ interface TallyResultRow {
   tally_party: string | null;
   tally_date: string | null;
   tally_credit: number | null;
+  salary_tally_party: string | null;
+  salary_tally_date: string | null;
+  salary_tally_credit: number | null;
   result: TallyResult;
   reason: string | null;
   mapped: boolean;
@@ -93,12 +97,8 @@ interface TallyResultRow {
 /** Mirrors TdsTallyRecon.tsx's own (module-local, unexported) `isTallyIssue`. */
 const isTallyIssue = (r: string) => r !== "Matched";
 
-/** Mirrors TdsTallyRecon.tsx's own (module-local, unexported) `oneSidedLabel` —
- *  the audit-facing label for an APPROVED one-sided override. */
-const oneSidedLabel = (r: Pick<TallyResultRow, "result">): string =>
-  r.result === "Ledger Entry Not Found" ? "Office Data Only"
-    : r.result === "Office Data Not Found" ? "Tally Ledger Only"
-    : r.result;
+// oneSidedLabel is imported from tallyRecon.ts — see its doc there for why this
+// must never be re-implemented locally.
 
 // ── Public input/output shapes ────────────────────────────────────────────────
 
@@ -322,11 +322,18 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
       const need = new Set(officeSections.map((s) => canonicalSection(s)).filter(Boolean) as string[]);
       missingSections = [...need].filter((s) => !have.has(s)).sort();
     }
+    // Column set kept IDENTICAL to TdsTallyRecon.tsx's stage3Report() row —
+    // including the dual-ledger figures, without which an exported
+    // "…Amount Mismatch" line shows every visible number in agreement.
     const stage3Row = (r: TallyResultRow) => ({
       "Office Party": r.office_name || "—",
       "Office Date": r.office_date || "—",
+      "Office Amount": r.office_amount ?? "",
       "Office TDS": r.office_tds ?? "",
       Section: r.office_section || "—",
+      "Expense Ledger Party": r.salary_tally_party || "",
+      "Expense Ledger Date": r.salary_tally_date || "",
+      "Expense Ledger Credit": r.salary_tally_credit ?? "",
       "Ledger Party": r.tally_party || "—",
       "Ledger Date": r.tally_date || "—",
       "Ledger Credit": r.tally_credit ?? "",

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  reconcileTallyFull, mergeDualLedgerResults,
+  reconcileTallyFull, mergeDualLedgerResults, oneSidedLabel, SPLIT_FOLD_CONFIDENCE,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap,
 } from "./tallyRecon";
 import { normalizeName } from "./match";
@@ -252,6 +252,97 @@ describe("dual-ledger — precedence when BOTH figures are wrong at once", () =>
     // The second problem is NOT lost — a checker still sees it on the same row.
     expect(nirmit.tds_status).toBe("Amount Mismatch");
     expect(nirmit.taxable_income_status).toBe("Missing from Ledger");
+  });
+});
+
+// Findings from the adversarial review of this feature. Each one was a real
+// defect reproduced against the engine before it was fixed; these pin the fix.
+describe("dual-ledger — adversarial-review regressions", () => {
+  it("an Amount Mismatch names ITS OWN figure and the exact gap, never 'office TDS (—)'", () => {
+    const salary = FULL_SALARY.map((s) => (s.party!.startsWith("Nevil") ? { ...s, credit: 49500 } : s));
+    const { rows } = dualRecon(OFFICE, [...salary, ...FULL_TDS]);
+    const nevil = byName(rows)["Nevil Thummar"];
+
+    expect(nevil.result).toBe("Taxable Income Amount Mismatch");
+    // render()'s single-ledger wording weighed the credit against whichever
+    // figure the section's basis vote chose — in the salary pass that vote has
+    // no usable input, so it named "the office TDS (—)" for a TAXABLE INCOME
+    // discrepancy and computed no difference at all.
+    expect(nevil.reason).not.toContain("office TDS");
+    expect(nevil.reason).toContain("Taxable Income");
+    expect(nevil.reason).toContain("49,500");   // the ledger figure
+    expect(nevil.reason).toContain("49,372");   // the office figure
+    expect(nevil.reason).toContain("128");      // the exact difference
+  });
+
+  it("the TDS side names the TDS figure and its own exact gap", () => {
+    const tdsRows = FULL_TDS.map((t) => (t.party!.startsWith("Nirmit") ? { ...t, credit: 34900 } : t));
+    const { rows } = dualRecon(OFFICE, [...FULL_SALARY, ...tdsRows]);
+    const nirmit = byName(rows)["Nirmitkumar Madhukant Patel"];
+
+    expect(nirmit.result).toBe("TDS Amount Mismatch");
+    expect(nirmit.reason).toContain("34,900");
+    expect(nirmit.reason).toContain("34,800");
+    expect(nirmit.reason).toContain("100");
+  });
+
+  // A NULL office figure is the ABSENCE of a figure, not an assertion of zero.
+  // Treating the two alike let a return certify "no TDS was deducted" on the
+  // strength of a blank cell while a real ledger credit sat unclaimed.
+  it("a NULL office figure is Needs Review, never a silent 'Matched'", () => {
+    const office: OfficeTxn[] = [
+      { ...OFFICE[0], tds: null },                    // unknown, not zero
+      { ...OFFICE[2] },                               // an affirmative 0
+    ];
+    const { rows } = dualRecon(office, [...FULL_SALARY, ...FULL_TDS.filter((t) => !t.party!.startsWith("Madhukant"))]);
+    const r = byName(rows);
+
+    expect(r["Madhukant Kanjibhai Patel"].tds_status).toBe("Needs Review");
+    expect(r["Madhukant Kanjibhai Patel"].result).not.toBe("Matched");
+    // …while a genuine zero still reads as agreement.
+    expect(r["Devansiben Mukeshbhai Panchal"].tds_status).toBe("Matched");
+    expect(r["Devansiben Mukeshbhai Panchal"].result).toBe("Matched");
+  });
+
+  it("a zero-TDS Matched employee is not reported at 0% confidence", () => {
+    const { rows } = dualRecon(OFFICE, [...FULL_SALARY, ...FULL_TDS]);
+    const devansiben = byName(rows)["Devansiben Mukeshbhai Panchal"];
+
+    expect(devansiben.result).toBe("Matched");
+    // The TDS side had nothing to reconcile, so it must not drag the score to
+    // zero — that read as "no-confidence match" across most of a 24Q roster.
+    expect(devansiben.confidence).toBeGreaterThan(50);
+  });
+
+  // The picker's claim-counting treats this exact value as the signature for
+  // "this row shares one physical ledger credit with its siblings".
+  it("a merged Matched row never lands on SPLIT_FOLD_CONFIDENCE by coincidence", () => {
+    const { rows } = dualRecon(OFFICE, [...FULL_SALARY, ...FULL_TDS]);
+    for (const r of rows) expect(r.confidence).not.toBe(SPLIT_FOLD_CONFIDENCE);
+  });
+
+  // The Stage-3 tab, the Overview Report export and the Stage-4 audit all read
+  // ONE oneSidedLabel. Duplicated copies drifted the moment dual-ledger added
+  // its one-sided results, so the same overridden row read as resolved on one
+  // surface and as an open problem on another.
+  it("one-sided labels are defined once and cover the dual-ledger results", () => {
+    expect(oneSidedLabel({ result: "Ledger Entry Not Found" })).toBe("Office Data Only");
+    expect(oneSidedLabel({ result: "Office Data Not Found" })).toBe("Tally Ledger Only");
+    expect(oneSidedLabel({ result: "Taxable Income Missing from Office Data" })).toBe("Expense Ledger Only");
+    expect(oneSidedLabel({ result: "TDS Missing from Office Data" })).toBe("TDS Ledger Only");
+    // Anything that is not a one-sided acceptance keeps its own name.
+    expect(oneSidedLabel({ result: "Date Mismatch" })).toBe("Date Mismatch");
+  });
+
+  it("'No Ledger for Section' escalates instead of masquerading as a missing entry", () => {
+    // The office records are 192B; the TDS ledger was titled without the
+    // sub-letter and canonicalises to 192, so its section was never imported.
+    const tdsRows = FULL_TDS.map((t) => ({ ...t, section: "192" }));
+    const { rows } = dualRecon(OFFICE, [...FULL_SALARY, ...tdsRows]);
+    const madhukant = byName(rows)["Madhukant Kanjibhai Patel"];
+
+    expect(madhukant.result).toBe("No Ledger for Section");
+    expect(madhukant.reason).toContain("Import that section's ledger");
   });
 });
 
