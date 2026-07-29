@@ -1,4 +1,23 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(npx supabase projects list:*)",
+      "Bash(npx supabase link:*)",
+      "Bash(npx supabase functions list:*)",
+      "Bash(npx supabase functions deploy:*)",
+      "Bash(npx supabase migration list:*)",
+      "Bash(npx supabase migration repair:*)",
+      "Bash(npx supabase db query:*)",
+      "Bash(npx supabase secrets list:*)",
+      "Bash(npx supabase secrets set:*)"
+    ],
+    "deny": [
+      "Bash(npx supabase db push:*)",
+      "Bash(npx supabase db reset:*)",
+      "Bash(npx supabase functions delete:*)",
+      "Bash(npx supabase projects delete:*)"
+    ]
+  },
   "hooks": {
     "PostToolUse": [
       {
