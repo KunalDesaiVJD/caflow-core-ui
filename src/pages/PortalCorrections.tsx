@@ -436,7 +436,7 @@ function PortalCorrectionDetail({ correctionId, clientName, actor, onBack, toast
         </div>
       )}
 
-      {correction.status === "pending" && (
+      {(correction.status === "awaiting_employee" || correction.status === "awaiting_senior") && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
           Submitted to your firm. You will see it marked <strong>Correction Filed</strong> once they sign it.
         </div>

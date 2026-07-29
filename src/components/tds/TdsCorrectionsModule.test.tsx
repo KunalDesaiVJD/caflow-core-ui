@@ -6,7 +6,7 @@
  * the rules the module exists to enforce:
  *
  *   1. A FILED correction is read-only — no Sign/Submit/Edit/Delete offered.
- *   2. A pending one offers Sign & File to staff.
+ *   2. Each stage offers only its own next action (sign / approve / file).
  *   3. The client portal NEVER offers a signing control, at any status.
  *   4. isCorrectionLocked is the single source of truth for 1-3.
  */
@@ -17,7 +17,7 @@ import { isCorrectionLocked, summariseCorrection } from "@/lib/tdsCorrections";
 const CORRECTION: any = {
   id: "corr1", firm_id: "firm1", client_id: "c1",
   financial_year: "2025-26", quarter: "Q1", form_type: "26Q",
-  original_filing_id: "f1", status: "pending", reason: "Wrong PAN reported",
+  original_filing_id: "f1", status: "awaiting_senior", reason: "Wrong PAN reported",
   raised_by: "u1", raised_by_name: "Asha", raised_by_role: "staff",
   raised_at: "2026-07-01T10:00:00Z", submitted_at: "2026-07-01T11:00:00Z",
   signed_by: null, signed_by_name: null, signed_by_role: null, signed_at: null,
@@ -38,7 +38,7 @@ const DEDUCTEE: any = {
   gross_salary: null, standard_deduction_allowed: null, net_taxable_salary: null,
 };
 
-const { state } = vi.hoisted(() => ({ state: { status: "pending" as string } }));
+const { state } = vi.hoisted(() => ({ state: { status: "awaiting_senior" as string } }));
 
 vi.mock("@/integrations/supabase/client", () => {
   const rowsFor = (name: string) => {
@@ -87,7 +87,7 @@ const staffProps = {
 describe("isCorrectionLocked", () => {
   it("locks only the filed state", () => {
     expect(isCorrectionLocked("filed")).toBe(true);
-    for (const s of ["draft", "pending", "rejected", undefined, null]) {
+    for (const s of ["draft", "awaiting_employee", "awaiting_senior", "ready_to_file", "rejected", undefined, null]) {
       expect(isCorrectionLocked(s as any)).toBe(false);
     }
   });
@@ -107,26 +107,28 @@ describe("summariseCorrection", () => {
 });
 
 describe("staff module", () => {
-  beforeEach(() => { state.status = "pending"; });
+  beforeEach(() => { state.status = "awaiting_senior"; });
 
   it("mounts the dashboard and lists the correction", async () => {
     render(<TdsCorrectionsModule {...staffProps} />);
     await waitFor(() => expect(screen.getByText("Corrections")).toBeInTheDocument());
     await waitFor(() => expect(screen.getAllByText("Acme Pvt Ltd").length).toBeGreaterThan(0));
-    // Status tiles render
-    expect(screen.getAllByText("Pending").length).toBeGreaterThan(0);
+    // All six lifecycle tiles render, in workflow order
+    for (const tile of ["Draft", "Awaiting Employee", "Awaiting Senior", "Ready to File", "Filed", "Rejected"]) {
+      expect(screen.getAllByText(tile).length).toBeGreaterThan(0);
+    }
   });
 });
 
 describe("client portal", () => {
-  beforeEach(() => { state.status = "pending"; });
+  beforeEach(() => { state.status = "awaiting_senior"; });
 
   it("mounts and never offers a signing control while pending", async () => {
     render(<PortalCorrections />);
     // Title now lives on the TDS module shell; this tab is identified by its
     // own primary action.
     await waitFor(() => expect(screen.getByText(/Raise Correction/i)).toBeInTheDocument());
-    expect(screen.queryByText(/Sign & File/i)).toBeNull();
+    expect(screen.queryByText(/Sign as preparer|Approve as senior|Mark as Filed/i)).toBeNull();
     expect(screen.queryByText(/^Reject$/i)).toBeNull();
   });
 
@@ -136,7 +138,7 @@ describe("client portal", () => {
     // Title now lives on the TDS module shell; this tab is identified by its
     // own primary action.
     await waitFor(() => expect(screen.getByText(/Raise Correction/i)).toBeInTheDocument());
-    expect(screen.queryByText(/Sign & File/i)).toBeNull();
+    expect(screen.queryByText(/Sign as preparer|Approve as senior|Mark as Filed/i)).toBeNull();
   });
 });
 
@@ -145,7 +147,7 @@ describe("client portal", () => {
 import PortalTdsModule from "@/pages/PortalTdsModule";
 
 describe("portal TDS module", () => {
-  beforeEach(() => { state.status = "pending"; });
+  beforeEach(() => { state.status = "awaiting_senior"; });
 
   it("renders exactly two sub-tabs: Data Entry and Correction", async () => {
     const { container } = render(<PortalTdsModule />);
@@ -173,7 +175,7 @@ describe("portal TDS module", () => {
 import { fireEvent } from "@testing-library/react";
 
 describe("correction detail UX", () => {
-  beforeEach(() => { state.status = "pending"; });
+  beforeEach(() => { state.status = "awaiting_senior"; });
 
   const openDetail = async () => {
     const view = render(<TdsCorrectionsModule {...staffProps} />);
