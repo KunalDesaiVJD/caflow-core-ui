@@ -30,6 +30,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -54,6 +55,11 @@ import {
   type Correction, type CorrectionStatus, type CorrectionChallan,
   type CorrectionDeductee, type CorrectionAction, type Actor,
 } from "@/lib/tdsCorrections";
+import {
+  type RateEntry, getRateForSection, computeApplied, computeAllocatable,
+  challanStatus, balanceColorClass, statusTextClass, calcAutoInterest,
+  PAN_4TH_CHAR_MAP, isValidPan,
+} from "@/lib/tds/rateEngine";
 
 interface ClientOption {
   id: string; name: string | null; pan?: string | null;
@@ -92,6 +98,20 @@ const ACTION_META: Record<CorrectionAction, { rail: string; badge: string; label
 };
 
 type ChangeFilter = "all" | "changed" | "add" | "modify" | "delete";
+
+// Fixed legal enumeration (Sec 197/197A/206AA reason codes) — not a rate or
+// business rule that changes with the law, so a small local copy here (same
+// values as TdsDataEntry.tsx) is low-risk, unlike the rate/interest/balance
+// engine which is shared via rateEngine.ts.
+const REASON_CODES = [
+  { code: "A", label: "A — Below threshold (no deduction required)" },
+  { code: "B", label: "B — Lower rate certificate u/s 197" },
+  { code: "C", label: "C — No deduction u/s 197A (Form 15G/15H)" },
+  { code: "D", label: "D — Payment to Government" },
+  { code: "E", label: "E — Notification/rules exemption" },
+  { code: "Y", label: "Y — Any other reason" },
+  { code: "Z", label: "Z — Higher rate u/s 206AA (PAN not available)" },
+];
 
 /** Shown wherever a correction's state needs to read at a glance. */
 export function CorrectionStatusBadge({ status, className }: { status: string; className?: string }) {
@@ -571,6 +591,7 @@ function CorrectionDetail({
   const [correction, setCorrection] = useState<Correction | null>(null);
   const [challans, setChallans] = useState<CorrectionChallan[]>([]);
   const [deductees, setDeductees] = useState<CorrectionDeductee[]>([]);
+  const [rateMaster, setRateMaster] = useState<RateEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -594,6 +615,13 @@ function CorrectionDetail({
       const detail = await loadCorrectionDetail(correctionId);
       setChallans(detail.challans);
       setDeductees(detail.deductees);
+      // Same Rate Master scoping as Data Entry (form_type + financial_year +
+      // is_active) — see rateEngine.ts / TdsDataEntry.tsx's fetchRates for why
+      // financial_year must be included, not just form_type.
+      const { data: rates } = await supabase.from("tds_rate_master")
+        .select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company, effective_from, effective_to")
+        .eq("form_type", head.form_type).eq("financial_year", head.financial_year).eq("is_active", true);
+      setRateMaster((rates || []) as RateEntry[]);
     }
     setLoading(false);
   }, [correctionId]);
@@ -604,6 +632,22 @@ function CorrectionDetail({
   const clientName = clients.find(c => c.id === correction?.client_id)?.name || "—";
   const delta = useMemo(() => summariseCorrection(challans, deductees), [challans, deductees]);
   const hasChanges = delta.added + delta.modified + delta.deleted + delta.challansTouched > 0;
+
+  // ── Per-challan financial breakdown (Total / Utilised / Unutilised /
+  // Balance / Status) — the SAME engine Data Entry uses (rateEngine.ts),
+  // scoped to this correction's own rows only (a correction is a single,
+  // self-contained snapshot — no cross-quarter carry-forward concept
+  // applies). A deleted entry no longer counts as "utilised".
+  const challanBreakdown = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof computeApplied> & { allocatable: number; status: string; colorClass: string }>();
+    for (const c of challans) {
+      const rows = deductees.filter(d => d.correction_challan_id === c.id && d.action !== "delete");
+      const bd = computeApplied(rows);
+      const allocatable = computeAllocatable(c.total_challan_amount || 0, c.late_fees_234e || 0);
+      m.set(c.id, { ...bd, allocatable, status: challanStatus(bd.applied, allocatable), colorClass: balanceColorClass(bd.applied, allocatable) });
+    }
+    return m;
+  }, [challans, deductees]);
 
   // ── Search + change filter ────────────────────────────────────────────────
   const visibleDeductees = useMemo(() => {
@@ -857,56 +901,81 @@ function CorrectionDetail({
         ) : shownChallans.map(c => {
           const rows = byChallan.get(c.id) || [];
           const isCollapsed = collapsed.has(c.id);
-          const challanTds = rows.filter(r => r.action !== "delete")
-            .reduce((s, r) => s + (r.total_tax_deducted ?? r.tds_amount ?? 0), 0);
+          const bd = challanBreakdown.get(c.id);
           return (
             <Card
               key={c.id}
               className={cn("overflow-hidden border-l-[3px]", ACTION_META[c.action].rail)}
             >
-              {/* Challan header */}
-              <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 flex-wrap">
-                <button
-                  onClick={() => toggleChallan(c.id)}
-                  className="flex items-center gap-1.5 min-w-0 hover:text-primary transition-colors"
-                  title={isCollapsed ? "Expand" : "Collapse"}
-                >
-                  {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                  <Landmark size={13} className="text-amber-600 shrink-0" />
-                  <span className="text-sm font-semibold truncate">
-                    Challan {c.challan_serial_no || "—"}
+              {/* Challan header — same field set as Data Entry's challan card:
+                  full deposit identity, Total/Utilised/Unutilised/Balance/Status,
+                  so a correction can be made without cross-checking Data Entry. */}
+              <div className="px-3 py-2 bg-muted/30 space-y-1.5">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={() => toggleChallan(c.id)}
+                    className="flex items-center gap-1.5 min-w-0 hover:text-primary transition-colors"
+                    title={isCollapsed ? "Expand" : "Collapse"}
+                  >
+                    {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                    <Landmark size={13} className="text-amber-600 shrink-0" />
+                    <span className="text-sm font-semibold truncate">
+                      Challan {c.challan_serial_no || "—"}
+                    </span>
+                  </button>
+                  {c.bsr_code && <span className="text-[11px] text-muted-foreground">BSR {c.bsr_code}</span>}
+                  <span className="text-border">|</span>
+                  <span className="text-[11px] text-muted-foreground">{shortDate(c.deposit_date)}</span>
+                  {c.section_code && (
+                    <>
+                      <span className="text-border">|</span>
+                      <span className="text-[11px] text-muted-foreground">Section <strong className="text-foreground">{c.section_code}</strong></span>
+                    </>
+                  )}
+                  {c.bank_name && (
+                    <>
+                      <span className="text-border">|</span>
+                      <span className="text-[11px] text-muted-foreground">{c.bank_name}</span>
+                    </>
+                  )}
+                  {c.is_book_entry && <Badge variant="outline" className="text-[9px]">Book Entry</Badge>}
+                  <span className="text-[11px] text-muted-foreground">
+                    Entries: <strong className="text-foreground">{rows.length}</strong>
                   </span>
-                </button>
-                {c.bsr_code && <span className="text-[11px] text-muted-foreground">BSR {c.bsr_code}</span>}
-                <span className="text-border">|</span>
-                <span className="text-[11px] text-muted-foreground">{shortDate(c.deposit_date)}</span>
-                <span className="text-border">|</span>
-                <span className="text-[11px] text-muted-foreground">
-                  Entries: <strong className="text-foreground">{rows.length}</strong>
-                </span>
-                <span className="text-[11px] text-muted-foreground">
-                  TDS: <strong className="text-foreground">₹{money(challanTds)}</strong>
-                </span>
-                <span className="text-[11px] text-muted-foreground">
-                  Deposited: <strong className="text-foreground">₹{money(c.total_challan_amount)}</strong>
-                </span>
-                {c.action !== "unchanged" && (
-                  <Badge className={cn("text-[9px]", ACTION_META[c.action].badge)}>
-                    Challan {ACTION_META[c.action].label.toLowerCase()}
-                  </Badge>
-                )}
+                  {c.action !== "unchanged" && (
+                    <Badge className={cn("text-[9px]", ACTION_META[c.action].badge)}>
+                      Challan {ACTION_META[c.action].label.toLowerCase()}
+                    </Badge>
+                  )}
 
-                <div className="flex-1" />
+                  <div className="flex-1" />
 
-                {!locked && (
-                  <>
-                    <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={() => setEditChallan(c)}>
-                      <Pencil size={12} /> Challan
-                    </Button>
-                    <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => setAddToChallan(c)}>
-                      <Plus size={12} /> Add entry
-                    </Button>
-                  </>
+                  {!locked && (
+                    <>
+                      <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={() => setEditChallan(c)}>
+                        <Pencil size={12} /> Challan
+                      </Button>
+                      <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => setAddToChallan(c)}>
+                        <Plus size={12} /> Add entry
+                      </Button>
+                    </>
+                  )}
+                </div>
+
+                {bd && (
+                  <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px]">
+                    <span className="text-muted-foreground">Total Challan Amount: <strong className="text-foreground">₹{money(c.total_challan_amount)}</strong></span>
+                    <span className="text-muted-foreground">Utilised: <strong className="text-foreground">₹{money(bd.applied)}</strong></span>
+                    <span className="text-muted-foreground">Unutilised (Balance): <strong className="text-foreground">₹{money(Math.max(0, bd.allocatable - bd.applied))}</strong></span>
+                    {(c.late_fees_234e || 0) > 0 && (
+                      <span className="text-muted-foreground">Late Fees 234E: <strong className="text-foreground">₹{money(c.late_fees_234e)}</strong></span>
+                    )}
+                    <span className={cn("font-semibold", statusTextClass(bd.applied, bd.allocatable))}>{bd.status}</span>
+                    <div className="w-full max-w-[220px] h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className={cn("h-full rounded-full transition-all", bd.colorClass)}
+                        style={{ width: (c.total_challan_amount || 0) > 0 ? `${Math.min(100, (bd.applied / (c.total_challan_amount || 1)) * 100)}%` : "0%" }} />
+                    </div>
+                  </div>
                 )}
               </div>
 
@@ -950,6 +1019,7 @@ function CorrectionDetail({
         challan={addToChallan}
         correction={correction}
         form={correction.form_type}
+        rateMaster={rateMaster}
         actor={actor}
         onClose={() => { setEditRow(null); setAddToChallan(null); }}
         onSaved={() => { setEditRow(null); setAddToChallan(null); load(); }}
@@ -1095,10 +1165,10 @@ function EntryTable({ rows, form, locked, onEdit, onDelete, onRestore }: {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function EntryDialog({
-  open, row, challan, correction, form, actor, onClose, onSaved, toast,
+  open, row, challan, correction, form, rateMaster, actor, onClose, onSaved, toast,
 }: {
   open: boolean; row: CorrectionDeductee | null; challan: CorrectionChallan | null;
-  correction: Correction; form: string; actor: Actor;
+  correction: Correction; form: string; rateMaster: RateEntry[]; actor: Actor;
   onClose: () => void; onSaved: () => void; toast: any;
 }) {
   const isSalary = form === "24Q";
@@ -1108,22 +1178,61 @@ function EntryDialog({
   useEffect(() => {
     if (!open) return;
     setF(row ? { ...row } : {
-      deductee_name: "", deductee_pan: "", deductee_type: "", section_code: "",
+      deductee_name: "", deductee_pan: "", pan_not_available: false, deductee_type: "", section_code: "",
       amount_paid_credited: "", date_of_payment: "", rate_of_tds: "",
-      tds_amount: "", total_tax_deducted: "", interest_amount: "",
+      tds_amount: "", total_tax_deducted: "", interest_amount: 0,
       gross_salary: "", standard_deduction_allowed: "", net_taxable_salary: "",
-      remarks: "",
+      reason_for_lower_or_nil_deduction: "", lower_deduction_certificate_no: "", lower_deduction_rate: "",
+      country_of_residence: "", remarks: "",
     });
   }, [open, row]);
 
-  const set = (k: string, v: any) => setF(p => ({ ...p, [k]: v }));
+  // Re-derive PAN Not Available / Deductee Type / Rate of TDS / TDS Amount /
+  // Interest Amount from whatever changed — the SAME cascade as Data Entry's
+  // updateDeducteeField (rateEngine.ts is the shared engine), just applied to
+  // local dialog state and committed to the DB on Save instead of per-field
+  // on blur. `patch` carries the field that actually changed plus its value.
+  const set = (k: string, v: any) => setF(p => recompute({ ...p, [k]: v }, k));
   const num = (v: any) => (v === "" || v == null ? null : Number(v));
+
+  function recompute(next: Record<string, any>, changedField: string) {
+    if (isSalary) return next; // 24Q's salary/slab path is out of scope here, same as the template
+    if (changedField === "deductee_pan") {
+      const panVal = (next.deductee_pan || "").trim().toUpperCase();
+      next.deductee_pan = panVal || "";
+      if (!panVal || !isValidPan(panVal)) {
+        next.pan_not_available = true;
+        if (panVal.length >= 4 && PAN_4TH_CHAR_MAP[panVal[3]]) next.deductee_type = PAN_4TH_CHAR_MAP[panVal[3]];
+        else if (!panVal) next.deductee_type = "";
+      } else {
+        next.pan_not_available = false;
+        const detected = PAN_4TH_CHAR_MAP[panVal[3]] || null;
+        if (detected) next.deductee_type = detected;
+      }
+    }
+    if (["deductee_pan", "section_code", "amount_paid_credited", "date_of_payment"].includes(changedField)) {
+      const { rate, noPanRate, rateFound } = getRateForSection(rateMaster, next.section_code, next.deductee_type, next.date_of_payment || null);
+      const resolved = next.pan_not_available ? (noPanRate ?? 20) : rate;
+      if (rateFound && resolved !== null) next.rate_of_tds = resolved;
+      const amt = parseFloat(next.amount_paid_credited) || 0;
+      const rt = parseFloat(next.rate_of_tds) || 0;
+      next.tds_amount = Math.round(amt * rt / 100);
+      next.total_tax_deducted = next.tds_amount;
+      next.interest_amount = calcAutoInterest(next.tds_amount, next.date_of_payment || null, challan?.deposit_date || null).interest;
+    }
+    return next;
+  }
+
+  const isAutoRate = !isSalary && (!!f.section_code
+    && getRateForSection(rateMaster, f.section_code, f.deductee_type, f.date_of_payment || null).rateFound
+    || f.pan_not_available);
 
   const save = async () => {
     setSaving(true);
     const payload: Record<string, any> = {
       deductee_name: f.deductee_name || null,
       deductee_pan: f.deductee_pan || null,
+      pan_not_available: !!f.pan_not_available,
       deductee_type: f.deductee_type || null,
       section_code: f.section_code || null,
       amount_paid_credited: num(f.amount_paid_credited),
@@ -1135,6 +1244,10 @@ function EntryDialog({
       gross_salary: num(f.gross_salary),
       standard_deduction_allowed: num(f.standard_deduction_allowed),
       net_taxable_salary: num(f.net_taxable_salary),
+      reason_for_lower_or_nil_deduction: f.reason_for_lower_or_nil_deduction || null,
+      lower_deduction_certificate_no: f.lower_deduction_certificate_no || null,
+      lower_deduction_rate: num(f.lower_deduction_rate),
+      country_of_residence: f.country_of_residence || null,
       remarks: f.remarks || null,
       updated_at: new Date().toISOString(),
     };
@@ -1172,7 +1285,7 @@ function EntryDialog({
 
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{row ? "Edit entry" : "Add entry"}</DialogTitle>
           <DialogDescription>
@@ -1192,8 +1305,17 @@ function EntryDialog({
             <Input className="h-9 text-xs font-mono" value={f.deductee_pan ?? ""} onChange={e => set("deductee_pan", e.target.value.toUpperCase())} />
           </div>
           <div className="space-y-1">
+            <Label className="text-xs flex items-center gap-1">PAN Not Available <Lock size={9} className="text-muted-foreground" /></Label>
+            <Input readOnly disabled className={cn("h-9 text-xs bg-muted cursor-not-allowed", f.pan_not_available && "text-destructive font-semibold")}
+              value={f.pan_not_available ? "Y — flat no-PAN rate applies" : "N"} />
+          </div>
+          <div className="space-y-1">
             <Label className="text-xs">Section</Label>
             <Input className="h-9 text-xs" value={f.section_code ?? ""} onChange={e => set("section_code", e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs flex items-center gap-1">Deductee Type <Lock size={9} className="text-muted-foreground" /></Label>
+            <Input readOnly disabled className="h-9 text-xs bg-muted cursor-not-allowed" value={f.deductee_type || "—"} />
           </div>
 
           {isSalary ? (
@@ -1218,15 +1340,44 @@ function EntryDialog({
                 <Input type="date" className="h-9 text-xs" value={(f.date_of_payment ?? "").slice(0, 10)} onChange={e => set("date_of_payment", e.target.value)} />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs">Rate %</Label>
-                <Input type="number" step="0.01" className="h-9 text-xs" value={f.rate_of_tds ?? ""} onChange={e => set("rate_of_tds", e.target.value)} />
+                <Label className="text-xs flex items-center gap-1">
+                  Rate % {isAutoRate && <Lock size={9} className="text-muted-foreground" />}
+                </Label>
+                <Input
+                  type="number" step="0.01" className={cn("h-9 text-xs", isAutoRate && "bg-muted cursor-not-allowed")}
+                  readOnly={isAutoRate} disabled={isAutoRate}
+                  value={f.rate_of_tds ?? ""} onChange={e => set("rate_of_tds", e.target.value)}
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs flex items-center gap-1">Interest amount <Lock size={9} className="text-muted-foreground" /></Label>
+                <Input readOnly disabled className="h-9 text-xs bg-muted cursor-not-allowed" value={money(f.interest_amount)} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Reason code</Label>
+                <Select value={f.reason_for_lower_or_nil_deduction ?? ""} onValueChange={v => set("reason_for_lower_or_nil_deduction", v)}>
+                  <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Pick" /></SelectTrigger>
+                  <SelectContent>{REASON_CODES.map(r => <SelectItem key={r.code} value={r.code}>{r.label}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Lower deduction certificate no.</Label>
+                <Input className="h-9 text-xs" value={f.lower_deduction_certificate_no ?? ""} onChange={e => set("lower_deduction_certificate_no", e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Lower deduction rate</Label>
+                <Input type="number" step="0.01" className="h-9 text-xs" value={f.lower_deduction_rate ?? ""} onChange={e => set("lower_deduction_rate", e.target.value)} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Country of residence</Label>
+                <Input className="h-9 text-xs" value={f.country_of_residence ?? ""} onChange={e => set("country_of_residence", e.target.value)} />
               </div>
             </>
           )}
 
           <div className="space-y-1">
-            <Label className="text-xs">TDS amount</Label>
-            <Input type="number" className="h-9 text-xs" value={f.tds_amount ?? ""} onChange={e => { set("tds_amount", e.target.value); set("total_tax_deducted", e.target.value); }} />
+            <Label className="text-xs flex items-center gap-1">TDS amount <Lock size={9} className="text-muted-foreground" /></Label>
+            <Input readOnly disabled className="h-9 text-xs bg-muted cursor-not-allowed" value={money(f.tds_amount)} />
           </div>
           <div className="space-y-1 col-span-2">
             <Label className="text-xs">Remarks</Label>
@@ -1260,6 +1411,13 @@ function ChallanDialog({ challan, correction, actor, onClose, onSaved, toast }: 
   const set = (k: string, v: any) => setF(p => ({ ...p, [k]: v }));
   const num = (v: any) => (v === "" || v == null ? null : Number(v));
 
+  // Total Challan Amount is auto-computed from the 6 deposit components,
+  // exactly like Data Entry's challanTotal — never a field the user types
+  // into directly, in either screen.
+  const total = (parseFloat(f.total_tax_deposited) || 0) + (parseFloat(f.surcharge_deposited) || 0)
+    + (parseFloat(f.education_cess_deposited) || 0) + (parseFloat(f.interest_deposited) || 0)
+    + (parseFloat(f.others_deposited) || 0) + (parseFloat(f.late_fees_234e) || 0);
+
   const save = async () => {
     if (!challan) return;
     setSaving(true);
@@ -1268,11 +1426,18 @@ function ChallanDialog({ challan, correction, actor, onClose, onSaved, toast }: 
       challan_serial_no: f.challan_serial_no || null,
       deposit_date: f.deposit_date || null,
       total_tax_deposited: num(f.total_tax_deposited),
+      surcharge_deposited: num(f.surcharge_deposited),
+      education_cess_deposited: num(f.education_cess_deposited),
       interest_deposited: num(f.interest_deposited),
+      others_deposited: num(f.others_deposited),
       late_fees_234e: num(f.late_fees_234e),
-      total_challan_amount: num(f.total_challan_amount),
+      total_challan_amount: total,
       minor_head_of_challan: f.minor_head_of_challan || null,
+      is_book_entry: !!f.is_book_entry,
+      transfer_voucher_no: f.is_book_entry ? (f.transfer_voucher_no || null) : null,
+      cheque_dd_no: f.cheque_dd_no || null,
       bank_name: f.bank_name || null,
+      section_code: f.section_code || null,
       challan_remarks: f.challan_remarks || null,
       action: challan.action === "add" ? "add" : "modify",
       updated_at: new Date().toISOString(),
@@ -1288,7 +1453,7 @@ function ChallanDialog({ challan, correction, actor, onClose, onSaved, toast }: 
 
   return (
     <Dialog open={!!challan} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Correct challan details</DialogTitle>
           <DialogDescription>The filed challan is preserved; this records the corrected values.</DialogDescription>
@@ -1308,27 +1473,68 @@ function ChallanDialog({ challan, correction, actor, onClose, onSaved, toast }: 
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Minor head</Label>
-            <Input className="h-9 text-xs" value={f.minor_head_of_challan ?? ""} onChange={e => set("minor_head_of_challan", e.target.value)} />
+            <Select value={f.minor_head_of_challan ?? ""} onValueChange={v => set("minor_head_of_challan", v)}>
+              <SelectTrigger className="h-9 text-xs"><SelectValue placeholder="Pick" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="200">200 — TDS Payable</SelectItem>
+                <SelectItem value="400">400 — Demand</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Section</Label>
+            <Input className="h-9 text-xs" value={f.section_code ?? ""} onChange={e => set("section_code", e.target.value)} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Tax deposited</Label>
             <Input type="number" className="h-9 text-xs" value={f.total_tax_deposited ?? ""} onChange={e => set("total_tax_deposited", e.target.value)} />
           </div>
           <div className="space-y-1">
-            <Label className="text-xs">Interest</Label>
+            <Label className="text-xs">Surcharge deposited</Label>
+            <Input type="number" className="h-9 text-xs" value={f.surcharge_deposited ?? ""} onChange={e => set("surcharge_deposited", e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Education cess deposited</Label>
+            <Input type="number" className="h-9 text-xs" value={f.education_cess_deposited ?? ""} onChange={e => set("education_cess_deposited", e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Interest deposited</Label>
             <Input type="number" className="h-9 text-xs" value={f.interest_deposited ?? ""} onChange={e => set("interest_deposited", e.target.value)} />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Others deposited</Label>
+            <Input type="number" className="h-9 text-xs" value={f.others_deposited ?? ""} onChange={e => set("others_deposited", e.target.value)} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">Late fee (234E)</Label>
             <Input type="number" className="h-9 text-xs" value={f.late_fees_234e ?? ""} onChange={e => set("late_fees_234e", e.target.value)} />
           </div>
           <div className="space-y-1">
-            <Label className="text-xs">Total challan amount</Label>
-            <Input type="number" className="h-9 text-xs" value={f.total_challan_amount ?? ""} onChange={e => set("total_challan_amount", e.target.value)} />
+            <Label className="text-xs">Total challan amount (auto)</Label>
+            <Input readOnly disabled className="h-9 text-xs bg-muted cursor-not-allowed" value={money(total)} />
           </div>
+          <div className="space-y-1 col-span-2 flex items-center justify-between rounded-md border px-3 py-2">
+            <Label className="text-xs">Book entry (government payment, no cheque/DD)</Label>
+            <Switch checked={!!f.is_book_entry} onCheckedChange={v => set("is_book_entry", v)} />
+          </div>
+          {f.is_book_entry ? (
+            <div className="space-y-1 col-span-2">
+              <Label className="text-xs">Transfer voucher no.</Label>
+              <Input className="h-9 text-xs" value={f.transfer_voucher_no ?? ""} onChange={e => set("transfer_voucher_no", e.target.value)} />
+            </div>
+          ) : (
+            <div className="space-y-1 col-span-2">
+              <Label className="text-xs">Cheque/DD no.</Label>
+              <Input className="h-9 text-xs" value={f.cheque_dd_no ?? ""} onChange={e => set("cheque_dd_no", e.target.value)} />
+            </div>
+          )}
           <div className="space-y-1 col-span-2">
             <Label className="text-xs">Bank</Label>
             <Input className="h-9 text-xs" value={f.bank_name ?? ""} onChange={e => set("bank_name", e.target.value)} />
+          </div>
+          <div className="space-y-1 col-span-2">
+            <Label className="text-xs">Challan remarks</Label>
+            <Input className="h-9 text-xs" value={f.challan_remarks ?? ""} onChange={e => set("challan_remarks", e.target.value)} />
           </div>
         </div>
         <DialogFooter>

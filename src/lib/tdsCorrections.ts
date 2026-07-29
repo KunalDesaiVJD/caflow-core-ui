@@ -84,11 +84,16 @@ export interface CorrectionChallan {
   challan_serial_no: string | null;
   deposit_date: string | null;
   total_tax_deposited: number | null;
+  surcharge_deposited: number | null;
+  education_cess_deposited: number | null;
   interest_deposited: number | null;
+  others_deposited: number | null;
   late_fees_234e: number | null;
   total_challan_amount: number | null;
   minor_head_of_challan: string | null;
   is_book_entry: boolean | null;
+  transfer_voucher_no: string | null;
+  cheque_dd_no: string | null;
   bank_name: string | null;
   section_code: string | null;
   challan_remarks: string | null;
@@ -104,18 +109,28 @@ export interface CorrectionDeductee {
   deductee_name: string | null;
   deductee_pan: string | null;
   pan_not_available: boolean | null;
+  deductee_ref_no: string | null;
   deductee_type: string | null;
   section_code: string | null;
+  nature_of_payment: string | null;
   amount_paid_credited: number | null;
   date_of_payment: string | null;
+  date_of_deduction: string | null;
   rate_of_tds: number | null;
   tds_amount: number | null;
+  surcharge_amount: number | null;
+  cess_amount: number | null;
   total_tax_deducted: number | null;
   interest_amount: number | null;
+  late_fees_amount: number | null;
+  lower_deduction_certificate_no: string | null;
+  lower_deduction_rate: number | null;
   reason_for_lower_or_nil_deduction: string | null;
+  country_of_residence: string | null;
   gross_salary: number | null;
   standard_deduction_allowed: number | null;
   net_taxable_salary: number | null;
+  designation: string | null;
   remarks: string | null;
 }
 

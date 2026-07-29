@@ -90,7 +90,17 @@ const TdsFilings = () => {
     return user?.firm_id ?? null;
   }, [user?.firm_id]);
 
-  const fetchClients = useCallback(async () => {
+  // Signature of the client list currently in state. Background sync compares
+  // against it and returns WITHOUT touching state when nothing changed — see
+  // the comment at the setClients call for why a new array identity alone is
+  // enough to rebuild whatever screen the user is working on.
+  const clientsSigRef = useRef<string>('');
+  const setEmptyClients = useCallback(() => {
+    if (clientsSigRef.current === '[]') return false;
+    clientsSigRef.current = '[]'; setClients([]); return true;
+  }, []);
+
+  const fetchClients = useCallback(async (): Promise<boolean> => {
     // TDS Compliance (Edit Client → Service Specific → TDS Compliance) is the
     // single source of truth for TDS module membership: only clients with a
     // real, active client_services row whose service_category has
@@ -108,7 +118,7 @@ const TdsFilings = () => {
       .select("id, linked_module")
       .eq("linked_module", "tds");
     const tdsCatIds = (catData || []).map((c: any) => c.id);
-    if (tdsCatIds.length === 0) { setClients([]); return; }
+    if (tdsCatIds.length === 0) return setEmptyClients();
 
     // 2. Fetch ONLY the TDS client_services rows (filtered by category).
     //    CRITICAL: never fetch all active client_services — a firm can have
@@ -143,7 +153,7 @@ const TdsFilings = () => {
     }
 
     const tdsClientIds = [...rangeByClient.keys()];
-    if (tdsClientIds.length === 0) { setClients([]); return; }
+    if (tdsClientIds.length === 0) return setEmptyClients();
 
     // 3. Fetch only those TDS clients (by id → no truncation), live only.
     const { data: clientsData } = await supabase
@@ -159,8 +169,23 @@ const TdsFilings = () => {
 
     console.log(`[TDS] Client list: ${eligible.length} eligible (TDS Compliance configured, of ${tdsClientIds.length} TDS service rows)`);
 
+    // ONLY replace the array when the DATA actually changed.
+    //
+    // `clients` is a prop of every screen in this module, so a fresh array
+    // identity re-runs the useCallback/useEffect chains beneath it and rebuilds
+    // whatever the user is looking at — losing filters, opened records, scroll
+    // position and in-progress edits. Background sync runs on a 45s poll, on
+    // tab visibility, and on every Realtime change (including the ones the
+    // user's OWN action causes: resolving a mismatch writes to tds_filings),
+    // and it almost always returns byte-identical data. Comparing first turns
+    // the common case into a true no-op, so a refresh only ever disturbs the
+    // screen when there is genuinely something new to show.
+    const sig = JSON.stringify(eligible);
+    if (sig === clientsSigRef.current) return false;
+    clientsSigRef.current = sig;
     setClients(eligible);
-  }, [resolveFirmId]);
+    return true;
+  }, [resolveFirmId, setEmptyClients]);
 
   const fetchUsers = useCallback(async () => {
     const firmId = await resolveFirmId();
@@ -221,11 +246,9 @@ const TdsFilings = () => {
     const onVisible = () => { if (!document.hidden) refreshRef.current(); };
     const onPageShow = () => refreshRef.current();
     document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onVisible);
     window.addEventListener("pageshow", onPageShow);
     return () => {
       document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onVisible);
       window.removeEventListener("pageshow", onPageShow);
     };
   }, []);
