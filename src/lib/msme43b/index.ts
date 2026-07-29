@@ -34,6 +34,11 @@ export {
 } from './calibrate';
 export { reviewDifference, type AiReview, type AiRuleVerdict, type AiUnexplainedCause } from './aiReview';
 export {
+  runPanelReview, buildEvidence,
+  type PanelReview, type PanelEvidenceInput, type PanelPosition,
+  type PanelChallenge, type PanelResponse, type PanelUnresolved,
+} from './panelReview';
+export {
   loadRuleProfile, saveRuleProfile, listRuleChanges,
   saveGolden, listGoldenSummaries, loadGoldens, deleteGolden,
   type StoreResult, type RuleChangeRow, type GoldenSummary,
