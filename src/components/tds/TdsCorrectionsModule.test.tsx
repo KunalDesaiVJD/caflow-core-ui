@@ -209,11 +209,23 @@ describe("correction detail UX", () => {
     await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
   });
 
-  it("makes the whole entry row the edit affordance", async () => {
+  it("makes the whole entry row the edit affordance while still editable", async () => {
+    state.status = "draft";
     await openDetail();
     await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
     fireEvent.click(screen.getByTitle("Click to edit this entry"));
     await waitFor(() => expect(screen.getByText("Edit entry")).toBeInTheDocument());
+  });
+
+  it("freezes the entries once the preparer has signed", async () => {
+    // Entries must stop being editable at the FIRST signature, not at filing —
+    // otherwise what the senior approves is not what was signed. The DB
+    // enforces this too; this pins the UI half.
+    state.status = "awaiting_senior";
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
+    expect(screen.queryByTitle("Click to edit this entry")).toBeNull();
+    expect(screen.queryByTitle("Delete entry")).toBeNull();
   });
 
   it("shows change counts only when non-zero — no empty stat cards", async () => {
