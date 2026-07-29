@@ -1,5 +1,5 @@
 /**
- * Corrections/Patterns — a read-only, CROSS-CLIENT view of every manual
+ * Overrides — a read-only, CROSS-CLIENT view of every manual
  * override made across Stage 1 (Validate & Finalise), Stage 2 (PAN
  * Verification) and Stage 3 (Tally Reconciliation), grouped by reason so a
  * recurring issue is visible without reading every filing one at a time.
@@ -223,7 +223,7 @@ export function TdsCorrections({ clients, users, isSuperadmin, resolveFirmId }: 
           Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16 w-full" />)
         ) : patterns.length === 0 ? (
           <Card><CardContent className="p-8 text-center text-muted-foreground text-sm">
-            No overrides match these filters — nothing has needed manual correction here.
+            No overrides match these filters — nothing has needed a manual override here.
           </CardContent></Card>
         ) : patterns.map((p) => (
           <Card key={p.key} className={p.items.length > 1 ? "border-amber-200 dark:border-amber-900" : undefined}>
