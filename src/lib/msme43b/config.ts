@@ -17,9 +17,37 @@
 
 import type { SettlementType } from './types';
 
+/**
+ * How a settlement entry behaves in the 43B(h) test:
+ *   nonCash     — extinguishes the payable without a payment; compliant whatever
+ *                 its date (TDS, credit/debit notes, kasar under the "it was
+ *                 never payable" view).
+ *   cashTiming  — a real discharge whose DATE decides compliance.
+ *   ignore      — not a discharge at all; left out of the matching entirely.
+ */
+export type Treatment = 'nonCash' | 'cashTiming' | 'ignore';
+
+/** Whether the invoice date itself counts as day 1 of the s.15 window. */
+export type DayCountBasis = 'exclusive' | 'inclusive';
+
+/** Which open bill a settlement is taken to clear (no bill-wise refs in exports). */
+export type AllocationMethod = 'FIFO' | 'LIFO' | 'PRO_RATA';
+
 export interface Msme43bConfig {
   /** permitted days u/s 15 MSMED Act: 15 (no agreement) or 45 (with agreement) */
   windowDays: number;
+  /**
+   * Day-count basis. 'exclusive' (default, firm-blessed): the invoice date is
+   * day 0, so bill + windowDays is the last compliant day. 'inclusive': the
+   * invoice date is day 1, so the window closes a day earlier.
+   */
+  dayCountBasis: DayCountBasis;
+  /**
+   * Days between the invoice date and the "day of acceptance" u/s 2(b) MSMED
+   * Act, when the client's agreed terms run from acceptance/goods receipt
+   * rather than the invoice. 0 = the clock starts on the invoice date.
+   */
+  acceptanceGraceDays: number;
   /**
    * Materiality tolerance in ₹ for balance reconciliation and for ignoring
    * immaterial round-off style entries in the disallowance base.
@@ -28,19 +56,46 @@ export interface Msme43bConfig {
   /** treat opening-balance payables as bills dated at period start */
   includeOpeningBalance: boolean;
   /**
+   * Whether an opening (prior-year) payable can itself be disallowed in CY.
+   * 'exclude' (default): it accrued in an earlier year, so it is that year's
+   * item. 'include': test it in CY too.
+   */
+  openingDisallowance: 'exclude' | 'include';
+  /** which open bill a settlement clears */
+  allocation: AllocationMethod;
+  /**
    * Whether the disallowance base is net of TDS (the sum actually "payable" to
    * the supplier). Standard view = true.
    */
   netOfTds: boolean;
+  /** kasar / vatav / discount / write-off */
+  kasarTreatment: Treatment;
+  /** credit notes / debit notes / returns */
+  notesTreatment: Treatment;
+  /** round-off entries */
+  roundOffTreatment: Treatment;
+  /** advance adjusted against a bill */
+  advanceTreatment: Treatment;
+  /** journal set-off / contra / netting against another ledger */
+  contraTreatment: Treatment;
   /** first assessment year the section applies from (guards against pre-FY24 runs) */
   firstApplicableFy: string; // "2023-24"
 }
 
 export const DEFAULT_CONFIG: Msme43bConfig = {
   windowDays: 45,
+  dayCountBasis: 'exclusive',
+  acceptanceGraceDays: 0,
   toleranceRupees: 5,
   includeOpeningBalance: true,
+  openingDisallowance: 'exclude',
+  allocation: 'FIFO',
   netOfTds: true,
+  kasarTreatment: 'nonCash',
+  notesTreatment: 'nonCash',
+  roundOffTreatment: 'nonCash',
+  advanceTreatment: 'cashTiming',
+  contraTreatment: 'cashTiming',
   firstApplicableFy: '2023-24',
 };
 
@@ -133,4 +188,33 @@ export function addDays(iso: string, days: number): string {
   const d = new Date(iso + 'T00:00:00Z');
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+/**
+ * The s.15 MSMED Act due date for a bill — the last day on which payment is
+ * still within time. Single source of truth for the day count: both the primary
+ * engine and the independent cross-check call this, so the two can never drift
+ * apart on the boundary.
+ */
+export function dueDateFor(billDate: string, cfg: Msme43bConfig): string {
+  const clockStart = cfg.acceptanceGraceDays ? addDays(billDate, cfg.acceptanceGraceDays) : billDate;
+  return addDays(clockStart, cfg.dayCountBasis === 'inclusive' ? cfg.windowDays - 1 : cfg.windowDays);
+}
+
+/**
+ * How a settlement of a given type behaves under the current interpretation.
+ * Every timing decision in the engine routes through here, so a rule change is
+ * a data change — not an edit in two places that can fall out of step.
+ */
+export function treatmentOf(type: SettlementType, cfg: Msme43bConfig): Treatment {
+  switch (type) {
+    case 'TDS': return cfg.netOfTds ? 'nonCash' : 'cashTiming';
+    case 'KASAR_VATAV': return cfg.kasarTreatment;
+    case 'ROUND_OFF': return cfg.roundOffTreatment;
+    case 'DEBIT_NOTE':
+    case 'CREDIT_NOTE': return cfg.notesTreatment;
+    case 'ADVANCE_ADJ': return cfg.advanceTreatment;
+    case 'CONTRA_JV': return cfg.contraTreatment;
+    default: return 'cashTiming'; // PAYMENT and anything unclassified
+  }
 }
