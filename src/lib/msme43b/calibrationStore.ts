@@ -45,7 +45,7 @@ const fail = <T>(error: { code?: string; message?: string }): StoreResult<T> =>
 
 export async function loadRuleProfile(clientId: string): Promise<StoreResult<RuleProfile>> {
   const { data, error } = await db('msme_43b_rule_profiles')
-    .select('overrides, vendor_windows, revision')
+    .select('overrides, vendor_windows, vendor_gst_rates, revision')
     .eq('client_id', clientId)
     .maybeSingle();
   if (error) return fail(error);
@@ -55,6 +55,7 @@ export async function loadRuleProfile(clientId: string): Promise<StoreResult<Rul
     clientId,
     overrides: data.overrides ?? {},
     vendorWindows: data.vendor_windows ?? [],
+    vendorGstRates: data.vendor_gst_rates ?? [],
     revision: data.revision ?? 0,
     history: [],
   };
@@ -94,6 +95,7 @@ export async function saveRuleProfile(input: SaveProfileInput): Promise<StoreRes
     client_id: input.clientId,
     overrides: input.profile.overrides,
     vendor_windows: input.profile.vendorWindows,
+    vendor_gst_rates: input.profile.vendorGstRates ?? [],
     revision: input.profile.revision,
     updated_by: input.userId ?? null,
     updated_by_name: input.userName ?? null,
@@ -163,6 +165,7 @@ export interface SaveGoldenInput {
   fyLedgers: VendorLedger[];
   config: Msme43bConfig;
   vendorWindows?: Record<string, number>;
+  vendorGstRates?: Record<string, number>;
 }
 
 /**
@@ -185,6 +188,7 @@ export async function saveGolden(input: SaveGoldenInput): Promise<StoreResult<st
     blessed,
     config: input.config,
     vendor_windows: input.vendorWindows ?? {},
+    vendor_gst_rates: input.vendorGstRates ?? {},
     signed_off_by: input.userId ?? null,
     signed_off_by_name: input.userName ?? null,
   };
@@ -225,7 +229,7 @@ export async function listGoldenSummaries(clientId: string): Promise<StoreResult
 /** Load the full golden cases (with ledgers) so the calibrator can replay them. */
 export async function loadGoldens(clientId: string): Promise<StoreResult<GoldenCase[]>> {
   const { data, error } = await db('msme_43b_goldens')
-    .select('id, label, cy_label, cy_ledgers, fy_ledgers, blessed, vendor_windows')
+    .select('id, label, cy_label, cy_ledgers, fy_ledgers, blessed, vendor_windows, vendor_gst_rates')
     .eq('client_id', clientId)
     .order('created_at', { ascending: false });
   if (error) return fail(error);
@@ -237,6 +241,7 @@ export async function loadGoldens(clientId: string): Promise<StoreResult<GoldenC
     fyLedgers: (r.fy_ledgers as VendorLedger[]) ?? [],
     blessed: (r.blessed as Record<string, number>) ?? {},
     vendorWindows: (r.vendor_windows as Record<string, number>) ?? undefined,
+    vendorGstRates: (r.vendor_gst_rates as Record<string, number>) ?? undefined,
   }));
   return ok(cases);
 }

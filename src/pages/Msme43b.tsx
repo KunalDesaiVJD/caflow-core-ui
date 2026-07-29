@@ -19,11 +19,12 @@ import { MultiYearTrend } from '@/components/msme43b/MultiYearTrend';
 import { AccuracyReview } from '@/components/msme43b/AccuracyReview';
 import { PanelReview } from '@/components/msme43b/PanelReview';
 import {
-  pdfToLines, parseLedgerPages, detectFormat, extractLedgersViaAI,
+  extractLedgersViaAI,
   buildReport, downloadWorkpaper, msme43bToForm3cd,
   saveRun, listRuns, loadRun, renameRun, deleteRun, computeCarryForward,
   loadRuleProfile, saveRuleProfile, saveGolden, loadGoldens,
-  configFromProfile, vendorWindowMap,
+  configFromProfile, vendorWindowMap, vendorGstMap,
+  storeFiles, linkToRun, workpaperBlob, workpaperFileName,
   DEFAULT_CONFIG, type VendorLedger, type Msme43bReport, type VendorResult,
   type Msme43bRunSummary, type RuleProfile, type GoldenCase,
 } from '@/lib/msme43b';
@@ -36,28 +37,30 @@ const inr = (v: number) =>
 interface IngestResult { ledgers: VendorLedger[]; aiCount: number; truncatedAny: boolean }
 
 /**
- * Route each PDF: Tally/Expert go through the exact deterministic parser;
- * any other format goes to Claude (when enabled). Both paths are reconciled
- * against the printed closing balance downstream.
+ * EVERY PDF is read through the Claude API, whatever its format.
+ *
+ * The deterministic Tally/Expert parsers still exist and still reconcile to zero
+ * drift on those two formats, but they are no longer on this path: the firm asked
+ * for one uniform route so that behaviour does not depend on which software
+ * produced the file, and — importantly — so the GST split is captured on every
+ * ledger. The deterministic parsers only ever saw a single gross amount per row.
+ *
+ * The safety property is unchanged: whatever comes back is reconstructed and
+ * checked against the PRINTED closing balance before any figure is used. An
+ * extraction that does not reconcile is flagged, not trusted.
+ *
+ * Failures are surfaced, never silently downgraded to a local parse — a figure
+ * from an unexpected source is worse than an error message.
  */
-async function filesToLedgers(files: FileList | File[], useAi: boolean): Promise<IngestResult> {
+async function filesToLedgers(files: FileList | File[]): Promise<IngestResult> {
   const out: VendorLedger[] = [];
   let aiCount = 0;
   let truncatedAny = false;
   for (const f of Array.from(files)) {
-    const buf = await f.arrayBuffer();
-    const pages = await pdfToLines(buf);
-    const fmt = detectFormat(pages);
-    if (fmt === 'tally' || fmt === 'expert') {
-      out.push(...parseLedgerPages(pages, f.name));
-    } else if (useAi) {
-      const res = await extractLedgersViaAI(f);
-      aiCount += res.ledgers.length;
-      truncatedAny = truncatedAny || res.truncated;
-      out.push(...res.ledgers);
-    } else {
-      out.push(...parseLedgerPages(pages, f.name)); // best-effort deterministic
-    }
+    const res = await extractLedgersViaAI(f);
+    aiCount += res.ledgers.length;
+    truncatedAny = truncatedAny || res.truncated;
+    out.push(...res.ledgers);
   }
   return { ledgers: out, aiCount, truncatedAny };
 }
@@ -69,11 +72,9 @@ export default function Msme43b() {
   const [clients, setClients] = useState<ClientOpt[]>([]);
   const [clientId, setClientId] = useState<string>('');
   const [windowDays, setWindowDays] = useState(45);
-  const [useAi, setUseAi] = useState(true);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<Msme43bReport | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [saving, setSaving] = useState(false);
   const [saveLabel, setSaveLabel] = useState('');
   const [savedRuns, setSavedRuns] = useState<Msme43bRunSummary[]>([]);
   const [persistOff, setPersistOff] = useState(false);
@@ -87,6 +88,7 @@ export default function Msme43b() {
   const [profile, setProfile] = useState<RuleProfile | null>(null);
   const [goldens, setGoldens] = useState<GoldenCase[]>([]);
   const [calibOff, setCalibOff] = useState(false);
+  const [retention, setRetention] = useState<string | null>(null);
 
   const clientName = clients.find((c) => c.id === clientId)?.name || '';
 
@@ -137,11 +139,12 @@ export default function Msme43b() {
     }
     setRunning(true);
     try {
-      const [cyRes, fyRes] = await Promise.all([filesToLedgers(cyFiles, useAi), filesToLedgers(fyFiles, useAi)]);
+      const [cyRes, fyRes] = await Promise.all([filesToLedgers(cyFiles), filesToLedgers(fyFiles)]);
       const cy = cyRes.ledgers;
       const fy = fyRes.ledgers;
       const rep = buildReport(cy, fy, activeConfig, clientName || undefined, {
         vendorWindowDays: vendorWindowMap(profile),
+        vendorGstRate: vendorGstMap(profile),
       });
       setReport(rep);
       setCyLedgers(cy);
@@ -154,31 +157,72 @@ export default function Msme43b() {
       if (bad.length) {
         toast.warning(`${bad.length} ledger(s) did not reconcile to their printed closing balance — check Exceptions.`);
       } else {
-        toast.success(`Parsed ${cy.length} CY + ${fy.length} FY ledger(s)${aiCount ? ` (${aiCount} via Claude)` : ''}, all reconciled.`);
+        toast.success(`Read ${cy.length} CY + ${fy.length} FY ledger(s) via Claude${aiCount ? '' : ''}, all reconciled.`);
       }
+      // Retention runs after the result is on screen — it must never delay or
+      // block the analysis, and a storage failure must not lose the work.
+      void retain(rep);
     } catch (e) {
       console.error(e);
       toast.error(`Analysis failed: ${(e as Error).message}`);
     } finally {
       setRunning(false);
     }
-  }, [cyFiles, fyFiles, clientName, activeConfig, profile, useAi]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cyFiles, fyFiles, clientName, activeConfig, profile, clientId, user, saveLabel]);
 
-  const doSave = useCallback(async () => {
-    if (!report) return;
-    if (!clientId) { toast.error('Select a client to save this run against.'); return; }
-    setSaving(true);
-    const res = await saveRun({
-      clientId, firmId: user?.firm_id, userId: user?.id,
-      userName: user?.name || user?.email || null, label: saveLabel, report,
-    });
-    setSaving(false);
-    if (res.unavailable) { setPersistOff(true); toast.error('Saved-runs table not deployed yet — apply the migration first.'); return; }
-    if (res.error) { toast.error(`Save failed: ${res.error}`); return; }
-    toast.success('Run saved.');
-    setSaveLabel('');
-    refreshRuns(clientId);
-  }, [report, clientId, user, saveLabel, refreshRuns]);
+  /**
+   * Keep everything, permanently: the uploaded ledgers, the computed run, and
+   * the exported working paper — all linked together so the run can be
+   * reproduced from its own sources later.
+   *
+   * Re-running the same ledgers is expressly allowed and simply creates another
+   * run; nothing is overwritten.
+   */
+  const retain = useCallback(async (rep: Msme43bReport) => {
+    if (!clientId || !user?.firm_id) {
+      setRetention('Not retained — select a client before running to keep the uploads and the output on file.');
+      return;
+    }
+    setRetention('Saving uploads and output…');
+    const base = {
+      clientId, firmId: user.firm_id, userId: user.id,
+      userName: user.name || user.email || null,
+    };
+    try {
+      const [cyStore, fyStore] = await Promise.all([
+        storeFiles({ ...base, files: cyFiles, kind: 'cy_ledger' }),
+        storeFiles({ ...base, files: fyFiles, kind: 'fy_ledger' }),
+      ]);
+      if (cyStore.unavailable || fyStore.unavailable) {
+        setRetention('Retention not deployed yet — apply the migrations to keep uploads and outputs on file.');
+        return;
+      }
+
+      const saved = await saveRun({
+        ...base,
+        label: saveLabel.trim() || `${rep.cyLabel} · ${new Date().toLocaleString('en-IN')}`,
+        report: rep,
+      });
+      if (saved.unavailable) { setPersistOff(true); setRetention('Saved-runs table not deployed yet.'); return; }
+      if (saved.error || !saved.data) { setRetention(`Could not save the run: ${saved.error}`); return; }
+
+      const runId = saved.data;
+      const ids = [...cyStore.stored, ...fyStore.stored].map((a) => a.id);
+      await linkToRun(ids, runId);
+
+      // The deliverable itself is retained too, so what was issued is on file.
+      const blob = await workpaperBlob(rep, null, { config: activeConfig, profile, preparedBy: base.userName || undefined });
+      const file = new File([blob], workpaperFileName(rep), { type: blob.type });
+      await storeFiles({ ...base, files: [file], kind: 'workpaper_export', runId });
+
+      setSaveLabel('');
+      setRetention(`Retained: ${ids.length} ledger file(s) + the working paper, against this run.`);
+      refreshRuns(clientId);
+    } catch (e) {
+      setRetention(`Retention failed: ${(e as Error).message}`);
+    }
+  }, [clientId, user, cyFiles, fyFiles, saveLabel, activeConfig, profile, refreshRuns]);
 
   const commitRename = useCallback(async (id: string) => {
     setEditingId(null);
@@ -211,6 +255,7 @@ export default function Msme43b() {
       userName: user?.name || user?.email || null,
       label, report, cyLedgers, fyLedgers,
       config: activeConfig, vendorWindows: vendorWindowMap(profile),
+      vendorGstRates: vendorGstMap(profile),
     });
     if (res.unavailable) { setCalibOff(true); toast.error('Calibration tables not deployed yet — apply the migration first.'); return; }
     if (res.error) { toast.error(`Sign-off failed: ${res.error}`); return; }
@@ -238,6 +283,7 @@ export default function Msme43b() {
     if (next.overrides.windowDays) setWindowDays(next.overrides.windowDays);
     setReport(buildReport(cyLedgers, fyLedgers, cfg, clientName || undefined, {
       vendorWindowDays: vendorWindowMap(next),
+      vendorGstRate: vendorGstMap(next),
     }));
     toast.success('Rules adopted and the working re-computed.');
     refreshCalibration(clientId);
@@ -286,21 +332,13 @@ export default function Msme43b() {
         </div>
         {report && (
           <div className="flex gap-2 items-center">
-            {!persistOff && (
-              <>
-                <Input
-                  value={saveLabel} onChange={(e) => setSaveLabel(e.target.value)}
-                  placeholder="Label (optional)" className="h-9 w-44"
-                  onKeyDown={(e) => { if (e.key === 'Enter' && clientId) doSave(); }}
-                />
-                <Button onClick={doSave} variant="outline" disabled={saving || !clientId}
-                  title={!clientId ? 'Select a client first' : 'Save this run against the selected client'}>
-                  {saving ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Save className="h-4 w-4 mr-2" />}
-                  Save run
-                </Button>
-              </>
-            )}
-            <Button onClick={() => downloadWorkpaper(report, carry, { config: activeConfig, profile })} variant="outline">
+            <Button
+              onClick={() => downloadWorkpaper(report, carry, {
+                config: activeConfig, profile,
+                preparedBy: user?.name || user?.email || undefined,
+              })}
+              variant="outline"
+            >
               <Download className="h-4 w-4 mr-2" /> Export working paper
             </Button>
           </div>
@@ -340,20 +378,19 @@ export default function Msme43b() {
             </div>
           </div>
 
-          <label className="flex items-start gap-2 text-sm cursor-pointer">
-            <input
-              type="checkbox" className="mt-0.5" checked={useAi}
-              onChange={(e) => setUseAi(e.target.checked)}
-            />
-            <span>
-              <span className="font-medium">Read any format with Claude</span>
-              <span className="block text-xs text-muted-foreground">
-                Tally &amp; Expert PDFs are parsed exactly on-device. Any other software's format is
-                sent to Claude to read — the result is still verified against the printed closing
-                balance, so a wrong read is flagged, not trusted.
-              </span>
-            </span>
-          </label>
+          <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground space-y-1">
+            <div className="font-medium text-foreground text-sm">Every PDF is read by Claude</div>
+            <p>
+              Any accounting software's format works — Tally, Expert, Busy, Marg, Zoho or anything
+              else. Each ledger is then reconstructed and checked against its <b>printed closing
+              balance</b>, so a misread is flagged rather than used.
+            </p>
+            <p>
+              The disallowance is computed on the <b>taxable value</b>: GST is not claimed as a
+              deduction, so it cannot be disallowed. Where a ledger doesn't show the tax split, the
+              vendor is flagged so you can declare the rate.
+            </p>
+          </div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <FileDrop
@@ -464,8 +501,26 @@ export default function Msme43b() {
             <StatCard label={`Disallowance ${report.cyLabel}`} value={inr(report.totalDisallowedCY)} tone="danger" icon={<AlertTriangle className="h-4 w-4" />} />
             <StatCard label={`Allowed on payment ${report.fyLabel}`} value={inr(report.totalAllowedFY)} tone="ok" icon={<CheckCircle2 className="h-4 w-4" />} />
             <StatCard label="Still outstanding (FY end)" value={inr(report.totalStillOutstanding)} tone="warn" icon={<AlertTriangle className="h-4 w-4" />} />
-            <StatCard label="Vendors analysed" value={String(report.vendors.length)} tone="neutral" icon={<FileText className="h-4 w-4" />} />
+            <StatCard label="GST excluded (not disallowable)" value={inr(report.totalGstExcluded)} tone="neutral" icon={<Landmark className="h-4 w-4" />} />
           </div>
+
+          {retention && (
+            <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+              <Save className="h-3 w-3" /> {retention}
+            </div>
+          )}
+
+          {report.totalGstUnidentified > 0 && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>GST not identified on ₹{inr(report.totalGstUnidentified)} of disallowed value</AlertTitle>
+              <AlertDescription className="text-sm">
+                Those ledgers don't print a tax split, so that amount is stated on <b>gross</b> and is
+                overstated by the tax. Upload your own working and the tool will suggest each vendor's
+                GST rate for you to confirm — or the vendors are listed below with a warning.
+              </AlertDescription>
+            </Alert>
+          )}
 
           {clause26 && (
             <Alert>

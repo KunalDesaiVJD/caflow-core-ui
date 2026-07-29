@@ -18,7 +18,7 @@ import type {
   Bill43bResult, VendorResult, Msme43bReport,
 } from './types';
 import { classifyTxn } from './classify';
-import { DEFAULT_CONFIG, Msme43bConfig, fyEndDate, addDays, dueDateFor, treatmentOf } from './config';
+import { DEFAULT_CONFIG, Msme43bConfig, fyEndDate, addDays, dueDateFor, treatmentOf, splitGst } from './config';
 import { verifyVendor } from './verify';
 
 interface Alloc { date: string; amount: number; type: SettlementType; }
@@ -33,6 +33,7 @@ function buildBillsAndSettlements(
   cy: VendorLedger,
   fy: VendorLedger | null,
   cfg: Msme43bConfig,
+  declaredGstRate?: number,
 ): { bills: WorkBill[]; settlements: Settlement[] } {
   const bills: WorkBill[] = [];
   const settlements: Settlement[] = [];
@@ -51,7 +52,7 @@ function buildBillsAndSettlements(
       t.type = c.type;
       t.needsReview = c.needsReview;
       if (t.credit > cfg.toleranceRupees) {
-        bills.push(mkBill(led.vendorName, t.date, t.credit, c.type === 'PURCHASE' ? 'PURCHASE' : c.type, false, t));
+        bills.push(mkBill(led.vendorName, t.date, t.credit, c.type === 'PURCHASE' ? 'PURCHASE' : c.type, false, t, declaredGstRate));
       } else if (t.debit > cfg.toleranceRupees) {
         // 'ignore' settlements are not discharges under the current rule profile
         // and take no part in the matching.
@@ -75,7 +76,15 @@ function buildBillsAndSettlements(
 function mkBill(
   vendor: string, date: string, amount: number,
   type: SettlementType, isOpening: boolean, src?: LedgerTxn,
+  declaredGstRate?: number,
 ): WorkBill {
+  // The GST split is established here, once, from the document or a declaration
+  // — never inferred. An opening balance is a carried-forward net figure with no
+  // invoice behind it, so no rate is applied to it.
+  const gst = isOpening
+    ? { gstAmount: 0, taxableValue: r2(amount), taxableRatio: 1, source: 'unavailable' as const }
+    : splitGst(amount, src, declaredGstRate);
+
   return {
     id: `B${++seq}`,
     vendorName: vendor,
@@ -87,6 +96,11 @@ function mkBill(
     settlements: [],
     vchNo: src?.vchNo,
     vchType: src?.vchType || (isOpening ? 'Opening' : undefined),
+    gstAmount: gst.gstAmount,
+    taxableValue: gst.taxableValue,
+    taxableRatio: gst.taxableRatio,
+    gstSource: gst.source,
+    gstRate: gst.rate,
     allocs: [],
     remaining: r2(amount),
   };
@@ -180,13 +194,32 @@ function computeBill(b: WorkBill, cfg: Msme43bConfig, cyEnd: string, fyEnd: stri
     sum((a) => a.date > cyEnd && a.date <= dueDate && isCash(a)),
   );
   const settledWithinWindowAfterYE = Math.min(outstandingAtYE, compliantAfterYE);
-  const disallowedCY = r2(Math.max(0, outstandingAtYE - compliantAfterYE));
+  const grossDisallowedCY = r2(Math.max(0, outstandingAtYE - compliantAfterYE));
 
   // Of the disallowed amount, the part actually paid (cash) during the FY, after
   // the due date, is allowed as a deduction in the FY.
   const paidLateInFY = sum((a) => a.date > dueDate && a.date > cyEnd && a.date <= fyEnd && isCash(a));
-  const allowedInFY = Math.min(disallowedCY, r2(paidLateInFY));
+  const grossAllowedInFY = Math.min(grossDisallowedCY, r2(paidLateInFY));
+
+  // ── GST ──
+  // Settlements are made in GROSS rupees, so everything above runs on gross.
+  // The disallowance is then stated on the taxable value, because that is what
+  // was claimed as a deduction (see Msme43bConfig.disallowanceBase). Applying a
+  // single ratio to all three figures keeps
+  //   disallowed = allowedFY + stillOutstanding
+  // exact, which the invariant checker enforces.
+  const ratio = cfg.disallowanceBase === 'taxableValue' ? b.taxableRatio : 1;
+  const disallowedCY = r2(grossDisallowedCY * ratio);
+  const allowedInFY = r2(grossAllowedInFY * ratio);
   const stillOutstanding = r2(disallowedCY - allowedInFY);
+
+  // Day count for the workpaper: when this bill was actually cleared, and how
+  // long it took. Uses the last cash allocation, which is the one that settles it.
+  const cashAllocs = b.allocs.filter(isCash);
+  const clearedOn = cashAllocs.length && b.remaining <= cfg.toleranceRupees
+    ? cashAllocs[cashAllocs.length - 1].date
+    : undefined;
+  const daysTaken = clearedOn ? daysBetween(b.billDate, clearedOn) : undefined;
 
   let reason: string;
   if (b.isOpening && cfg.openingDisallowance === 'exclude') reason = 'Opening balance — pre-CY accrual, excluded from CY disallowance';
@@ -198,9 +231,19 @@ function computeBill(b: WorkBill, cfg: Msme43bConfig, cyEnd: string, fyEnd: stri
   else reason = `Unpaid beyond s.15 due date (${dueDate}) — disallowed`;
 
   return {
-    bill: b, dueDate, outstandingAtYearEnd: outstandingAtYE,
-    settledWithinWindowAfterYE, disallowedCY, allowedInFY, stillOutstanding, reason,
+    bill: b, dueDate, windowDays: cfg.windowDays,
+    outstandingAtYearEnd: outstandingAtYE,
+    settledWithinWindowAfterYE, disallowedCY, allowedInFY, stillOutstanding,
+    grossDisallowedCY, clearedOn, daysTaken, reason,
   };
+}
+
+/** Calendar days between two ISO dates (exclusive of the start date). */
+export function daysBetween(fromIso: string, toIso: string): number {
+  const a = Date.parse(fromIso + 'T00:00:00Z');
+  const b = Date.parse(toIso + 'T00:00:00Z');
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
+  return Math.round((b - a) / 86400000);
 }
 
 export function analyzeVendor(
@@ -213,8 +256,10 @@ export function analyzeVendor(
    * verifies the winning configuration once at the end instead.
    */
   verify = true,
+  /** the GST rate the firm has declared for this vendor's supplies, if any */
+  declaredGstRate?: number,
 ): VendorResult {
-  const { bills, settlements } = buildBillsAndSettlements(cy, fy, cfg);
+  const { bills, settlements } = buildBillsAndSettlements(cy, fy, cfg, declaredGstRate);
   allocate(bills, settlements, cfg);
 
   const cyEnd = cy.periodTo || fyEndDate(cy.financialYear || '2025-26');
@@ -235,11 +280,26 @@ export function analyzeVendor(
   const reviewCount = cy.txns.filter((t) => t.needsReview).length + (fy ? fy.txns.filter((t) => t.needsReview).length : 0);
   const continuityOk = !fy || Math.abs(cy.closingBalance - fy.openingBalance) <= cfg.toleranceRupees;
 
+  // ── GST coverage ──
+  const scored = results.filter((x) => !skip(x));
+  const gstExcluded = r2(scored.reduce((a, x) => a + (x.grossDisallowedCY - x.disallowedCY), 0));
+  const gstUnidentifiedValue = r2(
+    scored
+      .filter((x) => x.bill.gstSource === 'unavailable' && x.grossDisallowedCY > cfg.toleranceRupees)
+      .reduce((a, x) => a + x.grossDisallowedCY, 0),
+  );
+
   const warnings = [...(cy.warnings || [])];
   if (!cy.balanceReconciled) warnings.push(`CY ledger did not reconcile (drift ₹${cy.reconDrift}).`);
   if (fy && !fy.balanceReconciled) warnings.push(`FY ledger did not reconcile (drift ₹${fy.reconDrift}).`);
   if (!continuityOk) warnings.push(`FY opening (₹${fy?.openingBalance}) ≠ CY closing (₹${cy.closingBalance}).`);
   if (!fy) warnings.push('Following-year ledger not provided — FY payment dates unknown; year-end outstanding shown as fully disallowed pending FY data.');
+  if (cfg.disallowanceBase === 'taxableValue' && gstUnidentifiedValue > cfg.toleranceRupees) {
+    warnings.push(
+      `GST could not be identified on ₹${gstUnidentifiedValue} of disallowed value — the ledger does not show the tax split. ` +
+      'That amount is stated on GROSS and is therefore OVERSTATED by the tax. Declare this vendor\'s GST rate to correct it.',
+    );
+  }
 
   const result: VendorResult = {
     vendorName: cy.vendorName,
@@ -251,6 +311,7 @@ export function analyzeVendor(
     continuityOk,
     bills: results,
     totalDisallowedCY, totalAllowedFY, totalStillOutstanding,
+    gstExcluded, gstUnidentifiedValue, declaredGstRate,
     warnings, reviewCount,
   };
 
@@ -275,6 +336,13 @@ export interface BuildReportOptions {
    * declaration is disclosed on the workpaper.
    */
   vendorWindowDays?: Record<string, number>;
+  /**
+   * Per-vendor GST rate %, keyed by normalised vendor name. Like the window,
+   * this is a DECLARED fact (what rate this vendor charges), used only where
+   * the ledger itself does not show the tax split. Only the statutory rates are
+   * accepted — enforced in rules.ts.
+   */
+  vendorGstRate?: Record<string, number>;
 }
 
 /** Normalise a vendor name for matching across years / working papers. */
@@ -293,7 +361,7 @@ export function buildReport(
     const key = norm(cy.vendorName);
     const declared = opts.vendorWindowDays?.[key];
     const vcfg = declared && declared !== cfg.windowDays ? { ...cfg, windowDays: declared } : cfg;
-    return analyzeVendor(cy, fyByName.get(key) || null, vcfg, opts.verify !== false);
+    return analyzeVendor(cy, fyByName.get(key) || null, vcfg, opts.verify !== false, opts.vendorGstRate?.[key]);
   });
 
   const cyLabel = cyLedgers[0]?.financialYear || 'CY';
@@ -301,10 +369,13 @@ export function buildReport(
   const totalDisallowedCY = r2(vendors.reduce((a, v) => a + v.totalDisallowedCY, 0));
   const totalAllowedFY = r2(vendors.reduce((a, v) => a + v.totalAllowedFY, 0));
   const totalStillOutstanding = r2(vendors.reduce((a, v) => a + v.totalStillOutstanding, 0));
+  const totalGstExcluded = r2(vendors.reduce((a, v) => a + v.gstExcluded, 0));
+  const totalGstUnidentified = r2(vendors.reduce((a, v) => a + v.gstUnidentifiedValue, 0));
   const clean = vendors.every((v) => v.cyReconciled && (v.fyReconciled || true) && v.reviewCount === 0);
 
   return {
     clientName, cyLabel, fyLabel, windowDays: cfg.windowDays,
-    vendors, totalDisallowedCY, totalAllowedFY, totalStillOutstanding, clean,
+    vendors, totalDisallowedCY, totalAllowedFY, totalStillOutstanding,
+    totalGstExcluded, totalGstUnidentified, clean,
   };
 }
