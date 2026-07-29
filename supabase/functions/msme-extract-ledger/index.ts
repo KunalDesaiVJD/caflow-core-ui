@@ -99,9 +99,13 @@ serve(async (req) => {
     }
 
     // --- Input ---
-    const { pdf_base64, filename } = await req.json();
-    if (!pdf_base64 || typeof pdf_base64 !== "string") {
-      return json({ error: "Missing pdf_base64" }, 400);
+    // Either the PDF itself (best fidelity, and the only way to read a scan), or
+    // the TEXT of a page range. A merged export holding every vendor's ledger is
+    // far too large for one reply, so the client splits it by pages and sends the
+    // text of each chunk. See src/lib/msme43b/aiExtract.ts.
+    const { pdf_base64, text_content, filename, page_range } = await req.json();
+    if (!pdf_base64 && !text_content) {
+      return json({ error: "Missing pdf_base64 or text_content" }, 400);
     }
 
     const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
@@ -119,14 +123,35 @@ serve(async (req) => {
       },
       body: JSON.stringify({
         model: MODEL,
-        max_tokens: 8192,
+        // A ledger year can run to hundreds of rows. 8192 truncated real files
+        // mid-JSON, which the parser then discarded entirely — the whole reply
+        // lost for want of headroom. Sonnet 4 supports far more.
+        max_tokens: 32000,
         system: SYSTEM_PROMPT,
         messages: [{
           role: "user",
-          content: [
-            { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf_base64 } },
-            { type: "text", text: `Extract the ledger${filename ? ` from "${filename}"` : ""} into the JSON schema. Output JSON only.` },
-          ],
+          content: pdf_base64
+            ? [
+                { type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf_base64 } },
+                { type: "text", text: `Extract the ledger${filename ? ` from "${filename}"` : ""} into the JSON schema. Output JSON only.` },
+              ]
+            : [
+                {
+                  type: "text",
+                  text:
+                    `Ledger text${filename ? ` from "${filename}"` : ""}` +
+                    `${page_range ? `, pages ${page_range}` : ""}:\n\n${String(text_content).slice(0, 600_000)}`,
+                },
+                {
+                  type: "text",
+                  text:
+                    "Extract it into the JSON schema. This may be one PAGE RANGE of a longer export " +
+                    "containing several vendors' ledgers, so: return one entry in \"ledgers\" per vendor " +
+                    "appearing in this text; a ledger may start or end mid-range, in which case return the " +
+                    "rows you can see and leave openingBalance/closingBalance as 0 unless the range actually " +
+                    "shows them. Output JSON only.",
+                },
+              ],
         }],
       }),
     });
@@ -150,7 +175,16 @@ serve(async (req) => {
     try {
       parsed = parseJson(content);
     } catch (_e) {
-      return json({ error: "AI returned unparseable output.", truncated, raw: content.slice(0, 2000) }, 502);
+      // Truncation is the usual cause and has a specific remedy, so say which it
+      // is rather than reporting a generic parse failure.
+      return json({
+        error: truncated
+          ? "The ledger was too large to read in one pass — the reply was cut off. " +
+            "Split the PDF into smaller files (one vendor, or a few pages each) and try again."
+          : "The ledger-reading service returned output that could not be parsed.",
+        truncated,
+        raw: content.slice(0, 2000),
+      }, 502);
     }
 
     return json({ ...(parsed as object), truncated, model: MODEL });

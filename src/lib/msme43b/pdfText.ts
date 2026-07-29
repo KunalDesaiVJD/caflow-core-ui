@@ -71,6 +71,33 @@ export async function pdfToLines(data: ArrayBuffer | Uint8Array): Promise<TextLi
   return pages;
 }
 
+/**
+ * Page count plus the plain text of every page, in reading order.
+ *
+ * Used to handle a MERGED export — one PDF holding every vendor's ledger. Such a
+ * file is far too large for one model call: the reply would be truncated
+ * mid-JSON and thrown away. Splitting it into page ranges needs the text, and
+ * pdfjs can read a PDF even though it cannot write one.
+ */
+export async function pdfPageTexts(data: ArrayBuffer | Uint8Array): Promise<string[]> {
+  const pages = await pdfToLines(data);
+  return pages.map((lines) => lines.map((l) => l.text).join('\n'));
+}
+
+/** Cheap page count without pulling the text of every page. */
+export async function pdfPageCount(data: ArrayBuffer | Uint8Array): Promise<number> {
+  const pdfjs = await import('pdfjs-dist');
+  await setupPdfWorker(pdfjs);
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const loadingTask = pdfjs.getDocument({ data: bytes });
+  try {
+    const doc = await loadingTask.promise;
+    return doc.numPages;
+  } finally {
+    await loadingTask.destroy();
+  }
+}
+
 let workerReady = false;
 async function setupPdfWorker(pdfjs: typeof import('pdfjs-dist')): Promise<void> {
   if (workerReady) return;
