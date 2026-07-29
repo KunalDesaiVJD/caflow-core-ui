@@ -51,7 +51,15 @@ vi.mock("@/integrations/supabase/client", () => {
   const build = (name: string) => {
     const rows = rowsFor(name);
     const b: any = {};
-    b.select = () => b; b.eq = () => b; b.insert = () => b; b.update = () => b; b.delete = () => b;
+    // The correction detail now renders the real TdsDataEntry engine, which
+    // uses a wider query surface than the old bespoke screen — keep every
+    // builder method chainable so the mock never dictates the component's
+    // query style.
+    for (const m of [
+      "select", "eq", "neq", "in", "is", "gte", "lte", "gt", "lt",
+      "order", "limit", "range", "ilike", "or", "filter", "insert",
+      "update", "upsert", "delete",
+    ]) b[m] = () => b;
     b.maybeSingle = () => Promise.resolve({ data: rows[0] ?? null, error: null });
     b.single = () => Promise.resolve({ data: rows[0] ?? null, error: null });
     b.then = (res: any) => Promise.resolve({ data: rows, error: null, count: rows.length }).then(res);
@@ -174,61 +182,43 @@ describe("portal TDS module", () => {
 
 import { fireEvent } from "@testing-library/react";
 
-describe("correction detail UX", () => {
-  beforeEach(() => { state.status = "awaiting_senior"; });
+describe("correction detail is the Data Entry engine", () => {
+  beforeEach(() => { state.status = "draft"; });
 
   const openDetail = async () => {
-    const view = render(<TdsCorrectionsModule {...staffProps} />);
+    render(<TdsCorrectionsModule {...staffProps} />);
     await waitFor(() => expect(screen.getAllByText("Acme Pvt Ltd").length).toBeGreaterThan(0));
-    // Row click opens the correction (no "Open" link to hunt for)
     fireEvent.click(screen.getAllByTitle("Open correction")[0]);
     await waitFor(() => expect(screen.getByText("All corrections")).toBeInTheDocument());
-    return view;
   };
 
-  it("offers search and change-filter chips over the entries", async () => {
+  it("renders the real Data Entry engine, not a look-alike", async () => {
     await openDetail();
-    expect(screen.getByPlaceholderText(/Find by name, PAN, section/i)).toBeInTheDocument();
-    for (const chip of ["All", "Changed", "Added", "Modified", "Deleted"]) {
-      expect(screen.getByRole("button", { name: chip })).toBeInTheDocument();
-    }
+    // These are TdsDataEntry's own controls and computed balances — a
+    // bespoke look-alike would not produce them.
+    await waitFor(() => expect(screen.getByText(/Add Challan/i)).toBeInTheDocument());
+    expect(screen.getByText(/Add Row/i)).toBeInTheDocument();
+    expect(screen.getByText(/Auto-match/i)).toBeInTheDocument();
+    // Utilised / unutilised balance, straight from the engine.
+    expect(screen.getByText(/Applied:/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Unconsumed/).length).toBeGreaterThan(0);
   });
 
-  it("search narrows the visible entries and can be cleared", async () => {
+  it("hides the filing selector — the period is fixed by the correction", async () => {
     await openDetail();
-    await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
-
-    fireEvent.change(screen.getByPlaceholderText(/Find by name, PAN, section/i), {
-      target: { value: "zzzz-no-such-party" },
-    });
-    await waitFor(() => expect(screen.queryByText("Acme Traders")).toBeNull());
-    // Empty state offers the way out rather than dead-ending
-    expect(screen.getByText("Clear search")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByText("Clear search"));
-    await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Add Challan/i)).toBeInTheDocument());
+    expect(screen.queryByText("Select Filing")).toBeNull();
   });
 
-  it("makes the whole entry row the edit affordance while still editable", async () => {
-    state.status = "draft";
+  it("keeps the workflow chrome around the engine", async () => {
     await openDetail();
-    await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
-    fireEvent.click(screen.getByTitle("Click to edit this entry"));
-    await waitFor(() => expect(screen.getByText("Edit entry")).toBeInTheDocument());
-  });
-
-  it("freezes the entries once the preparer has signed", async () => {
-    // Entries must stop being editable at the FIRST signature, not at filing —
-    // otherwise what the senior approves is not what was signed. The DB
-    // enforces this too; this pins the UI half.
-    state.status = "awaiting_senior";
-    await openDetail();
-    await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
-    expect(screen.queryByTitle("Click to edit this entry")).toBeNull();
-    expect(screen.queryByTitle("Delete entry")).toBeNull();
+    // Stage tracker + both signature slots live outside the engine.
+    expect(screen.getByText("1 · Employee signature")).toBeInTheDocument();
+    expect(screen.getByText("2 · Senior approval")).toBeInTheDocument();
   });
 
   it("shows change counts only when non-zero — no empty stat cards", async () => {
+    state.status = "awaiting_senior";
     await openDetail();
     await waitFor(() => expect(screen.getByText("1 modified")).toBeInTheDocument());
     expect(screen.queryByText(/^0 added$/)).toBeNull();

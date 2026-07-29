@@ -776,7 +776,7 @@ export function TdsDataEntry({
   const fetchDeductees = async (challanId: string) => {
     const { data } = await supabase.from(SRC.deductees as any).select("*")
       .eq("challan_id", challanId).order("created_at", { ascending: true });
-    const list = (data || []) as Deductee[];
+    const list = (data || []) as unknown as Deductee[];
     // Store ALL entries for cross-quarter balance calc (Issue 7A)
     setAllChallanDeductees(prev => ({ ...prev, [challanId]: list }));
     // Two-way split:
@@ -985,7 +985,7 @@ export function TdsDataEntry({
       pan_not_available: false, rate_of_tds: rate,
     } as any).select("*").single();
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
-    const newDed = data as Deductee;
+    const newDed = data as unknown as Deductee;
     setDeductees(prev => [...prev, newDed]);
     // Update allChallanDeductees too
     setAllChallanDeductees(prev => ({
@@ -1305,7 +1305,7 @@ export function TdsDataEntry({
       firm_id: firmId || filing.firm_id,
     } as any).select("*").single();
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
-    setDeductees(prev => [...prev, data as Deductee]);
+    setDeductees(prev => [...prev, data as unknown as Deductee]);
     toast({ title: "Row duplicated" });
     await bumpUnderProcess();
   };
