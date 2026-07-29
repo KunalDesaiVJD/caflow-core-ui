@@ -167,6 +167,10 @@ export interface VendorResult {
   warnings: string[];
   /** entries the classifier could not confidently type */
   reviewCount: number;
+  /** true when the independent cross-check agrees and all invariants hold */
+  verified?: boolean;
+  /** cross-check / invariant discrepancies, if any */
+  verifyNotes?: string[];
 }
 
 export interface Msme43bReport {

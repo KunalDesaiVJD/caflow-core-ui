@@ -3,6 +3,8 @@
 import * as XLSX from 'xlsx';
 import type { Msme43bReport } from './types';
 import type { CarryForward } from './carryForward';
+import type { Msme43bConfig } from './config';
+import { disclosedAssumptions, type RuleProfile } from './rules';
 
 const money = (n: number) => Math.round(n * 100) / 100;
 
@@ -24,7 +26,17 @@ export function msme43bToForm3cd(report: Msme43bReport) {
   };
 }
 
-export function buildWorkpaperWorkbook(report: Msme43bReport, carry?: CarryForward | null): XLSX.WorkBook {
+export interface WorkpaperOptions {
+  /** the rule profile in force, disclosed on an "Interpretation" sheet */
+  config?: Msme43bConfig;
+  profile?: RuleProfile | null;
+}
+
+export function buildWorkpaperWorkbook(
+  report: Msme43bReport,
+  carry?: CarryForward | null,
+  opts?: WorkpaperOptions,
+): XLSX.WorkBook {
   const wb = XLSX.utils.book_new();
 
   // ── Summary ──
@@ -88,6 +100,39 @@ export function buildWorkpaperWorkbook(report: Msme43bReport, carry?: CarryForwa
   }
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([bHead, ...bRows]), 'Bill Detail');
 
+  // ── Interpretation applied ──
+  // Every judgement the figures depend on, stated on the deliverable itself, so
+  // a reviewer can see WHY a number is what it is — including any position the
+  // tool has learned from this client's own working papers.
+  if (opts?.config) {
+    const rows: (string | number)[][] = [
+      ['Interpretation applied to this computation'],
+      ['Each line is a judgement the figures depend on. Positions marked "learned" were'],
+      ['adopted from a working paper this firm confirmed as correct, and are applied to every vendor.'],
+      [],
+      ['Question', 'Position taken', 'Basis', 'Source'],
+    ];
+    for (const a of disclosedAssumptions(opts.config)) {
+      rows.push([a.question, a.position, a.basis, a.isDefault ? 'Standard position' : 'Learned from reviewed working']);
+    }
+    if (opts.profile?.vendorWindows.length) {
+      rows.push([], ['Per-vendor declarations (s.15 MSMED Act)'], ['Vendor', 'Window', 'Basis', 'Declared by']);
+      for (const d of opts.profile.vendorWindows) {
+        rows.push([
+          d.vendorName, `${d.windowDays} days`,
+          d.basis === 'agreement' ? 'Written agreement on file' : 'No written agreement',
+          d.declaredBy || '—',
+        ]);
+      }
+    }
+    rows.push(
+      [],
+      ['Matching note', 'The source ledgers carry no bill-wise references, so settlements are matched to bills'],
+      ['', `on the "${opts.config.allocation}" basis stated above. This is an interpretation, not data.`],
+    );
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), 'Interpretation');
+  }
+
   // ── Exceptions ──
   const exHead = ['Vendor', 'Warning'];
   const exRows: string[][] = [];
@@ -97,8 +142,8 @@ export function buildWorkpaperWorkbook(report: Msme43bReport, carry?: CarryForwa
   return wb;
 }
 
-export function downloadWorkpaper(report: Msme43bReport, carry?: CarryForward | null): void {
-  const wb = buildWorkpaperWorkbook(report, carry);
+export function downloadWorkpaper(report: Msme43bReport, carry?: CarryForward | null, opts?: WorkpaperOptions): void {
+  const wb = buildWorkpaperWorkbook(report, carry, opts);
   const name = `MSME_43B(h)_${(report.clientName || 'client').replace(/\s+/g, '_')}_${report.cyLabel}.xlsx`;
   XLSX.writeFile(wb, name);
 }

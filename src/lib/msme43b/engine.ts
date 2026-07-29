@@ -17,8 +17,9 @@ import type {
   VendorLedger, LedgerTxn, SettlementType, MatchedBill, Settlement,
   Bill43bResult, VendorResult, Msme43bReport,
 } from './types';
-import { classifyTxn, isCashTiming, isNonCashReduction } from './classify';
-import { DEFAULT_CONFIG, Msme43bConfig, fyEndDate, addDays } from './config';
+import { classifyTxn } from './classify';
+import { DEFAULT_CONFIG, Msme43bConfig, fyEndDate, addDays, dueDateFor, treatmentOf } from './config';
+import { verifyVendor } from './verify';
 
 interface Alloc { date: string; amount: number; type: SettlementType; }
 interface WorkBill extends MatchedBill { allocs: Alloc[]; remaining: number; }
@@ -52,6 +53,9 @@ function buildBillsAndSettlements(
       if (t.credit > cfg.toleranceRupees) {
         bills.push(mkBill(led.vendorName, t.date, t.credit, c.type === 'PURCHASE' ? 'PURCHASE' : c.type, false, t));
       } else if (t.debit > cfg.toleranceRupees) {
+        // 'ignore' settlements are not discharges under the current rule profile
+        // and take no part in the matching.
+        if (treatmentOf(c.type, cfg) === 'ignore') continue;
         settlements.push({
           date: t.date, amount: t.debit, type: c.type,
           particulars: t.particulars, vchNo: t.vchNo, yearBucket: isCY ? 'CY' : 'FY',
@@ -88,31 +92,76 @@ function mkBill(
   };
 }
 
-/** FIFO: allocate each settlement to the oldest open bill(s). */
-function fifoAllocate(bills: WorkBill[], settlements: Settlement[]): void {
-  let bi = 0;
-  for (const s of settlements) {
-    let amt = s.amount;
-    while (amt > 0.005 && bi < bills.length) {
-      const b = bills[bi];
-      if (b.remaining <= 0.005) { bi++; continue; }
-      const take = Math.min(amt, b.remaining);
-      b.remaining = r2(b.remaining - take);
-      amt = r2(amt - take);
-      b.allocs.push({ date: s.date, amount: take, type: s.type });
-      b.settlements.push({ date: s.date, amount: take, type: s.type, particulars: s.particulars, vchNo: s.vchNo, yearBucket: s.yearBucket });
-      if (b.remaining <= 0.005) bi++;
+/** Apply a settlement to a bill, recording the allocation on the audit trail. */
+function take(b: WorkBill, s: Settlement, amount: number): number {
+  const amt = Math.min(amount, b.remaining);
+  if (amt <= 0.005) return 0;
+  b.remaining = r2(b.remaining - amt);
+  b.allocs.push({ date: s.date, amount: amt, type: s.type });
+  b.settlements.push({ date: s.date, amount: amt, type: s.type, particulars: s.particulars, vchNo: s.vchNo, yearBucket: s.yearBucket });
+  return amt;
+}
+
+/**
+ * Match settlements to bills. The source exports carry no bill-wise references,
+ * so WHICH bill a payment clears is an interpretation — exposed as a rule.
+ *   FIFO     — oldest open bill first (the defensible default, and what most
+ *              Indian books do in practice).
+ *   LIFO     — newest already-raised bill first.
+ *   PRO_RATA — spread across every bill open on the settlement date, in
+ *              proportion to the amount still outstanding on each.
+ * Excess settlement (an over-payment or advance) is ignored, as before.
+ */
+function allocate(bills: WorkBill[], settlements: Settlement[], cfg: Msme43bConfig): void {
+  if (cfg.allocation === 'FIFO') {
+    let bi = 0;
+    for (const s of settlements) {
+      let amt = s.amount;
+      while (amt > 0.005 && bi < bills.length) {
+        const b = bills[bi];
+        if (b.remaining <= 0.005) { bi++; continue; }
+        amt = r2(amt - take(b, s, amt));
+        if (b.remaining <= 0.005) bi++;
+      }
     }
-    // excess settlement (over-allocation / advance) is ignored
+    return;
+  }
+
+  for (const s of settlements) {
+    // Only bills already raised on the settlement date can be cleared by it.
+    const open = bills.filter((b) => b.remaining > 0.005 && b.billDate <= s.date);
+    // Nothing raised yet → fall back to the oldest open bill (an advance).
+    const pool = open.length ? open : bills.filter((b) => b.remaining > 0.005);
+    if (!pool.length) continue;
+
+    if (cfg.allocation === 'LIFO') {
+      let amt = s.amount;
+      for (let i = pool.length - 1; i >= 0 && amt > 0.005; i--) amt = r2(amt - take(pool[i], s, amt));
+      continue;
+    }
+
+    // PRO_RATA
+    const total = pool.reduce((a, b) => a + b.remaining, 0);
+    if (total <= 0.005) continue;
+    const spend = Math.min(s.amount, total);
+    let placed = 0;
+    for (let i = 0; i < pool.length; i++) {
+      const share = i === pool.length - 1 ? r2(spend - placed) : r2((spend * pool[i].remaining) / total);
+      placed = r2(placed + take(pool[i], s, share));
+    }
   }
 }
 
 function computeBill(b: WorkBill, cfg: Msme43bConfig, cyEnd: string, fyEnd: string): Bill43bResult {
-  const dueDate = addDays(b.billDate, cfg.windowDays);
+  const dueDate = dueDateFor(b.billDate, cfg);
+  const isNonCash = (a: Alloc) => treatmentOf(a.type, cfg) === 'nonCash';
+  const isCash = (a: Alloc) => treatmentOf(a.type, cfg) === 'cashTiming';
 
-  // Split allocations for reporting.
+  // Split allocations for reporting. Only reductions treated as non-cash under
+  // the current rule profile come out of the 43B(h) base.
   let tds = 0, notes = 0, kasar = 0;
   for (const a of b.allocs) {
+    if (!isNonCash(a)) continue;
     if (a.type === 'TDS') tds += a.amount;
     else if (a.type === 'DEBIT_NOTE' || a.type === 'CREDIT_NOTE') notes += a.amount;
     else if (a.type === 'KASAR_VATAV' || a.type === 'ROUND_OFF') kasar += a.amount;
@@ -127,20 +176,21 @@ function computeBill(b: WorkBill, cfg: Msme43bConfig, cyEnd: string, fyEnd: stri
 
   // Non-cash reductions are always compliant; cash within due date is compliant.
   const compliantAfterYE = r2(
-    sum((a) => a.date > cyEnd && isNonCashReduction(a.type)) +
-    sum((a) => a.date > cyEnd && a.date <= dueDate && isCashTiming(a.type)),
+    sum((a) => a.date > cyEnd && isNonCash(a)) +
+    sum((a) => a.date > cyEnd && a.date <= dueDate && isCash(a)),
   );
   const settledWithinWindowAfterYE = Math.min(outstandingAtYE, compliantAfterYE);
   const disallowedCY = r2(Math.max(0, outstandingAtYE - compliantAfterYE));
 
   // Of the disallowed amount, the part actually paid (cash) during the FY, after
   // the due date, is allowed as a deduction in the FY.
-  const paidLateInFY = sum((a) => a.date > dueDate && a.date > cyEnd && a.date <= fyEnd && isCashTiming(a.type));
+  const paidLateInFY = sum((a) => a.date > dueDate && a.date > cyEnd && a.date <= fyEnd && isCash(a));
   const allowedInFY = Math.min(disallowedCY, r2(paidLateInFY));
   const stillOutstanding = r2(disallowedCY - allowedInFY);
 
   let reason: string;
-  if (b.isOpening) reason = 'Opening balance — pre-CY accrual, excluded from CY disallowance';
+  if (b.isOpening && cfg.openingDisallowance === 'exclude') reason = 'Opening balance — pre-CY accrual, excluded from CY disallowance';
+  else if (b.isOpening && disallowedCY > cfg.toleranceRupees) reason = `Opening balance unpaid beyond due date (${dueDate}) — disallowed (opening included by rule)`;
   else if (outstandingAtYE <= cfg.toleranceRupees) reason = `Settled within CY (by ${cyEnd})`;
   else if (disallowedCY <= cfg.toleranceRupees) reason = `Outstanding at year-end cleared within s.15 due date (${dueDate})`;
   else if (allowedInFY > 0 && stillOutstanding <= cfg.toleranceRupees) reason = `Paid in FY beyond due date (${dueDate}) — disallowed CY, allowed FY`;
@@ -157,9 +207,15 @@ export function analyzeVendor(
   cy: VendorLedger,
   fy: VendorLedger | null,
   cfg: Msme43bConfig = DEFAULT_CONFIG,
+  /**
+   * Run the independent cross-check. Only turned off by the rule calibrator,
+   * which re-runs the engine hundreds of times to search interpretations — it
+   * verifies the winning configuration once at the end instead.
+   */
+  verify = true,
 ): VendorResult {
   const { bills, settlements } = buildBillsAndSettlements(cy, fy, cfg);
-  fifoAllocate(bills, settlements);
+  allocate(bills, settlements, cfg);
 
   const cyEnd = cy.periodTo || fyEndDate(cy.financialYear || '2025-26');
   const fyEnd = fy ? (fy.periodTo || fyEndDate(fy.financialYear || '2026-27')) : addDays(cyEnd, 365);
@@ -170,9 +226,11 @@ export function analyzeVendor(
   const openingBill = bills.find((b) => b.isOpening);
   if (openingBill) results.unshift(computeBill(openingBill, cfg, cyEnd, fyEnd));
 
-  const totalDisallowedCY = r2(results.reduce((a, x) => a + (x.bill.isOpening ? 0 : x.disallowedCY), 0));
-  const totalAllowedFY = r2(results.reduce((a, x) => a + (x.bill.isOpening ? 0 : x.allowedInFY), 0));
-  const totalStillOutstanding = r2(results.reduce((a, x) => a + (x.bill.isOpening ? 0 : x.stillOutstanding), 0));
+  // Whether a prior-year opening payable can be disallowed in CY is a rule.
+  const skip = (x: Bill43bResult) => x.bill.isOpening && cfg.openingDisallowance === 'exclude';
+  const totalDisallowedCY = r2(results.reduce((a, x) => a + (skip(x) ? 0 : x.disallowedCY), 0));
+  const totalAllowedFY = r2(results.reduce((a, x) => a + (skip(x) ? 0 : x.allowedInFY), 0));
+  const totalStillOutstanding = r2(results.reduce((a, x) => a + (skip(x) ? 0 : x.stillOutstanding), 0));
 
   const reviewCount = cy.txns.filter((t) => t.needsReview).length + (fy ? fy.txns.filter((t) => t.needsReview).length : 0);
   const continuityOk = !fy || Math.abs(cy.closingBalance - fy.openingBalance) <= cfg.toleranceRupees;
@@ -183,7 +241,7 @@ export function analyzeVendor(
   if (!continuityOk) warnings.push(`FY opening (₹${fy?.openingBalance}) ≠ CY closing (₹${cy.closingBalance}).`);
   if (!fy) warnings.push('Following-year ledger not provided — FY payment dates unknown; year-end outstanding shown as fully disallowed pending FY data.');
 
-  return {
+  const result: VendorResult = {
     vendorName: cy.vendorName,
     format: cy.format,
     cyReconciled: !!cy.balanceReconciled,
@@ -195,7 +253,32 @@ export function analyzeVendor(
     totalDisallowedCY, totalAllowedFY, totalStillOutstanding,
     warnings, reviewCount,
   };
+
+  // Independent cross-check + invariants (see verify.ts).
+  if (verify) {
+    const v = verifyVendor(result, cy, fy, cfg);
+    result.verified = v.verified;
+    result.verifyNotes = v.notes;
+    if (!v.verified) warnings.push(...v.notes.map((n) => `Cross-check: ${n}`));
+  }
+
+  return result;
 }
+
+export interface BuildReportOptions {
+  /** run the independent cross-check per vendor (default true) */
+  verify?: boolean;
+  /**
+   * Per-vendor s.15 window, keyed by normalised vendor name. This is a DECLARED
+   * fact about the vendor (a written agreement exists → 45 days, otherwise 15),
+   * not a tuning knob: only 15 or 45 are accepted (enforced in rules.ts) and the
+   * declaration is disclosed on the workpaper.
+   */
+  vendorWindowDays?: Record<string, number>;
+}
+
+/** Normalise a vendor name for matching across years / working papers. */
+export const normVendor = norm;
 
 /** Pair CY and FY ledgers by normalised vendor name and build the full report. */
 export function buildReport(
@@ -203,9 +286,15 @@ export function buildReport(
   fyLedgers: VendorLedger[],
   cfg: Msme43bConfig = DEFAULT_CONFIG,
   clientName?: string,
+  opts: BuildReportOptions = {},
 ): Msme43bReport {
   const fyByName = new Map(fyLedgers.map((l) => [norm(l.vendorName), l]));
-  const vendors = cyLedgers.map((cy) => analyzeVendor(cy, fyByName.get(norm(cy.vendorName)) || null, cfg));
+  const vendors = cyLedgers.map((cy) => {
+    const key = norm(cy.vendorName);
+    const declared = opts.vendorWindowDays?.[key];
+    const vcfg = declared && declared !== cfg.windowDays ? { ...cfg, windowDays: declared } : cfg;
+    return analyzeVendor(cy, fyByName.get(key) || null, vcfg, opts.verify !== false);
+  });
 
   const cyLabel = cyLedgers[0]?.financialYear || 'CY';
   const fyLabel = fyLedgers[0]?.financialYear || 'FY';

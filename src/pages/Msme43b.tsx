@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, Fragment } from 'react';
+import { useState, useCallback, useEffect, useMemo, Fragment } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -16,12 +16,15 @@ import {
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { MultiYearTrend } from '@/components/msme43b/MultiYearTrend';
+import { AccuracyReview } from '@/components/msme43b/AccuracyReview';
 import {
   pdfToLines, parseLedgerPages, detectFormat, extractLedgersViaAI,
   buildReport, downloadWorkpaper, msme43bToForm3cd,
   saveRun, listRuns, loadRun, renameRun, deleteRun, computeCarryForward,
+  loadRuleProfile, saveRuleProfile, saveGolden, loadGoldens,
+  configFromProfile, vendorWindowMap,
   DEFAULT_CONFIG, type VendorLedger, type Msme43bReport, type VendorResult,
-  type Msme43bRunSummary,
+  type Msme43bRunSummary, type RuleProfile, type GoldenCase,
 } from '@/lib/msme43b';
 
 interface ClientOpt { id: string; name: string }
@@ -76,8 +79,22 @@ export default function Msme43b() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingLabel, setEditingLabel] = useState('');
   const [carryPriorId, setCarryPriorId] = useState<string>('');
+  // Ledgers are kept after the run so the accuracy loop can re-run the engine
+  // under a candidate interpretation without re-uploading the PDFs.
+  const [cyLedgers, setCyLedgers] = useState<VendorLedger[]>([]);
+  const [fyLedgers, setFyLedgers] = useState<VendorLedger[]>([]);
+  const [profile, setProfile] = useState<RuleProfile | null>(null);
+  const [goldens, setGoldens] = useState<GoldenCase[]>([]);
+  const [calibOff, setCalibOff] = useState(false);
 
   const clientName = clients.find((c) => c.id === clientId)?.name || '';
+
+  // The interpretation in force: the standard positions, overridden by whatever
+  // this client's reviewer has taught the tool.
+  const activeConfig = useMemo(
+    () => ({ ...configFromProfile(profile, DEFAULT_CONFIG), windowDays }),
+    [profile, windowDays],
+  );
 
   // Load client list.
   useEffect(() => {
@@ -96,6 +113,22 @@ export default function Msme43b() {
 
   useEffect(() => { refreshRuns(clientId); }, [clientId, refreshRuns]);
 
+  // Load this client's learned interpretation and its signed-off runs.
+  const refreshCalibration = useCallback(async (cid: string) => {
+    if (!cid) { setProfile(null); setGoldens([]); return; }
+    const [p, g] = await Promise.all([loadRuleProfile(cid), loadGoldens(cid)]);
+    if (p.unavailable || g.unavailable) { setCalibOff(true); setProfile(null); setGoldens([]); return; }
+    setCalibOff(false);
+    if (p.error) toast.warning(p.error);
+    setProfile(p.data);
+    setGoldens(g.data || []);
+    // Keep the window selector showing the position actually in force.
+    const learned = p.data?.overrides.windowDays;
+    if (learned) setWindowDays(learned);
+  }, []);
+
+  useEffect(() => { refreshCalibration(clientId); }, [clientId, refreshCalibration]);
+
   const run = useCallback(async () => {
     if (cyFiles.length === 0) {
       toast.error('Upload at least the current-year ledger PDF(s).');
@@ -106,8 +139,12 @@ export default function Msme43b() {
       const [cyRes, fyRes] = await Promise.all([filesToLedgers(cyFiles, useAi), filesToLedgers(fyFiles, useAi)]);
       const cy = cyRes.ledgers;
       const fy = fyRes.ledgers;
-      const rep = buildReport(cy, fy, { ...DEFAULT_CONFIG, windowDays }, clientName || undefined);
+      const rep = buildReport(cy, fy, activeConfig, clientName || undefined, {
+        vendorWindowDays: vendorWindowMap(profile),
+      });
       setReport(rep);
+      setCyLedgers(cy);
+      setFyLedgers(fy);
       if (cyRes.truncatedAny || fyRes.truncatedAny) {
         toast.warning('A ledger was too large for the AI to read in full — its result may be incomplete. Check reconciliation.');
       }
@@ -124,7 +161,7 @@ export default function Msme43b() {
     } finally {
       setRunning(false);
     }
-  }, [cyFiles, fyFiles, clientName, windowDays, useAi]);
+  }, [cyFiles, fyFiles, clientName, activeConfig, profile, useAi]);
 
   const doSave = useCallback(async () => {
     if (!report) return;
@@ -163,6 +200,47 @@ export default function Msme43b() {
     toast.success('Run deleted.');
     refreshRuns(clientId);
   }, [clientId, refreshRuns]);
+
+  // ── Accuracy loop ───────────────────────────────────────────────────────
+  /** The reviewer confirms this run — store it as a replayable golden case. */
+  const doSignOff = useCallback(async (label: string) => {
+    if (!report || !clientId) return;
+    const res = await saveGolden({
+      clientId, firmId: user?.firm_id, userId: user?.id,
+      userName: user?.name || user?.email || null,
+      label, report, cyLedgers, fyLedgers,
+      config: activeConfig, vendorWindows: vendorWindowMap(profile),
+    });
+    if (res.unavailable) { setCalibOff(true); toast.error('Calibration tables not deployed yet — apply the migration first.'); return; }
+    if (res.error) { toast.error(`Sign-off failed: ${res.error}`); return; }
+    toast.success('Signed off. Future rule changes will be checked against this run.');
+    refreshCalibration(clientId);
+  }, [report, clientId, user, cyLedgers, fyLedgers, activeConfig, profile, refreshCalibration]);
+
+  /** The reviewer accepts a learned interpretation — persist it and re-run. */
+  const doAdoptProfile = useCallback(async (
+    next: RuleProfile,
+    meta: { sourceFile: string; matchedBefore: number; matchedAfter: number },
+  ) => {
+    if (!clientId) { toast.error('Select a client — rules are learned per client.'); return; }
+    const res = await saveRuleProfile({
+      clientId, firmId: user?.firm_id, userId: user?.id,
+      userName: user?.name || user?.email || null,
+      profile: next, sourceFile: meta.sourceFile,
+      matchedBefore: meta.matchedBefore, matchedAfter: meta.matchedAfter,
+    });
+    if (res.unavailable) { setCalibOff(true); toast.error('Calibration tables not deployed yet — apply the migration first.'); return; }
+    if (res.error) { toast.error(`Could not save the rules: ${res.error}`); return; }
+
+    setProfile(next);
+    const cfg = { ...configFromProfile(next, DEFAULT_CONFIG) };
+    if (next.overrides.windowDays) setWindowDays(next.overrides.windowDays);
+    setReport(buildReport(cyLedgers, fyLedgers, cfg, clientName || undefined, {
+      vendorWindowDays: vendorWindowMap(next),
+    }));
+    toast.success('Rules adopted and the working re-computed.');
+    refreshCalibration(clientId);
+  }, [clientId, user, cyLedgers, fyLedgers, clientName, refreshCalibration]);
 
   const toggle = (name: string) =>
     setExpanded((s) => {
@@ -221,7 +299,7 @@ export default function Msme43b() {
                 </Button>
               </>
             )}
-            <Button onClick={() => downloadWorkpaper(report, carry)} variant="outline">
+            <Button onClick={() => downloadWorkpaper(report, carry, { config: activeConfig, profile })} variant="outline">
               <Download className="h-4 w-4 mr-2" /> Export working paper
             </Button>
           </div>
@@ -452,6 +530,22 @@ export default function Msme43b() {
             </Card>
           )}
 
+          {/* ── Accuracy loop: confirm, or teach the tool your interpretation ── */}
+          {cyLedgers.length > 0 && (
+            <AccuracyReview
+              report={report}
+              cyLedgers={cyLedgers}
+              fyLedgers={fyLedgers}
+              config={activeConfig}
+              profile={profile}
+              goldens={goldens}
+              clientId={clientId}
+              persistOff={calibOff}
+              onSignOff={doSignOff}
+              onAdoptProfile={doAdoptProfile}
+            />
+          )}
+
           {/* ── Vendor table with drilldown ── */}
           <Card>
             <CardHeader><CardTitle className="text-lg">Vendor-wise result</CardTitle></CardHeader>
@@ -576,6 +670,8 @@ function VendorChecks({ v }: { v: VendorResult }) {
       {v.continuityOk
         ? <Badge variant="outline" className="text-[10px]">continuity ✓</Badge>
         : <Badge variant="destructive" className="text-[10px]">continuity ✗</Badge>}
+      {v.verified === true && <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600">cross-checked ✓</Badge>}
+      {v.verified === false && <Badge variant="destructive" className="text-[10px]" title={(v.verifyNotes || []).join(' | ')}>cross-check: review</Badge>}
       {v.reviewCount > 0 && <Badge variant="secondary" className="text-[10px]">{v.reviewCount} review</Badge>}
     </div>
   );
