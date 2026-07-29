@@ -1319,21 +1319,10 @@ export function TdsValidateFinalise({
                     </span>
                   )}
                   <div className="flex-1" />
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button size="sm" variant="outline" className="gap-1 h-6 px-2 text-[11px] shrink-0">
-                        <Download size={12} /> Download Template
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem className="text-xs gap-2" onClick={() => downloadTemplateFile("/templates/TDS_Data_Entry_Simple_Template.xlsx", "TDS_Data_Entry_Simple_Template.xlsx")}>
-                        <FileSpreadsheet size={13} /> Simple (one sheet, grouped by challan)
-                      </DropdownMenuItem>
-                      <DropdownMenuItem className="text-xs gap-2" onClick={() => downloadTemplateFile("/templates/TDS_Data_Entry_Client_Template.xlsx", "TDS_Data_Entry_Client_Template.xlsx")}>
-                        <FileSpreadsheet size={13} /> Detailed (Challan Details linked to TDS Entries)
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  <Button size="sm" variant="outline" className="gap-1 h-6 px-2 text-[11px] shrink-0"
+                    onClick={() => downloadTemplateFile("/templates/TDS_Data_Entry_Simple_Template.xlsx", "TDS_Data_Entry_Simple_Template.xlsx")}>
+                    <Download size={12} /> Download Template
+                  </Button>
                   <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
                     onChange={(e) => {
                       const picked = Array.from(e.target.files ?? []);

@@ -358,30 +358,32 @@ function findHeaderKey(row: Record<string, unknown> | undefined, targets: string
   return null;
 }
 
-/** Normalises a Challan ID VALUE for tolerant matching between the "Challan
- * Details" and "TDS Entries" sheets: trim + uppercase only. Unlike header-name
- * normalisation above, punctuation is DELIBERATELY kept — a Challan ID like
- * "CH-Q1-001" carries meaningful structure, not noise, so two differently
- * punctuated IDs must NOT be folded into the same key. */
+/** Normalises a challan-linking VALUE (Challan ID or Challan Serial No.) for
+ * tolerant matching across rows/sheets: trim + uppercase only. Unlike
+ * header-name normalisation above, punctuation is DELIBERATELY kept — an ID
+ * like "CH-Q1-001" carries meaningful structure, not noise, so two
+ * differently punctuated values must NOT be folded into the same key. */
 const normaliseChallanId = (v: unknown): string => String(v ?? "").trim().toUpperCase();
 
 /**
- * The official template's worked-example row (row 4 on both "Challan
- * Details" and "TDS Entries") ships pre-filled with realistic-looking data —
- * a real deductee name, PAN, and amount — so a client can see the expected
- * format at a glance. The in-sheet note tells them to delete or overwrite it
- * before submitting, but nothing stops them leaving it in place, and if they
- * do, that row is indistinguishable from real data by content alone (it's
- * DESIGNED to look real). Left unhandled, it would be silently imported as a
- * fabricated deductee record into the client's actual TDS data — worse than
- * a false mismatch, since nothing downstream would ever flag it as wrong.
- * The template gives this row's Challan ID this exact reserved value on BOTH
- * sheets (never a real Challan ID a client would type), so it can be dropped
+ * The official template's worked-example row ships pre-filled with
+ * realistic-looking data — a real deductee name, PAN, and amount — so a
+ * client can see the expected format at a glance. The in-sheet note tells
+ * them to delete or overwrite it before submitting, but nothing stops them
+ * leaving it in place, and if they do, that row is indistinguishable from
+ * real data by content alone (it's DESIGNED to look real). Left unhandled,
+ * it would be silently imported as a fabricated deductee record into the
+ * client's actual TDS data — worse than a false mismatch, since nothing
+ * downstream would ever flag it as wrong. The template gives this row's
+ * challan-linking field (Challan ID on the two-sheet template; Challan
+ * Serial No. on the single-sheet template, which has no separate Challan
+ * ID — see joinChallanTemplate) this exact reserved value everywhere it's
+ * used (never a value a client would type), so it can be dropped
  * unconditionally regardless of whether the client remembered to delete it.
  */
 export const TEMPLATE_EXAMPLE_CHALLAN_ID = "EXAMPLE-DO-NOT-IMPORT";
 
-/** Drops rows whose Challan ID is the template's reserved example-row sentinel. */
+/** Drops rows whose challan-linking field is the template's reserved example-row sentinel. */
 function dropExampleRow(rows: Record<string, unknown>[], idKey: string | null): Record<string, unknown>[] {
   if (!idKey) return rows;
   return rows.filter((row) => normaliseChallanId(row[idKey]) !== TEMPLATE_EXAMPLE_CHALLAN_ID);
@@ -408,45 +410,57 @@ export function isTwoSheetTemplate(sheetNames: string[]): { challanSheet: string
 }
 
 /**
- * Joins the official two-sheet template's already-parsed "Challan Details"
- * and "TDS Entries" rows (each produced by gridToRows) into ONE row set the
- * existing single-sheet import pipeline can consume: every entry row gets the
- * BSR Code / Challan No. of the challan its "Challan ID" links to, added under
- * the EXACT literal keys "BSR Code" and "Challan No" — the same strings
- * tds-recon-import's HEADER_SYNONYMS already recognises by exact match
- * ("bsrcode" → challan_bsr, "challanno" → challan_no; verified directly
- * against that file), so no edge-function change is needed.
+ * Joins already-parsed Challan rows and Entry rows (each produced by
+ * gridToRows) into ONE row set the existing single-sheet import pipeline can
+ * consume: every entry row gets the BSR Code / Challan No. of the challan it
+ * links to, added under the EXACT literal keys "BSR Code" and "Challan No" —
+ * the same strings tds-recon-import's HEADER_SYNONYMS already recognises by
+ * exact match ("bsrcode" → challan_bsr, "challanno" → challan_no; verified
+ * directly against that file), so no edge-function change is needed.
  *
- * An entry whose Challan ID doesn't match any known challan (typo, deleted
- * challan, blank) is returned UNCHANGED — no "BSR Code"/"Challan No" keys are
- * added — so it never looks like a confident-but-wrong deterministic mapping;
- * the existing pipeline already tolerates a row with no challan_bsr/challan_no.
+ * The linking field is resolved by trying "Challan ID" FIRST (the two-sheet
+ * template's own invented key, kept for backward compatibility with copies
+ * of that template already in the wild), then falling back to "Challan
+ * Serial No." — the field that actually identifies a challan in the
+ * software itself (see the Edit Challan dialog in TdsDataEntry.tsx: BSR Code
+ * + Challan Number, no separate ID). The single-sheet "TDS Data" template
+ * has no Challan ID column at all, so it always resolves to Challan Serial
+ * No., which then serves as BOTH the lookup key AND the "Challan No" value
+ * injected onto matched entries — deliberately the same field, since that
+ * value genuinely IS the challan's identity there.
+ *
+ * An entry whose linking value doesn't match any known challan (typo,
+ * deleted challan, blank) is returned UNCHANGED — no "BSR Code"/"Challan No"
+ * keys are added — so it never looks like a confident-but-wrong
+ * deterministic mapping; the existing pipeline already tolerates a row with
+ * no challan_bsr/challan_no.
  */
 export function joinChallanTemplate(
   challanRows: Record<string, unknown>[],
   entryRows: Record<string, unknown>[],
 ): Record<string, unknown>[] {
-  const idKey = findHeaderKey(challanRows[0], ["challanid"]);
-  const entryIdKey = findHeaderKey(entryRows[0], ["challanid"]);
+  const LINK_TARGETS = ["challanid", "challanserialno", "challanno", "challannumber"];
+  const idKey = findHeaderKey(challanRows[0], LINK_TARGETS);
+  const entryIdKey = findHeaderKey(entryRows[0], LINK_TARGETS);
 
   // Strip the worked-example row FIRST, on both sheets, regardless of whether
   // the client deleted it as instructed — see TEMPLATE_EXAMPLE_CHALLAN_ID.
   const cleanChallanRows = dropExampleRow(challanRows, idKey);
   const cleanEntryRows = dropExampleRow(entryRows, entryIdKey);
 
-  if (!idKey) return cleanEntryRows; // Challan Details has no Challan ID column — nothing to join
+  if (!idKey) return cleanEntryRows; // no challan-linking column at all — nothing to join
 
   const bsrKey = findHeaderKey(cleanChallanRows[0], ["bsrcode", "bsr"]);
-  const noKey = findHeaderKey(cleanChallanRows[0], ["challanserialno", "challanno", "challannumber"]);
+  const noKey = findHeaderKey(cleanChallanRows[0], ["challanserialno", "challanno", "challannumber"]) ?? idKey;
 
   const byId = new Map<string, { bsr: unknown; no: unknown }>();
   for (const row of cleanChallanRows) {
     const id = normaliseChallanId(row[idKey]);
-    if (!id) continue; // blank Challan ID (e.g. the template's own placeholder row) — never a lookup target
-    byId.set(id, { bsr: bsrKey ? row[bsrKey] : null, no: noKey ? row[noKey] : null });
+    if (!id) continue; // blank linking value (e.g. the template's own placeholder row) — never a lookup target
+    byId.set(id, { bsr: bsrKey ? row[bsrKey] : null, no: row[noKey] });
   }
 
-  if (!entryIdKey) return cleanEntryRows; // TDS Entries has no Challan ID column — nothing to join
+  if (!entryIdKey) return cleanEntryRows; // entries have no challan-linking column — nothing to join
 
   return cleanEntryRows.map((row) => {
     const match = byId.get(normaliseChallanId(row[entryIdKey]));
