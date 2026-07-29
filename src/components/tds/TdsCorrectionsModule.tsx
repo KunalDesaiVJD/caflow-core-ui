@@ -48,6 +48,7 @@ import {
   AlertTriangle, Send,
 } from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
+import { TdsDataEntry, CORRECTION_TDS_SOURCE } from "./TdsDataEntry";
 import {
   CORRECTION_STATUS_META, isCorrectionLocked, isCorrectionEditable,
   isSeniorReviewer, createCorrection, loadCorrectionDetail, submitCorrection,
@@ -641,6 +642,21 @@ function CorrectionDetail({
   const editable = isCorrectionEditable(correction?.status);
   const isSamePerson = !!correction?.prepared_by && correction.prepared_by === actor.id;
   const canApprove = isSeniorReviewer(actor.role) && !isSamePerson;
+
+  // The correction presented to the Data Entry engine as if it were a filing.
+  // 20260729190000 made the correction tables column-identical to the live
+  // ones and mirrors filing_id onto correction_id, so the engine's queries
+  // work unchanged against this id.
+  const correctionAsFiling = useMemo(() => correction ? ({
+    id: correction.id,
+    client_id: correction.client_id,
+    firm_id: correction.firm_id,
+    financial_year: correction.financial_year,
+    quarter: correction.quarter,
+    tds_forms: [correction.form_type],
+    work_status: correction.status === "filed" ? "Filed" : "Under Process",
+    tan: null,
+  }) as any : null, [correction]);
   const clientName = clients.find(c => c.id === correction?.client_id)?.name || "—";
   const delta = useMemo(() => summariseCorrection(challans, deductees), [challans, deductees]);
   const hasChanges = delta.added + delta.modified + delta.deleted + delta.challansTouched > 0;
@@ -872,183 +888,26 @@ function CorrectionDetail({
         )}
       </div>
 
-      {/* ── Toolbar: find the row you came to fix ── */}
-      <Card>
-        <CardContent className="p-2.5 flex flex-wrap items-center gap-2">
-          <div className="relative flex-1 min-w-[200px]">
-            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Find by name, PAN, section…"
-              className="h-8 pl-8 pr-7 text-xs"
-            />
-            {search && (
-              <button
-                onClick={() => setSearch("")} title="Clear"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                <X size={12} />
-              </button>
-            )}
-          </div>
-
-          <div className="flex items-center gap-1">
-            {([
-              ["all", "All"], ["changed", "Changed"], ["add", "Added"],
-              ["modify", "Modified"], ["delete", "Deleted"],
-            ] as [ChangeFilter, string][]).map(([k, label]) => (
-              <button
-                key={k}
-                onClick={() => setChangeFilter(k)}
-                aria-pressed={changeFilter === k}
-                className={cn(
-                  "px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors",
-                  changeFilter === k
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "border-transparent text-muted-foreground hover:bg-muted",
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex-1" />
-          <span className="text-[11px] text-muted-foreground">
-            {filtering ? `${visibleDeductees.length} of ${deductees.length}` : `${deductees.length} entries`}
-          </span>
-          <Button
-            variant="ghost" size="sm" className="h-8 text-xs"
-            onClick={() => setCollapsed(collapsed.size ? new Set() : new Set(challans.map(c => c.id)))}
-          >
-            {collapsed.size ? "Expand all" : "Collapse all"}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* ── Challans ── */}
-      <div className="space-y-2">
-        {challans.length === 0 && deductees.length === 0 ? (
-          <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">
-            The filed return had no challans or entries to copy in.
-          </CardContent></Card>
-        ) : shownChallans.length === 0 ? (
-          <Card><CardContent className="p-8 text-center">
-            <p className="text-sm text-muted-foreground">No entries match “{search}”.</p>
-            <Button size="sm" variant="outline" className="mt-3" onClick={() => { setSearch(""); setChangeFilter("all"); }}>
-              Clear search
-            </Button>
-          </CardContent></Card>
-        ) : shownChallans.map(c => {
-          const rows = byChallan.get(c.id) || [];
-          const isCollapsed = collapsed.has(c.id);
-          const bd = challanBreakdown.get(c.id);
-          return (
-            <Card
-              key={c.id}
-              className={cn("overflow-hidden border-l-[3px]", ACTION_META[c.action].rail)}
-            >
-              {/* Challan header — same field set as Data Entry's challan card:
-                  full deposit identity, Total/Utilised/Unutilised/Balance/Status,
-                  so a correction can be made without cross-checking Data Entry. */}
-              <div className="px-3 py-2 bg-muted/30 space-y-1.5">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <button
-                    onClick={() => toggleChallan(c.id)}
-                    className="flex items-center gap-1.5 min-w-0 hover:text-primary transition-colors"
-                    title={isCollapsed ? "Expand" : "Collapse"}
-                  >
-                    {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                    <Landmark size={13} className="text-amber-600 shrink-0" />
-                    <span className="text-sm font-semibold truncate">
-                      Challan {c.challan_serial_no || "—"}
-                    </span>
-                  </button>
-                  {c.bsr_code && <span className="text-[11px] text-muted-foreground">BSR {c.bsr_code}</span>}
-                  <span className="text-border">|</span>
-                  <span className="text-[11px] text-muted-foreground">{shortDate(c.deposit_date)}</span>
-                  {c.section_code && (
-                    <>
-                      <span className="text-border">|</span>
-                      <span className="text-[11px] text-muted-foreground">Section <strong className="text-foreground">{c.section_code}</strong></span>
-                    </>
-                  )}
-                  {c.bank_name && (
-                    <>
-                      <span className="text-border">|</span>
-                      <span className="text-[11px] text-muted-foreground">{c.bank_name}</span>
-                    </>
-                  )}
-                  {c.is_book_entry && <Badge variant="outline" className="text-[9px]">Book Entry</Badge>}
-                  <span className="text-[11px] text-muted-foreground">
-                    Entries: <strong className="text-foreground">{rows.length}</strong>
-                  </span>
-                  {c.action !== "unchanged" && (
-                    <Badge className={cn("text-[9px]", ACTION_META[c.action].badge)}>
-                      Challan {ACTION_META[c.action].label.toLowerCase()}
-                    </Badge>
-                  )}
-
-                  <div className="flex-1" />
-
-                  {editable && (
-                    <>
-                      <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={() => setEditChallan(c)}>
-                        <Pencil size={12} /> Challan
-                      </Button>
-                      <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => setAddToChallan(c)}>
-                        <Plus size={12} /> Add entry
-                      </Button>
-                    </>
-                  )}
-                </div>
-
-                {bd && (
-                  <div className="flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px]">
-                    <span className="text-muted-foreground">Total Challan Amount: <strong className="text-foreground">₹{money(c.total_challan_amount)}</strong></span>
-                    <span className="text-muted-foreground">Utilised: <strong className="text-foreground">₹{money(bd.applied)}</strong></span>
-                    <span className="text-muted-foreground">Unutilised (Balance): <strong className="text-foreground">₹{money(Math.max(0, bd.allocatable - bd.applied))}</strong></span>
-                    {(c.late_fees_234e || 0) > 0 && (
-                      <span className="text-muted-foreground">Late Fees 234E: <strong className="text-foreground">₹{money(c.late_fees_234e)}</strong></span>
-                    )}
-                    <span className={cn("font-semibold", statusTextClass(bd.applied, bd.allocatable))}>{bd.status}</span>
-                    <div className="w-full max-w-[220px] h-1.5 rounded-full bg-muted overflow-hidden">
-                      <div className={cn("h-full rounded-full transition-all", bd.colorClass)}
-                        style={{ width: (c.total_challan_amount || 0) > 0 ? `${Math.min(100, (bd.applied / (c.total_challan_amount || 1)) * 100)}%` : "0%" }} />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {!isCollapsed && (
-                <CardContent className="p-0">
-                  <EntryTable
-                    rows={rows}
-                    form={correction.form_type}
-                    locked={!editable}
-                    onEdit={setEditRow}
-                    onDelete={markDeleted}
-                    onRestore={restoreRow}
-                  />
-                </CardContent>
-              )}
-            </Card>
-          );
-        })}
-
-        {(byChallan.get("__unlinked__") || []).length > 0 && (
-          <Card className="overflow-hidden">
-            <div className="px-3 py-2 bg-muted/30 text-sm font-semibold">Not linked to a challan</div>
-            <CardContent className="p-0">
-              <EntryTable
-                rows={byChallan.get("__unlinked__") || []}
-                form={correction.form_type} locked={!editable}
-                onEdit={setEditRow} onDelete={markDeleted} onRestore={restoreRow}
-              />
-            </CardContent>
-          </Card>
-        )}
-      </div>
+      {/* ── The Data Entry module itself ──────────────────────────────────
+          Not a look-alike: this IS TdsDataEntry, pointed at the correction's
+          tables. Challan cards, utilised/unutilised balances, validations,
+          calculations, dropdowns, Genius import/export — all identical,
+          because it is the same component. Users edit as if it were the
+          original return; every write lands in the correction version, and
+          the DB tracks add/modify/delete on the way in. */}
+      <TdsDataEntry
+        clients={clients as any}
+        users={[]}
+        isSuperadmin={false}
+        resolveFirmId={async () => correction.firm_id}
+        selClient={correction.client_id} setSelClient={() => {}}
+        selFy={correction.financial_year} setSelFy={() => {}}
+        selQuarter={correction.quarter} setSelQuarter={() => {}}
+        selForm={correction.form_type} setSelForm={() => {}}
+        source={CORRECTION_TDS_SOURCE}
+        filingOverride={correctionAsFiling}
+        forceReadOnly={!editable}
+      />
 
       {/* Signature */}
       <SignatureSection correction={correction} />

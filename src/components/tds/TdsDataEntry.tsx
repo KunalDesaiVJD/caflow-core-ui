@@ -1502,7 +1502,9 @@ export function TdsDataEntry({
   // ─── Render ───
   return (
     <div className="space-y-4">
-      {/* ── CP-03: Filing Selector — always visible, auto-loads on change ── */}
+      {/* ── CP-03: Filing Selector — hidden in correction mode, where the
+          period is fixed by the correction being edited ── */}
+      {!isCorrectionMode && (
       <div className="rounded-lg bg-foreground/5 border p-4 space-y-3">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-foreground">Select Filing</h3>
@@ -1640,6 +1642,7 @@ export function TdsDataEntry({
           <p className="text-xs text-muted-foreground pt-1">Select a client to auto-load the filing.</p>
         )}
       </div>
+      )}
 
       {filing && (
         <>
