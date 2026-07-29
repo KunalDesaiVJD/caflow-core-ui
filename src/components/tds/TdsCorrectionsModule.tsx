@@ -43,7 +43,7 @@ import {
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Search, Plus, ArrowLeft, PenTool, Trash2, Pencil, RotateCcw, X,
+  Search, Plus, ArrowLeft, PenTool, Trash2, Pencil, RotateCcw, X, GitCompare,
   CheckCircle2, XCircle, Landmark, ShieldCheck, Lock, ChevronDown, ChevronRight,
   AlertTriangle, Send,
 } from "lucide-react";
@@ -53,9 +53,9 @@ import {
   CORRECTION_STATUS_META, isCorrectionLocked, isCorrectionEditable,
   isSeniorReviewer, createCorrection, loadCorrectionDetail, submitCorrection,
   signAsPreparer, approveAsSenior, markCorrectionFiled,
-  rejectCorrection, summariseCorrection, logCorrectionAction,
+  rejectCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
   type Correction, type CorrectionStatus, type CorrectionChallan,
-  type CorrectionDeductee, type CorrectionAction, type Actor,
+  type CorrectionDeductee, type CorrectionAction, type Actor, type FieldDiff,
 } from "@/lib/tdsCorrections";
 
 /** Every lifecycle state, in workflow order — used by the tiles and filters. */
@@ -888,6 +888,9 @@ function CorrectionDetail({
         )}
       </div>
 
+      {/* Every change vs the filed return, with Original -> Corrected values */}
+      <ChangesPanel challans={challans} deductees={deductees} />
+
       {/* ── The Data Entry module itself ──────────────────────────────────
           Not a look-alike: this IS TdsDataEntry, pointed at the correction's
           tables. Challan cards, utilised/unutilised balances, validations,
@@ -1476,6 +1479,118 @@ function ChallanDialog({ challan, correction, actor, onClose, onSaved, toast }: 
 // ═══════════════════════════════════════════════════════════════════════════
 // Signature
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Every change in this correction, versus the originally filed return —
+ * so nobody has to diff two returns by eye.
+ *
+ * Additions and deletions come from `action`; modifications are shown
+ * field-by-field as Original -> Corrected, using the snapshot the database
+ * takes the instant before the first edit (20260729200000).
+ */
+function ChangesPanel({ challans, deductees }: {
+  challans: CorrectionChallan[]; deductees: CorrectionDeductee[];
+}) {
+  const rows = useMemo(() => {
+    const out: {
+      kind: "Challan" | "Entry"; action: CorrectionAction;
+      title: string; diffs: FieldDiff[];
+    }[] = [];
+
+    for (const c of challans) {
+      if (c.action === "unchanged") continue;
+      out.push({
+        kind: "Challan", action: c.action,
+        title: `Challan ${c.challan_serial_no || "—"}`,
+        diffs: diffCorrectionRow(c),
+      });
+    }
+    for (const d of deductees) {
+      if (d.action === "unchanged") continue;
+      out.push({
+        kind: "Entry", action: d.action,
+        title: d.deductee_name || "—",
+        diffs: diffCorrectionRow(d),
+      });
+    }
+    // Modified first — those are the ones needing a value comparison.
+    const rank = { modify: 0, add: 1, delete: 2, unchanged: 3 } as const;
+    return out.sort((a, b) => rank[a.action] - rank[b.action]);
+  }, [challans, deductees]);
+
+  if (rows.length === 0) {
+    return (
+      <Card>
+        <CardContent className="p-3 text-xs text-muted-foreground">
+          No changes yet — this correction is currently identical to the filed return.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const fmt = (v: unknown) =>
+    v === null || v === undefined || v === "" ? "—" : String(v);
+
+  return (
+    <Card>
+      <CardContent className="p-0">
+        <div className="px-3 py-2 border-b flex items-center gap-2">
+          <GitCompare size={13} className="text-muted-foreground" />
+          <span className="text-sm font-semibold">Changes vs the filed return</span>
+          <span className="text-[11px] text-muted-foreground">
+            {rows.length} change{rows.length === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        <div className="divide-y">
+          {rows.map((r, i) => (
+            <div
+              key={i}
+              className={cn("px-3 py-2 border-l-[3px]", ACTION_META[r.action].rail)}
+            >
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge className={cn("text-[9px]", ACTION_META[r.action].badge)}>
+                  {ACTION_META[r.action].label}
+                </Badge>
+                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{r.kind}</span>
+                <span className={cn("text-xs font-medium", r.action === "delete" && "line-through")}>
+                  {r.title}
+                </span>
+              </div>
+
+              {r.action === "modify" && r.diffs.length > 0 && (
+                <div className="mt-1.5 overflow-x-auto">
+                  <table className="text-xs">
+                    <tbody>
+                      {r.diffs.map(d => (
+                        <tr key={d.field}>
+                          <td className="pr-3 py-0.5 text-muted-foreground whitespace-nowrap">{d.label}</td>
+                          <td className="pr-2 py-0.5">
+                            <span className="line-through text-red-600 dark:text-red-400">{fmt(d.original)}</span>
+                          </td>
+                          <td className="pr-2 py-0.5 text-muted-foreground">→</td>
+                          <td className="py-0.5">
+                            <span className="font-medium text-emerald-700 dark:text-emerald-400">{fmt(d.corrected)}</span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {r.action === "modify" && r.diffs.length === 0 && (
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Marked modified; no field-level snapshot was captured for this row.
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 /** Horizontal stage tracker: where the correction is and what happens next. */
 function WorkflowTracker({ correction }: { correction: Correction }) {

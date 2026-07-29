@@ -491,6 +491,77 @@ export async function rejectCorrection(c: Correction, reason: string, actor: Act
   return error?.message ?? null;
 }
 
+// ─── Field-level diff: Original vs Corrected ────────────────────────────────
+
+/** Human labels for the columns a correction can change. */
+const FIELD_LABELS: Record<string, string> = {
+  deductee_name: "Name", deductee_pan: "PAN", pan_not_available: "PAN not available",
+  deductee_type: "Type", section_code: "Section", nature_of_payment: "Nature of payment",
+  amount_paid_credited: "Amount paid", date_of_payment: "Date of payment",
+  date_of_deduction: "Date of deduction", rate_of_tds: "Rate %",
+  tds_amount: "TDS", total_tax_deducted: "Total tax deducted",
+  surcharge_amount: "Surcharge", cess_amount: "Cess", interest_amount: "Interest",
+  late_fees_amount: "Late fees", gross_salary: "Gross salary",
+  standard_deduction_allowed: "Standard deduction", net_taxable_salary: "Taxable salary",
+  lower_deduction_certificate_no: "LDC number", lower_deduction_rate: "LDC rate",
+  reason_for_lower_or_nil_deduction: "Reason", designation: "Designation",
+  remarks: "Remarks", country_of_residence: "Country",
+  // Challan fields
+  bsr_code: "BSR code", challan_serial_no: "Challan serial no.",
+  deposit_date: "Deposit date", total_tax_deposited: "Tax deposited",
+  interest_deposited: "Interest deposited", late_fees_234e: "Late fee (234E)",
+  total_challan_amount: "Total challan amount", minor_head_of_challan: "Minor head",
+  bank_name: "Bank", is_book_entry: "Book entry", challan_remarks: "Challan remarks",
+};
+
+/** Bookkeeping columns a user never edits — never show them as "changes". */
+const DIFF_IGNORE = new Set([
+  "id", "correction_id", "filing_id", "challan_id", "correction_challan_id",
+  "original_challan_id", "original_deductee_id", "firm_id", "client_id",
+  "action", "original_values", "created_at", "updated_at",
+  "form_type", "financial_year", "quarter", "fully_utilized", "late_fees_used",
+  "origin_quarter", "origin_fy",
+]);
+
+export interface FieldDiff {
+  field: string; label: string;
+  original: unknown; corrected: unknown;
+}
+
+/** Normalise so 100 vs "100" and null vs "" do not read as changes. */
+const norm = (v: unknown) => {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number") return v;
+  if (typeof v === "boolean") return v;
+  const n = Number(v);
+  return Number.isFinite(n) && String(v).trim() !== "" ? n : String(v);
+};
+
+/**
+ * What actually changed on a row, comparing it to the snapshot the database
+ * took the moment before the first edit (20260729200000). Returns [] for
+ * unchanged rows and for additions (an addition has no "original").
+ */
+export function diffCorrectionRow(row: any): FieldDiff[] {
+  const original = row?.original_values;
+  if (!original || typeof original !== "object") return [];
+
+  const out: FieldDiff[] = [];
+  for (const key of Object.keys(original)) {
+    if (DIFF_IGNORE.has(key)) continue;
+    const before = norm(original[key]);
+    const after = norm(row[key]);
+    if (before === after) continue;
+    out.push({
+      field: key,
+      label: FIELD_LABELS[key] || key.replace(/_/g, " "),
+      original: original[key],
+      corrected: row[key],
+    });
+  }
+  return out;
+}
+
 // ─── Summary of what changed ────────────────────────────────────────────────
 
 export interface CorrectionDelta {

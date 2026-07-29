@@ -8,9 +8,10 @@ import {
   ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw, Repeat2,
   FileEdit,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
-import { TdsDataEntry } from "@/components/tds/TdsDataEntry";
+import { TdsDataEntry, CORRECTION_TDS_SOURCE } from "@/components/tds/TdsDataEntry";
 import { TdsValidateFinalise } from "@/components/tds/TdsValidateFinalise";
 import { TdsReports } from "@/components/tds/TdsReports";
 import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
@@ -56,7 +57,8 @@ const TdsFilings = () => {
   
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   // CP-02: sub-tab inside TDS Workspace
-  const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
+  const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate" | "correction">("data-entry");
+
   // Sub-tab inside Audit & Overrides
   const [activityTab, setActivityTab] = useState<"audit-log" | "overrides">("audit-log");
 
@@ -78,6 +80,39 @@ const TdsFilings = () => {
   // Increment to force TdsDashboard to re-fetch when returning from workspace
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
+
+  // ── Filed correction for the CURRENT workspace context ────────────────────
+  // A third Workspace tab appears only once a correction return has actually
+  // been FILED for this client/FY/quarter/form. Data Entry and Validate &
+  // Finalise keep showing the ORIGINAL return; the Correction tab shows the
+  // latest filed correction, so the two versions sit side by side.
+  const [filedCorrection, setFiledCorrection] = useState<any | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      if (!ctxClient || !ctxFy || !ctxQuarter || !ctxForm) { setFiledCorrection(null); return; }
+      const { data } = await supabase
+        .from("tds_corrections" as any)
+        .select("*")
+        .eq("client_id", ctxClient)
+        .eq("financial_year", ctxFy)
+        .eq("quarter", ctxQuarter)
+        .eq("form_type", ctxForm)
+        .eq("status", "filed");
+      if (cancelled) return;
+      // Latest filed wins when a period has been corrected more than once.
+      const latest = ((data || []) as any[])
+        .slice()
+        .sort((a, b) => (b.filed_at || b.signed_at || "").localeCompare(a.filed_at || a.signed_at || ""))[0] || null;
+      setFiledCorrection(latest);
+      // If the tab is open and the context moved to a period with no filed
+      // correction, fall back rather than showing an empty tab.
+      if (!latest) setWorkspaceTab(t => (t === "correction" ? "data-entry" : t));
+    };
+    run();
+    return () => { cancelled = true; };
+  }, [ctxClient, ctxFy, ctxQuarter, ctxForm, dashRefreshKey]);
 
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);
@@ -362,6 +397,25 @@ const TdsFilings = () => {
                     <ShieldCheck size={14} /> Validate &amp; Finalise
                   </span>
                 </button>
+
+                {/* Only once a correction has actually been FILED for this
+                    return. No filed correction → only the two tabs above. */}
+                {filedCorrection && (
+                  <button
+                    onClick={() => setWorkspaceTab("correction")}
+                    className={cn(
+                      "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+                      workspaceTab === "correction"
+                        ? "border-primary text-primary"
+                        : "border-transparent text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <span className="flex items-center gap-2">
+                      <FileEdit size={14} /> Correction
+                      <Badge className="text-[9px] bg-emerald-100 text-emerald-700">Filed</Badge>
+                    </span>
+                  </button>
+                )}
               </div>
 
               {/* Tab content — rendered but hidden so state is preserved on switch */}
@@ -384,6 +438,46 @@ const TdsFilings = () => {
                   forceStage1Signal={forceStage1Signal}
                 />
               </div>
+
+              {/* The filed correction — the SAME Data Entry engine, pointed at
+                  the correction's tables and read-only, so the two versions of
+                  the return are compared in one identical interface. */}
+              {filedCorrection && (
+                <div className={workspaceTab === "correction" ? "" : "hidden"}>
+                  <div className="mb-3 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2 flex items-start gap-2.5">
+                    <BadgeCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                    <div className="text-xs">
+                      <p className="font-semibold text-emerald-800 dark:text-emerald-300">
+                        Filed correction — read-only
+                      </p>
+                      <p className="text-emerald-700 dark:text-emerald-400">
+                        This is the corrected version of {ctxForm} · {ctxQuarter} {ctxFy}.
+                        The Data Entry and Validate &amp; Finalise tabs still show the original filed return.
+                      </p>
+                    </div>
+                  </div>
+                  <TdsDataEntry
+                    clients={clients} users={users}
+                    isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId}
+                    selClient={ctxClient} setSelClient={setCtxClient}
+                    selFy={ctxFy} setSelFy={setCtxFy}
+                    selQuarter={ctxQuarter} setSelQuarter={setCtxQuarter}
+                    selForm={ctxForm} setSelForm={setCtxForm}
+                    source={CORRECTION_TDS_SOURCE}
+                    filingOverride={{
+                      id: filedCorrection.id,
+                      client_id: filedCorrection.client_id,
+                      firm_id: filedCorrection.firm_id,
+                      financial_year: filedCorrection.financial_year,
+                      quarter: filedCorrection.quarter,
+                      tds_forms: [filedCorrection.form_type],
+                      work_status: "Filed",
+                      tan: null,
+                    } as any}
+                    forceReadOnly
+                  />
+                </div>
+              )}
             </div>
           )}
 

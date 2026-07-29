@@ -2076,9 +2076,33 @@ export function TdsDataEntry({
                             {/* Current quarter entries (Issue 1: locked when filing=Filed) */}
                             {deductees.map((d, idx) => {
                               const locked = isFilingLocked;
+                              // Correction mode only: tint the row by what
+                              // changed versus the filed return, so a change is
+                              // visible while editing, not just in the summary.
+                              const act = isCorrectionMode ? (d as any).action : undefined;
                               return (
-                                <TableRow key={d.id} className={cn(locked && "bg-muted/20")}>
-                                  <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
+                                <TableRow
+                                  key={d.id}
+                                  className={cn(
+                                    locked && "bg-muted/20",
+                                    act === "add" && "bg-emerald-50/70 dark:bg-emerald-950/20",
+                                    act === "modify" && "bg-amber-50/70 dark:bg-amber-950/20",
+                                    act === "delete" && "bg-red-50/70 dark:bg-red-950/20 opacity-60",
+                                  )}
+                                  title={
+                                    act && act !== "unchanged"
+                                      ? `${act[0].toUpperCase()}${act.slice(1)} in this correction`
+                                      : undefined
+                                  }
+                                >
+                                  <TableCell className="text-xs text-muted-foreground">
+                                    <span className="flex items-center gap-1">
+                                      {idx + 1}
+                                      {act === "add" && <span className="text-emerald-600 font-bold" title="Added">+</span>}
+                                      {act === "modify" && <span className="text-amber-600 font-bold" title="Modified">±</span>}
+                                      {act === "delete" && <span className="text-red-600 font-bold" title="Deleted">−</span>}
+                                    </span>
+                                  </TableCell>
                                   {selForm === "24Q" ? (
                                     <>
                                       <TableCell>
