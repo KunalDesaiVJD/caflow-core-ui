@@ -43,13 +43,28 @@ export function linesFromItems(items: RawItem[], yTolerance = 3): TextLine[] {
 }
 
 /**
+ * A PRIVATE COPY of the caller's bytes.
+ *
+ * pdfjs TRANSFERS the buffer it is given to its worker thread, which DETACHES it
+ * on this side: every later read of the caller's buffer then throws "Cannot
+ * perform Construct on a detached ArrayBuffer". That bit a real upload — the
+ * page count was taken first and the upload of the same buffer died immediately
+ * after. Handing pdfjs a copy keeps the caller's buffer usable, and callers can
+ * pass the same data to several functions here without thinking about it.
+ */
+export function ownedBytes(data: ArrayBuffer | Uint8Array): Uint8Array {
+  const src = data instanceof Uint8Array ? data : new Uint8Array(data);
+  return src.slice(); // slice() allocates a fresh buffer, unlike subarray()
+}
+
+/**
  * Convert a PDF (ArrayBuffer / Uint8Array) to pages of TextLines, in the browser.
  * The pdfjs worker must be configured once at app start (see setupPdfWorker).
  */
 export async function pdfToLines(data: ArrayBuffer | Uint8Array): Promise<TextLine[][]> {
   const pdfjs = await import('pdfjs-dist');
   await setupPdfWorker(pdfjs);
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const bytes = ownedBytes(data);
   // Keep the loading task: pdfjs v6's PDFDocumentProxy has no destroy(); cleanup
   // (worker teardown) lives on the loading task.
   const loadingTask = pdfjs.getDocument({ data: bytes });
@@ -88,8 +103,7 @@ export async function pdfPageTexts(data: ArrayBuffer | Uint8Array): Promise<stri
 export async function pdfPageCount(data: ArrayBuffer | Uint8Array): Promise<number> {
   const pdfjs = await import('pdfjs-dist');
   await setupPdfWorker(pdfjs);
-  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
-  const loadingTask = pdfjs.getDocument({ data: bytes });
+  const loadingTask = pdfjs.getDocument({ data: ownedBytes(data) });
   try {
     const doc = await loadingTask.promise;
     return doc.numPages;
