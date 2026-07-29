@@ -119,6 +119,14 @@ const STATUS_TONE: Record<string, string> = {
 export default function PortalTds() {
   const { activeClient, loading: clientLoading } = usePortalClient();
 
+  // Every effect below keys off this string, never the activeClient OBJECT.
+  // PortalClientContext.load() rebuilds its client objects from scratch on
+  // each run, so the object identity changes while the entity does not —
+  // depending on it makes fetchFilings/fetchDetail new every render and the
+  // fetch → setState → fetch loop hangs the tab. (Same failure that took out
+  // the staff TdsFilings page; see the ref/[] comment in src/pages/TdsFilings.tsx.)
+  const clientId = activeClient?.id ?? null;
+
   const [filings, setFilings] = useState<PortalFiling[]>([]);
   const [filingsLoading, setFilingsLoading] = useState(true);
 
