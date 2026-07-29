@@ -66,7 +66,7 @@ DO $$
 DECLARE
   t text;
   tables_all text[] := ARRAY[
-    'tds_entries', 'tds_ack_files', 'tds_demand_items', 'tds_filing_audit_log',
+    'tds_ack_files', 'tds_demand_items', 'tds_filing_audit_log',
     'tds_import_batches', 'tds_imported_rows', 'tds_pan_verification_batches',
     'tds_pan_verification_results', 'tds_pan_verification_rows',
     'tds_rate_master', 'tds_rate_master_audit_log', 'tds_recon_flags',
@@ -99,7 +99,12 @@ END $$;
 DO $$
 DECLARE
   t text;
-  tables_portal text[] := ARRAY['tds_filings', 'tds_challans', 'tds_deductees'];
+  -- tds_entries is here, not in the blanket list above, because PortalHome
+  -- already renders a TDS-by-section summary from it
+  -- (src/pages/PortalHome.tsx). Blanket-blocking it would silently zero that
+  -- widget out; own-rows-only SELECT keeps it working AND closes the same
+  -- cross-client hole on it.
+  tables_portal text[] := ARRAY['tds_filings', 'tds_challans', 'tds_deductees', 'tds_entries'];
 BEGIN
   FOREACH t IN ARRAY tables_portal LOOP
     IF NOT EXISTS (
