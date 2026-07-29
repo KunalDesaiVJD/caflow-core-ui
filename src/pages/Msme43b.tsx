@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { MultiYearTrend } from '@/components/msme43b/MultiYearTrend';
 import { AccuracyReview } from '@/components/msme43b/AccuracyReview';
+import { PanelReview } from '@/components/msme43b/PanelReview';
 import {
   pdfToLines, parseLedgerPages, detectFormat, extractLedgersViaAI,
   buildReport, downloadWorkpaper, msme43bToForm3cd,
@@ -545,6 +546,9 @@ export default function Msme43b() {
               onAdoptProfile={doAdoptProfile}
             />
           )}
+
+          {/* ── Claude ↔ GPT panel on the interpretation applied ── */}
+          <PanelReview input={{ report, config: activeConfig, profile }} />
 
           {/* ── Vendor table with drilldown ── */}
           <Card>
