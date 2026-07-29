@@ -1,9 +1,17 @@
 /**
- * THROWAWAY render check — deleted after running.
+ * PortalTds regression guard.
  *
- * Build + tsc do not mount the tree, so neither catches render-time crashes
- * (see the Radix asChild class of bug). This mounts PortalTds against a fake
- * supabase + portal context and asserts it paints real rows.
+ * Build + tsc never mount the tree, so neither catches render-time crashes nor
+ * effect loops. This mounts the page against a fake supabase + portal context
+ * and pins the two properties the portal TDS view exists to guarantee:
+ *
+ *   1. READ-ONLY — the page paints the firm's data and renders no input.
+ *   2. LIVE + SCOPED — it subscribes to all three Data Entry tables, and every
+ *      subscription is filtered to the active entity.
+ *
+ * It also catches the fetch→setState→fetch loop that an effect keyed on the
+ * activeClient OBJECT (rather than its id) reintroduces — that version OOMs
+ * this test instead of silently hanging a client's browser.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
