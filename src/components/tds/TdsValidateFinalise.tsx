@@ -1327,7 +1327,7 @@ export function TdsValidateFinalise({
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem className="text-xs gap-2" onClick={() => downloadTemplateFile("/templates/TDS_Data_Entry_Simple_Template.xlsx", "TDS_Data_Entry_Simple_Template.xlsx")}>
-                        <FileSpreadsheet size={13} /> Simple (one sheet, one row per entry)
+                        <FileSpreadsheet size={13} /> Simple (one sheet, grouped by challan)
                       </DropdownMenuItem>
                       <DropdownMenuItem className="text-xs gap-2" onClick={() => downloadTemplateFile("/templates/TDS_Data_Entry_Client_Template.xlsx", "TDS_Data_Entry_Client_Template.xlsx")}>
                         <FileSpreadsheet size={13} /> Detailed (Challan Details linked to TDS Entries)

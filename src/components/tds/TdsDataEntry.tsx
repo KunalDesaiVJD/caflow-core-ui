@@ -1900,7 +1900,16 @@ export function TdsDataEntry({
                             gets an explicit width for the same reason Name/PAN need one: under
                             fixed layout, an unspecified column's width is undefined behaviour
                             (typically an equal share of whatever's left, not a considered size). */}
-                        <Table style={selForm === "24Q" ? { tableLayout: "fixed", width: "100%" } : undefined}>
+                        {/* width:max-content, NOT 100%. Under table-layout:fixed a
+                            table told to fill 100% of its container hands the LEFTOVER
+                            space back to the columns proportionally — which silently
+                            undoes the AutoFit above: every Employee Name and PAN box
+                            stretched far past its widest value, with a dead gap before
+                            Gross. max-content makes the table exactly the sum of the
+                            widths computed for it, so a column really is as wide as its
+                            content and no wider; the overflow-x-auto wrapper still
+                            handles a viewport narrower than that sum. */}
+                        <Table style={selForm === "24Q" ? { tableLayout: "fixed", width: "max-content" } : undefined}>
                           <TableHeader>
                             <TableRow>
                               <TableHead className="w-8 text-xs">#</TableHead>

@@ -23,7 +23,7 @@
  */
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
-import { extractWorkbookRows, extractSheetRows, gridToRows, isTwoSheetTemplate, joinChallanTemplate } from "@/lib/tdsImportParsing";
+import { extractWorkbookRows, extractSheetRows, gridToRows, isTwoSheetTemplate, joinChallanTemplate, isChallanBlockTemplate, explodeChallanBlockTemplate } from "@/lib/tdsImportParsing";
 
 const MAX_ROWS = 50000;   // hard ceiling on rows processed per sheet
 const MAX_COLS = 100;     // hard ceiling on columns processed per sheet
@@ -134,6 +134,20 @@ export function parseWorkbookRows(buffer: ArrayBuffer, onProgress?: (p: ParsePro
     const rows = joinChallanTemplate(challanRows, entryRows);
     const tEnd = perfNow();
     try { console.debug(`[tds-import] read ${Math.round(tRead - t0)}ms · extract ${Math.round(tEnd - tRead)}ms · ${rows.length} rows · 2 sheet(s) (two-sheet template)`); } catch { /* ignore */ }
+    onProgress?.({ stage: "extracted", rows: rows.length, elapsedMs: Math.round(tEnd - t0) });
+    return rows;
+  }
+
+  // The official single-sheet, challan-grouped template ("TDS Data"): every
+  // row tagged Challan/Entry via a Row Type column, entries listed under
+  // their challan. Detected FIRST, by exact tab name only, same as above.
+  const challanBlockSheet = isChallanBlockTemplate(wb.SheetNames);
+  if (challanBlockSheet) {
+    onProgress?.({ stage: "sheets", totalSheets: 1, elapsedMs: Math.round(tRead - t0) });
+    const rawRows = gridToRows(gridOf(challanBlockSheet));
+    const rows = explodeChallanBlockTemplate(rawRows);
+    const tEnd = perfNow();
+    try { console.debug(`[tds-import] read ${Math.round(tRead - t0)}ms · extract ${Math.round(tEnd - tRead)}ms · ${rows.length} rows · 1 sheet(s) (challan-grouped template)`); } catch { /* ignore */ }
     onProgress?.({ stage: "extracted", rows: rows.length, elapsedMs: Math.round(tEnd - t0) });
     return rows;
   }

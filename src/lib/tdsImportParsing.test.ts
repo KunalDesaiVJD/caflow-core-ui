@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { detectHeaderRow, gridToRows, isTwoSheetTemplate, joinChallanTemplate, TEMPLATE_EXAMPLE_CHALLAN_ID, extractSheetRows, extractWorkbookRows, TEMPLATE_EXAMPLE_ROW_SENTINEL } from "./tdsImportParsing";
+import { detectHeaderRow, gridToRows, isTwoSheetTemplate, joinChallanTemplate, TEMPLATE_EXAMPLE_CHALLAN_ID, extractSheetRows, extractWorkbookRows, TEMPLATE_EXAMPLE_ROW_SENTINEL, isChallanBlockTemplate, explodeChallanBlockTemplate } from "./tdsImportParsing";
 
 // Fixture shape mirrors a real client TDS export (structure only — no real
 // client data): a company-name title row, a TAN/PAN summary strip, THEN the
@@ -281,5 +281,93 @@ describe("extractWorkbookRows — skips an 'Instructions' sheet by exact name", 
     const rows = extractWorkbookRows([" INSTRUCTIONS ", "TDS Entries"], (name) =>
       name.trim().toUpperCase() === "INSTRUCTIONS" ? instructionsGrid : dataGrid);
     expect(rows).toHaveLength(1);
+  });
+});
+
+describe("isChallanBlockTemplate", () => {
+  it("detects the single-sheet challan-grouped template by exact tab name", () => {
+    expect(isChallanBlockTemplate(["TDS Data"])).toBe("TDS Data");
+  });
+
+  it("matches case/whitespace-insensitively", () => {
+    expect(isChallanBlockTemplate(["  tds data  "])).toBe("  tds data  ");
+  });
+
+  it("does not detect an unrelated single-sheet workbook", () => {
+    expect(isChallanBlockTemplate(["Sheet1"])).toBeNull();
+  });
+
+  it("does not detect the two-sheet template's own sheet names", () => {
+    expect(isChallanBlockTemplate(["Challan Details", "TDS Entries"])).toBeNull();
+  });
+});
+
+// The single-sheet challan-grouped template: every row tagged "Challan" or
+// "Entry" via a Row Type column. A Challan row carries the full challan
+// details once; its entries are listed beneath it, each repeating the same
+// Challan ID to link back. explodeChallanBlockTemplate splits by Row Type
+// and hands off to joinChallanTemplate — already covered by its own tests —
+// so these tests focus on the split itself, not re-testing the join.
+describe("explodeChallanBlockTemplate", () => {
+  const BLOCK_HEADER = [
+    "Sr. No.", "Row Type*", "Challan ID*", "BSR Code*", "Challan Serial No.*", "Date of Deposit*", "Total Challan Amount (Rs)*", "Bank Name",
+    "Deductee Name*", "PAN*", "Section*", "Date of Payment/Credit*", "Amount Paid/Credited (Rs)*", "Rate of TDS (%)*", "TDS Amount (Rs)*", "Interest (Rs)", "Remarks",
+  ];
+  // Placeholders for the 5 challan-only columns (BSR Code, Challan Serial No.,
+  // Date of Deposit, Total Challan Amount, Bank Name) — blank on an entry row.
+  const blankChallanCols = ["", "", "", "", ""];
+  const grid: unknown[][] = [
+    BLOCK_HEADER,
+    ["", "Challan", "CH-Q1-001", "0510002", "24894", "31-05-2026", "6,558", "HDFC Bank", "", "", "", "", "", "", "", "", "May payments"],
+    ["1", "Entry", "CH-Q1-001", ...blankChallanCols, "Acme Traders", "AACCP6899F", "194C", "31-05-2026", "5,558,172", "0.10", "5,558", "0", ""],
+    ["2", "Entry", " ch-q1-001 ", ...blankChallanCols, "Beta Chemicals", "AAGCA2480D", "194C", "31-05-2026", "500,000", "0.20", "1,000", "0", ""],
+    ["", "Challan", "CH-Q1-002", "0510002", "38051", "30-06-2026", "4,491", "HDFC Bank", "", "", "", "", "", "", "", "", "June payments"],
+    ["3", "Entry", "CH-Q1-002", ...blankChallanCols, "Gamma Industries", "AAGCG2480D", "194J", "30-06-2026", "732,750", "0.10", "733", "0", ""],
+    ["4", "Entry", "CH-UNKNOWN-999", ...blankChallanCols, "Delta Corp", "AADCD1234E", "194C", "30-06-2026", "100,000", "0.10", "100", "0", ""],
+  ];
+  const rows = explodeChallanBlockTemplate(gridToRows(grid));
+
+  it("returns ONLY entry rows — challan rows never appear in the output", () => {
+    expect(rows).toHaveLength(4);
+    expect(rows.every((r) => r["Deductee Name*"])).toBe(true);
+  });
+
+  it("resolves BSR Code / Challan No for entries under their challan, by ID — not by position", () => {
+    expect(rows[0]["BSR Code"]).toBe("0510002");
+    expect(rows[0]["Challan No"]).toBe("24894");
+    expect(rows[1]["BSR Code"]).toBe("0510002"); // case/whitespace-tolerant match
+    expect(rows[1]["Challan No"]).toBe("24894");
+  });
+
+  it("resolves a second, distinct challan correctly", () => {
+    expect(rows[2]["BSR Code"]).toBe("0510002");
+    expect(rows[2]["Challan No"]).toBe("38051");
+  });
+
+  it("passes an unmatched Challan ID through unchanged", () => {
+    expect("BSR Code" in rows[3]).toBe(false);
+    expect("Challan No" in rows[3]).toBe(false);
+  });
+
+  it("is a no-op (rows pass through unchanged) when there is no Row Type column — not this layout", () => {
+    const plainRows = gridToRows([
+      ["Deductee Name*", "PAN*"],
+      ["Acme Traders", "AACCP6899F"],
+    ]);
+    expect(explodeChallanBlockTemplate(plainRows)).toEqual(plainRows);
+  });
+
+  it("drops the worked-example block (challan + its entry) via the shared example Challan ID, however the client leaves it", () => {
+    const exampleGrid: unknown[][] = [
+      BLOCK_HEADER,
+      ["", "Challan", TEMPLATE_EXAMPLE_CHALLAN_ID, "0510002", "24894", "04-06-2026", "5,558", "HDFC Bank", "", "", "", "", "", "", "", "", "Worked example"],
+      ["", "Entry", TEMPLATE_EXAMPLE_CHALLAN_ID, ...blankChallanCols, "ADINATH PROCESSING INDUSTRIES PRIVATE LIMITED", "AACCP6899F", "194C", "31-05-2026", "5,558,172", "0.10", "5,558", "0", ""],
+      ["1", "Challan", "CH-REAL-001", "0640123", "99887", "07-07-2026", "2,500", "ICICI Bank", "", "", "", "", "", "", "", "", ""],
+      ["1", "Entry", "CH-REAL-001", ...blankChallanCols, "Genuine Real Client Pvt Ltd", "AAACG1234H", "194C", "07-07-2026", "250,000", "1.00", "2,500", "0", ""],
+    ];
+    const out = explodeChallanBlockTemplate(gridToRows(exampleGrid));
+    expect(out).toHaveLength(1);
+    expect(out[0]["Deductee Name*"]).toBe("Genuine Real Client Pvt Ltd");
+    expect(out[0]["BSR Code"]).toBe("0640123");
   });
 });

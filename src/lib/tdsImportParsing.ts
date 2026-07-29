@@ -455,6 +455,47 @@ export function joinChallanTemplate(
   });
 }
 
+// ── Official single-sheet, challan-grouped TDS import template ─────────────
+// A third template shape: ONE sheet ("TDS Data"), every row tagged "Challan"
+// or "Entry" via a Row Type column. A Challan row carries its full details
+// (BSR Code, Challan Serial No., Date of Deposit, Total Amount, Bank Name)
+// once; its entries are listed directly beneath it, each also carrying the
+// same Challan ID for the link. Simpler for a client to fill than the
+// two-sheet template (nothing to switch tabs for) while showing the complete
+// challan picture the flat one-row-per-entry template (repeated BSR/No only)
+// was criticised for lacking.
+
+/**
+ * Detects the single-sheet, challan-grouped template by its EXACT tab name
+ * ("TDS Data", case/whitespace-insensitive, never fuzzy) — same convention
+ * as isTwoSheetTemplate, so it can't misfire on an unrelated client workbook.
+ */
+export function isChallanBlockTemplate(sheetNames: string[]): string | null {
+  const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
+  for (const name of sheetNames) {
+    if (norm(name) === "tds data") return name;
+  }
+  return null;
+}
+
+/**
+ * Splits the challan-grouped sheet's rows by their "Row Type" (Challan /
+ * Entry) and hands them to joinChallanTemplate — the SAME, already-tested
+ * join used by the two-sheet template. Row Type is the only new signal this
+ * layout needs; Challan ID linking, example-row exclusion, and unmatched
+ * pass-through all come from joinChallanTemplate unchanged, so this shape
+ * inherits those guarantees for free rather than re-implementing them.
+ * Not this layout after all (no Row Type column) → rows pass through as-is.
+ */
+export function explodeChallanBlockTemplate(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  const rowTypeKey = findHeaderKey(rows[0], ["rowtype"]);
+  if (!rowTypeKey) return rows;
+  const type = (row: Record<string, unknown>): string => String(row[rowTypeKey] ?? "").trim().toUpperCase();
+  const challanRows = rows.filter((r) => type(r) === "CHALLAN");
+  const entryRows = rows.filter((r) => type(r) === "ENTRY");
+  return joinChallanTemplate(challanRows, entryRows);
+}
+
 /**
  * GROUND TRUTH for the never-lose-a-record safety net: every distinct PAN that
  * appears in ANY cell of the workbook.
