@@ -66,6 +66,7 @@ const AuditQueryDispatch       = lazy(() => import("./pages/AuditQueryDispatch")
 const AuditReportEngine        = lazy(() => import("./pages/AuditReportEngine"));
 const PortalQueries            = lazy(() => import("./pages/PortalQueries"));
 const PortalDocuments          = lazy(() => import("./pages/PortalDocuments"));
+const PortalTds                = lazy(() => import("./pages/PortalTds"));
 const NoticeDetail             = lazy(() => import("./pages/NoticeDetail"));
 const RolesPermissions         = lazy(() => import("./pages/RolesPermissions"));
 const AccessPermissions        = lazy(() => import("./pages/AccessPermissions"));
@@ -208,6 +209,7 @@ const App = () => (
               <Route path="/portal" element={<PortalHome />} />
               <Route path="/portal/queries" element={<PortalQueries />} />
               <Route path="/portal/documents" element={<PortalDocuments />} />
+              <Route path="/portal/tds" element={<PortalTds />} />
             </Route>
 
             {/* Internal team routes — IE, CSE, and superadmin */}
