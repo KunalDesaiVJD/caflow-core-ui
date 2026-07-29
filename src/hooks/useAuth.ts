@@ -1,4 +1,4 @@
-import { createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 interface AuthUser {
@@ -24,8 +24,37 @@ const AuthContext = createContext<AuthContextValue>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [userState, setUserState] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
+
+  /**
+   * PUBLISH A NEW `user` ONLY WHEN THE USER ACTUALLY CHANGED.
+   *
+   * `user` is consumed app-wide, so a new object identity re-renders every
+   * consumer and re-runs any effect that depends on it. Nothing about the
+   * signed-in person changes on a token refresh — but the refresh path ran on
+   * every visibilitychange and on Supabase's own TOKEN_REFRESHED event, each
+   * time calling setUser with a freshly-built object. In the TDS module that
+   * rebuilt whatever screen was open, losing filters, opened records and
+   * scroll position mid-task.
+   *
+   * Comparing first makes a token refresh invisible to the UI, which is what
+   * it should always have been: it keeps the session alive, it does not change
+   * who is logged in.
+   */
+  const setUser = useCallback((next: AuthUser | null) => {
+    setUserState((prev) => {
+      if (prev === next) return prev;
+      if (!prev || !next) return next;
+      const same =
+        prev.id === next.id && prev.email === next.email && prev.name === next.name &&
+        prev.role === next.role && prev.firm_id === next.firm_id &&
+        prev.must_change_password === next.must_change_password &&
+        prev.avatar_url === next.avatar_url;
+      return same ? prev : next;
+    });
+  }, []);
+  const user = userState;
 
   useEffect(() => {
     let isActive = true;
