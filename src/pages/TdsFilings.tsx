@@ -13,7 +13,7 @@ import { TdsDataEntry } from "@/components/tds/TdsDataEntry";
 import { TdsValidateFinalise } from "@/components/tds/TdsValidateFinalise";
 import { TdsReports } from "@/components/tds/TdsReports";
 import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
-import { TdsCorrections } from "@/components/tds/TdsCorrections";
+import { TdsOverrides } from "@/components/tds/TdsOverrides";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -37,11 +37,11 @@ const NAV_ITEMS = [
   { key: "workspace",  label: "TDS Workspace",  icon: Combine },
   { key: "reports",    label: "Reports",        icon: BarChart3 },
   { key: "rate-master",label: "Rate Master",    icon: Settings },
-  // Audit Log + Overrides live under ONE nav tab with sub-tabs —
+  // Audit Log + Overrides live under ONE nav tab ("Audit & Overrides") with sub-tabs —
   // same pattern as TDS Workspace (Data Entry / Validate & Finalise). Both read
   // the same override/action history, so splitting them across two top-level
   // tabs only made the user hop between them.
-  { key: "activity",   label: "Audit & Corrections", icon: ClipboardList },
+  { key: "activity",   label: "Audit & Overrides", icon: ClipboardList },
 ] as const;
 
 type NavKey = typeof NAV_ITEMS[number]["key"];
@@ -52,8 +52,8 @@ const TdsFilings = () => {
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   // CP-02: sub-tab inside TDS Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
-  // Sub-tab inside Audit & Corrections
-  const [activityTab, setActivityTab] = useState<"audit-log" | "corrections">("audit-log");
+  // Sub-tab inside Audit & Overrides
+  const [activityTab, setActivityTab] = useState<"audit-log" | "overrides">("audit-log");
 
   // ── Shared Workspace filing context ─────────────────────────────────────────
   // Client / FY / Quarter / Form are selected ONCE and shared by BOTH the Data
@@ -292,9 +292,12 @@ const TdsFilings = () => {
                   setWorkspaceTab("validate"); setActiveSection("workspace");
                 }
                 // Legacy deep-links to the two now-merged screens open the
-                // combined tab on the right sub-tab.
-                else if (section === "audit-log" || section === "corrections") {
-                  setActivityTab(section); setActiveSection("activity");
+                // combined tab on the right sub-tab. "corrections" is the old
+                // inbound key — kept as an accepted alias, mapped to the
+                // renamed "overrides" sub-tab.
+                else if (section === "audit-log" || section === "corrections" || section === "overrides") {
+                  setActivityTab(section === "audit-log" ? "audit-log" : "overrides");
+                  setActiveSection("activity");
                 }
                 else setActiveSection(section as NavKey);
               }}
@@ -359,11 +362,11 @@ const TdsFilings = () => {
           {activeSection === "reports" && <TdsReports clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
           {activeSection === "rate-master" && <TdsRateMaster resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />}
 
-          {/* ── Audit & Corrections — Audit Log + Corrections in one tab ────── */}
+          {/* ── Audit & Overrides — Audit Log + Overrides in one tab ────────── */}
           {activeSection === "activity" && (
             <div>
               <div className="mb-4">
-                <h2 className="text-xl font-bold text-foreground">Audit &amp; Corrections</h2>
+                <h2 className="text-xl font-bold text-foreground">Audit &amp; Overrides</h2>
                 <p className="text-sm text-muted-foreground">
                   Every action recorded against a filing, and every manual override grouped into patterns — read-only.
                 </p>
@@ -385,10 +388,10 @@ const TdsFilings = () => {
                   </span>
                 </button>
                 <button
-                  onClick={() => setActivityTab("corrections")}
+                  onClick={() => setActivityTab("overrides")}
                   className={cn(
                     "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
-                    activityTab === "corrections"
+                    activityTab === "overrides"
                       ? "border-primary text-primary"
                       : "border-transparent text-muted-foreground hover:text-foreground"
                   )}
@@ -403,8 +406,8 @@ const TdsFilings = () => {
               <div className={activityTab === "audit-log" ? "" : "hidden"}>
                 <TdsAuditLog clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
               </div>
-              <div className={activityTab === "corrections" ? "" : "hidden"}>
-                <TdsCorrections clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
+              <div className={activityTab === "overrides" ? "" : "hidden"}>
+                <TdsOverrides clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
               </div>
             </div>
           )}
