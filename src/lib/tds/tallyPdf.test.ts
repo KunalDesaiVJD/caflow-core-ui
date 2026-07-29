@@ -297,6 +297,59 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     expect(rows[0].amountKind).toBe("taxable_income");
   });
 
+  // THE EMPLOYEE'S LINE IS NOT ALWAYS NAMED "… - Salary". Verbatim from a real
+  // Kwikteam "Salary Expenses" ledger:
+  //
+  //   30-Apr-26 To (as per details)   Journal 6   Debit 32,261.00
+  //     Krunal Rajendrakumar Nayak    30,131.00 Cr
+  //     Professional Tax (AMC)           200.00 Cr
+  //     PF (Employee's Share)          1,800.00 Cr
+  //     ESIC (Employee's Share)          130.00 Cr
+  //
+  // Requiring the literal word "Salary" was one client's naming convention, not
+  // a rule: here every voucher failed to resolve a deductee and all 15 were
+  // dropped as payments, surfacing as "No credit (deduction) entries were found
+  // in this ledger" for a ledger that is nothing but salary. The employee is
+  // now identified structurally — not a statutory head, and carrying the bulk
+  // of the voucher — so naming style is irrelevant.
+  it("finds the employee when the credit line is a bare name, with no '- Salary' suffix", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        date: "30-Apr-26", vchNo: "6", debit: 32261,
+        crLines: [
+          { label: "Krunal Rajendrakumar Nayak", amount: 30131 },
+          { label: "Professional Tax (AMC)", amount: 200 },
+          { label: "PF (Employee's Share)", amount: 1800 },
+          { label: "ESIC (Employee's Share)", amount: 130 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Krunal Rajendrakumar Nayak");
+    expect(rows[0].credit).toBe(32261);            // the voucher's own debit
+    expect(rows[0].amountKind).toBe("taxable_income");
+  });
+
+  // The deduction heads must never stand in for the employee, even when they
+  // are the only credit lines the voucher has.
+  it("still drops a voucher whose credits are ALL deduction heads", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        date: "30-Apr-26", vchNo: "6", debit: 2130,
+        crLines: [
+          { label: "Professional Tax (AMC)", amount: 200 },
+          { label: "PF (Employee's Share)", amount: 1800 },
+          { label: "ESIC (Employee's Share)", amount: 130 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(0);
+  });
+
   // TAX IS NOT INCOME — and the tax line is NOT labelled "TDS". Reproduced
   // verbatim from the real "Director Remuneration - RCM" ledger:
   //

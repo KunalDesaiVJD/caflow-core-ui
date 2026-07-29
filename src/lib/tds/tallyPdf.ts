@@ -193,6 +193,16 @@ const SALARY_DEDUCTION_HEAD =
  * The "- Salary" suffix is still accepted directly, for a voucher whose net pay
  * happens to be split so far that no single line reaches a majority.
  */
+/** Could this text-only line be the tail of a wrapped LEDGER NAME, rather than
+ *  the voucher's narration? A narration is a sentence — it announces itself
+ *  ("BEING THE INTEREST PAID @ 6% …") and runs long; a wrapped name fragment is
+ *  a few words. Deliberately conservative: when in doubt this returns false and
+ *  the line is treated as narration, which is the recoverable mistake. */
+function isNameContinuation(text: string): boolean {
+  const t = text.trim();
+  return t.length > 0 && t.length <= 40 && !/^being\b|^narration\b|@\s*\d|\brs\.?\s*\d/i.test(t);
+}
+
 function isDeducteeCreditLine(label: string, credit: number, voucherTotal: number): boolean {
   if (SALARY_DEDUCTION_HEAD.test(label) || isTaxLine(label)) return false;
   if (/\bsalary\b/i.test(label)) return true;
@@ -404,6 +414,9 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
     // counts depends on WHOSE account it is — and the deciding line (the
     // employee's own "- Salary" credit) is printed AFTER them.
     let extraDr: { label: string; amount: number }[] = [];
+    // True for exactly one line after the deductee's name was committed, so a
+    // wrapped name can absorb its own continuation — see its use below.
+    let justNamedDeductee = false;
     const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
     const tryMatchBreakdown = (amount: number, marker: string | null | undefined, partyText: string): boolean => {
       if (
@@ -506,9 +519,26 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
           // intercept the narration lines that follow it as a retry attempt.
           const stillSearching = !matched && current && current.party && AS_PER_DETAILS_RE.test(current.party);
           pendingAmount = stillSearching ? { amount: breakdownAmount, marker: f.marker ?? null, text: f.party ?? "" } : null;
+          // Another amount-bearing line means the deductee's own label is
+          // finished — anything text-only after this belongs to the narration,
+          // not to the name (see justNamedDeductee).
+          justNamedDeductee = matched;
           continue;   // breakdown line either way — never a new row
         }
         if (f.onlyParticulars) {
+          if (justNamedDeductee && current && f.party && isNameContinuation(f.party)) {
+            // A WRAPPED deductee name, resolved on its first fragment. The
+            // amount sits with that first line, so the match now commits
+            // before the rest of the name has even been read
+            // ("Keshviben Hasmukhbhau" / "Gami - Salary"). Only the line
+            // IMMEDIATELY after the match can be a continuation, and only if
+            // it doesn't read as narration — so the real narration that
+            // follows a fully-named deductee is never glued onto the name.
+            current.party = `${current.party ?? ""} ${f.party}`.replace(/\s+/g, " ").trim();
+            justNamedDeductee = false;
+            continue;
+          }
+          justNamedDeductee = false;
           if (pendingAmount && f.party) {
             // Completes a wrapped label whose amount sat with its FIRST
             // line — retry with the two fragments joined, using the SAME
