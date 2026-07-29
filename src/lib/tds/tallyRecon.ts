@@ -281,7 +281,7 @@ export function aggregateTaxableByEmployeeMonth(rows: TallyRow[]): TallyRow[] {
     out.push({
       ...anchor,
       credit: total,
-      narration: `Taxable Income combined from ${g.length} ledger entries: ${parts} = ${inr(total)}.`,
+      narration: `Combined from ${g.length} ledger entries for this employee in the month: ${parts} = ${inr(total)}.`,
     });
   }
   return out;

@@ -448,11 +448,26 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const isRealExpenseLedger = [...taggedSections].some(
       (sec) => creditsIn(taggedRows, sec) > creditsIn(tally.filter((t) => t.amountKind !== "taxable_income"), sec),
     );
-    // Salary + Bonus + Reimbursement are separate ledgers but ONE taxable
-    // figure — Office Data holds the month's total, so they are summed per
-    // employee per month before reconciling (see aggregateTaxableByEmployeeMonth).
-    const salaryLedgerRows = isRealExpenseLedger ? aggregateTaxableByEmployeeMonth(taggedRows) : [];
-    const tdsLedgerRows = isRealExpenseLedger ? tally.filter((t) => t.amountKind !== "taxable_income") : tally;
+    // ONE ROW PER EMPLOYEE PER MONTH — but only on 24Q, where that is exactly
+    // what Office Data holds. A salary month is a single line on the return
+    // even when Tally books it across several vouchers (Salary + Bonus +
+    // Reimbursement; a TDS instalment corrected by a second entry), so those
+    // are summed before reconciling. 26Q/27EQ are the opposite: Office Data
+    // carries one row PER TRANSACTION, and two bills to the same contractor in
+    // one month are two separate deductions that must never be merged.
+    //
+    // Both sides need it, not just the taxable one. A real client's TDS ledger
+    // held Virender Singh's ₹1,52,672 as ₹1,35,200 + ₹17,472; the engine is
+    // strictly 1:1, so the first row paired with him and the SECOND went
+    // looking for a home and landed on "Urvashi Virender Singh" — a different
+    // person whose name merely contains his. Summed first, there is one row
+    // that matches his office figure exactly and nothing left over to
+    // mis-assign.
+    const perMonth = selForm === "24Q";
+    const agg = (rows: TallyRow[]) => (perMonth ? aggregateTaxableByEmployeeMonth(rows) : rows);
+    const untagged = tally.filter((t) => t.amountKind !== "taxable_income");
+    const salaryLedgerRows = isRealExpenseLedger ? agg(taggedRows) : [];
+    const tdsLedgerRows = isRealExpenseLedger ? agg(untagged) : agg(tally);
     const dualLedgerMode = salaryLedgerRows.length > 0;
     let audited: TallyReconRow[]; let surplusLedger: TallyRow[];
     if (dualLedgerMode) {

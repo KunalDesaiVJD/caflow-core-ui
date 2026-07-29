@@ -419,3 +419,42 @@ describe("aggregateTaxableByEmployeeMonth — one taxable figure per employee pe
     expect(out[0].narration).toBeUndefined();
   });
 });
+
+// A REAL MIS-MAPPING. Virender Singh's ₹1,52,672 of TDS sat in the ledger as
+// TWO entries (₹1,35,200 + ₹17,472). The engine is strictly 1:1, so the first
+// paired with him and the SECOND went looking for a home — landing on
+// "Urvashi Virender Singh", a different person whose name merely CONTAINS his.
+// Both records then reported a mismatch, and ₹17,472 of one employee's tax was
+// shown against another's. Summing per employee per month leaves nothing spare
+// to mis-assign.
+describe("a spare ledger entry must never land on a name-similar employee", () => {
+  const office: OfficeTxn[] = [
+    { deductee_id: "v", name: "VIRENDER SINGH", date_iso: "2026-06-30", amount: 673533, tds: 152672, section: "192B", pan: "AAAPV1111A" },
+    { deductee_id: "u", name: "URVASHI VIRENDER SINGH", date_iso: "2026-06-30", amount: 95200, tds: 0, section: "192B", pan: "AAAPU2222B" },
+  ];
+  const tdsRow = (i: number, credit: number): TallyRow => ({
+    row_index: i, date: "30-Jun-26", iso: "2026-06-30", party: "Virender Singh - Salary",
+    debit: null, credit, vch_no: String(i), vch_type: "Journal", section: "192B",
+  });
+
+  it("sums the two entries so Virender matches and Urvashi keeps her zero", () => {
+    const merged = aggregateTaxableByEmployeeMonth([tdsRow(1, 135200), tdsRow(2, 17472)]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].credit).toBe(152672);          // exactly Virender's office TDS
+
+    const { rows } = dualRecon(office, merged);
+    const r = byName(rows);
+    expect(r["VIRENDER SINGH"].tds_status).toBe("Matched");
+    expect(r["VIRENDER SINGH"].tally_credit).toBe(152672);
+    // Urvashi genuinely has no TDS — she must not be handed the spare entry.
+    expect(r["URVASHI VIRENDER SINGH"].tally_credit).toBeNull();
+    expect(r["URVASHI VIRENDER SINGH"].tds_status).toBe("Matched");
+  });
+
+  // The bug as it actually reached the user, so the fix is anchored to it.
+  it("reproduces the mis-assignment when the entries are NOT summed", () => {
+    const { rows } = dualRecon(office, [tdsRow(1, 135200), tdsRow(2, 17472)]);
+    const urvashi = byName(rows)["URVASHI VIRENDER SINGH"];
+    expect(urvashi.tally_credit).toBe(17472);       // the spare entry, on the wrong person
+  });
+});
