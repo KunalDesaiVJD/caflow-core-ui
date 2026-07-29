@@ -14,7 +14,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { PortalClientProvider, usePortalClient } from "@/contexts/PortalClientContext";
 import {
-  LogOut, Home, MessageSquareWarning, FolderOpen, Receipt, FileEdit,
+  LogOut, Home, MessageSquareWarning, FolderOpen, Receipt,
   ChevronDown, Building2, Check, Loader2, Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,10 +36,9 @@ const NAV = [
   { to: "/portal",           label: "Home",      icon: Home,                 exact: true  },
   { to: "/portal/queries",   label: "Queries",   icon: MessageSquareWarning, exact: false },
   { to: "/portal/documents", label: "Documents", icon: FolderOpen,           exact: false },
-  // Read-only view of the entity's own TDS return data (Data Entry only).
+  // TDS module — ONE tab, two sub-tabs inside it (Data Entry / Correction).
+  // Everything above is pre-existing and deliberately left alone.
   { to: "/portal/tds",       label: "TDS",       icon: Receipt,              exact: false },
-  // Raise + track corrections to the entity's own already-filed returns.
-  { to: "/portal/corrections", label: "Corrections", icon: FileEdit,         exact: false },
 ];
 
 // ─── Entity Switcher ──────────────────────────────────────────────────────────

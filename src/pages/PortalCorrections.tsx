@@ -141,18 +141,13 @@ export default function PortalCorrections() {
 
   return (
     <div className="space-y-5">
+      {/* Sub-tab header. The page title lives on the TDS module shell
+          (PortalTdsModule) — this row only carries what is specific to the
+          Correction tab. */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <FileEdit size={22} className="text-amber-600" />
-            Corrections
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Raise a correction against a TDS return already filed for
-            {activeClient?.name ? <span className="font-medium"> {activeClient.name}</span> : " your entity"}.
-            Your CA firm reviews and signs it.
-          </p>
-        </div>
+        <p className="text-sm text-muted-foreground">
+          Raise a correction against a TDS return already filed. Your CA firm reviews and signs it.
+        </p>
         <Button size="sm" className="gap-1.5 shrink-0" onClick={() => setNewOpen(true)}>
           <Plus size={14} /> Raise Correction
         </Button>
@@ -163,32 +158,44 @@ export default function PortalCorrections() {
           No corrections yet. Use Raise Correction if something in a filed return needs fixing.
         </CardContent></Card>
       ) : (
-        <div className="rounded-md border bg-white overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-xs">Period</TableHead>
-                <TableHead className="text-xs">Form</TableHead>
-                <TableHead className="text-xs">Reason</TableHead>
-                <TableHead className="text-xs">Status</TableHead>
-                <TableHead className="text-xs">Raised on</TableHead>
-                <TableHead className="text-xs">Signed by</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map(r => (
-                <TableRow key={r.id} className="cursor-pointer" onClick={() => setOpenId(r.id)}>
-                  <TableCell className="text-xs">{r.quarter} {r.financial_year}</TableCell>
-                  <TableCell className="text-xs">{r.form_type}</TableCell>
-                  <TableCell className="text-xs max-w-[240px] truncate">{r.reason || "—"}</TableCell>
-                  <TableCell><StatusBadge status={r.status} /></TableCell>
-                  <TableCell className="text-xs">{shortDate(r.raised_at)}</TableCell>
-                  <TableCell className="text-xs">{r.signed_by_name || "—"}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="text-xs">Period</TableHead>
+                    <TableHead className="text-xs">Reason</TableHead>
+                    <TableHead className="text-xs">Status</TableHead>
+                    <TableHead className="text-xs">Raised</TableHead>
+                    <TableHead className="text-xs">Signed by</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map(r => (
+                    <TableRow
+                      key={r.id}
+                      className="cursor-pointer h-10"
+                      onClick={() => setOpenId(r.id)}
+                      title="Open correction"
+                    >
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">
+                        <span className="font-medium">{r.form_type}</span>
+                        <span className="text-muted-foreground"> · {r.quarter} {r.financial_year}</span>
+                      </TableCell>
+                      <TableCell className="text-xs py-1.5 max-w-[280px] truncate text-muted-foreground">
+                        {r.reason || "—"}
+                      </TableCell>
+                      <TableCell className="py-1.5"><StatusBadge status={r.status} /></TableCell>
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">{shortDate(r.raised_at)}</TableCell>
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">{r.signed_by_name || "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       <RaiseCorrectionDialog

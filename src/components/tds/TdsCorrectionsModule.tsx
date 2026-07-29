@@ -9,12 +9,21 @@
  * Two views: a dashboard (search / filter / track) and a correction detail
  * editor. Once signed, a correction is read-only — enforced by a DB trigger,
  * mirrored here so the UI never offers an action the database will reject.
+ *
+ * UI follows the Data Entry module's language: compact info strips with "|"
+ * separators, Card > CardContent p-0 > Table for dense grids, text-[9px]
+ * badges, and emerald/amber/destructive as the semantic trio.
+ *
+ * The detail view is built for the real shape of the job — a challan can hold
+ * hundreds of deductees and the user is hunting for the one that is wrong — so
+ * search and change-filters sit above the grid, challans collapse, rows are
+ * dense, and clicking a row opens it for edit (no hunting for a pencil).
  */
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,8 +42,9 @@ import {
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Search, Plus, ArrowLeft, PenTool, Trash2, Pencil, RotateCcw,
-  CheckCircle2, XCircle, Landmark, ShieldCheck, Lock,
+  Search, Plus, ArrowLeft, PenTool, Trash2, Pencil, RotateCcw, X,
+  CheckCircle2, XCircle, Landmark, ShieldCheck, Lock, ChevronDown, ChevronRight,
+  AlertTriangle, Send,
 } from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import {
@@ -73,15 +83,15 @@ const shortDate = (d: string | null | undefined) => {
   return isNaN(p.getTime()) ? "—" : format(p, "dd/MM/yyyy");
 };
 
-const ACTION_TONE: Record<CorrectionAction, string> = {
-  unchanged: "",
-  add: "bg-emerald-50 dark:bg-emerald-950/20",
-  modify: "bg-amber-50 dark:bg-amber-950/20",
-  delete: "bg-red-50 dark:bg-red-950/20 line-through opacity-60",
+/** Left rail colour + badge tone per change type — one place, used everywhere. */
+const ACTION_META: Record<CorrectionAction, { rail: string; badge: string; label: string }> = {
+  unchanged: { rail: "border-l-transparent", badge: "", label: "" },
+  add:       { rail: "border-l-emerald-500", badge: "bg-emerald-100 text-emerald-700", label: "Added" },
+  modify:    { rail: "border-l-amber-500",   badge: "bg-amber-100 text-amber-700",     label: "Modified" },
+  delete:    { rail: "border-l-red-500",     badge: "bg-red-100 text-red-700",         label: "Deleted" },
 };
-const ACTION_LABEL: Record<CorrectionAction, string> = {
-  unchanged: "", add: "Added", modify: "Modified", delete: "Deleted",
-};
+
+type ChangeFilter = "all" | "changed" | "add" | "modify" | "delete";
 
 /** Shown wherever a correction's state needs to read at a glance. */
 export function CorrectionStatusBadge({ status, className }: { status: string; className?: string }) {
@@ -155,10 +165,8 @@ function CorrectionDashboard({
     let q = supabase.from("tds_corrections" as any).select("*");
     if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
     const { data } = await q;
-    const all = ((data || []) as unknown as Correction[])
-      .slice()
-      .sort((a, b) => (b.raised_at || "").localeCompare(a.raised_at || ""));
-    setRows(all);
+    setRows(((data || []) as unknown as Correction[]).slice()
+      .sort((a, b) => (b.raised_at || "").localeCompare(a.raised_at || "")));
     setLoading(false);
   }, [isSuperadmin, resolveFirmId]);
 
@@ -200,14 +208,23 @@ function CorrectionDashboard({
     rejected: rows.filter(r => r.status === "rejected").length,
   }), [rows]);
 
+  const filtersActive = fClient !== "all" || fFy !== "all" || fQuarter !== "all"
+    || fStatus !== "all" || !!fFrom || !!fTo || !!search.trim();
+
+  const clearFilters = () => {
+    setFClient("all"); setFFy("all"); setFQuarter("all");
+    setFStatus("all"); setFFrom(""); setFTo(""); setSearch("");
+  };
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
+      {/* Title row */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-xl font-bold text-foreground">Corrections</h2>
           <p className="text-sm text-muted-foreground">
-            Revise TDS data already filed for an earlier quarter or financial year. The original filed
-            data is never changed — each correction is kept as a separate version.
+            Revise TDS data already filed for an earlier period. The original filing is never changed —
+            each correction is kept as a separate version.
           </p>
         </div>
         <Button size="sm" className="gap-1.5 shrink-0" onClick={() => setNewOpen(true)}>
@@ -215,133 +232,150 @@ function CorrectionDashboard({
         </Button>
       </div>
 
-      {/* Status tiles double as quick filters */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {(["draft", "pending", "filed", "rejected"] as CorrectionStatus[]).map(s => (
-          <button
-            key={s}
-            onClick={() => setFStatus(fStatus === s ? "all" : s)}
-            className={cn(
-              "text-left rounded-lg border p-3 transition-colors hover:bg-muted/50",
-              fStatus === s && "ring-2 ring-primary",
-            )}
-          >
-            <p className="text-xs text-muted-foreground">{CORRECTION_STATUS_META[s].label}</p>
-            {/* div, not p — Skeleton renders a div and cannot nest inside a p */}
-            <div className="text-2xl font-bold">{loading ? <Skeleton className="h-7 w-10" /> : counts[s]}</div>
-          </button>
-        ))}
+      {/* Status tiles — compact, and each is a one-click filter */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {(["draft", "pending", "filed", "rejected"] as CorrectionStatus[]).map(s => {
+          const on = fStatus === s;
+          return (
+            <button
+              key={s}
+              onClick={() => setFStatus(on ? "all" : s)}
+              aria-pressed={on}
+              className={cn(
+                "flex items-center justify-between rounded-lg border px-3 py-2 text-left transition-colors",
+                on ? "border-primary bg-primary/5" : "hover:bg-muted/50",
+              )}
+            >
+              <span className="text-xs text-muted-foreground">{CORRECTION_STATUS_META[s].label}</span>
+              <span className="text-lg font-bold leading-none">
+                {loading ? <Skeleton className="h-5 w-6" /> : counts[s]}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* Filters */}
-      <div className="flex flex-wrap gap-3 items-end">
-        <div className="space-y-1">
-          <Label className="text-xs">Search</Label>
-          <div className="relative">
+      {/* Toolbar */}
+      <Card>
+        <CardContent className="p-2.5 flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[200px]">
             <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search} onChange={e => setSearch(e.target.value)}
-              placeholder="Client, reason, person…" className="h-9 w-[220px] pl-8 text-xs"
+              placeholder="Search client, reason, person…"
+              className="h-8 pl-8 pr-7 text-xs"
             />
+            {search && (
+              <button
+                onClick={() => setSearch("")} title="Clear"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Client</Label>
+
           <Select value={fClient} onValueChange={setFClient}>
-            <SelectTrigger className="w-[180px] h-9"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 w-[170px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Clients</SelectItem>
               {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Financial Year</Label>
           <Select value={fFy} onValueChange={setFFy}>
-            <SelectTrigger className="w-[130px] h-9"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 w-[120px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All FYs</SelectItem>
               {FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
             </SelectContent>
           </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Quarter</Label>
           <Select value={fQuarter} onValueChange={setFQuarter}>
-            <SelectTrigger className="w-[110px] h-9"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="h-8 w-[100px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All</SelectItem>
+              <SelectItem value="all">All Qtrs</SelectItem>
               {QUARTERS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}
             </SelectContent>
           </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Status</Label>
-          <Select value={fStatus} onValueChange={setFStatus}>
-            <SelectTrigger className="w-[150px] h-9"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Statuses</SelectItem>
-              {(["draft", "pending", "filed", "rejected"] as CorrectionStatus[]).map(s => (
-                <SelectItem key={s} value={s}>{CORRECTION_STATUS_META[s].label}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">From</Label>
-          <Input type="date" className="w-[140px] h-9" value={fFrom} onChange={e => setFFrom(e.target.value)} />
-        </div>
-        <div className="space-y-1">
-          <Label className="text-xs">To</Label>
-          <Input type="date" className="w-[140px] h-9" value={fTo} onChange={e => setFTo(e.target.value)} />
-        </div>
-      </div>
+          <Input type="date" title="Raised from" className="h-8 w-[135px] text-xs" value={fFrom} onChange={e => setFFrom(e.target.value)} />
+          <Input type="date" title="Raised to" className="h-8 w-[135px] text-xs" value={fTo} onChange={e => setFTo(e.target.value)} />
+
+          {filtersActive && (
+            <Button variant="ghost" size="sm" className="h-8 gap-1 text-xs" onClick={clearFilters}>
+              <X size={12} /> Clear
+            </Button>
+          )}
+          <span className="text-[11px] text-muted-foreground ml-auto">
+            {loading ? "" : `${filtered.length} of ${rows.length}`}
+          </span>
+        </CardContent>
+      </Card>
 
       {/* List */}
       {loading ? (
-        <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div>
+        <div className="space-y-1.5">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-11 w-full" />)}</div>
       ) : filtered.length === 0 ? (
-        <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">
-          {rows.length === 0
-            ? "No corrections raised yet. Use New Correction to revise a filed return."
-            : "No corrections match these filters."}
+        <Card><CardContent className="p-10 text-center">
+          <p className="text-sm text-muted-foreground">
+            {rows.length === 0
+              ? "No corrections raised yet."
+              : "No corrections match these filters."}
+          </p>
+          {rows.length === 0 ? (
+            <Button size="sm" className="mt-3 gap-1.5" onClick={() => setNewOpen(true)}>
+              <Plus size={14} /> Raise the first correction
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" className="mt-3" onClick={clearFilters}>Clear filters</Button>
+          )}
         </CardContent></Card>
       ) : (
-        <div className="rounded-md border overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="text-xs">Client</TableHead>
-                <TableHead className="text-xs">Period</TableHead>
-                <TableHead className="text-xs">Form</TableHead>
-                <TableHead className="text-xs">Status</TableHead>
-                <TableHead className="text-xs">Raised by</TableHead>
-                <TableHead className="text-xs">Raised on</TableHead>
-                <TableHead className="text-xs">Signed by</TableHead>
-                <TableHead className="text-xs w-16"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filtered.map(r => (
-                <TableRow key={r.id} className="cursor-pointer" onClick={() => onOpen(r.id)}>
-                  <TableCell className="text-xs font-medium">{clientMap[r.client_id] || "—"}</TableCell>
-                  <TableCell className="text-xs">{r.quarter} {r.financial_year}</TableCell>
-                  <TableCell className="text-xs">{r.form_type}</TableCell>
-                  <TableCell><CorrectionStatusBadge status={r.status} /></TableCell>
-                  <TableCell className="text-xs">
-                    {r.raised_by_name || (r.raised_by ? userMap[r.raised_by] : null) || "—"}
-                    {r.raised_by_role === "client" && (
-                      <Badge variant="outline" className="ml-1 text-[9px]">Client</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs">{shortDate(r.raised_at)}</TableCell>
-                  <TableCell className="text-xs">{r.signed_by_name || "—"}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">Open</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <Card>
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="text-xs">Client</TableHead>
+                    <TableHead className="text-xs">Period</TableHead>
+                    <TableHead className="text-xs">Reason</TableHead>
+                    <TableHead className="text-xs">Status</TableHead>
+                    <TableHead className="text-xs">Raised by</TableHead>
+                    <TableHead className="text-xs">Raised</TableHead>
+                    <TableHead className="text-xs">Signed by</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filtered.map(r => (
+                    <TableRow
+                      key={r.id}
+                      onClick={() => onOpen(r.id)}
+                      className="cursor-pointer h-10"
+                      title="Open correction"
+                    >
+                      <TableCell className="text-xs font-medium py-1.5">{clientMap[r.client_id] || "—"}</TableCell>
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">
+                        <span className="font-medium">{r.form_type}</span>
+                        <span className="text-muted-foreground"> · {r.quarter} {r.financial_year}</span>
+                      </TableCell>
+                      <TableCell className="text-xs py-1.5 max-w-[260px] truncate text-muted-foreground">
+                        {r.reason || "—"}
+                      </TableCell>
+                      <TableCell className="py-1.5"><CorrectionStatusBadge status={r.status} /></TableCell>
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">
+                        {r.raised_by_name || (r.raised_by ? userMap[r.raised_by] : null) || "—"}
+                        {r.raised_by_role === "client" && (
+                          <Badge variant="outline" className="ml-1 text-[9px]">Client</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">{shortDate(r.raised_at)}</TableCell>
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">{r.signed_by_name || "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       <NewCorrectionDialog
@@ -354,7 +388,7 @@ function CorrectionDashboard({
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// New correction — pick the filed period, preview it, create
+// New correction
 // ═══════════════════════════════════════════════════════════════════════════
 
 function NewCorrectionDialog({
@@ -381,8 +415,6 @@ function NewCorrectionDialog({
     }
   }, [open]);
 
-  // Look up the filed return for the chosen period and show what will be
-  // copied in, so the user knows there is something to correct before starting.
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
@@ -412,11 +444,9 @@ function NewCorrectionDialog({
   }, [client, fy, quarter, form]);
 
   const clientObj = clients.find(c => c.id === client);
-  // Same TDS Compliance gate the rest of the module applies.
   const compliant = !clientObj || !fy || !quarter || isFilingTdsCompliant(
     { client_id: client, financial_year: fy, quarter, tds_forms: [form] }, clientObj as any,
   );
-
   const canCreate = !!(client && fy && quarter && form && filing && compliant);
 
   const handleCreate = async () => {
@@ -462,27 +492,21 @@ function NewCorrectionDialog({
               <Label className="text-xs">Financial Year</Label>
               <Select value={fy} onValueChange={setFy}>
                 <SelectTrigger className="h-9"><SelectValue placeholder="FY" /></SelectTrigger>
-                <SelectContent>
-                  {FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-                </SelectContent>
+                <SelectContent>{FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Quarter</Label>
               <Select value={quarter} onValueChange={setQuarter}>
                 <SelectTrigger className="h-9"><SelectValue placeholder="Q" /></SelectTrigger>
-                <SelectContent>
-                  {QUARTERS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}
-                </SelectContent>
+                <SelectContent>{QUARTERS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Form</Label>
               <Select value={form} onValueChange={setForm}>
                 <SelectTrigger className="h-9"><SelectValue placeholder="Form" /></SelectTrigger>
-                <SelectContent>
-                  {FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-                </SelectContent>
+                <SelectContent>{FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
               </Select>
             </div>
           </div>
@@ -499,24 +523,26 @@ function NewCorrectionDialog({
           {checking && <p className="text-xs text-muted-foreground">Looking up the filed return…</p>}
 
           {!checking && client && fy && quarter && form && !filing && (
-            <p className="text-xs text-red-600">
-              No filed return found for {form} · {quarter} {fy} for this client. A correction can only
-              revise data that has already been filed.
-            </p>
+            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span>
+                No filed return found for {form} · {quarter} {fy} for this client. A correction can only
+                revise data that has already been filed.
+              </span>
+            </div>
           )}
 
           {!compliant && (
-            <p className="text-xs text-red-600">
-              This period is outside the client's TDS Compliance range.
-            </p>
+            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span>This period is outside the client's TDS Compliance range.</span>
+            </div>
           )}
 
           {preview && (
             <div className="rounded-md border bg-muted/40 p-2.5 text-xs">
-              Will copy in <span className="font-semibold">{preview.challans}</span> challan
-              {preview.challans === 1 ? "" : "s"} and{" "}
-              <span className="font-semibold">{preview.deductees}</span> entr
-              {preview.deductees === 1 ? "y" : "ies"}.
+              Will copy in <strong>{preview.challans}</strong> challan{preview.challans === 1 ? "" : "s"} and{" "}
+              <strong>{preview.deductees}</strong> entr{preview.deductees === 1 ? "y" : "ies"}.
             </div>
           )}
         </div>
@@ -533,7 +559,7 @@ function NewCorrectionDialog({
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Correction detail — edit, submit, sign
+// Correction detail
 // ═══════════════════════════════════════════════════════════════════════════
 
 function CorrectionDetail({
@@ -554,6 +580,10 @@ function CorrectionDetail({
   const [signOpen, setSignOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
 
+  const [search, setSearch] = useState("");
+  const [changeFilter, setChangeFilter] = useState<ChangeFilter>("all");
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
   const load = useCallback(async () => {
     setLoading(true);
     const { data } = await supabase.from("tds_corrections" as any)
@@ -573,23 +603,47 @@ function CorrectionDetail({
   const locked = isCorrectionLocked(correction?.status);
   const clientName = clients.find(c => c.id === correction?.client_id)?.name || "—";
   const delta = useMemo(() => summariseCorrection(challans, deductees), [challans, deductees]);
+  const hasChanges = delta.added + delta.modified + delta.deleted + delta.challansTouched > 0;
+
+  // ── Search + change filter ────────────────────────────────────────────────
+  const visibleDeductees = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return deductees.filter(d => {
+      if (changeFilter === "changed" && d.action === "unchanged") return false;
+      if (changeFilter !== "all" && changeFilter !== "changed" && d.action !== changeFilter) return false;
+      if (!q) return true;
+      return [d.deductee_name, d.deductee_pan, d.section_code, d.remarks]
+        .filter(Boolean).join(" ").toLowerCase().includes(q);
+    });
+  }, [deductees, search, changeFilter]);
 
   const byChallan = useMemo(() => {
     const m = new Map<string, CorrectionDeductee[]>();
-    for (const d of deductees) {
+    for (const d of visibleDeductees) {
       const k = d.correction_challan_id || "__unlinked__";
       const l = m.get(k); if (l) l.push(d); else m.set(k, [d]);
     }
     return m;
-  }, [deductees]);
+  }, [visibleDeductees]);
+
+  const filtering = !!search.trim() || changeFilter !== "all";
+  // While filtering, hide challans with no matching rows — the user is hunting.
+  const shownChallans = useMemo(
+    () => filtering ? challans.filter(c => (byChallan.get(c.id) || []).length > 0) : challans,
+    [challans, byChallan, filtering],
+  );
+
+  const toggleChallan = (id: string) =>
+    setCollapsed(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
 
   // ── Row actions ───────────────────────────────────────────────────────────
   const markDeleted = async (d: CorrectionDeductee) => {
     if (locked || !correction) return;
     setBusy(true);
-    // An entry that only exists in this correction is removed outright; one
-    // that came from the filed return is marked deleted so the correction can
-    // still show what was removed.
     if (d.action === "add") {
       await supabase.from("tds_correction_deductees" as any).delete().eq("id", d.id);
     } else {
@@ -628,7 +682,7 @@ function CorrectionDetail({
   };
 
   if (loading) {
-    return <div className="space-y-3"><Skeleton className="h-9 w-40" /><Skeleton className="h-32 w-full" /><Skeleton className="h-64 w-full" /></div>;
+    return <div className="space-y-3"><Skeleton className="h-9 w-40" /><Skeleton className="h-16 w-full" /><Skeleton className="h-64 w-full" /></div>;
   }
 
   if (!correction) {
@@ -642,137 +696,240 @@ function CorrectionDetail({
     );
   }
 
+  const totalTds = deductees
+    .filter(d => d.action !== "delete")
+    .reduce((s, d) => s + (d.total_tax_deducted ?? d.tds_amount ?? 0), 0);
+
   return (
-    <div className="space-y-4">
-      <Button variant="ghost" size="sm" className="gap-1.5 -ml-2" onClick={onBack}>
-        <ArrowLeft size={14} /> All corrections
-      </Button>
+    <div className="space-y-3">
+      {/* ── Header: back + identity + status + primary action, all one row ── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button variant="ghost" size="sm" className="gap-1.5 -ml-2 h-8" onClick={onBack}>
+          <ArrowLeft size={14} /> All corrections
+        </Button>
+        <h2 className="text-lg font-bold text-foreground">{clientName}</h2>
+        <span className="text-sm text-muted-foreground">
+          {correction.form_type} · {correction.quarter} {correction.financial_year}
+        </span>
+        <CorrectionStatusBadge status={correction.status} />
 
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h2 className="text-xl font-bold text-foreground flex items-center gap-2 flex-wrap">
-            {clientName}
-            <span className="text-muted-foreground font-normal text-base">
-              {correction.form_type} · {correction.quarter} {correction.financial_year}
-            </span>
-            <CorrectionStatusBadge status={correction.status} />
-          </h2>
-          {correction.reason && (
-            <p className="text-sm text-muted-foreground mt-0.5">{correction.reason}</p>
-          )}
-        </div>
+        <div className="flex-1" />
 
-        <div className="flex items-center gap-2 shrink-0">
-          {!locked && correction.status === "draft" && (
-            <Button size="sm" variant="outline" disabled={busy} onClick={doSubmit}>Submit for filing</Button>
-          )}
-          {!locked && correction.status === "pending" && (
-            <>
-              <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setRejectOpen(true)}>
-                <XCircle size={14} /> Reject
-              </Button>
-              <Button size="sm" className="gap-1.5" onClick={() => setSignOpen(true)}>
-                <PenTool size={14} /> Sign &amp; File
-              </Button>
-            </>
-          )}
-          {!locked && correction.status === "rejected" && (
-            <Button size="sm" variant="outline" disabled={busy} onClick={doSubmit}>Re-submit</Button>
-          )}
-        </div>
+        {!locked && correction.status === "draft" && (
+          <Button size="sm" className="gap-1.5 h-8" disabled={busy} onClick={doSubmit}>
+            <Send size={13} /> Submit for filing
+          </Button>
+        )}
+        {!locked && correction.status === "pending" && (
+          <>
+            <Button size="sm" variant="outline" className="gap-1.5 h-8" onClick={() => setRejectOpen(true)}>
+              <XCircle size={13} /> Reject
+            </Button>
+            <Button size="sm" className="gap-1.5 h-8" onClick={() => setSignOpen(true)}>
+              <PenTool size={13} /> Sign &amp; File
+            </Button>
+          </>
+        )}
+        {!locked && correction.status === "rejected" && (
+          <Button size="sm" className="gap-1.5 h-8" disabled={busy} onClick={doSubmit}>
+            <Send size={13} /> Re-submit
+          </Button>
+        )}
       </div>
 
-      {/* Filed banner — the clear, module-wide "this is done" indicator */}
+      {correction.reason && (
+        <p className="text-xs text-muted-foreground -mt-1">
+          <span className="font-medium text-foreground">Reason:</span> {correction.reason}
+        </p>
+      )}
+
+      {/* ── Filed / rejected banners ── */}
       {locked && (
-        <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 p-3 flex items-start gap-2.5">
-          <ShieldCheck size={18} className="text-emerald-600 shrink-0 mt-0.5" />
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-              Correction Filed <Lock size={12} />
+        <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2 flex items-start gap-2.5">
+          <ShieldCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+          <div className="min-w-0 text-xs">
+            <p className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+              Correction Filed <Lock size={11} />
             </p>
-            <p className="text-xs text-emerald-700 dark:text-emerald-400">
+            <p className="text-emerald-700 dark:text-emerald-400">
               Signed by {correction.signed_by_name || "—"}
               {correction.signed_by_role ? ` (${correction.signed_by_role})` : ""}
-              {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}.
-              This correction is now read-only.
+              {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}. Read-only.
             </p>
           </div>
         </div>
       )}
 
       {correction.status === "rejected" && correction.rejection_reason && (
-        <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 p-3">
-          <p className="text-sm font-semibold text-red-800 dark:text-red-300">Rejected</p>
-          <p className="text-xs text-red-700 dark:text-red-400">{correction.rejection_reason}</p>
+        <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 px-3 py-2 text-xs">
+          <p className="font-semibold text-red-800 dark:text-red-300">Rejected</p>
+          <p className="text-red-700 dark:text-red-400">{correction.rejection_reason}</p>
         </div>
       )}
 
-      {/* What changed */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {([
-          ["Added", delta.added], ["Modified", delta.modified],
-          ["Deleted", delta.deleted], ["Challans changed", delta.challansTouched],
-        ] as const).map(([label, n]) => (
-          <Card key={label}><CardContent className="p-3">
-            <p className="text-xs text-muted-foreground">{label}</p>
-            <p className="text-2xl font-bold">{n}</p>
-          </CardContent></Card>
-        ))}
+      {/* ── Change summary strip (Data Entry's info-strip language) ── */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs px-0.5">
+        <span className="text-muted-foreground">Challans: <strong className="text-foreground">{challans.length}</strong></span>
+        <span className="text-border">|</span>
+        <span className="text-muted-foreground">Entries: <strong className="text-foreground">{deductees.filter(d => d.action !== "delete").length}</strong></span>
+        <span className="text-border">|</span>
+        <span className="text-muted-foreground">TDS: <strong className="text-foreground">₹{money(totalTds)}</strong></span>
+        <span className="text-border">|</span>
+        {hasChanges ? (
+          <>
+            {delta.added > 0 && <Badge className={cn("text-[9px]", ACTION_META.add.badge)}>{delta.added} added</Badge>}
+            {delta.modified > 0 && <Badge className={cn("text-[9px]", ACTION_META.modify.badge)}>{delta.modified} modified</Badge>}
+            {delta.deleted > 0 && <Badge className={cn("text-[9px]", ACTION_META.delete.badge)}>{delta.deleted} deleted</Badge>}
+            {delta.challansTouched > 0 && <Badge variant="outline" className="text-[9px]">{delta.challansTouched} challan{delta.challansTouched === 1 ? "" : "s"} changed</Badge>}
+          </>
+        ) : (
+          <span className="text-muted-foreground italic">No changes yet — edit an entry to start.</span>
+        )}
       </div>
 
-      {/* Challans + entries */}
-      <div className="space-y-4">
+      {/* ── Toolbar: find the row you came to fix ── */}
+      <Card>
+        <CardContent className="p-2.5 flex flex-wrap items-center gap-2">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Find by name, PAN, section…"
+              className="h-8 pl-8 pr-7 text-xs"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")} title="Clear"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+
+          <div className="flex items-center gap-1">
+            {([
+              ["all", "All"], ["changed", "Changed"], ["add", "Added"],
+              ["modify", "Modified"], ["delete", "Deleted"],
+            ] as [ChangeFilter, string][]).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setChangeFilter(k)}
+                aria-pressed={changeFilter === k}
+                className={cn(
+                  "px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors",
+                  changeFilter === k
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "border-transparent text-muted-foreground hover:bg-muted",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex-1" />
+          <span className="text-[11px] text-muted-foreground">
+            {filtering ? `${visibleDeductees.length} of ${deductees.length}` : `${deductees.length} entries`}
+          </span>
+          <Button
+            variant="ghost" size="sm" className="h-8 text-xs"
+            onClick={() => setCollapsed(collapsed.size ? new Set() : new Set(challans.map(c => c.id)))}
+          >
+            {collapsed.size ? "Expand all" : "Collapse all"}
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* ── Challans ── */}
+      <div className="space-y-2">
         {challans.length === 0 && deductees.length === 0 ? (
           <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">
             The filed return had no challans or entries to copy in.
           </CardContent></Card>
-        ) : challans.map(c => (
-          <Card key={c.id} className={cn(c.action !== "unchanged" && "border-amber-300 dark:border-amber-900")}>
-            <CardHeader className="py-3">
-              <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
-                <Landmark size={14} className="text-amber-600 shrink-0" />
-                <span>
-                  Challan {c.challan_serial_no || "—"}
-                  {c.bsr_code ? ` · BSR ${c.bsr_code}` : ""}
+        ) : shownChallans.length === 0 ? (
+          <Card><CardContent className="p-8 text-center">
+            <p className="text-sm text-muted-foreground">No entries match “{search}”.</p>
+            <Button size="sm" variant="outline" className="mt-3" onClick={() => { setSearch(""); setChangeFilter("all"); }}>
+              Clear search
+            </Button>
+          </CardContent></Card>
+        ) : shownChallans.map(c => {
+          const rows = byChallan.get(c.id) || [];
+          const isCollapsed = collapsed.has(c.id);
+          const challanTds = rows.filter(r => r.action !== "delete")
+            .reduce((s, r) => s + (r.total_tax_deducted ?? r.tds_amount ?? 0), 0);
+          return (
+            <Card
+              key={c.id}
+              className={cn("overflow-hidden border-l-[3px]", ACTION_META[c.action].rail)}
+            >
+              {/* Challan header */}
+              <div className="flex items-center gap-2 px-3 py-2 bg-muted/30 flex-wrap">
+                <button
+                  onClick={() => toggleChallan(c.id)}
+                  className="flex items-center gap-1.5 min-w-0 hover:text-primary transition-colors"
+                  title={isCollapsed ? "Expand" : "Collapse"}
+                >
+                  {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                  <Landmark size={13} className="text-amber-600 shrink-0" />
+                  <span className="text-sm font-semibold truncate">
+                    Challan {c.challan_serial_no || "—"}
+                  </span>
+                </button>
+                {c.bsr_code && <span className="text-[11px] text-muted-foreground">BSR {c.bsr_code}</span>}
+                <span className="text-border">|</span>
+                <span className="text-[11px] text-muted-foreground">{shortDate(c.deposit_date)}</span>
+                <span className="text-border">|</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Entries: <strong className="text-foreground">{rows.length}</strong>
                 </span>
-                <span className="text-xs font-normal text-muted-foreground">{shortDate(c.deposit_date)}</span>
+                <span className="text-[11px] text-muted-foreground">
+                  TDS: <strong className="text-foreground">₹{money(challanTds)}</strong>
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                  Deposited: <strong className="text-foreground">₹{money(c.total_challan_amount)}</strong>
+                </span>
                 {c.action !== "unchanged" && (
-                  <Badge variant="outline" className="text-[9px]">{ACTION_LABEL[c.action]}</Badge>
+                  <Badge className={cn("text-[9px]", ACTION_META[c.action].badge)}>
+                    Challan {ACTION_META[c.action].label.toLowerCase()}
+                  </Badge>
                 )}
+
                 <div className="flex-1" />
-                <span className="text-xs font-normal text-muted-foreground">
-                  ₹{money(c.total_challan_amount)}
-                </span>
+
                 {!locked && (
                   <>
                     <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={() => setEditChallan(c)}>
                       <Pencil size={12} /> Challan
                     </Button>
-                    <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={() => setAddToChallan(c)}>
-                      <Plus size={12} /> Entry
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => setAddToChallan(c)}>
+                      <Plus size={12} /> Add entry
                     </Button>
                   </>
                 )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <EntryTable
-                rows={byChallan.get(c.id) || []}
-                form={correction.form_type}
-                locked={locked}
-                onEdit={setEditRow}
-                onDelete={markDeleted}
-                onRestore={restoreRow}
-              />
-            </CardContent>
-          </Card>
-        ))}
+              </div>
+
+              {!isCollapsed && (
+                <CardContent className="p-0">
+                  <EntryTable
+                    rows={rows}
+                    form={correction.form_type}
+                    locked={locked}
+                    onEdit={setEditRow}
+                    onDelete={markDeleted}
+                    onRestore={restoreRow}
+                  />
+                </CardContent>
+              )}
+            </Card>
+          );
+        })}
 
         {(byChallan.get("__unlinked__") || []).length > 0 && (
-          <Card>
-            <CardHeader className="py-3"><CardTitle className="text-sm">Not linked to a challan</CardTitle></CardHeader>
-            <CardContent className="pt-0">
+          <Card className="overflow-hidden">
+            <div className="px-3 py-2 bg-muted/30 text-sm font-semibold">Not linked to a challan</div>
+            <CardContent className="p-0">
               <EntryTable
                 rows={byChallan.get("__unlinked__") || []}
                 form={correction.form_type} locked={locked}
@@ -783,7 +940,7 @@ function CorrectionDetail({
         )}
       </div>
 
-      {/* Signature section — appears once the correction has been raised */}
+      {/* Signature */}
       <SignatureSection correction={correction} />
 
       {/* Dialogs */}
@@ -798,7 +955,6 @@ function CorrectionDetail({
         onSaved={() => { setEditRow(null); setAddToChallan(null); load(); }}
         toast={toast}
       />
-
       <ChallanDialog
         challan={editChallan}
         correction={correction}
@@ -807,14 +963,12 @@ function CorrectionDetail({
         onSaved={() => { setEditChallan(null); load(); }}
         toast={toast}
       />
-
       <SignDialog
         open={signOpen} onOpenChange={setSignOpen}
         correction={correction} actor={actor} delta={delta}
         onSigned={() => { setSignOpen(false); load(); }}
         toast={toast}
       />
-
       <RejectDialog
         open={rejectOpen} onOpenChange={setRejectOpen}
         correction={correction} actor={actor}
@@ -826,7 +980,7 @@ function CorrectionDetail({
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Entry table
+// Entry table — dense; the whole row is the edit affordance
 // ═══════════════════════════════════════════════════════════════════════════
 
 function EntryTable({ rows, form, locked, onEdit, onDelete, onRestore }: {
@@ -835,7 +989,9 @@ function EntryTable({ rows, form, locked, onEdit, onDelete, onRestore }: {
   onDelete: (d: CorrectionDeductee) => void;
   onRestore: (d: CorrectionDeductee) => void;
 }) {
-  if (rows.length === 0) return <p className="text-xs text-muted-foreground py-2">No entries under this challan.</p>;
+  if (rows.length === 0) {
+    return <p className="text-xs text-muted-foreground px-3 py-2.5">No entries under this challan.</p>;
+  }
   const isSalary = form === "24Q";
   const isTcs = form === "27EQ";
 
@@ -843,8 +999,7 @@ function EntryTable({ rows, form, locked, onEdit, onDelete, onRestore }: {
     <div className="overflow-x-auto">
       <Table>
         <TableHeader>
-          <TableRow>
-            <TableHead className="text-xs w-20">Change</TableHead>
+          <TableRow className="hover:bg-transparent">
             <TableHead className="text-xs">{isSalary ? "Employee" : isTcs ? "Collectee" : "Name"}</TableHead>
             <TableHead className="text-xs">PAN</TableHead>
             {isSalary ? (
@@ -857,63 +1012,78 @@ function EntryTable({ rows, form, locked, onEdit, onDelete, onRestore }: {
               <>
                 <TableHead className="text-xs">Section</TableHead>
                 <TableHead className="text-xs text-right">Amount</TableHead>
-                <TableHead className="text-xs">Date</TableHead>
+                <TableHead className="text-xs whitespace-nowrap">Date</TableHead>
                 <TableHead className="text-xs text-right">Rate%</TableHead>
                 <TableHead className="text-xs text-right">{isTcs ? "TCS" : "TDS"}</TableHead>
               </>
             )}
-            {!locked && <TableHead className="text-xs w-20"></TableHead>}
+            {!locked && <TableHead className="text-xs w-[70px] text-right">Actions</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
-          {rows.map(d => (
-            <TableRow key={d.id} className={ACTION_TONE[d.action]}>
-              <TableCell className="text-xs">
-                {d.action === "unchanged"
-                  ? <span className="text-muted-foreground">—</span>
-                  : <Badge variant="outline" className="text-[9px]">{ACTION_LABEL[d.action]}</Badge>}
-              </TableCell>
-              <TableCell className="text-xs font-medium">{d.deductee_name || "—"}</TableCell>
-              <TableCell className="text-xs font-mono">
-                {d.pan_not_available ? "PANNOTAVBL" : (d.deductee_pan || "—")}
-              </TableCell>
-              {isSalary ? (
-                <>
-                  <TableCell className="text-xs text-right">{money(d.gross_salary)}</TableCell>
-                  <TableCell className="text-xs text-right">{money(d.net_taxable_salary)}</TableCell>
-                  <TableCell className="text-xs text-right">{money(d.total_tax_deducted ?? d.tds_amount)}</TableCell>
-                </>
-              ) : (
-                <>
-                  <TableCell className="text-xs">{d.section_code || "—"}</TableCell>
-                  <TableCell className="text-xs text-right">{money(d.amount_paid_credited)}</TableCell>
-                  <TableCell className="text-xs">{shortDate(d.date_of_payment)}</TableCell>
-                  <TableCell className="text-xs text-right">{d.rate_of_tds ?? "—"}</TableCell>
-                  <TableCell className="text-xs text-right">{money(d.total_tax_deducted ?? d.tds_amount)}</TableCell>
-                </>
-              )}
-              {!locked && (
-                <TableCell>
-                  <div className="flex items-center gap-0.5">
-                    {d.action === "delete" ? (
-                      <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Restore" onClick={() => onRestore(d)}>
-                        <RotateCcw size={12} />
-                      </Button>
-                    ) : (
-                      <>
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0" title="Edit" onClick={() => onEdit(d)}>
-                          <Pencil size={12} />
-                        </Button>
-                        <Button size="sm" variant="ghost" className="h-7 w-7 p-0 text-red-600" title="Delete" onClick={() => onDelete(d)}>
-                          <Trash2 size={12} />
-                        </Button>
-                      </>
+          {rows.map(d => {
+            const meta = ACTION_META[d.action];
+            const removed = d.action === "delete";
+            return (
+              <TableRow
+                key={d.id}
+                onClick={() => { if (!locked && !removed) onEdit(d); }}
+                className={cn(
+                  "h-9 border-l-[3px]", meta.rail,
+                  removed && "opacity-55",
+                  !locked && !removed && "cursor-pointer",
+                )}
+                title={!locked && !removed ? "Click to edit this entry" : undefined}
+              >
+                <TableCell className="text-xs font-medium py-1">
+                  <span className={cn("inline-flex items-center gap-1.5", removed && "line-through")}>
+                    {d.deductee_name || "—"}
+                    {d.action !== "unchanged" && (
+                      <Badge className={cn("text-[9px] px-1 py-0", meta.badge)}>{meta.label}</Badge>
                     )}
-                  </div>
+                  </span>
                 </TableCell>
-              )}
-            </TableRow>
-          ))}
+                <TableCell className={cn("text-xs font-mono py-1", removed && "line-through")}>
+                  {d.pan_not_available ? <span className="text-muted-foreground">PANNOTAVBL</span> : (d.deductee_pan || "—")}
+                </TableCell>
+                {isSalary ? (
+                  <>
+                    <TableCell className="text-xs text-right py-1">{money(d.gross_salary)}</TableCell>
+                    <TableCell className="text-xs text-right py-1">{money(d.net_taxable_salary)}</TableCell>
+                    <TableCell className="text-xs text-right py-1 font-medium">{money(d.total_tax_deducted ?? d.tds_amount)}</TableCell>
+                  </>
+                ) : (
+                  <>
+                    <TableCell className="text-xs py-1">{d.section_code || "—"}</TableCell>
+                    <TableCell className="text-xs text-right py-1">{money(d.amount_paid_credited)}</TableCell>
+                    <TableCell className="text-xs py-1 whitespace-nowrap">{shortDate(d.date_of_payment)}</TableCell>
+                    <TableCell className="text-xs text-right py-1">{d.rate_of_tds ?? "—"}</TableCell>
+                    <TableCell className="text-xs text-right py-1 font-medium">{money(d.total_tax_deducted ?? d.tds_amount)}</TableCell>
+                  </>
+                )}
+                {!locked && (
+                  <TableCell className="py-1" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center justify-end gap-0.5">
+                      {removed ? (
+                        <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5 text-[11px]" title="Restore this entry" onClick={() => onRestore(d)}>
+                          <RotateCcw size={11} /> Restore
+                        </Button>
+                      ) : (
+                        <>
+                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0" title="Edit entry" onClick={() => onEdit(d)}>
+                            <Pencil size={12} />
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-6 w-6 p-0 text-red-600 hover:text-red-700" title="Delete entry" onClick={() => onDelete(d)}>
+                            <Trash2 size={12} />
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </TableCell>
+                )}
+              </TableRow>
+            );
+          })}
         </TableBody>
       </Table>
     </div>
@@ -971,8 +1141,6 @@ function EntryDialog({
 
     let err: string | null = null;
     if (row) {
-      // A row copied from the filed return becomes 'modify'; a row added in
-      // this correction stays 'add'.
       const nextAction = row.action === "add" ? "add" : "modify";
       const { error } = await supabase.from("tds_correction_deductees" as any)
         .update({ ...payload, action: nextAction }).eq("id", row.id);
@@ -1017,7 +1185,7 @@ function EntryDialog({
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1 col-span-2">
             <Label className="text-xs">{isSalary ? "Employee name" : "Deductee name"}</Label>
-            <Input className="h-9 text-xs" value={f.deductee_name ?? ""} onChange={e => set("deductee_name", e.target.value)} />
+            <Input autoFocus className="h-9 text-xs" value={f.deductee_name ?? ""} onChange={e => set("deductee_name", e.target.value)} />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">PAN</Label>
@@ -1181,13 +1349,11 @@ export function SignatureSection({ correction }: { correction: Correction }) {
   const signed = correction.status === "filed";
   return (
     <Card className={cn(signed && "border-emerald-200 dark:border-emerald-900")}>
-      <CardHeader className="py-3">
-        <CardTitle className="text-sm flex items-center gap-2">
-          <PenTool size={14} className={signed ? "text-emerald-600" : "text-muted-foreground"} />
-          Signature
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent className="p-3">
+        <div className="flex items-center gap-2 mb-2">
+          <PenTool size={13} className={signed ? "text-emerald-600" : "text-muted-foreground"} />
+          <span className="text-sm font-semibold">Signature</span>
+        </div>
         {signed ? (
           <div className="space-y-1">
             <div className="border-b border-foreground/40 w-56 pb-1">
@@ -1197,7 +1363,7 @@ export function SignatureSection({ correction }: { correction: Correction }) {
               {correction.signed_by_role || "Authorised signatory"}
               {correction.signed_at ? ` · ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}
             </p>
-            <p className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1 pt-1">
+            <p className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1 pt-0.5">
               <CheckCircle2 size={12} /> This signature filed the correction.
             </p>
           </div>

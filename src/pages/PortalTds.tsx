@@ -312,19 +312,15 @@ export default function PortalTds() {
 
   return (
     <div className="space-y-5">
-      {/* Header */}
+      {/* Sub-tab header. The page title lives on the TDS module shell
+          (PortalTdsModule) — this row only carries what is specific to the
+          Data Entry tab. */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
-            <Receipt size={22} className="text-amber-600" />
-            TDS Workspace
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {activeClient?.name ? <>Return data for <span className="font-medium">{activeClient.name}</span>. </> : null}
-            Prepared by your CA firm.
-          </p>
-        </div>
+        <p className="text-sm text-muted-foreground">
+          Return data prepared by your CA firm, exactly as filed.
+        </p>
         <div className="flex items-center gap-2 shrink-0">
+
           <span
             className="flex items-center gap-1.5 text-xs text-muted-foreground"
             title="This page updates automatically when your CA firm changes the data"

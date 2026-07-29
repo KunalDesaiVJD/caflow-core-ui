@@ -83,7 +83,9 @@ describe("PortalTds render check", () => {
     render(<PortalTds />);
 
     await waitFor(() => {
-      expect(screen.getByText("TDS Workspace")).toBeInTheDocument();
+      // The page title now lives on the TDS module shell; this tab is
+      // identified by its own read-only affordance.
+      expect(screen.getByText("View only")).toBeInTheDocument();
     });
 
     // Deductee row reached the DOM

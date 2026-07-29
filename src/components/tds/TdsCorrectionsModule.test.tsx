@@ -123,7 +123,9 @@ describe("client portal", () => {
 
   it("mounts and never offers a signing control while pending", async () => {
     render(<PortalCorrections />);
-    await waitFor(() => expect(screen.getByText("Corrections")).toBeInTheDocument());
+    // Title now lives on the TDS module shell; this tab is identified by its
+    // own primary action.
+    await waitFor(() => expect(screen.getByText(/Raise Correction/i)).toBeInTheDocument());
     expect(screen.queryByText(/Sign & File/i)).toBeNull();
     expect(screen.queryByText(/^Reject$/i)).toBeNull();
   });
@@ -131,7 +133,91 @@ describe("client portal", () => {
   it("offers no signing control once filed either", async () => {
     state.status = "filed";
     render(<PortalCorrections />);
-    await waitFor(() => expect(screen.getByText("Corrections")).toBeInTheDocument());
+    // Title now lives on the TDS module shell; this tab is identified by its
+    // own primary action.
+    await waitFor(() => expect(screen.getByText(/Raise Correction/i)).toBeInTheDocument());
     expect(screen.queryByText(/Sign & File/i)).toBeNull();
+  });
+});
+
+// ─── Portal TDS module shell ────────────────────────────────────────────────
+
+import PortalTdsModule from "@/pages/PortalTdsModule";
+
+describe("portal TDS module", () => {
+  beforeEach(() => { state.status = "pending"; });
+
+  it("renders exactly two sub-tabs: Data Entry and Correction", async () => {
+    const { container } = render(<PortalTdsModule />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "TDS" })).toBeInTheDocument());
+
+    // The sub-tab bar is the only button group directly under the border-b row.
+    const tabBar = container.querySelector(".flex.border-b");
+    const tabs = Array.from(tabBar?.querySelectorAll("button") ?? []).map(b => b.textContent?.trim());
+    expect(tabs).toEqual(["Data Entry", "Correction"]);
+  });
+
+  it("keeps both tabs mounted so state survives switching", async () => {
+    const { container } = render(<PortalTdsModule />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "TDS" })).toBeInTheDocument());
+    // Correction starts hidden rather than unmounted.
+    const hidden = container.querySelectorAll(".hidden");
+    expect(hidden.length).toBeGreaterThan(0);
+  });
+});
+
+// ─── Redesign affordances ───────────────────────────────────────────────────
+// The detail screen exists to FIND and fix one wrong entry among hundreds.
+// These pin the affordances that make that possible.
+
+import { fireEvent } from "@testing-library/react";
+
+describe("correction detail UX", () => {
+  beforeEach(() => { state.status = "pending"; });
+
+  const openDetail = async () => {
+    const view = render(<TdsCorrectionsModule {...staffProps} />);
+    await waitFor(() => expect(screen.getAllByText("Acme Pvt Ltd").length).toBeGreaterThan(0));
+    // Row click opens the correction (no "Open" link to hunt for)
+    fireEvent.click(screen.getAllByTitle("Open correction")[0]);
+    await waitFor(() => expect(screen.getByText("All corrections")).toBeInTheDocument());
+    return view;
+  };
+
+  it("offers search and change-filter chips over the entries", async () => {
+    await openDetail();
+    expect(screen.getByPlaceholderText(/Find by name, PAN, section/i)).toBeInTheDocument();
+    for (const chip of ["All", "Changed", "Added", "Modified", "Deleted"]) {
+      expect(screen.getByRole("button", { name: chip })).toBeInTheDocument();
+    }
+  });
+
+  it("search narrows the visible entries and can be cleared", async () => {
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText(/Find by name, PAN, section/i), {
+      target: { value: "zzzz-no-such-party" },
+    });
+    await waitFor(() => expect(screen.queryByText("Acme Traders")).toBeNull());
+    // Empty state offers the way out rather than dead-ending
+    expect(screen.getByText("Clear search")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText("Clear search"));
+    await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
+  });
+
+  it("makes the whole entry row the edit affordance", async () => {
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("Acme Traders")).toBeInTheDocument());
+    fireEvent.click(screen.getByTitle("Click to edit this entry"));
+    await waitFor(() => expect(screen.getByText("Edit entry")).toBeInTheDocument());
+  });
+
+  it("shows change counts only when non-zero — no empty stat cards", async () => {
+    await openDetail();
+    await waitFor(() => expect(screen.getByText("1 modified")).toBeInTheDocument());
+    expect(screen.queryByText(/^0 added$/)).toBeNull();
+    expect(screen.queryByText(/^0 deleted$/)).toBeNull();
   });
 });
