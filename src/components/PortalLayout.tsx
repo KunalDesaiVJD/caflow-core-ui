@@ -14,7 +14,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { PortalClientProvider, usePortalClient } from "@/contexts/PortalClientContext";
 import {
-  LogOut, Home, MessageSquareWarning, FolderOpen,
+  LogOut, Home, MessageSquareWarning, FolderOpen, Receipt,
   ChevronDown, Building2, Check, Loader2, Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -36,6 +36,8 @@ const NAV = [
   { to: "/portal",           label: "Home",      icon: Home,                 exact: true  },
   { to: "/portal/queries",   label: "Queries",   icon: MessageSquareWarning, exact: false },
   { to: "/portal/documents", label: "Documents", icon: FolderOpen,           exact: false },
+  // Read-only view of the entity's own TDS return data (Data Entry only).
+  { to: "/portal/tds",       label: "TDS",       icon: Receipt,              exact: false },
 ];
 
 // ─── Entity Switcher ──────────────────────────────────────────────────────────

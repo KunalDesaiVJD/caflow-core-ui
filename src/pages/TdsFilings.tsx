@@ -37,7 +37,7 @@ const NAV_ITEMS = [
   { key: "workspace",  label: "TDS Workspace",  icon: Combine },
   { key: "reports",    label: "Reports",        icon: BarChart3 },
   { key: "rate-master",label: "Rate Master",    icon: Settings },
-  // Audit Log + Corrections & Patterns live under ONE nav tab with sub-tabs —
+  // Audit Log + Overrides live under ONE nav tab with sub-tabs —
   // same pattern as TDS Workspace (Data Entry / Validate & Finalise). Both read
   // the same override/action history, so splitting them across two top-level
   // tabs only made the user hop between them.
@@ -394,7 +394,7 @@ const TdsFilings = () => {
                   )}
                 >
                   <span className="flex items-center gap-2">
-                    <Repeat2 size={14} /> Corrections &amp; Patterns
+                    <Repeat2 size={14} /> Overrides
                   </span>
                 </button>
               </div>
