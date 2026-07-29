@@ -227,16 +227,73 @@ const splitClientName = (name: string): { main: string; parenthetical: string | 
 // Sentinel for the Prepared By filter's "Unassigned" bucket — preparer_id is
 // a real column that can be null, and "" can never collide with a uuid.
 const UNASSIGNED_PREPARER = "";
+// Validate & Finalise is derived, not stored — these are its only two states.
+const VF_READY = "ready";
+const VF_NOT_READY = "not-ready";
+
+/** The Client column's own filter: a free-text search rather than a checkbox
+ *  list, because a firm has hundreds of clients and typing a few letters beats
+ *  scrolling. Same header-as-trigger behaviour as MultiSelectFilter's inHeader
+ *  mode, so every filterable column behaves identically. */
+function ClientSearchHeader({ label, value, onChange }: {
+  label: string; value: string; onChange: (v: string) => void;
+}) {
+  const active = value.trim().length > 0;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          title={`Filter by ${label}`}
+          className={cn(
+            "group inline-flex items-center gap-1 -ml-1 px-1 py-0.5 rounded hover:bg-muted/70 transition-colors",
+            active && "text-indigo-600",
+          )}
+        >
+          <span className="truncate">{label}</span>
+          {active && <Search size={10} className="shrink-0" />}
+          <ChevronDown size={11} className={cn("shrink-0 opacity-40 group-hover:opacity-80", active && "opacity-90")} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-2">
+        <div className="relative">
+          <Search size={12} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+          <Input
+            autoFocus
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            placeholder="Search client…"
+            className="h-7 text-xs pl-6 pr-6"
+          />
+          {active && (
+            <button type="button" onClick={() => onChange("")} className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" aria-label="Clear client search">
+              <X size={11} />
+            </button>
+          )}
+        </div>
+        {active && (
+          <button type="button" onClick={() => onChange("")} className="mt-2 w-full text-[11px] text-orange-600 hover:underline text-left px-1">
+            Clear
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 /** Toolbar multi-select filter — search box, Select All, checkbox list,
  *  Clear (N) footer. Same UX as AuditStatusFilters.tsx's StatusMultiSelectFilter,
  *  generalised over {value,label} options so it works for both Status and
  *  Prepared By here without duplicating the popover/list chrome twice. */
-function MultiSelectFilter({ label, options, selection, onChange }: {
+function MultiSelectFilter({ label, options, selection, onChange, inHeader }: {
   label: string;
   options: { value: string; label: string }[];
   selection: string[];
   onChange: (next: string[]) => void;
+  /** Render the column header itself as the trigger, instead of a toolbar
+   *  button — so the filter lives IN the column it filters and there is no
+   *  separate filter row duplicating the same controls above the grid. */
+  inHeader?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
@@ -264,10 +321,30 @@ function MultiSelectFilter({ label, options, selection, onChange }: {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" size="sm" className="h-8 text-xs w-44 justify-between font-normal gap-1">
-          <span className="truncate">{triggerLabel}</span>
-          <ChevronDown size={13} className="ml-1 shrink-0 opacity-60" />
-        </Button>
+        {inHeader ? (
+          // The header text IS the control: clicking the column name opens its
+          // filter. A count and a filled icon mark a column that is currently
+          // narrowing the grid, so an active filter is never invisible.
+          <button
+            type="button"
+            title={`Filter by ${label}`}
+            className={cn(
+              "group inline-flex items-center gap-1 -ml-1 px-1 py-0.5 rounded hover:bg-muted/70 transition-colors",
+              selection.length > 0 && "text-indigo-600",
+            )}
+          >
+            <span className="truncate">{label}</span>
+            {selection.length > 0 && (
+              <span className="rounded-full bg-indigo-600 text-white text-[9px] leading-none px-1 py-[2px]">{selection.length}</span>
+            )}
+            <ChevronDown size={11} className={cn("shrink-0 opacity-40 group-hover:opacity-80", selection.length > 0 && "opacity-90")} />
+          </button>
+        ) : (
+          <Button type="button" variant="outline" size="sm" className="h-8 text-xs w-44 justify-between font-normal gap-1">
+            <span className="truncate">{triggerLabel}</span>
+            <ChevronDown size={13} className="ml-1 shrink-0 opacity-60" />
+          </Button>
+        )}
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 p-2">
         <div className="relative">
@@ -370,6 +447,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const [clientSearchQuery, setClientSearchQuery] = useState("");
   const [statusMultiFilter, setStatusMultiFilter] = useState<string[]>([]);
   const [preparedByMultiFilter, setPreparedByMultiFilter] = useState<string[]>([]);
+  // Every filterable column now owns its own filter, opened from its header.
+  const [vfMultiFilter, setVfMultiFilter] = useState<string[]>([]);
+  const [filedByMultiFilter, setFiledByMultiFilter] = useState<string[]>([]);
 
   // Apply an external status-group preset (Dashboard KPI card click) — keyed
   // on `nonce` so re-clicking the same card re-applies it even with no value
@@ -511,13 +591,19 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const clientQ = clientSearchQuery.trim().toLowerCase();
     const statusSet = statusMultiFilter.length ? new Set(statusMultiFilter) : null;
     const preparedBySet = preparedByMultiFilter.length ? new Set(preparedByMultiFilter) : null;
-    if (!q && !clientQ && !statusSet && !preparedBySet) return filtered;
+    const vfSet = vfMultiFilter.length ? new Set(vfMultiFilter) : null;
+    const filedBySet = filedByMultiFilter.length ? new Set(filedByMultiFilter) : null;
+    if (!q && !clientQ && !statusSet && !preparedBySet && !vfSet && !filedBySet) return filtered;
     return filtered.filter(f => {
       const client = clients.find(c => c.id === f.client_id);
       const name = client?.name || deletedClients.get(f.client_id)?.name || "";
       if (clientQ && !name.toLowerCase().includes(clientQ)) return false;
       if (statusSet && !statusSet.has(f.work_status)) return false;
       if (preparedBySet && !preparedBySet.has(f.preparer_id || UNASSIGNED_PREPARER)) return false;
+      // Validate & Finalise is a DERIVED column (vfStatuses), so it filters on
+      // the same ready/not-ready split the column itself displays.
+      if (vfSet && !vfSet.has(vfStatuses.get(f.id)?.ready ? VF_READY : VF_NOT_READY)) return false;
+      if (filedBySet && !filedBySet.has(f.checker_id || UNASSIGNED_PREPARER)) return false;
       if (!q) return true;
       const pan = client?.pan || "";
       const ackNo = f.acknowledgment_number || "";
@@ -525,7 +611,28 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       const filedBy = users.find(u => u.id === f.checker_id)?.name || "";
       return [name, pan, ackNo, preparedBy, filedBy].some(v => v.toLowerCase().includes(q));
     });
-  }, [filtered, searchBuffer, clientSearchQuery, statusMultiFilter, preparedByMultiFilter, clients, deletedClients, users]);
+  }, [filtered, searchBuffer, clientSearchQuery, statusMultiFilter, preparedByMultiFilter, vfMultiFilter, filedByMultiFilter, vfStatuses, clients, deletedClients, users]);
+
+  // Options for the two columns that gained their own header filter. Same rule
+  // as Status/Prepared By: only values some currently-loaded filing actually
+  // holds, so the list never offers a choice that matches nothing.
+  const vfOptions = useMemo(() => {
+    const ready = filtered.some(f => vfStatuses.get(f.id)?.ready);
+    const notReady = filtered.some(f => !vfStatuses.get(f.id)?.ready);
+    return [
+      ...(ready ? [{ value: VF_READY, label: "Ready" }] : []),
+      ...(notReady ? [{ value: VF_NOT_READY, label: "Not ready" }] : []),
+    ];
+  }, [filtered, vfStatuses]);
+
+  const filedByOptions = useMemo(() => {
+    const presentIds = new Set(filtered.map(f => f.checker_id).filter((id): id is string => !!id));
+    const hasUnassigned = filtered.some(f => !f.checker_id);
+    const opts = users.filter(u => presentIds.has(u.id))
+      .map(u => ({ value: u.id, label: u.name || "Unnamed" }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+    return hasUnassigned ? [...opts, { value: UNASSIGNED_PREPARER, label: "Not filed yet" }] : opts;
+  }, [filtered, users]);
 
   // Prepared By options — only users who actually appear as a preparer among
   // the currently-loaded filings (per FY/Quarter/Client/Form), not the whole
@@ -1377,42 +1484,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           The three below are a second, independent layer: they narrow the
           grid FURTHER (composing with FY/Quarter/Client/Form/statusGroup via
           searchFiltered), not replace them. */}
-      <div className="flex flex-wrap gap-2 items-end">
-        <div className="relative w-52">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-          <Input
-            className="pl-7 h-8 text-xs pr-6"
-            placeholder="Search client…"
-            value={clientSearchQuery}
-            onChange={e => setClientSearchQuery(e.target.value)}
-          />
-          {clientSearchQuery && (
-            <button
-              type="button"
-              onClick={() => setClientSearchQuery("")}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              aria-label="Clear client search"
-            >
-              <X size={12} />
-            </button>
-          )}
-        </div>
-        <MultiSelectFilter
-          label="Status"
-          options={statusOptions}
-          selection={statusMultiFilter}
-          onChange={setStatusMultiFilter}
-        />
-        <MultiSelectFilter
-          label="Prepared By"
-          options={preparedByOptions}
-          selection={preparedByMultiFilter}
-          onChange={setPreparedByMultiFilter}
-        />
-        {(clientSearchQuery || statusMultiFilter.length > 0 || preparedByMultiFilter.length > 0) && (
+      {/* NO separate filter row: every filterable column carries its own
+          filter, opened by clicking that column HEADER (see the <TableHead>s
+          below). Only a compact clear-all remains, and only while something
+          is actually filtered — otherwise this strip is invisible. */}
+      <div className="flex flex-wrap gap-2 items-center">
+        {(clientSearchQuery || statusMultiFilter.length > 0 || preparedByMultiFilter.length > 0 || vfMultiFilter.length > 0 || filedByMultiFilter.length > 0) && (
           <Button
             variant="outline" size="sm" className="h-8 text-xs gap-1.5 text-orange-600 border-orange-300 hover:bg-orange-50"
-            onClick={() => { setClientSearchQuery(""); setStatusMultiFilter([]); setPreparedByMultiFilter([]); }}
+            onClick={() => { setClientSearchQuery(""); setStatusMultiFilter([]); setPreparedByMultiFilter([]); setVfMultiFilter([]); setFiledByMultiFilter([]); }}
           >
             <X size={12} /> Clear Filters
           </Button>
@@ -1509,13 +1589,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                     onCheckedChange={toggleSelectAll}
                   />
                 </TableHead>
-                <TableHead className="min-w-[220px] sticky left-0 bg-background z-10">Client</TableHead>
-                <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}>Status</TableHead>
+                <TableHead className="min-w-[220px] sticky left-0 bg-background z-10"><ClientSearchHeader label="Client" value={clientSearchQuery} onChange={setClientSearchQuery} /></TableHead>
+                <TableHead style={{ width: statusColWidth, minWidth: statusColWidth }}><MultiSelectFilter inHeader label="Status" options={statusOptions} selection={statusMultiFilter} onChange={setStatusMultiFilter} /></TableHead>
                 <TableHead className="w-[184px] pl-6">Filing Date</TableHead>
                 <TableHead style={{ width: ackColWidth, minWidth: ackColWidth }}>Ack No</TableHead>
-                <TableHead className="w-56">Validate &amp; Finalise</TableHead>
-                <TableHead className="w-28">Prepared By</TableHead>
-                <TableHead className="w-28">Filed By</TableHead>
+                <TableHead className="w-56"><MultiSelectFilter inHeader label="Validate & Finalise" options={vfOptions} selection={vfMultiFilter} onChange={setVfMultiFilter} /></TableHead>
+                <TableHead className="w-28"><MultiSelectFilter inHeader label="Prepared By" options={preparedByOptions} selection={preparedByMultiFilter} onChange={setPreparedByMultiFilter} /></TableHead>
+                <TableHead className="w-28"><MultiSelectFilter inHeader label="Filed By" options={filedByOptions} selection={filedByMultiFilter} onChange={setFiledByMultiFilter} /></TableHead>
                 <TableHead className="w-[100px]">Actions</TableHead>
               </TableRow>
             </TableHeader>

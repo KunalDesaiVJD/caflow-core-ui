@@ -105,7 +105,45 @@ interface Props {
   selFy: string; setSelFy: (v: string) => void;
   selQuarter: string; setSelQuarter: (v: string) => void;
   selForm: string; setSelForm: (v: string) => void;
+
+  // ── Correction mode ───────────────────────────────────────────────────────
+  // A correction is the SAME return in a second version, so it must be the
+  // same screen — same challan cards, utilised/unutilised balances,
+  // validations, calculations and dropdowns. Rather than fork this component
+  // (which is exactly how the TDS stages ended up with three drifting copies
+  // of the same rules), it is pointed at a different pair of tables.
+  //
+  // 20260729190000 made tds_correction_challans / tds_correction_deductees
+  // column-identical to the live tables — same filing_id, challan_id and
+  // utilisation columns — so every query below is unchanged apart from the
+  // table NAME, and add/modify/delete tracking happens in DB triggers.
+  /** Which tables to read and write. Defaults to the live Data Entry tables. */
+  source?: TdsEntrySource;
+  /** Use THIS filing-shaped row instead of resolving one from the period. */
+  filingOverride?: TdsFiling | null;
+  /** Force read-only regardless of work_status (e.g. a filed correction). */
+  forceReadOnly?: boolean;
 }
+
+/** The table pair this engine reads and writes. */
+export interface TdsEntrySource {
+  challans: string;
+  deductees: string;
+  /** Purely for copy — "filing" vs "correction". */
+  label?: string;
+}
+
+export const LIVE_TDS_SOURCE: TdsEntrySource = {
+  challans: "tds_challans",
+  deductees: "tds_deductees",
+  label: "filing",
+};
+
+export const CORRECTION_TDS_SOURCE: TdsEntrySource = {
+  challans: "tds_correction_challans",
+  deductees: "tds_correction_deductees",
+  label: "correction",
+};
 
 // ─── Constants ───
 const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; return `${s}-${String(s + 1).slice(2)}`; });
@@ -238,9 +276,15 @@ const buildPrevQuarterLabel = (
 export function TdsDataEntry({
   clients, users, isSuperadmin, resolveFirmId,
   selClient, setSelClient, selFy, setSelFy, selQuarter, setSelQuarter, selForm, setSelForm,
+  source, filingOverride, forceReadOnly,
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
+
+  // The table pair this instance drives. Defaults to the live Data Entry
+  // tables, so every existing call site behaves exactly as before.
+  const SRC = source ?? LIVE_TDS_SOURCE;
+  const isCorrectionMode = SRC.challans !== LIVE_TDS_SOURCE.challans;
   // Display name for the acting user on audit-log entries — resolved from the
   // already-fetched `users` list (same pattern as other TDS screens), no
   // separate fetch needed.
@@ -310,6 +354,24 @@ export function TdsDataEntry({
     if (!selClient) { toast({ title: "Select a client", variant: "destructive" }); return; }
     setLoading(true);
     setFilingLoaded(false);
+
+    // ── Correction mode ──────────────────────────────────────────────────────
+    // The "filing" is the correction itself, handed in by the caller. None of
+    // the resolve-or-create logic below applies: a correction is never
+    // auto-created from a period, and the TDS Compliance gate was already
+    // applied when the correction was raised. Re-checking it here would refuse
+    // to open a perfectly valid correction for a client whose compliance
+    // period has since been closed — precisely when a correction is likeliest.
+    if (filingOverride) {
+      setFiling(filingOverride);
+      await fetchChallans(filingOverride.id);
+      // No carry-forward: a correction revises ONE already-filed period, and
+      // prior-quarter challans live in the live tables, not this version.
+      setCarryForwardChallans([]);
+      setFilingLoaded(true);
+      setLoading(false);
+      return;
+    }
 
     // TDS Compliance is the single source of truth for module membership —
     // refuse to load or auto-create a filing for a client with no TDS
@@ -438,7 +500,7 @@ export function TdsDataEntry({
     }
     setFilingLoaded(true);
     setLoading(false);
-  }, [selClient, selFy, selQuarter, selForm, clients]);
+  }, [selClient, selFy, selQuarter, selForm, clients, filingOverride]);
 
   const resetFiling = () => {
     setFiling(null); setChallans([]); setDeductees([]); setPrevEntries([]);
@@ -454,7 +516,8 @@ export function TdsDataEntry({
     } else {
       resetFiling();
     }
-  }, [selClient, selFy, selQuarter, selForm]); // loadFiling/resetFiling intentionally omitted — stable callbacks
+    // filingOverride?.id so opening a different correction reloads the screen.
+  }, [selClient, selFy, selQuarter, selForm, filingOverride?.id]); // loadFiling/resetFiling intentionally omitted — stable callbacks
 
   // ─── Carry Forward — CP-04: cross-FY support ──────────────────────────────
   //
@@ -496,7 +559,7 @@ export function TdsDataEntry({
     // already sum every form's deductees against it (unfiltered by form),
     // so this is purely about not hiding a challan that money-wise is still
     // usable here.
-    const { data: priorChallansRaw } = await supabase.from("tds_challans").select("*")
+    const { data: priorChallansRaw } = await supabase.from(SRC.challans as any).select("*")
       .eq("client_id", clientId)
       .order("deposit_date", { ascending: true });
 
@@ -510,7 +573,7 @@ export function TdsDataEntry({
     // Fetch FULL deductee rows (not just sum fields) so we can merge them into
     // allChallanDeductees — getChallanBreakdownAll looks up deductees from that
     // map to compute 'Used (all Q)' for carry-forward challans.
-    const { data: allDeds } = await supabase.from("tds_deductees")
+    const { data: allDeds } = await supabase.from(SRC.deductees as any)
       .select("*")
       .in("challan_id", challanIds);
 
@@ -567,22 +630,34 @@ export function TdsDataEntry({
     // be orphaned and disappear from the UI while still existing in the DB.
     // Self-heal any stale filing_id back to the current one so future queries
     // match strictly too.
-    const { data } = await supabase.from("tds_challans").select("*")
-      .eq("client_id", selClient)
-      .eq("form_type", selForm)
-      .eq("financial_year", selFy)
-      .eq("quarter", selQuarter)
-      .order("deposit_date", { ascending: true });
+    // Correction mode scopes STRICTLY by filing_id (the correction's id).
+    // The logical-key query below is right for live data — one filing per
+    // period — but a client can have several corrections for the SAME period,
+    // and the logical key cannot tell them apart, so it would merge two
+    // corrections' challans into one screen. Correction rows also get their
+    // filing_id from a trigger, so it cannot drift and needs no self-heal.
+    const challanQuery = isCorrectionMode
+      ? supabase.from(SRC.challans as any).select("*")
+          .eq("filing_id", filingId)
+          .order("deposit_date", { ascending: true })
+      : supabase.from(SRC.challans as any).select("*")
+          .eq("client_id", selClient)
+          .eq("form_type", selForm)
+          .eq("financial_year", selFy)
+          .eq("quarter", selQuarter)
+          .order("deposit_date", { ascending: true });
+
+    const { data } = await challanQuery;
     const ownList = (data as unknown as Challan[]) || [];
 
     // Self-heal filing_id drift — ONLY for this form's OWN challans. A SHARED
     // challan (below) legitimately belongs to a different form's filing_id;
     // overwriting that here would sever it from the return that actually
     // created it.
-    const stale = ownList.filter(c => c.filing_id !== filingId);
+    const stale = isCorrectionMode ? [] : ownList.filter(c => c.filing_id !== filingId);
     if (stale.length > 0) {
       console.log(`[TDS] Repairing filing_id on ${stale.length} challan(s) for ${selFy} ${selQuarter} ${selForm}`);
-      const { error: fixErr } = await supabase.from("tds_challans")
+      const { error: fixErr } = await supabase.from(SRC.challans as any)
         .update({ filing_id: filingId })
         .in("id", stale.map(c => c.id));
       if (fixErr) console.warn("[TDS] filing_id self-heal failed:", fixErr.message);
@@ -603,7 +678,7 @@ export function TdsDataEntry({
     // under THIS form/quarter/FY is genuinely in use here and must show up,
     // with its Applied/Available already reflecting every form's usage
     // (the deductee sums below carry no form_type filter).
-    const { data: sharedDeds } = await supabase.from("tds_deductees").select("challan_id")
+    const { data: sharedDeds } = await supabase.from(SRC.deductees as any).select("challan_id")
       .eq("client_id", selClient).eq("form_type", selForm)
       .eq("financial_year", selFy).eq("quarter", selQuarter);
     const ownIds = new Set(ownList.map(c => c.id));
@@ -611,7 +686,7 @@ export function TdsDataEntry({
       .filter(id => !ownIds.has(id));
     let sharedList: Challan[] = [];
     if (sharedIds.length > 0) {
-      const { data: sharedChallans } = await supabase.from("tds_challans").select("*").in("id", sharedIds);
+      const { data: sharedChallans } = await supabase.from(SRC.challans as any).select("*").in("id", sharedIds);
       sharedList = (sharedChallans as unknown as Challan[]) || [];
     }
 
@@ -621,7 +696,7 @@ export function TdsDataEntry({
     setChallans(list);
     if (list.length > 0) {
       const challanIds = list.map(c => c.id);
-      const { data: allDeds } = await supabase.from("tds_deductees").select("*")
+      const { data: allDeds } = await supabase.from(SRC.deductees as any).select("*")
         .in("challan_id", challanIds).order("created_at");
       const grouped: Record<string, Deductee[]> = {};
       (allDeds || []).forEach((d: any) => {
@@ -699,7 +774,7 @@ export function TdsDataEntry({
 
   // Issue 5: Split entries into prev (read-only) and current (editable)
   const fetchDeductees = async (challanId: string) => {
-    const { data } = await supabase.from("tds_deductees").select("*")
+    const { data } = await supabase.from(SRC.deductees as any).select("*")
       .eq("challan_id", challanId).order("created_at", { ascending: true });
     const list = (data || []) as Deductee[];
     // Store ALL entries for cross-quarter balance calc (Issue 7A)
@@ -796,7 +871,7 @@ export function TdsDataEntry({
     // unused balance flows to later quarters via CARRY-FORWARD, not by re-
     // adding the challan. Skip this check when editing the same row.
     const dupQuery = supabase
-      .from("tds_challans")
+      .from(SRC.challans as any)
       .select("id, filing_id, financial_year, quarter, form_type, client_id, bsr_code")
       .eq("challan_serial_no", challanForm.challan_serial_no);
     if (editingChallan?.id) dupQuery.neq("id", editingChallan.id);
@@ -841,9 +916,9 @@ export function TdsDataEntry({
     let error: any;
     const tryInsertOrUpdate = async (p: any) => {
       if (editingChallan) {
-        return supabase.from("tds_challans").update(p).eq("id", editingChallan.id);
+        return supabase.from(SRC.challans as any).update(p).eq("id", editingChallan.id);
       } else {
-        return supabase.from("tds_challans").insert(p);
+        return supabase.from(SRC.challans as any).insert(p);
       }
     };
     // Audit trail — log NEW challan creation only (not edits to an existing
@@ -881,7 +956,7 @@ export function TdsDataEntry({
   };
 
   const deleteChallan = async (id: string) => {
-    const { error } = await supabase.from("tds_challans").delete().eq("id", id);
+    const { error } = await supabase.from(SRC.challans as any).delete().eq("id", id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     toast({ title: "Challan deleted" });
     if (filing) await refreshChallansAndCF(filing.id);
@@ -901,7 +976,7 @@ export function TdsDataEntry({
     const firmId = await resolveFirmId();
     const defaultSection = selectedChallan.section_code || "";
     const { rate } = getRateForSection(defaultSection);
-    const { data, error } = await supabase.from("tds_deductees").insert({
+    const { data, error } = await supabase.from(SRC.deductees as any).insert({
       challan_id: selectedChallan.id, filing_id: filing.id,
       client_id: filing.client_id, firm_id: firmId || filing.firm_id,
       form_type: selForm, financial_year: selFy, quarter: selQuarter,
@@ -1014,7 +1089,7 @@ export function TdsDataEntry({
       }
     }
 
-    const { error } = await supabase.from("tds_deductees").update(updates).eq("id", deducteeId);
+    const { error } = await supabase.from(SRC.deductees as any).update(updates).eq("id", deducteeId);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     // Audit trail — PAN / Section / LDC No. / LDC Rate edits only (the fields
     // explicitly asked to be tracked), and only when the value genuinely
@@ -1050,7 +1125,7 @@ export function TdsDataEntry({
   // Issue 7I: Delete + instant recalculation
   const deleteDeductee = async (id: string) => {
     if (isFilingLocked) return;
-    const { error } = await supabase.from("tds_deductees").delete().eq("id", id);
+    const { error } = await supabase.from(SRC.deductees as any).delete().eq("id", id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     setDeductees(prev => prev.filter(d => d.id !== id));
     // Issue 7I: Instantly update allChallanDeductees for balance recalc
@@ -1061,7 +1136,7 @@ export function TdsDataEntry({
       }));
       // Issue 7D: if challan was fully_utilized, re-enable it
       if (selectedChallan.fully_utilized) {
-        await supabase.from("tds_challans").update({ fully_utilized: false } as any).eq("id", selectedChallan.id);
+        await supabase.from(SRC.challans as any).update({ fully_utilized: false } as any).eq("id", selectedChallan.id);
         setSelectedChallan(prev => prev ? { ...prev, fully_utilized: false } : prev);
       }
     }
@@ -1112,7 +1187,7 @@ export function TdsDataEntry({
       total_tax_deducted: computedSalaryTax.tax,
       designation: salaryForm.designation || null,
     };
-    const { error } = await supabase.from("tds_deductees").update(updates).eq("id", salaryDeductee.id);
+    const { error } = await supabase.from(SRC.deductees as any).update(updates).eq("id", salaryDeductee.id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     setDeductees(prev => prev.map(d => d.id === salaryDeductee.id ? { ...d, ...updates } : d));
     setSalaryDrawerOpen(false);
@@ -1225,7 +1300,7 @@ export function TdsDataEntry({
     if (!selectedChallan || !filing || isFilingLocked) return;
     const firmId = await resolveFirmId();
     const { id, ...rest } = sourceDeductee;
-    const { data, error } = await supabase.from("tds_deductees").insert({
+    const { data, error } = await supabase.from(SRC.deductees as any).insert({
       ...rest,
       firm_id: firmId || filing.firm_id,
     } as any).select("*").single();
@@ -1252,7 +1327,10 @@ export function TdsDataEntry({
   };
 
   const client = clients.find(c => c.id === selClient);
-  const isFilingLocked = filing?.work_status === "Filed";
+  // A filed return is read-only; so is a correction the caller marks locked
+  // (filed corrections are immutable in the DB too, so offering an edit here
+  // would only produce an error the user cannot act on).
+  const isFilingLocked = forceReadOnly || filing?.work_status === "Filed";
 
   // Issue 1: Row-level read-only check
   const isRowReadOnly = (d: Deductee) => isFilingLocked || (filing ? d.filing_id !== filing.id : false);
@@ -1753,7 +1831,7 @@ export function TdsDataEntry({
                                         onClick={e => e.stopPropagation()}
                                         onBlur={async e => {
                                           const val = Math.min(parseFloat(e.target.value) || 0, c.late_fees_234e || 0);
-                                          await supabase.from("tds_challans").update({ late_fees_used: val } as any).eq("id", c.id);
+                                          await supabase.from(SRC.challans as any).update({ late_fees_used: val } as any).eq("id", c.id);
                                           if (filing) await refreshChallansAndCF(filing.id);
                                           await bumpUnderProcess();
                                         }}

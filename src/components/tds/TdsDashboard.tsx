@@ -311,28 +311,11 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-0.5">
-            <Label className="text-[10px]">Client</Label>
-            <Select value={clientFilter} onValueChange={v => { setClientFilter(v); setClientFilterSearch(""); }}>
-              <SelectTrigger className="w-[180px] h-8 text-xs"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <div className="px-2 pb-1 pt-1 sticky top-0 bg-popover z-10">
-                  <Input
-                    placeholder="Search…"
-                    value={clientFilterSearch}
-                    onChange={e => setClientFilterSearch(e.target.value)}
-                    onKeyDown={e => e.stopPropagation()}
-                    className="h-6 text-xs"
-                  />
-                </div>
-                <SelectItem value="all">All Clients</SelectItem>
-                {clients
-                  .filter(c => formTab === "all" || clientHasForm(c, formTab))
-                  .filter(c => !clientFilterSearch || (c.name || "").toLowerCase().includes(clientFilterSearch.toLowerCase()))
-                  .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </div>
+          {/* The Client filter now lives in the table's Client COLUMN HEADER
+              (see TdsFilingsManager). Keeping one here as well meant two
+              controls for one job — a client could be narrowed up here and
+              searched down there at once, with no single place showing what
+              was actually applied. */}
         </div>
       </div>
 
