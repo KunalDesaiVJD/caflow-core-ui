@@ -155,20 +155,43 @@ In a cloud session, `npx supabase <anything>` fails with:
 LegacyPlatformAuthRequiredError: Access token not provided.
 ```
 
-**To make cloud sessions able to deploy** (one-time setup, then it works
-permanently and unattended):
+**Making cloud sessions able to deploy is possible, but carries a real
+trade-off** — read this before doing it.
 
-1. Create a personal access token at
-   https://supabase.com/dashboard/account/tokens
-2. Add it to the Claude Code environment as `SUPABASE_ACCESS_TOKEN`
-   (environment settings, **not** the repo, **not** pasted into chat —
-   it grants full account access).
-3. Optionally add `SUPABASE_PROJECT_REF=hubyywmodekfdzhwiumb` so `--project-ref`
-   can be omitted.
+A `SUPABASE_ACCESS_TOKEN` in the cloud-environment variables makes the CLI
+non-interactive, and Claude can then run §4 and §5 unattended. However,
+Anthropic's own documentation is explicit that cloud environments have **no
+secrets store**, and that environment-variable values are readable by anyone
+who uses that environment:
 
-With that set, the CLI is non-interactive and Claude should run §4 and §5 without
-being asked. Until it is set, say so plainly and give the exact commands — do not
-claim the browser is reachable.
+> "Anyone who uses the environment can read the values, and cloud environments
+> have no dedicated secrets store, so don't add API keys or other credentials."
+> — https://code.claude.com/docs/en/cloud-environments#set-environment-variables
+
+A Supabase personal access token cannot be scoped: it grants **full account
+access** to every project. That makes it one of the worst candidates for a
+readable environment variable.
+
+**Default position: run the deploys locally.** They take under a minute, need
+no standing credential, and `supabase login` already works there.
+
+**If the convenience is worth it anyway** (a personal, non-shared environment
+where the user is the only reader), the setup is:
+
+1. Create a token at https://supabase.com/dashboard/account/tokens
+2. At claude.ai/code, select the cloud icon showing the environment name in the
+   row above the message box (there is no settings page or direct URL), hover
+   the environment, select the gear icon, and add to **Environment variables**
+   in `.env` format:
+   `SUPABASE_ACCESS_TOKEN=sbp_...`
+   Optionally `SUPABASE_PROJECT_REF=hubyywmodekfdzhwiumb`.
+3. Start a **new** session — variables are copied once at startup, so a session
+   already running keeps the values it began with.
+
+Never paste the token into chat, into the repo, or into a shared environment.
+
+Until it is set, say so plainly and give the exact commands — do not claim the
+browser is reachable.
 
 ### Secrets
 
