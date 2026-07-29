@@ -1,6 +1,11 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
+import {
+  PAN_4TH_CHAR_MAP, isValidPan, isIndividualRateType, getRateForSection as getRateForSectionPure,
+  calcAutoInterest, isChallanOverApplied, isChallanFullyUtilised, computeApplied, balanceColorClass,
+  type RateEntry,
+} from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -89,13 +94,6 @@ interface Deductee {
   remarks: string | null;
 }
 
-interface RateEntry {
-  section_code: string; nature_of_payment: string | null;
-  rate_individual: number | null; rate_company: number | null;
-  rate_no_pan: number | null; threshold_individual: number | null;
-  threshold_company: number | null;
-}
-
 interface Props {
   clients: ClientOption[];
   users: UserOption[];
@@ -114,14 +112,6 @@ const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; ret
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 
-const PAN_4TH_CHAR_MAP: Record<string, string> = {
-  P: "Individual", H: "HUF", C: "Company", F: "Firm",
-  L: "LLP", T: "Trust", A: "AOP",
-};
-
-const isValidPan = (pan: string): boolean => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan.toUpperCase());
-const isIndividualRateType = (type: string | null): boolean => type === "Individual" || type === "HUF";
-
 // Office-record fields the user explicitly asked to have audit-tracked on
 // edit (tds_filing_audit_log). Scoped deliberately narrow — every OTHER
 // field on a deductee row (name, amount, dates, rate, etc.) is intentionally
@@ -134,17 +124,6 @@ const TRACKED_DEDUCTEE_AUDIT_FIELDS: Record<string, { actionType: string; label:
   lower_deduction_certificate_no: { actionType: "DEDUCTEE_LDC_NUMBER_EDIT", label: "Lower Deduction Certificate No." },
   lower_deduction_rate: { actionType: "DEDUCTEE_LDC_RATE_EDIT", label: "Lower Deduction Rate" },
 };
-
-// Challan utilisation status — ZERO tolerance on over-application. Applied
-// strictly exceeding the allocatable challan amount by ANY amount (even
-// ₹0.01) is over-applied. Compared in paise (Math.round(x*100)) so genuine
-// ₹0.01 excesses are caught while floating-point noise is not. Matches the
-// canonical logic in TdsReports.
-const challanAppliedPaise = (n: number) => Math.round((n || 0) * 100);
-const isChallanOverApplied = (applied: number, allocatable: number): boolean =>
-  challanAppliedPaise(applied) > challanAppliedPaise(allocatable);
-const isChallanFullyUtilised = (applied: number, allocatable: number): boolean =>
-  challanAppliedPaise(applied) === challanAppliedPaise(allocatable);
 
 const REASON_CODES = [
   { code: "A", label: "A — Below threshold (no deduction required)" },
@@ -195,33 +174,6 @@ const calcTaxWithRebate = (totalIncome: number, regime: "new" | "old"): number =
 const parseLocalDate = (dateStr: string): Date => {
   const parts = dateStr.split("-");
   return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-};
-
-// Correct interest formula per Sec 201(1A) Income Tax Act
-// Due date = 7th of month following deduction. If challanDate ≤ dueDate → 0 (STOP).
-// Otherwise: lateMonths = DATEDIF(entryDate, challanDate, 'M') + 1
-//            interest = ROUND(TDS × 1.5% × lateMonths, 0)
-// Returns { interest, lateMonths } so callers can display months without re-computing.
-const calcAutoInterest = (
-  tdsAmount: number,
-  paymentDate: string | null,
-  depositDate: string | null,
-): { interest: number; lateMonths: number } => {
-  if (!paymentDate || !depositDate || !tdsAmount) return { interest: 0, lateMonths: 0 };
-  // #3: use parseLocalDate — both dates at local midnight, no UTC shift
-  const entry = parseLocalDate(paymentDate);
-  const challan = parseLocalDate(depositDate);
-  // Due date: 7th of the month following the entry (deduction) month
-  const dueDate = new Date(entry.getFullYear(), entry.getMonth() + 1, 7);
-  // Deposited on or before due date → no interest
-  if (challan <= dueDate) return { interest: 0, lateMonths: 0 };
-  // lateMonths = DATEDIF(entryDate, challanDate, 'M') + 1
-  const monthsDiff =
-    (challan.getFullYear() - entry.getFullYear()) * 12 +
-    (challan.getMonth() - entry.getMonth());
-  const lateMonths = monthsDiff + 1;
-  const interest = Math.round(tdsAmount * 0.015 * lateMonths);
-  return { interest, lateMonths };
 };
 
 // ─── Previous-quarter label helper ───────────────────────────────────────────
@@ -328,11 +280,19 @@ export function TdsDataEntry({
   const autoSaveRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // ─── Rate Master ───
+  // Filters by financial_year too (previously missing): without it, a
+  // form_type with BOTH FY2025-26 and FY2026-27 rows simultaneously
+  // is_active=true (the normal carry-forward state) returned every year's
+  // rate, and rateMaster.find() picked whichever row Postgres happened to
+  // return first — not necessarily the year actually being filed. Scoping to
+  // selFy still leaves every date-ranged row WITHIN that year (see
+  // getRateForSection in rateEngine.ts), so a rate that changed mid-year can
+  // still resolve correctly by date_of_payment once such a row exists.
   const fetchRates = useCallback(async () => {
-    const { data } = await supabase.from("tds_rate_master").select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company")
-      .eq("form_type", selForm).eq("is_active", true);
+    const { data } = await supabase.from("tds_rate_master").select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company, effective_from, effective_to")
+      .eq("form_type", selForm).eq("financial_year", selFy).eq("is_active", true);
     setRateMaster((data || []) as RateEntry[]);
-  }, [selForm]);
+  }, [selForm, selFy]);
 
   useEffect(() => { fetchRates(); }, [fetchRates, selFy]);
 
@@ -768,18 +728,12 @@ export function TdsDataEntry({
   };
 
   // ─── Rate lookup ───
-  const getRateForSection = (sectionCode: string, deducteeType?: string | null) => {
-    const match = rateMaster.find(r => r.section_code === sectionCode);
-    if (!match) return { rate: null, noPanRate: null, nature: null, threshold: null, rateFound: false };
-    const useIndRate = isIndividualRateType(deducteeType || null);
-    return {
-      rate: useIndRate ? match.rate_individual : match.rate_company,
-      noPanRate: match.rate_no_pan,
-      nature: match.nature_of_payment,
-      threshold: useIndRate ? match.threshold_individual : match.threshold_company,
-      rateFound: true,
-    };
-  };
+  // asOfDate (the deductee's own date_of_payment) picks the right row when a
+  // section has more than one date-ranged rate within the selected financial
+  // year (e.g. a rate cut effective partway through the year) — see
+  // rateEngine.ts. Defaults to today when no date is known yet.
+  const getRateForSection = (sectionCode: string, deducteeType?: string | null, asOfDate?: string | null) =>
+    getRateForSectionPure(rateMaster, sectionCode, deducteeType, asOfDate);
 
   // ─── Challan CRUD ───
   const openAddChallan = () => {
@@ -971,10 +925,18 @@ export function TdsDataEntry({
     if (!deductee) return;
     const updates: Record<string, any> = { [field]: value };
 
+    // date_of_payment is what actually determines which rate LAW applies —
+    // when this field itself changes, re-resolve using the NEW date so a row
+    // moved across a rate-change boundary picks up the correct rate, exactly
+    // like a section/type/PAN change already does. Every OTHER branch below
+    // that looks up a rate uses the deductee's existing date (or the fresh
+    // value here) as of-date, since none of those fields change the date.
+    const asOfDate = field === "date_of_payment" ? value : deductee.date_of_payment;
+
     if (field === "section_code") {
-      const { rate, nature } = getRateForSection(value, deductee.deductee_type);
+      const { rate, nature } = getRateForSection(value, deductee.deductee_type, asOfDate);
       if (rate !== null) {
-        updates.rate_of_tds = deductee.pan_not_available ? (getRateForSection(value).noPanRate || 20) : rate;
+        updates.rate_of_tds = deductee.pan_not_available ? (getRateForSection(value, deductee.deductee_type, asOfDate).noPanRate || 20) : rate;
         if (deductee.amount_paid_credited) {
           updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100);
           updates.total_tax_deducted = updates.tds_amount;
@@ -983,7 +945,7 @@ export function TdsDataEntry({
       }
     }
     if (field === "deductee_type") {
-      const { rate } = getRateForSection(deductee.section_code, value);
+      const { rate } = getRateForSection(deductee.section_code, value, asOfDate);
       if (rate !== null && !deductee.pan_not_available) {
         updates.rate_of_tds = rate;
         if (deductee.amount_paid_credited) {
@@ -1004,6 +966,20 @@ export function TdsDataEntry({
       updates.tds_amount = Math.round(amt * rate / 100);
       updates.total_tax_deducted = updates.tds_amount;
     }
+    if (field === "date_of_payment") {
+      // Re-resolve the rate for whichever effective-dated row now applies —
+      // matches the software's own PAN-availability rule (pan_not_available
+      // still forces the flat no-PAN rate regardless of date).
+      const { rate, noPanRate, rateFound } = getRateForSection(deductee.section_code, deductee.deductee_type, asOfDate);
+      const resolvedRate = deductee.pan_not_available ? (noPanRate ?? 20) : rate;
+      if (rateFound && resolvedRate !== null) {
+        updates.rate_of_tds = resolvedRate;
+        if (deductee.amount_paid_credited) {
+          updates.tds_amount = Math.round(deductee.amount_paid_credited * resolvedRate / 100);
+          updates.total_tax_deducted = updates.tds_amount;
+        }
+      }
+    }
     if (["amount_paid_credited", "rate_of_tds", "date_of_payment", "deductee_pan"].includes(field)) {
       const newTds = updates.tds_amount ?? deductee.tds_amount ?? deductee.total_tax_deducted ?? 0;
       const newPayDate = field === "date_of_payment" ? value : deductee.date_of_payment;
@@ -1016,7 +992,7 @@ export function TdsDataEntry({
         updates.pan_not_available = true;
         if (panVal && panVal.length >= 4 && PAN_4TH_CHAR_MAP[panVal[3]]) updates.deductee_type = PAN_4TH_CHAR_MAP[panVal[3]];
         else if (!panVal) updates.deductee_type = null;
-        const { noPanRate } = getRateForSection(deductee.section_code);
+        const { noPanRate } = getRateForSection(deductee.section_code, deductee.deductee_type, asOfDate);
         updates.rate_of_tds = noPanRate || 20;
         if (deductee.amount_paid_credited) {
           updates.tds_amount = Math.round(deductee.amount_paid_credited * updates.rate_of_tds / 100);
@@ -1027,7 +1003,7 @@ export function TdsDataEntry({
         const detectedType = PAN_4TH_CHAR_MAP[panVal[3]] || null;
         if (detectedType) updates.deductee_type = detectedType;
         const effectiveType = detectedType || deductee.deductee_type;
-        const { rate, rateFound } = getRateForSection(deductee.section_code, effectiveType);
+        const { rate, rateFound } = getRateForSection(deductee.section_code, effectiveType, asOfDate);
         if (rateFound && rate !== null) {
           updates.rate_of_tds = rate;
           if (deductee.amount_paid_credited) {
@@ -1153,12 +1129,9 @@ export function TdsDataEntry({
     const challanObj = challans.find(c => c.id === challanId)
       || (selectedChallan?.id === challanId ? selectedChallan : null)
       || carryForwardChallans.find(cf => cf.challan.id === challanId)?.challan || null;
-    const tds = allForChallan.reduce((s, d) => s + Math.round(d.total_tax_deducted || d.tds_amount || 0), 0);
-    const interest = allForChallan.reduce((s, d) => s + (d.interest_amount || 0), 0);
-    const surcharge = allForChallan.reduce((s, d) => s + (d.surcharge_amount || 0), 0);
+    const { tds, interest, surcharge, applied } = computeApplied(allForChallan);
     const lateFees = (challanObj as Challan | null)?.late_fees_234e || 0;
     // Issue 4: Late fees are a separate govt levy — exclude from allocatable TDS amount
-    const applied = tds + interest + surcharge;
     return { tds, interest, surcharge, lateFees, applied, count: allForChallan.length };
   }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans]);
 
@@ -1275,10 +1248,7 @@ export function TdsDataEntry({
 
   const getBalanceColor = (challan: Challan) => {
     const bd = getChallanBreakdownAll(challan.id);
-    const total = challan.total_challan_amount || 0;
-    if (isChallanOverApplied(bd.applied, total)) return "bg-destructive";  // any excess
-    if (isChallanFullyUtilised(bd.applied, total)) return "bg-emerald-500";
-    return "bg-amber-500";
+    return balanceColorClass(bd.applied, challan.total_challan_amount || 0);
   };
 
   const client = clients.find(c => c.id === selClient);
@@ -2121,7 +2091,7 @@ export function TdsDataEntry({
                                       </TableCell>
                                       <TableCell className="text-right">
                                         {(() => {
-                                          const { rateFound } = d.section_code ? getRateForSection(d.section_code, d.deductee_type) : { rateFound: false };
+                                          const { rateFound } = d.section_code ? getRateForSection(d.section_code, d.deductee_type, d.date_of_payment) : { rateFound: false };
                                           const isAutoRate = rateFound || d.pan_not_available;
                                           return (
                                             <div className="flex items-center gap-1 justify-end">
