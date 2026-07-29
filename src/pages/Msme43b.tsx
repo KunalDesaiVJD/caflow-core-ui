@@ -76,7 +76,7 @@ async function filesToLedgers(
     const f = list[i];
     onProgress?.(i, list.length, f.name);
     try {
-      const res = await extractLedgersViaAI(f);
+      const res = await extractLedgersViaAI(f, (note) => onProgress?.(i, list.length, note));
       aiCount += res.ledgers.length;
       truncatedAny = truncatedAny || res.truncated;
       out.push(...res.ledgers);
@@ -113,6 +113,7 @@ export default function Msme43b() {
   const [calibOff, setCalibOff] = useState(false);
   const [retention, setRetention] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
+  const [ingestFailures, setIngestFailures] = useState<Array<{ file: string; reason: string }>>([]);
 
   const clientName = clients.find((c) => c.id === clientId)?.name || '';
 
@@ -162,30 +163,37 @@ export default function Msme43b() {
       return;
     }
     setRunning(true);
+    setIngestFailures([]);
     setProgress(`Reading ${cyFiles.length + fyFiles.length} ledger(s)…`);
     try {
       // Sequential, not parallel: each file is a Claude call, and a firm-sized
       // batch fired at once would hit rate limits and lose the lot.
       const total = cyFiles.length + fyFiles.length;
       let done = 0;
-      const track = (label: string) => (_d: number, _t: number, current: string) => {
-        if (current) setProgress(`Reading ${label} ${done + 1} of ${total}: ${current}`);
-        else setProgress(null);
-        if (current) done++;
+      let started = 0;
+      const track = () => (_d: number, _t: number, current: string) => {
+        if (!current) { setProgress(null); return; }
+        // A chunk note ("file.pdf: pages 9–16 of 40") replaces the line without
+        // advancing the file counter, so a long merged file shows real movement.
+        const isChunkNote = current.includes(': pages ');
+        if (!isChunkNote) started = ++done;
+        setProgress(`Reading ${Math.min(started || 1, total)} of ${total}: ${current}`);
       };
-      const cyRes = await filesToLedgers(cyFiles, track('ledger'));
-      const fyRes = await filesToLedgers(fyFiles, track('ledger'));
+      const cyRes = await filesToLedgers(cyFiles, track());
+      const fyRes = await filesToLedgers(fyFiles, track());
       const cy = cyRes.ledgers;
       const fy = fyRes.ledgers;
 
+      // Kept on screen, not just flashed as a toast: this is the text the user
+      // needs in order to tell anyone what went wrong.
       const failures = [...cyRes.failures, ...fyRes.failures];
-      if (failures.length) {
-        for (const f of failures.slice(0, 3)) toast.error(`${f.file}: ${f.reason}`);
-        if (failures.length > 3) toast.error(`…and ${failures.length - 3} more file(s) could not be read.`);
-      }
+      setIngestFailures(failures);
       if (!cy.length) {
-        toast.error('No current-year ledger could be read — nothing to analyse.');
+        toast.error('No current-year ledger could be read — see the details below.');
         return;
+      }
+      if (failures.length) {
+        toast.warning(`${failures.length} file(s) could not be read — analysing the rest.`);
       }
       const rep = buildReport(cy, fy, activeConfig, clientName || undefined, {
         vendorWindowDays: vendorWindowMap(profile),
@@ -542,6 +550,18 @@ export default function Msme43b() {
 
       {/* ── Multi-year trend (self-hides with < 2 saved years) ── */}
       {clientId && !persistOff && <MultiYearTrend runs={savedRuns} />}
+
+      {ingestFailures.length > 0 && (
+        <Alert variant="destructive">
+          <AlertTriangle className="h-4 w-4" />
+          <AlertTitle>{ingestFailures.length} file(s) could not be read</AlertTitle>
+          <AlertDescription className="text-sm space-y-1">
+            {ingestFailures.map((f, i) => (
+              <div key={i}><b>{f.file}</b> — {f.reason}</div>
+            ))}
+          </AlertDescription>
+        </Alert>
+      )}
 
       {report && (
         <>
