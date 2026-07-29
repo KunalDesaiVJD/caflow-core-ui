@@ -227,7 +227,8 @@ function CorrectionDashboard({
             )}
           >
             <p className="text-xs text-muted-foreground">{CORRECTION_STATUS_META[s].label}</p>
-            <p className="text-2xl font-bold">{loading ? <Skeleton className="h-7 w-10" /> : counts[s]}</p>
+            {/* div, not p — Skeleton renders a div and cannot nest inside a p */}
+            <div className="text-2xl font-bold">{loading ? <Skeleton className="h-7 w-10" /> : counts[s]}</div>
           </button>
         ))}
       </div>

@@ -406,15 +406,15 @@ export default function PortalTds() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Card><CardContent className="p-3">
               <p className="text-xs text-muted-foreground">Deductee rows</p>
-              <p className="text-2xl font-bold">{detailLoading ? <Skeleton className="h-7 w-12" /> : totals.deductees}</p>
+              <div className="text-2xl font-bold">{detailLoading ? <Skeleton className="h-7 w-12" /> : totals.deductees}</div>
             </CardContent></Card>
             <Card><CardContent className="p-3">
               <p className="text-xs text-muted-foreground">Total TDS deducted</p>
-              <p className="text-2xl font-bold">{detailLoading ? <Skeleton className="h-7 w-20" /> : `₹${money(totals.tds)}`}</p>
+              <div className="text-2xl font-bold">{detailLoading ? <Skeleton className="h-7 w-20" /> : `₹${money(totals.tds)}`}</div>
             </CardContent></Card>
             <Card><CardContent className="p-3">
               <p className="text-xs text-muted-foreground">Total challan amount</p>
-              <p className="text-2xl font-bold">{detailLoading ? <Skeleton className="h-7 w-20" /> : `₹${money(totals.deposited)}`}</p>
+              <div className="text-2xl font-bold">{detailLoading ? <Skeleton className="h-7 w-20" /> : `₹${money(totals.deposited)}`}</div>
             </CardContent></Card>
           </div>
 
