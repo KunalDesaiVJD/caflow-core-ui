@@ -162,6 +162,43 @@ function isTaxLine(label: string): boolean {
     || /\btax\s*deducted\b/.test(s)
     || /\bincome\s*tax\b/.test(s);
 }
+/**
+ * The STATUTORY / RECOVERY heads a salary voucher credits alongside the
+ * employee's own account. Everything on the credit side of a salary voucher is
+ * either the employee's net pay or one of these — which is what lets the
+ * employee's line be identified without relying on how a particular client
+ * happens to name it.
+ */
+const SALARY_DEDUCTION_HEAD =
+  /\bp\.?\s*f\b|provident|\bepf\b|\bvpf\b|\besic?\b|profession(al)?\s*tax|\bp\.?\s*tax\b|labour\s*welfare|\blwf\b|gratuity|\badvance\b|\bloan\b|recovery|canteen|insurance|\bmess\b|\bround(ing)?\s*off\b/i
+  ;
+
+/**
+ * Is this credit line the EMPLOYEE, rather than a deduction head?
+ *
+ * The first version of this required the literal word "Salary" in the line,
+ * because the ledger it was built from wrote "Nevil Thummar - Salary". That is
+ * one client's naming convention, not a rule: a real Kwikteam ledger writes the
+ * employee line as plain "Krunal Rajendrakumar Nayak", so every voucher in the
+ * file failed to resolve a deductee and all 15 were dropped as payments —
+ * reported to the user as "No credit (deduction) entries were found in this
+ * ledger" for a ledger that is nothing but salary entries.
+ *
+ * Two signals, neither of which depends on naming style:
+ *  - the line is NOT one of the statutory/recovery heads above, and
+ *  - it carries the BULK of the voucher. Net pay dominates by construction —
+ *    on the real files it is 91-99.8% of the voucher, while PT/PF/ESIC are a
+ *    rounding error beside it — so a majority share identifies the employee
+ *    even in a ledger whose deduction heads this list has never seen.
+ * The "- Salary" suffix is still accepted directly, for a voucher whose net pay
+ * happens to be split so far that no single line reaches a majority.
+ */
+function isDeducteeCreditLine(label: string, credit: number, voucherTotal: number): boolean {
+  if (SALARY_DEDUCTION_HEAD.test(label) || isTaxLine(label)) return false;
+  if (/\bsalary\b/i.test(label)) return true;
+  return voucherTotal > 0 && credit >= voucherTotal * 0.5;
+}
+
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
 
 // pdfjs frequently merges a token with the marker printed right after it on
@@ -391,7 +428,8 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         // only `credit`) treats it exactly like a normal row.
         current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
         current.credit == null && current.debit != null &&
-        marker && /^cr$/i.test(marker) && /\bsalary\b/i.test(partyText)
+        marker && /^cr$/i.test(marker) &&
+        isDeducteeCreditLine(partyText, amount, current.debit + extraDr.reduce((s, d) => s + d.amount, 0))
       ) {
         current.party = partyText;
         // A debit posted to the DEDUCTEE'S OWN account is a contra entry —

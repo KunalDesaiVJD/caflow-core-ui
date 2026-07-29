@@ -440,6 +440,26 @@ const SECTION_KEYWORD_CODES: Array<[RegExp, string]> = [
 const SECTION_SUB = "AA|AB|BB|DA|EE|IA|IB|IC|LA|LB|LC|LD|[A-T]";
 const SECTION_RE = new RegExp(`\\b(19[2-9]|20[0-9])\\s*-?\\s*(${SECTION_SUB})?\\b`);
 
+/**
+ * THE SALARY SECTIONS HAVE TWO SPELLINGS, AND THEY ARE THE SAME SECTION.
+ *
+ * The FVU file format — and therefore every Genius/RPU export and the challan
+ * itself — writes the salary sections WITHOUT their leading 1: "92A", "92B",
+ * "92C" (seen in the wild as the code "1002-92B"). The Act, every client's own
+ * working file, and the rest of this codebase call those 192A / 192B / 192C.
+ *
+ * Left unhandled, "92B" matched neither SECTION_RE (which starts at 192) nor
+ * any keyword, so canonicalSection returned null and the comparison fell back
+ * to raw strings: Office Data "92B" vs the client file's "192B" reported a
+ * Section mismatch on EVERY employee of a 24Q return — a difference of one
+ * character that means nothing.
+ *
+ * The leading guard is what keeps "192B" itself out: there the "92B" is
+ * preceded by a digit, so this can only ever fire on a genuinely bare FVU
+ * code, never on a section that already carries its full number.
+ */
+const FVU_SALARY_SECTION = /(?:^|[^0-9A-Z])92\s*-?\s*([ABC])?(?![0-9A-Z])/;
+
 /** Canonical section code from a raw section/nature string, or null.
  *
  *  The separator tolerance is load-bearing, not cosmetic. Stage 3 derives a ledger's
@@ -461,7 +481,10 @@ export function canonicalSection(v: string | null | undefined): string | null {
     return null;
   };
   const m = SECTION_RE.exec(s);
-  if (!m) return byKeyword();
+  if (!m) {
+    const fvu = FVU_SALARY_SECTION.exec(s);
+    return fvu ? `192${fvu[1] ?? ""}` : byKeyword();
+  }
   const [, base, sub] = m;
   if (sub) return base + sub;
   // Bare base: accept a keyword's refinement only when it agrees on the base, so a

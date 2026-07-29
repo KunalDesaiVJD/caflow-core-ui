@@ -4,7 +4,7 @@
  * deciding — the complaint each time was "why are you asking me this?".
  */
 import { describe, it, expect } from "vitest";
-import { nameCompare, nameEvidence, rank, canonicalSection, amountsMatch, normalizeName } from "./match";
+import { nameCompare, nameEvidence, rank, canonicalSection, sectionsMatch, amountsMatch, normalizeName } from "./match";
 import { TIERS, AUTO_MATCH_MAX_RANK, assign, type AsgOffice, type AsgLedger } from "./assignment";
 import { reconcileTally, reconcileTallyFull, type OfficeTxn, type TallyRow, type PartyMap } from "./tallyRecon";
 
@@ -863,6 +863,47 @@ describe("reconcileTally — a saved mapping resolves the PARTY and nothing else
     expect(a.tally_row_index).toBe(0);
     expect(b.result).not.toBe("Matched");        // the mapping did NOT steal the row
     expect(b.tally_row_index).not.toBe(0);
+  });
+});
+
+// 92B and 192B ARE THE SAME SECTION. The FVU format (and so every Genius/RPU
+// export and the challan itself) writes the salary sections without their
+// leading 1 — "1002-92B" — while the Act, the client's own file and the rest
+// of this codebase say 192B. Unhandled, "92B" matched neither the section
+// regex (which starts at 192) nor any keyword, so it fell through to a raw
+// string compare and reported a Section mismatch on EVERY employee of a 24Q
+// return over a one-character difference that means nothing.
+describe("canonicalSection — the FVU spells the salary sections without their leading 1", () => {
+  it("treats 92A/92B/92C as 192A/192B/192C", () => {
+    expect(canonicalSection("92B")).toBe("192B");
+    expect(canonicalSection("92A")).toBe("192A");
+    expect(canonicalSection("92C")).toBe("192C");
+    expect(canonicalSection("92")).toBe("192");
+    // The form the code actually arrives in, straight from Genius.
+    expect(canonicalSection("1002-92B")).toBe("192B");
+    expect(sectionsMatch("92B", "192B")).toBe(true);
+    expect(sectionsMatch("1002-92B", "192B")).toBe(true);
+  });
+
+  it("leaves an already-full section code exactly as it was", () => {
+    expect(canonicalSection("192B")).toBe("192B");
+    expect(canonicalSection("192")).toBe("192");
+    expect(canonicalSection("194C")).toBe("194C");
+    expect(canonicalSection("1023-194C")).toBe("194C");
+    expect(canonicalSection("206C")).toBe("206C");
+  });
+
+  // The leading guard is the whole safety of this: a "92" that is part of a
+  // larger number is not a section code and must never be read as one.
+  it("never invents a section from digits that merely contain 92", () => {
+    expect(canonicalSection("1992")).toBeNull();
+    expect(canonicalSection("4092B")).toBeNull();
+    expect(canonicalSection("92BB")).toBeNull();
+  });
+
+  it("still reports a genuinely different section as a mismatch", () => {
+    expect(sectionsMatch("92B", "194C")).toBe(false);
+    expect(sectionsMatch("192B", "192A")).toBe(false);
   });
 });
 
