@@ -34,7 +34,13 @@ interface ClientOpt { id: string; name: string }
 const inr = (v: number) =>
   new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(v));
 
-interface IngestResult { ledgers: VendorLedger[]; aiCount: number; truncatedAny: boolean }
+interface IngestResult {
+  ledgers: VendorLedger[];
+  aiCount: number;
+  truncatedAny: boolean;
+  /** files that could not be read, with the reason — the run continues without them */
+  failures: Array<{ file: string; reason: string }>;
+}
 
 /**
  * EVERY PDF is read through the Claude API, whatever its format.
@@ -51,18 +57,35 @@ interface IngestResult { ledgers: VendorLedger[]; aiCount: number; truncatedAny:
  *
  * Failures are surfaced, never silently downgraded to a local parse — a figure
  * from an unexpected source is worse than an error message.
+ *
+ * A firm uploads 16 ledgers per year, so one unreadable file must NOT throw away
+ * the other thirty-one. Each failure is collected and reported by name; the run
+ * proceeds on what was read, and the exceptions make clear what is missing.
  */
-async function filesToLedgers(files: FileList | File[]): Promise<IngestResult> {
+async function filesToLedgers(
+  files: FileList | File[],
+  onProgress?: (done: number, total: number, current: string) => void,
+): Promise<IngestResult> {
+  const list = Array.from(files);
   const out: VendorLedger[] = [];
+  const failures: IngestResult['failures'] = [];
   let aiCount = 0;
   let truncatedAny = false;
-  for (const f of Array.from(files)) {
-    const res = await extractLedgersViaAI(f);
-    aiCount += res.ledgers.length;
-    truncatedAny = truncatedAny || res.truncated;
-    out.push(...res.ledgers);
+
+  for (let i = 0; i < list.length; i++) {
+    const f = list[i];
+    onProgress?.(i, list.length, f.name);
+    try {
+      const res = await extractLedgersViaAI(f);
+      aiCount += res.ledgers.length;
+      truncatedAny = truncatedAny || res.truncated;
+      out.push(...res.ledgers);
+    } catch (e) {
+      failures.push({ file: f.name, reason: (e as Error).message });
+    }
   }
-  return { ledgers: out, aiCount, truncatedAny };
+  onProgress?.(list.length, list.length, '');
+  return { ledgers: out, aiCount, truncatedAny, failures };
 }
 
 export default function Msme43b() {
@@ -89,6 +112,7 @@ export default function Msme43b() {
   const [goldens, setGoldens] = useState<GoldenCase[]>([]);
   const [calibOff, setCalibOff] = useState(false);
   const [retention, setRetention] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
 
   const clientName = clients.find((c) => c.id === clientId)?.name || '';
 
@@ -138,10 +162,31 @@ export default function Msme43b() {
       return;
     }
     setRunning(true);
+    setProgress(`Reading ${cyFiles.length + fyFiles.length} ledger(s)…`);
     try {
-      const [cyRes, fyRes] = await Promise.all([filesToLedgers(cyFiles), filesToLedgers(fyFiles)]);
+      // Sequential, not parallel: each file is a Claude call, and a firm-sized
+      // batch fired at once would hit rate limits and lose the lot.
+      const total = cyFiles.length + fyFiles.length;
+      let done = 0;
+      const track = (label: string) => (_d: number, _t: number, current: string) => {
+        if (current) setProgress(`Reading ${label} ${done + 1} of ${total}: ${current}`);
+        else setProgress(null);
+        if (current) done++;
+      };
+      const cyRes = await filesToLedgers(cyFiles, track('ledger'));
+      const fyRes = await filesToLedgers(fyFiles, track('ledger'));
       const cy = cyRes.ledgers;
       const fy = fyRes.ledgers;
+
+      const failures = [...cyRes.failures, ...fyRes.failures];
+      if (failures.length) {
+        for (const f of failures.slice(0, 3)) toast.error(`${f.file}: ${f.reason}`);
+        if (failures.length > 3) toast.error(`…and ${failures.length - 3} more file(s) could not be read.`);
+      }
+      if (!cy.length) {
+        toast.error('No current-year ledger could be read — nothing to analyse.');
+        return;
+      }
       const rep = buildReport(cy, fy, activeConfig, clientName || undefined, {
         vendorWindowDays: vendorWindowMap(profile),
         vendorGstRate: vendorGstMap(profile),
@@ -167,6 +212,7 @@ export default function Msme43b() {
       toast.error(`Analysis failed: ${(e as Error).message}`);
     } finally {
       setRunning(false);
+      setProgress(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cyFiles, fyFiles, clientName, activeConfig, profile, clientId, user, saveLabel]);
@@ -410,6 +456,9 @@ export default function Msme43b() {
               {running ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Scale className="h-4 w-4 mr-2" />}
               {running ? 'Analysing…' : 'Run 43B(h) analysis'}
             </Button>
+            {progress && (
+              <span className="text-xs text-muted-foreground">{progress}</span>
+            )}
             {fyFiles.length === 0 && cyFiles.length > 0 && (
               <span className="text-xs text-amber-600 flex items-center gap-1">
                 <AlertTriangle className="h-3 w-3" /> No following-year ledgers — year-end outstanding will be treated as disallowed pending payment data.
