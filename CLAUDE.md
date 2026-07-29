@@ -58,6 +58,8 @@ npx supabase db query --linked "$(cat supabase/migrations/<file>.sql)"
 npx supabase migration repair --status applied <version>
 ```
 
+See §10 for whether Claude can run this itself in the current session.
+
 ---
 
 ## 6. Protected files
@@ -124,3 +126,58 @@ Applied **once** at the COA mapping step. Flows unchanged through notes → face
 - Remote: `https://github.com/KunalDesaiVJD/caflow-core-ui.git`
 - Default branch: `main`
 - Working directory: `C:/Users/Admin/OneDrive/Documents/GitHub/caflow-core-ui`
+
+---
+
+## 10. Supabase deployment access
+
+**Standing instruction from the user (29-Jul-2026): Claude should run the Supabase
+deploy steps in §4 and §5 itself rather than handing back a list of commands.**
+
+Whether that is possible depends on where the session is running.
+
+### Local sessions (Claude Code on the user's PC)
+
+The user's Chrome is signed in to Supabase. `npx supabase login` opens the browser
+and completes without further input. **Run §4 and §5 directly — do not ask.**
+
+### Cloud sessions (claude.ai/code, GitHub Actions, mobile/web)
+
+These run in an **isolated ephemeral container with no access to the user's
+machine** — a different computer, not a different window. The user's open Chrome
+is unreachable: no shared browser profile, no session cookies, no CDP bridge. A
+Chromium binary exists in the container but is a blank Playwright install, so
+"log in via the browser" would still need credentials and MFA.
+
+In a cloud session, `npx supabase <anything>` fails with:
+
+```
+LegacyPlatformAuthRequiredError: Access token not provided.
+```
+
+**To make cloud sessions able to deploy** (one-time setup, then it works
+permanently and unattended):
+
+1. Create a personal access token at
+   https://supabase.com/dashboard/account/tokens
+2. Add it to the Claude Code environment as `SUPABASE_ACCESS_TOKEN`
+   (environment settings, **not** the repo, **not** pasted into chat —
+   it grants full account access).
+3. Optionally add `SUPABASE_PROJECT_REF=hubyywmodekfdzhwiumb` so `--project-ref`
+   can be omitted.
+
+With that set, the CLI is non-interactive and Claude should run §4 and §5 without
+being asked. Until it is set, say so plainly and give the exact commands — do not
+claim the browser is reachable.
+
+### Secrets
+
+Never paste an API key into chat or a commit. Set it directly:
+
+```bash
+npx supabase secrets set OPENROUTER_API_KEY=<key>
+```
+
+Keys used by the MSME 43B(h) utility: `ANTHROPIC_API_KEY` (Claude — extraction,
+calibration, panel) and `OPENROUTER_API_KEY` (GPT — review panel; optional
+`OPENROUTER_MODEL` to pin the model).
