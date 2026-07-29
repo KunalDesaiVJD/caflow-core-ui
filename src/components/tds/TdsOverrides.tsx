@@ -48,7 +48,7 @@ interface Props {
 
 type Stage = 1 | 2 | 3;
 
-interface CorrectionRecord {
+interface OverrideRecord {
   id: string; stage: Stage;
   clientId: string; financialYear: string; quarter: string; form: string;
   recordLabel: string; verdict: string; reason: string;
@@ -68,8 +68,8 @@ const STAGE_BADGE: Record<Stage, string> = {
 const normalizeReason = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
 const humanize = (s: string) => s.replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 
-export function TdsCorrections({ clients, users, isSuperadmin, resolveFirmId }: Props) {
-  const [records, setRecords] = useState<CorrectionRecord[]>([]);
+export function TdsOverrides({ clients, users, isSuperadmin, resolveFirmId }: Props) {
+  const [records, setRecords] = useState<OverrideRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [stageFilter, setStageFilter] = useState<"all" | "1" | "2" | "3">("all");
   const [clientFilter, setClientFilter] = useState("all");
@@ -106,7 +106,7 @@ export function TdsCorrections({ clients, users, isSuperadmin, resolveFirmId }: 
       (filings || []).forEach((f: any) => { filingMap[f.id] = f; });
     }
 
-    const recs: CorrectionRecord[] = [];
+    const recs: OverrideRecord[] = [];
     const push = (r: any, stage: Stage, recordLabel: string | null, verdict: string | null, reason: string | null) => {
       const f = filingMap[r.filing_id];
       if (!f) return;
@@ -146,7 +146,7 @@ export function TdsCorrections({ clients, users, isSuperadmin, resolveFirmId }: 
   }), [records, stageFilter, clientFilter, dateFrom, dateTo]);
 
   const patterns = useMemo(() => {
-    const groups = new Map<string, { stage: Stage; reason: string; items: CorrectionRecord[] }>();
+    const groups = new Map<string, { stage: Stage; reason: string; items: OverrideRecord[] }>();
     for (const r of filtered) {
       const key = `${r.stage}|${normalizeReason(r.reason)}`;
       const g = groups.get(key);
@@ -163,7 +163,7 @@ export function TdsCorrections({ clients, users, isSuperadmin, resolveFirmId }: 
 
   return (
     <div className="space-y-4">
-      {/* Title lives on the parent's "Audit & Corrections" tab header — this
+      {/* Title lives on the parent's "Audit & Overrides" tab header — this
           screen only describes its own sub-tab. */}
       <p className="text-sm text-muted-foreground">
         Every manual override across Stage 1/2/3, across every client — grouped by reason so a recurring issue is
