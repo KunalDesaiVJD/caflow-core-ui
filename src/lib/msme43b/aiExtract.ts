@@ -44,13 +44,33 @@ interface AiExtractResult {
   truncated: boolean;
 }
 
+/**
+ * Turn supabase-js's opaque transport errors into something a CA firm can act
+ * on. "Failed to send a request to the Edge Function" is what you get when the
+ * function is not deployed at all, and on its own it tells the user nothing.
+ */
+function describeInvokeError(error: { name?: string; message?: string }, fileName: string): Error {
+  const msg = error.message || '';
+  if (/Failed to send a request|Failed to fetch|NetworkError|FunctionsFetchError/i.test(msg) || error.name === 'FunctionsFetchError') {
+    return new Error(
+      'Could not reach the ledger-reading service (msme-extract-ledger). It is most likely not deployed yet — ' +
+      'run "npx supabase functions deploy msme-extract-ledger". ' +
+      'If it is deployed, check your network connection and try again.',
+    );
+  }
+  if (/timeout|timed out/i.test(msg)) {
+    return new Error(`Reading "${fileName}" timed out. Very large ledgers can exceed the limit — try splitting the PDF.`);
+  }
+  return new Error(msg || 'The ledger-reading service failed.');
+}
+
 /** Extract vendor ledgers from a PDF of any format via Claude. */
 export async function extractLedgersViaAI(file: File): Promise<AiExtractResult> {
   const pdf_base64 = await fileToBase64(file);
   const { data, error } = await supabase.functions.invoke('msme-extract-ledger', {
     body: { pdf_base64, filename: file.name },
   });
-  if (error) throw new Error(error.message || 'AI extraction request failed');
+  if (error) throw describeInvokeError(error, file.name);
   if (data?.error) throw new Error(data.error);
 
   const rawLedgers: unknown[] = Array.isArray(data?.ledgers) ? data.ledgers : [];
