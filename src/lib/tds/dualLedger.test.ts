@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  reconcileTallyFull, mergeDualLedgerResults, oneSidedLabel, SPLIT_FOLD_CONFIDENCE,
+  reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, oneSidedLabel, SPLIT_FOLD_CONFIDENCE,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap,
 } from "./tallyRecon";
 import { normalizeName } from "./match";
@@ -372,5 +372,50 @@ describe("dual-ledger — a SINGLE-ledger client never enters this path at all",
       expect(r.taxable_income_status).toBeUndefined();
       expect(r.tds_status).toBeUndefined();
     }
+  });
+});
+
+// Taxable Income is Salary + Bonus + Reimbursement, and a client keeps each in
+// its OWN Tally ledger. Office Data holds the month's TOTAL, so reconciling the
+// heads individually can never match it — a ₹5,000 bonus and a ₹30,000 salary
+// are two rows the 1:1 engine pairs one-at-a-time against one ₹35,000 office
+// figure, and both report a false mismatch.
+describe("aggregateTaxableByEmployeeMonth — one taxable figure per employee per month", () => {
+  const row = (party: string, iso: string, credit: number): TallyRow => ({
+    row_index: Math.round(credit), date: iso, iso, party, debit: null, credit,
+    vch_no: null, vch_type: "Journal", section: "192", amountKind: "taxable_income",
+  });
+
+  it("sums the separate pay heads booked on their own days in one month", () => {
+    const out = aggregateTaxableByEmployeeMonth([
+      row("Seema Sharma-Salary", "2026-04-03", 5000),     // Bonus ledger, 3rd
+      row("Seema Sharma-Salary", "2026-04-30", 30000),    // Salary ledger, month-end
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0].credit).toBe(35000);
+    // The month-end date is the one Office Data carries.
+    expect(out[0].iso).toBe("2026-04-30");
+    // …and the checker can see how the total was built.
+    expect(out[0].narration).toContain("5,000");
+    expect(out[0].narration).toContain("30,000");
+    expect(out[0].narration).toContain("35,000");
+  });
+
+  it("never merges across employees or across months", () => {
+    const out = aggregateTaxableByEmployeeMonth([
+      row("Seema Sharma-Salary", "2026-04-30", 30000),
+      row("Rashi Shah-Salary", "2026-04-30", 28000),      // different employee
+      row("Seema Sharma-Salary", "2026-05-31", 30000),    // different month
+    ]);
+    expect(out).toHaveLength(3);
+    expect(out.every((r) => r.credit === 30000 || r.credit === 28000)).toBe(true);
+  });
+
+  it("leaves a lone entry completely untouched", () => {
+    const only = row("Rashi Shah-Salary", "2026-05-31", 2249);
+    const out = aggregateTaxableByEmployeeMonth([only]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe(only);          // same object — no rewrite at all
+    expect(out[0].narration).toBeUndefined();
   });
 });

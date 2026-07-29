@@ -140,6 +140,32 @@ const SKIP_PARTY_RE = /^(opening|closing)\s*balance$|^(grand\s*)?total$|carried\
 const AS_PER_DETAILS_RE = /^\(as per details\)$/i;
 
 /**
+ * Is this ledger an EMPLOYEE-COST head — salary, bonus, reimbursement — rather
+ * than a TDS liability ledger?
+ *
+ * It matters because the two read a "To … Debit" row in opposite ways. In a
+ * TDS-liability ledger ("TDS 192 B") that row is the CHALLAN PAYMENT to the
+ * bank and must stay excluded. In an expense ledger it is the pay itself:
+ *
+ *   3-Apr-26  To  Seema Sharma-Salary   Journal 156    5,000.00
+ *
+ * — a real "Bonus Expense" ledger, where five of six entries are that shape.
+ * Dropping them as payments left the file with one row and the whole Bonus
+ * and Reimbursement ledgers reading as empty.
+ */
+function isEmployeeCostLedger(ledgerName: string | null): boolean {
+  const s = (ledgerName ?? "").toLowerCase();
+  if (!s) return false;
+  if (/\bt\.?\s*d\.?\s*s\.?\b|\btax\b|payable|duties|liabilit/i.test(s)) return false;
+  return /salar|wage|bonus|reimburse?ment|remunerat|incentive|allowance|arrear|ex-?gratia|perquisite|stipend|\bctc\b/i.test(s);
+}
+
+/** A ledger's counterparty that is NOT a person being paid — the bank/cash side
+ *  of a payment, or a balance line. Never an employee. */
+const NON_EMPLOYEE_PARTY_RE =
+  /\bbank\b|\bcash\b|\bhdfc\b|\bicici\b|\baxis\b|\bkotak\b|\bsbi\b|\bidbi\b|\byes\b\s*bank|\bimprest\b|suspense|\bpayable\b|\bprovision\b/i;
+
+/**
  * TAX IS NOT INCOME. True for a breakdown line that books a TAX, not a
  * taxable component — "TDS 192 B", "T.D.S. on Salary", "Income Tax Payable".
  *
@@ -200,8 +226,19 @@ const SALARY_DEDUCTION_HEAD =
  *  the line is treated as narration, which is the recoverable mistake. */
 function isNameContinuation(text: string): boolean {
   const t = text.trim();
-  return t.length > 0 && t.length <= 40 && !/^being\b|^narration\b|@\s*\d|\brs\.?\s*\d/i.test(t);
+  if (!t || t.length > 40) return false;
+  if (/^being\b|^narration\b|\brs\.?\s*\d/i.test(t)) return false;
+  // Prose gives itself away with a lowercase joining word ("Marriage Gift FROM
+  // office", "Full AND Final amount"); a wrapped ledger name does not have one.
+  return !/\b(from|and|for|with|of|to|on|as|being|towards|against|paid|payable)\b/i.test(t);
 }
+
+/** How long a party must be before a following text-only line can be more of
+ *  its NAME rather than the voucher's narration — i.e. long enough to have
+ *  filled the Particulars column and forced Tally to wrap. Calibrated on real
+ *  ledgers: the longest party that did NOT wrap is 27 chars, the shortest that
+ *  DID is 37. */
+const WRAP_MIN_PARTY_LEN = 32;
 
 function isDeducteeCreditLine(label: string, credit: number, voucherTotal: number): boolean {
   if (SALARY_DEDUCTION_HEAD.test(label) || isTaxLine(label)) return false;
@@ -560,8 +597,33 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       }
 
       if (f.onlyParticulars) {
-        // A wrapped party name — belongs to the entry above it.
-        if (current && f.party) current.party = `${current.party ?? ""} ${f.party}`.replace(/\s+/g, " ").trim();
+        // A text-only line under a COMPLETE row is that voucher's narration,
+        // not more of its party name. "Complete" means the row already carried
+        // its own amount and voucher number, so Tally had no reason to wrap:
+        //
+        //   3-Apr-26 To  Seema Sharma-Salary  Journal 156  5,000.00
+        //                Marriage Gift from office            <- narration
+        //
+        // Appending it produced the party "Seema Sharma-Salary Marriage Gift
+        // from office", which matches no employee in Office Data. A row still
+        // MISSING its amount is a genuinely wrapped name, and keeps the old
+        // append.
+        if (current && f.party) {
+          // Tally only wraps a name that FILLED the Particulars column, so a
+          // short party had room to spare and whatever follows it is the
+          // voucher's narration:
+          //   "Hero Fincorp Ltd - Tranche 01 - 78143" (37) + "84206@10%"  -> one name
+          //   "Seema Sharma-Salary" (19) + "Marriage Gift from office"    -> narration
+          // Length alone is not enough (a two-word narration like "Client
+          // Bonus" reads like a name fragment), so the continuation must also
+          // not look like prose.
+          const partyFilledColumn = (current.party ?? "").length >= WRAP_MIN_PARTY_LEN;
+          if (partyFilledColumn && isNameContinuation(f.party)) {
+            current.party = `${current.party ?? ""} ${f.party}`.replace(/\s+/g, " ").trim();
+          } else {
+            current.narration = current.narration ? `${current.narration} ${f.party}` : f.party;
+          }
+        }
         continue;
       }
       if (f.date) lastDate = f.date;
@@ -591,12 +653,28 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
   for (const r of all) { r.iso = toIso(r.date); r.section = section; }
 
   // Keep only the DEDUCTIONS: a named party, a credit, and Tally's "By" side.
+  //
+  // …EXCEPT in an employee-cost ledger, where the pay is booked as a plain
+  // DEBIT against the employee by name and there is no credit to key on:
+  //   3-Apr-26  To  Seema Sharma-Salary  Journal 156  5,000.00
+  // Those rows were being counted as challan payments and dropped, which is
+  // what made a whole Bonus / Reimbursement ledger read as empty. The debit is
+  // that employee's taxable pay, so it is promoted to `credit` exactly as the
+  // compound-voucher branch already does, and tagged taxable_income so it
+  // reconciles against Office Data's Taxable Income and never its TDS.
+  const employeeCostLedger = isEmployeeCostLedger(ledgerName);
   const rows: TallyPdfRow[] = [];
   for (const r of all) {
     const party = (r.party ?? "").trim();
     if (party && SKIP_PARTY_RE.test(party)) { skipped.balances++; continue; }
     if (!party) { skipped.totals++; continue; }              // totals carry figures but no party
-    if (r.credit == null || r.credit === 0) { skipped.payments++; continue; } // "To … Axis Bank" challan payment
+    if (r.credit == null || r.credit === 0) {
+      const directCost = employeeCostLedger && r.debit != null && r.debit > 0
+        && !NON_EMPLOYEE_PARTY_RE.test(party) && !isTaxLine(party) && !SALARY_DEDUCTION_HEAD.test(party);
+      if (!directCost) { skipped.payments++; continue; }     // "To … Axis Bank" challan payment
+      rows.push({ ...r, credit: r.debit, amountKind: "taxable_income" });
+      continue;
+    }
     rows.push(r);
   }
 

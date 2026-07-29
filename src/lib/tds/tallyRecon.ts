@@ -242,6 +242,51 @@ export function reconcileTallyFull(
   return { rows: applySplitEntryGrouping(rows, office), surplusLedger: surplus.map(rowAt) };
 }
 
+/**
+ * SUM AN EMPLOYEE'S TAXABLE PAY ACROSS EVERY EXPENSE LEDGER FOR THAT MONTH.
+ *
+ * Taxable Income is Salary + Bonus + Reimbursement + any other pay head, and a
+ * client keeps each of those in its OWN Tally ledger — one PDF per head. Office
+ * Data holds the TOTAL for the employee for the month, so reconciling the
+ * ledger rows individually can never match it: a bonus of ₹5,000 and a salary
+ * of ₹30,000 are two rows the engine (deliberately 1:1) pairs one-at-a-time
+ * against a single ₹35,000 office figure, and BOTH report a false mismatch.
+ *
+ * Grouping is by employee AND CALENDAR MONTH, not by exact date, because the
+ * heads are booked on their own days — the bonus on the 3rd, the salary on the
+ * 30th — while Office Data carries one line per employee per month. The
+ * month-end row is kept as the representative (the latest date in the group,
+ * which is what the return reports), and every contributing row is named in
+ * `narration` so a checker can see how the total was built.
+ *
+ * Only ever applied to taxable-income rows: TDS is a separate figure that
+ * reconciles against the TDS ledger on its own and is never aggregated here.
+ */
+export function aggregateTaxableByEmployeeMonth(rows: TallyRow[]): TallyRow[] {
+  const groups = new Map<string, TallyRow[]>();
+  for (const r of rows) {
+    const month = (r.iso ?? "").slice(0, 7);          // yyyy-mm
+    const key = `${normalizeName(r.party)}|${month}`;
+    const g = groups.get(key);
+    if (g) g.push(r); else groups.set(key, [r]);
+  }
+  const out: TallyRow[] = [];
+  for (const g of groups.values()) {
+    if (g.length === 1) { out.push(g[0]); continue; }
+    const total = g.reduce((sum, r) => sum + (r.credit ?? 0), 0);
+    // The latest-dated row represents the group: that is the month-end salary
+    // entry, whose date is the one Office Data carries.
+    const anchor = g.reduce((a, b) => ((b.iso ?? "") > (a.iso ?? "") ? b : a));
+    const parts = g.map((r) => `${r.date ?? "—"} ${inr(r.credit)}`).join(" + ");
+    out.push({
+      ...anchor,
+      credit: total,
+      narration: `Taxable Income combined from ${g.length} ledger entries: ${parts} = ${inr(total)}.`,
+    });
+  }
+  return out;
+}
+
 /** Reduce ONE single-ledger TallyReconRow (from a dual-ledger PASS — either
  *  the TDS-ledger call or the Salary-ledger call, both unchanged
  *  reconcileTallyFull() runs) to the sub-verdict that pass's own result

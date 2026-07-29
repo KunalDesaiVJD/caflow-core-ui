@@ -23,7 +23,7 @@ import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
 import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
-  reconcileTallyFull, mergeDualLedgerResults, SPLIT_FOLD_CONFIDENCE, oneSidedLabel,
+  reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, SPLIT_FOLD_CONFIDENCE, oneSidedLabel,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
 } from "@/lib/tds/tallyRecon";
 
@@ -448,7 +448,10 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const isRealExpenseLedger = [...taggedSections].some(
       (sec) => creditsIn(taggedRows, sec) > creditsIn(tally.filter((t) => t.amountKind !== "taxable_income"), sec),
     );
-    const salaryLedgerRows = isRealExpenseLedger ? taggedRows : [];
+    // Salary + Bonus + Reimbursement are separate ledgers but ONE taxable
+    // figure — Office Data holds the month's total, so they are summed per
+    // employee per month before reconciling (see aggregateTaxableByEmployeeMonth).
+    const salaryLedgerRows = isRealExpenseLedger ? aggregateTaxableByEmployeeMonth(taggedRows) : [];
     const tdsLedgerRows = isRealExpenseLedger ? tally.filter((t) => t.amountKind !== "taxable_income") : tally;
     const dualLedgerMode = salaryLedgerRows.length > 0;
     let audited: TallyReconRow[]; let surplusLedger: TallyRow[];

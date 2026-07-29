@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import {
   LayoutDashboard, PenLine,
   ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw, Repeat2,
+  FileEdit,
 } from "lucide-react";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
 import { TdsDashboard } from "@/components/tds/TdsDashboard";
@@ -14,6 +15,7 @@ import { TdsValidateFinalise } from "@/components/tds/TdsValidateFinalise";
 import { TdsReports } from "@/components/tds/TdsReports";
 import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
 import { TdsOverrides } from "@/components/tds/TdsOverrides";
+import { TdsCorrectionsModule } from "@/components/tds/TdsCorrectionsModule";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -42,6 +44,9 @@ const NAV_ITEMS = [
   // the same override/action history, so splitting them across two top-level
   // tabs only made the user hop between them.
   { key: "activity",   label: "Audit & Overrides", icon: ClipboardList },
+  // Revises data already FILED for an earlier period. Distinct from Overrides,
+  // which records manual verdict overrides during validation.
+  { key: "corrections",label: "Corrections",    icon: FileEdit },
 ] as const;
 
 type NavKey = typeof NAV_ITEMS[number]["key"];
@@ -291,11 +296,11 @@ const TdsFilings = () => {
                   }
                   setWorkspaceTab("validate"); setActiveSection("workspace");
                 }
-                // Legacy deep-links to the two now-merged screens open the
-                // combined tab on the right sub-tab. "corrections" is the old
-                // inbound key — kept as an accepted alias, mapped to the
-                // renamed "overrides" sub-tab.
-                else if (section === "audit-log" || section === "corrections" || section === "overrides") {
+                // Deep-links to the two merged screens open the combined tab on
+                // the right sub-tab. NOTE: "corrections" is deliberately NOT an
+                // alias here any more — it is now a top-level key of its own
+                // (the Correction module), so it must fall through below.
+                else if (section === "audit-log" || section === "overrides") {
                   setActivityTab(section === "audit-log" ? "audit-log" : "overrides");
                   setActiveSection("activity");
                 }
@@ -357,6 +362,13 @@ const TdsFilings = () => {
                 />
               </div>
             </div>
+          )}
+
+          {activeSection === "corrections" && (
+            <TdsCorrectionsModule
+              clients={clients} users={users}
+              isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId}
+            />
           )}
 
           {activeSection === "reports" && <TdsReports clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
