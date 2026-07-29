@@ -255,6 +255,25 @@ residual_value:'',
 additions_during_year:'0', addition_date:'',
 disposals_during_year:'0', disposal_date:'', narration:'',
 });
+// 2026-07-24 — Residual Value auto-fill (5% of Gross Block + Additions).
+// Tracks whether the user has typed into the field; while false, the
+// value auto-recomputes as they enter opening / addition amounts. First
+// keystroke in the residual cell flips this to true and the auto-fill
+// stops so the manual entry survives. Reset to false whenever the Add
+// Asset dialog opens fresh. This flag lives ONLY in dialog state — it
+// never leaves the Add Asset flow, so already-saved assets in the DB
+// keep whatever residual_value they were saved with (no back-fill).
+const [residualDirty, setResidualDirty] = useState(false);
+useEffect(() => {
+  if (!showAdd || residualDirty) return;
+  const gb = parseFloat(na.gross_block_opening) || 0;
+  const add = parseFloat(na.additions_during_year) || 0;
+  const auto = Math.round((gb + add) * 0.05 * 100) / 100;
+  const autoStr = auto > 0 ? String(auto) : '';
+  if (na.residual_value !== autoStr) {
+    setNa(p => ({ ...p, residual_value: autoStr }));
+  }
+}, [showAdd, residualDirty, na.gross_block_opening, na.additions_during_year, na.residual_value]);
 const [nc, setNc] = useState({
 name:'', asset_class:'', useful_life_years:'', wdv_rate:'',
 slm_rate:'', residual_value_pct:'5', schedule_ii_part:'A',
@@ -2530,7 +2549,12 @@ return (
 </Dialog>
 
 {/* ADD ASSET DIALOG */}
-<Dialog open={showAdd} onOpenChange={setShowAdd}>
+<Dialog open={showAdd} onOpenChange={(open) => {
+  setShowAdd(open);
+  // Reset the dirty flag every time the dialog opens/closes so the
+  // 5% auto-fill re-arms for the next asset.
+  if (open !== showAdd) setResidualDirty(false);
+}}>
   <DialogContent className='max-w-xl'>
     <DialogHeader><DialogTitle>Add Fixed Asset — {fy}</DialogTitle></DialogHeader>
     {assetErrs.length>0&&(<Alert variant='destructive'>
@@ -2584,18 +2608,32 @@ return (
         <div><Label>Disposal Date {parseFloat(na.disposals_during_year)>0&&'*'}</Label><Input type='date' value={na.disposal_date} onChange={e=>setNa(p=>({...p,disposal_date:e.target.value}))}/></div>
       </div>
       <div>
-        <Label>Residual Value (₹)</Label>
-        <Input type='number' min='0' value={na.residual_value} onChange={e=>setNa(p=>({...p,residual_value:e.target.value}))} placeholder='0' />
+        <Label>Residual Value (₹) *</Label>
+        <Input
+          type='number'
+          min='0'
+          value={na.residual_value}
+          onChange={e => {
+            // First keystroke in this cell → user is overriding the
+            // auto-computed 5%. Freeze the auto-fill so the manual
+            // entry survives further changes to Gross Block / Additions.
+            setResidualDirty(true);
+            setNa(p => ({ ...p, residual_value: e.target.value }));
+          }}
+          placeholder='0'
+        />
         {na.residual_value && parseFloat(na.residual_value) >= parseFloat(na.gross_block_opening||'0') && parseFloat(na.gross_block_opening||'0') > 0 && (
           <p className='text-xs text-destructive mt-1'>Residual Value must be less than Cost of Asset</p>
         )}
-        <p className='text-xs text-muted-foreground mt-0.5'>Leave blank to treat residual value as 0</p>
+        <p className='text-xs text-muted-foreground mt-0.5'>
+          Auto-filled at 5% of (Gross Block Opening + Additions During Year). Type any value to override.
+        </p>
       </div>
       <div><Label>Narration</Label><Input value={na.narration} onChange={e=>setNa(p=>({...p,narration:e.target.value}))}/></div>
     </div>
     <DialogFooter>
       <Button variant='outline' onClick={()=>setShowAdd(false)}>Cancel</Button>
-      <Button onClick={()=>addMut.mutate()} disabled={!na.asset_name||!na.category_id||!na.date_of_purchase||addMut.isPending}>
+      <Button onClick={()=>addMut.mutate()} disabled={!na.asset_name||!na.category_id||!na.date_of_purchase||!na.residual_value||addMut.isPending}>
         {addMut.isPending&&<Loader2 size={14} className='mr-1 animate-spin'/>}Add Asset
       </Button>
     </DialogFooter>
