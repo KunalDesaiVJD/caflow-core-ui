@@ -37,7 +37,7 @@
 // vendor, which either holds up on the next client's data or visibly fails. It
 // is not a memorised answer.
 
-import { DEFAULT_CONFIG, type Msme43bConfig } from './config';
+import { DEFAULT_CONFIG, PERMITTED_GST_RATES, type Msme43bConfig } from './config';
 
 export type RuleValue = string | number | boolean;
 
@@ -92,6 +92,16 @@ export const RULE_SPACE: RuleDef[] = [
       { value: 0, label: 'From invoice date', basis: 'Invoice date taken as the day of acceptance (the usual position where no GRN data exists).' },
       { value: 7, label: 'Acceptance + 7 days', basis: 'Client\'s terms run from goods receipt, ordinarily about a week after invoice.' },
       { value: 15, label: 'Acceptance + 15 days', basis: 'Deemed acceptance under the proviso to s.2(b) where objection may be raised within 15 days.' },
+    ],
+  },
+  {
+    key: 'disallowanceBase',
+    title: 'GST on the invoice',
+    question: 'Is the disallowance stated on the taxable value, or on the whole invoice including GST?',
+    legalBasis: 'S.43B(h) disallows a DEDUCTION. A registered buyer taking input tax credit never claims GST as a deduction — it sits in the input-tax ledger, not the profit and loss account — so there is nothing in the tax component for the section to disallow.',
+    options: [
+      { value: 'taxableValue', label: 'Taxable value only (exclude GST)', basis: 'Input credit is available, so GST was never claimed as a deduction and cannot be disallowed.' },
+      { value: 'grossInvoice', label: 'Whole invoice including GST', basis: 'Credit is blocked u/s 17(5) CGST Act, or the buyer is unregistered / under composition, so the tax forms part of the cost and IS claimed as a deduction.' },
     ],
   },
   {
@@ -236,18 +246,36 @@ export interface VendorWindowDeclaration {
   at: string;
 }
 
+/**
+ * The GST rate a vendor charges. Used ONLY where the ledger does not show the
+ * tax split, so the taxable value can be derived instead of the disallowance
+ * being overstated by the tax. Like the window declaration this is a statement
+ * of fact about the vendor, confirmed by a human and printed on the workpaper —
+ * and it is constrained to the statutory rates so it cannot become a dial.
+ */
+export interface VendorGstDeclaration {
+  key: string;
+  vendorName: string;
+  /** percentage: one of PERMITTED_GST_RATES */
+  gstRate: number;
+  declaredBy?: string;
+  at: string;
+}
+
 export interface RuleProfile {
   clientId?: string;
   /** interpretations that differ from DEFAULT_CONFIG */
   overrides: Partial<Msme43bConfig>;
   /** declared per-vendor s.15 windows (see fence #3) */
   vendorWindows: VendorWindowDeclaration[];
+  /** declared per-vendor GST rates (see fence #3) */
+  vendorGstRates: VendorGstDeclaration[];
   revision: number;
   history: RuleChange[];
 }
 
 export function emptyProfile(clientId?: string): RuleProfile {
-  return { clientId, overrides: {}, vendorWindows: [], revision: 0, history: [] };
+  return { clientId, overrides: {}, vendorWindows: [], vendorGstRates: [], revision: 0, history: [] };
 }
 
 /** Resolve a profile to the config the engine runs with. */
@@ -260,6 +288,12 @@ export function configFromProfile(profile: RuleProfile | null, base: Msme43bConf
 export function vendorWindowMap(profile: RuleProfile | null): Record<string, number> {
   if (!profile) return {};
   return Object.fromEntries(profile.vendorWindows.map((d) => [d.key, d.windowDays]));
+}
+
+/** Per-vendor GST rate map in the shape buildReport expects. */
+export function vendorGstMap(profile: RuleProfile | null): Record<string, number> {
+  if (!profile) return {};
+  return Object.fromEntries((profile.vendorGstRates ?? []).map((d) => [d.key, d.gstRate]));
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -284,6 +318,15 @@ export function validateProfile(profile: RuleProfile): string[] {
       errors.push(
         `${def.title}: "${String(value)}" is not one of the permitted positions ` +
         `(${def.options.map((o) => String(o.value)).join(', ')}) — refusing to apply it.`,
+      );
+    }
+  }
+
+  for (const d of profile.vendorGstRates ?? []) {
+    if (!PERMITTED_GST_RATES.includes(d.gstRate as 0 | 5 | 12 | 18 | 28)) {
+      errors.push(
+        `${d.vendorName}: a declared GST rate of ${d.gstRate}% is not a statutory rate ` +
+        `(${PERMITTED_GST_RATES.join(', ')}) — refusing to apply it.`,
       );
     }
   }

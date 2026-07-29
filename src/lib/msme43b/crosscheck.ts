@@ -16,7 +16,7 @@
 
 import type { VendorLedger } from './types';
 import { classifyTxn } from './classify';
-import { DEFAULT_CONFIG, Msme43bConfig, fyEndDate, addDays, dueDateFor, treatmentOf } from './config';
+import { DEFAULT_CONFIG, Msme43bConfig, fyEndDate, addDays, dueDateFor, treatmentOf, splitGst } from './config';
 
 export interface CrossResult {
   disallowedCY: number;
@@ -32,6 +32,8 @@ interface XBill {
   yeOutstanding: number; // captured after Phase 2
   compliantAfterYE: number; // FY settlements within due date
   laidLateInFY: number; // FY settlements after due date
+  /** taxable value ÷ gross — the disallowance is stated on the taxable value */
+  taxableRatio: number;
 }
 
 interface XSettle { date: string; amount: number; cash: boolean }
@@ -42,6 +44,7 @@ export function crossCheckVendor(
   cy: VendorLedger,
   fy: VendorLedger | null,
   cfg: Msme43bConfig = DEFAULT_CONFIG,
+  declaredGstRate?: number,
 ): CrossResult {
   const cyEnd = cy.periodTo || fyEndDate(cy.financialYear || '2025-26');
   const fyEnd = fy ? (fy.periodTo || fyEndDate(fy.financialYear || '2026-27')) : addDays(cyEnd, 365);
@@ -50,7 +53,9 @@ export function crossCheckVendor(
   // ── bills (opening + CY purchases) ──
   const bills: XBill[] = [];
   if (cfg.includeOpeningBalance && cy.openingBalance > cfg.toleranceRupees) {
-    bills.push(mkBill(openDate, cy.openingBalance, true, cfg));
+    // An opening balance is a carried-forward net figure with no invoice behind
+    // it, so no GST split is applied to it (matching the primary engine).
+    bills.push(mkBill(openDate, cy.openingBalance, true, cfg, 1));
   }
   const settlements: XSettle[] = [];
   if (cy.openingBalance < -cfg.toleranceRupees) {
@@ -60,7 +65,10 @@ export function crossCheckVendor(
     for (const t of led.txns) {
       const c = classifyTxn(t);
       if (t.credit > cfg.toleranceRupees) {
-        bills.push(mkBill(t.date, t.credit, false, cfg));
+        const ratio = cfg.disallowanceBase === 'taxableValue'
+          ? splitGst(t.credit, t, declaredGstRate).taxableRatio
+          : 1;
+        bills.push(mkBill(t.date, t.credit, false, cfg, ratio));
       } else if (t.debit > cfg.toleranceRupees) {
         // cash = timing-sensitive (payment/advance/contra); non-cash reductions
         // (TDS/notes/kasar/round-off) are compliant regardless of date → Phase 1.
@@ -103,18 +111,21 @@ export function crossCheckVendor(
     const dis = Math.max(0, r2(b.yeOutstanding - b.compliantAfterYE));
     if (dis <= cfg.toleranceRupees) continue;
     const allow = Math.min(dis, r2(b.laidLateInFY));
-    disallowedCY += dis;
-    allowedFY += allow;
-    stillOutstanding += r2(dis - allow);
+    // Matching runs on gross (payments are gross); the disallowance is stated
+    // on the taxable value. Same treatment as the primary engine.
+    disallowedCY += r2(dis * b.taxableRatio);
+    allowedFY += r2(allow * b.taxableRatio);
+    stillOutstanding += r2((dis - allow) * b.taxableRatio);
   }
   return { disallowedCY: r2(disallowedCY), allowedFY: r2(allowedFY), stillOutstanding: r2(stillOutstanding) };
 }
 
-function mkBill(date: string, amount: number, isOpening: boolean, cfg: Msme43bConfig): XBill {
+function mkBill(date: string, amount: number, isOpening: boolean, cfg: Msme43bConfig, taxableRatio: number): XBill {
   return {
     date, remaining: r2(amount), isOpening,
     dueDate: dueDateFor(date, cfg),
     yeOutstanding: 0, compliantAfterYE: 0, laidLateInFY: 0,
+    taxableRatio,
   };
 }
 

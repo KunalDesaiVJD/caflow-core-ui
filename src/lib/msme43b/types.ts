@@ -58,6 +58,17 @@ export interface LedgerTxn {
   vchNo?: string;
   debit: number;
   credit: number;
+  // ── GST split, when the source document actually shows it ──
+  // s.43B(h) disallows a DEDUCTION. For a registered buyer taking input credit,
+  // GST is not claimed as a deduction, so only the taxable value can be
+  // disallowed. These are populated only when the document states them; they
+  // are never inferred here (see gstSource on MatchedBill).
+  /** taxable value of the invoice, exclusive of GST */
+  taxableValue?: number;
+  /** total GST charged (CGST + SGST + IGST + cess) */
+  gstAmount?: number;
+  /** GST rate as a percentage, e.g. 18 */
+  gstRate?: number;
   /** running balance as printed by the software, if available (for validation) */
   printedBalance?: number;
   /** 'C' = credit (payable) balance, 'D' = debit balance */
@@ -132,22 +143,46 @@ export interface MatchedBill {
   settlements: Settlement[];
   vchNo?: string;
   vchType?: string;
+  // ── GST split ──
+  /** GST included in grossAmount (0 when none / not identified) */
+  gstAmount: number;
+  /** taxable value = grossAmount − gstAmount */
+  taxableValue: number;
+  /**
+   * Proportion of the gross that is the taxable value. Settlements are made in
+   * GROSS rupees, so matching runs on gross and this ratio is applied at the
+   * point the disallowance is stated — which keeps
+   * disallowed = allowedFY + stillOutstanding intact.
+   */
+  taxableRatio: number;
+  /** where the GST split came from — never guessed silently */
+  gstSource: 'ledger' | 'declared-rate' | 'no-gst' | 'unavailable';
+  /** applied GST rate %, when derived from a declaration */
+  gstRate?: number;
 }
 
 /** 43B(h) verdict for a single bill. */
 export interface Bill43bResult {
   bill: MatchedBill;
   dueDate: string;
-  /** base outstanding as at CY year-end (31-Mar) */
+  /** days allowed under s.15 MSMED Act for this bill */
+  windowDays: number;
+  /** base outstanding as at CY year-end (31-Mar), GROSS */
   outstandingAtYearEnd: number;
   /** portion settled after year-end but within the due date (allowed in CY) */
   settledWithinWindowAfterYE: number;
-  /** disallowed in CY (added back) */
+  /** disallowed in CY (added back) — on the taxable value unless the rule says gross */
   disallowedCY: number;
   /** of the CY-disallowed amount, the part actually paid in FY (allowed in FY) */
   allowedInFY: number;
   /** still outstanding beyond due date at end of FY */
   stillOutstanding: number;
+  /** the same three figures before the GST split, for the audit trail */
+  grossDisallowedCY: number;
+  /** date of the settlement that cleared this bill (latest allocation), if any */
+  clearedOn?: string;
+  /** calendar days from bill date to the clearing settlement */
+  daysTaken?: number;
   reason: string;
 }
 
@@ -171,6 +206,17 @@ export interface VendorResult {
   verified?: boolean;
   /** cross-check / invariant discrepancies, if any */
   verifyNotes?: string[];
+  // ── GST ──
+  /** total GST excluded from the disallowance across this vendor's bills */
+  gstExcluded: number;
+  /**
+   * Gross value of bills where the GST split could NOT be established — their
+   * disallowance is stated on gross and is therefore overstated by the tax.
+   * Declaring the vendor's GST rate resolves it.
+   */
+  gstUnidentifiedValue: number;
+  /** the GST rate declared for this vendor, if any */
+  declaredGstRate?: number;
 }
 
 export interface Msme43bReport {
@@ -183,6 +229,10 @@ export interface Msme43bReport {
   totalDisallowedCY: number;
   totalAllowedFY: number;
   totalStillOutstanding: number;
+  /** total GST excluded from the disallowance (not deductible, so not disallowable) */
+  totalGstExcluded: number;
+  /** gross value of bills whose GST split could not be established */
+  totalGstUnidentified: number;
   /** true when every ledger reconciled and there are no review items blocking */
   clean: boolean;
 }

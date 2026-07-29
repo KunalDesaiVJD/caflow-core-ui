@@ -47,11 +47,22 @@ const SYSTEM_PROMPT =
   '"vchType":string,                // Purchase/Payment/Journal/Credit Note/etc, or ""\n' +
   '"vchNo":string,                  // voucher/bill no, or ""\n' +
   '"debit":number,                  // amount debited to the party (0 if none)\n' +
-  '"credit":number                  // amount credited to the party (0 if none)\n' +
+  '"credit":number,                 // amount credited to the party (0 if none)\n' +
+  '"taxableValue":number|null,      // invoice value EXCLUDING GST, only if the document shows it\n' +
+  '"gstAmount":number|null,         // total GST on the invoice (CGST+SGST+IGST+cess), only if shown\n' +
+  '"gstRate":number|null            // GST rate as a percentage, e.g. 18, only if shown\n' +
   '}]}]}\n\n' +
   'RULES:\n' +
   '- Extract EVERY transaction line, top to bottom, in order. Do not summarise, ' +
   'sample, or skip rows.\n' +
+  '- GST FIELDS ARE CRITICAL AND MUST NEVER BE GUESSED. Only fill taxableValue, ' +
+  'gstAmount or gstRate when the document ACTUALLY SHOWS them — for example a tax ' +
+  'column, a CGST/SGST/IGST breakup, a rate in the narration, or a voucher detail ' +
+  'line naming a GST ledger. If the ledger shows only a single gross amount per ' +
+  'row, set ALL THREE to null. A wrong tax split produces a wrong disallowance, ' +
+  'whereas null is handled safely downstream. Never infer a rate from the amount, ' +
+  'from the vendor\'s trade, or from what is typical.\n' +
+  '- taxableValue + gstAmount must equal the credit amount when both are given.\n' +
   '- Each transaction has EITHER a debit OR a credit (the other is 0). Never put ' +
   'the same amount in both.\n' +
   '- Copy amounts EXACTLY (strip currency symbols and thousands separators; keep ' +

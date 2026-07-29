@@ -64,6 +64,20 @@ export interface Msme43bConfig {
   /** which open bill a settlement clears */
   allocation: AllocationMethod;
   /**
+   * What the disallowance is stated on.
+   *
+   * 'taxableValue' (default): only the taxable value can be disallowed. S.43B(h)
+   * disallows a DEDUCTION, and a registered buyer taking input tax credit does
+   * not claim GST as a deduction at all — it sits in the input-tax ledger, not
+   * the profit and loss account. There is therefore nothing for the section to
+   * disallow in the tax component.
+   *
+   * 'grossInvoice': the whole invoice. Correct where the credit is blocked
+   * (s.17(5) CGST Act) or the buyer is unregistered/composition, because the
+   * tax is then part of the cost and IS claimed as a deduction.
+   */
+  disallowanceBase: 'taxableValue' | 'grossInvoice';
+  /**
    * Whether the disallowance base is net of TDS (the sum actually "payable" to
    * the supplier). Standard view = true.
    */
@@ -90,6 +104,7 @@ export const DEFAULT_CONFIG: Msme43bConfig = {
   includeOpeningBalance: true,
   openingDisallowance: 'exclude',
   allocation: 'FIFO',
+  disallowanceBase: 'taxableValue',
   netOfTds: true,
   kasarTreatment: 'nonCash',
   notesTreatment: 'nonCash',
@@ -199,6 +214,70 @@ export function addDays(iso: string, days: number): string {
 export function dueDateFor(billDate: string, cfg: Msme43bConfig): string {
   const clockStart = cfg.acceptanceGraceDays ? addDays(billDate, cfg.acceptanceGraceDays) : billDate;
   return addDays(clockStart, cfg.dayCountBasis === 'inclusive' ? cfg.windowDays - 1 : cfg.windowDays);
+}
+
+/** The GST rates a vendor's supplies can be declared at. */
+export const PERMITTED_GST_RATES = [0, 5, 12, 18, 28] as const;
+
+export interface GstSplit {
+  gstAmount: number;
+  taxableValue: number;
+  taxableRatio: number;
+  source: 'ledger' | 'declared-rate' | 'no-gst' | 'unavailable';
+  rate?: number;
+}
+
+/**
+ * Split a bill into taxable value and GST — the base s.43B(h) can actually bite
+ * on. This NEVER guesses a rate. There are exactly three ways to know:
+ *
+ *   1. the document stated the tax          → 'ledger'
+ *   2. the firm declared this vendor's rate → 'declared-rate'
+ *   3. neither                              → 'unavailable', and the caller
+ *                                             must flag it rather than assume
+ *
+ * In case 3 the gross is returned unchanged, so the disallowance is stated on
+ * gross and is OVERSTATED by the tax. That is deliberately visible: a silent
+ * back-calculation at an assumed rate would be inventing a figure.
+ */
+export function splitGst(
+  grossAmount: number,
+  txn?: { taxableValue?: number; gstAmount?: number; gstRate?: number },
+  declaredRate?: number,
+): GstSplit {
+  const gross = Math.round(grossAmount * 100) / 100;
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const whole = (gst: number, source: GstSplit['source'], rate?: number): GstSplit => {
+    const taxableValue = r2(gross - gst);
+    return {
+      gstAmount: r2(gst),
+      taxableValue,
+      taxableRatio: gross > 0 ? taxableValue / gross : 1,
+      source,
+      rate,
+    };
+  };
+
+  // 1. Stated on the document.
+  if (txn?.gstAmount !== undefined && txn.gstAmount > 0) return whole(txn.gstAmount, 'ledger', txn.gstRate);
+  if (txn?.taxableValue !== undefined && txn.taxableValue > 0 && txn.taxableValue <= gross) {
+    return whole(gross - txn.taxableValue, 'ledger', txn.gstRate);
+  }
+  // A rate stated on the line is as good as the amount.
+  if (txn?.gstRate !== undefined && txn.gstRate > 0) {
+    return whole(gross - gross / (1 + txn.gstRate / 100), 'ledger', txn.gstRate);
+  }
+  // An explicit zero-rated / exempt line.
+  if (txn?.gstAmount === 0 && txn?.gstRate === 0) return whole(0, 'no-gst', 0);
+
+  // 2. Declared by the firm for this vendor.
+  if (declaredRate !== undefined) {
+    if (declaredRate === 0) return whole(0, 'no-gst', 0);
+    return whole(gross - gross / (1 + declaredRate / 100), 'declared-rate', declaredRate);
+  }
+
+  // 3. Unknown — say so.
+  return { gstAmount: 0, taxableValue: gross, taxableRatio: 1, source: 'unavailable' };
 }
 
 /**

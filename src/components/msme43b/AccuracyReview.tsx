@@ -31,7 +31,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import {
   parseExpectedWorking, diffAgainstExpected, calibrate, applyProposals, reviewDifference,
-  disclosedAssumptions, configFromProfile, vendorWindowMap,
+  disclosedAssumptions, vendorWindowMap, vendorGstMap,
   type ExpectedWorking, type DiffResult, type CalibrationResult, type Proposal,
   type GoldenCase, type RuleProfile, type AiReview,
   type VendorLedger, type Msme43bReport, type Msme43bConfig,
@@ -119,6 +119,7 @@ export function AccuracyReview(props: AccuracyReviewProps) {
           baseConfig: config,
           clientName: report.clientName,
           vendorWindows: vendorWindowMap(profile),
+          vendorGstRates: vendorGstMap(profile),
           goldens,
           matchTolerance,
         });
@@ -201,8 +202,10 @@ export function AccuracyReview(props: AccuracyReviewProps) {
             {nonDefault.length > 0 && (
               <Badge variant="secondary" className="text-[10px]">{nonDefault.length} learned</Badge>
             )}
-            {profile && profile.vendorWindows.length > 0 && (
-              <Badge variant="outline" className="text-[10px]">{profile.vendorWindows.length} vendor declaration(s)</Badge>
+            {profile && (profile.vendorWindows.length + (profile.vendorGstRates?.length ?? 0)) > 0 && (
+              <Badge variant="outline" className="text-[10px]">
+                {profile.vendorWindows.length + (profile.vendorGstRates?.length ?? 0)} vendor declaration(s)
+              </Badge>
             )}
             <span className="text-xs text-muted-foreground">({showAssumptions ? 'hide' : 'show all'})</span>
           </button>
@@ -234,6 +237,19 @@ export function AccuracyReview(props: AccuracyReviewProps) {
                       {!a.isDefault && <Badge variant="secondary" className="ml-2 text-[10px]">learned</Badge>}
                     </TableCell>
                     <TableCell className="text-xs align-top text-muted-foreground">{a.basis}</TableCell>
+                  </TableRow>
+                ))}
+                {profile?.vendorGstRates?.map((d) => (
+                  <TableRow key={`gst-${d.key}`}>
+                    <TableCell className="text-xs align-top">
+                      <div className="font-medium">GST declaration — {d.vendorName}</div>
+                      <div className="text-muted-foreground">What rate does this vendor charge?</div>
+                    </TableCell>
+                    <TableCell className="text-xs align-top whitespace-nowrap">{d.gstRate}%</TableCell>
+                    <TableCell className="text-xs align-top text-muted-foreground">
+                      Ledger shows no tax split; taxable value derived from the declared rate.
+                      {d.declaredBy ? ` Declared by ${d.declaredBy}.` : ''}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {profile?.vendorWindows.map((d) => (
@@ -384,7 +400,7 @@ export function AccuracyReview(props: AccuracyReviewProps) {
                             return n;
                           })}
                           verdict={ai?.verdicts.find((v) => v.rule.toLowerCase().includes(
-                            (p.kind === 'rule' ? p.title : p.vendorName).toLowerCase().slice(0, 12),
+                            proposalTitle(p).toLowerCase().slice(0, 12),
                           ))}
                         />
                       ))}
@@ -470,6 +486,24 @@ export function AccuracyReview(props: AccuracyReviewProps) {
   );
 }
 
+function proposalTitle(p: Proposal): string {
+  if (p.kind === 'rule') return p.title;
+  if (p.kind === 'vendor-window') return `s.15 window — ${p.vendorName}`;
+  return `GST rate — ${p.vendorName}`;
+}
+
+function proposalChange(p: Proposal): string {
+  if (p.kind === 'rule') return `${p.fromLabel} → ${p.toLabel}`;
+  if (p.kind === 'vendor-window') return `${p.currentWindowDays}d → ${p.windowDays}d`;
+  return `not declared → ${p.gstRate}%`;
+}
+
+function proposalQuestion(p: Proposal): string {
+  if (p.kind === 'rule') return p.question;
+  if (p.kind === 'vendor-window') return 'Is there a written agreement with this vendor?';
+  return 'What GST rate does this vendor charge? The ledger does not show the split.';
+}
+
 function ProposalRow({ proposal: p, checked, onToggle, verdict }: {
   proposal: Proposal;
   checked: boolean;
@@ -482,10 +516,8 @@ function ProposalRow({ proposal: p, checked, onToggle, verdict }: {
       <Checkbox checked={checked} onCheckedChange={onToggle} className="mt-1" />
       <div className="space-y-1 text-sm flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-medium">{isRule ? p.title : `s.15 window — ${p.vendorName}`}</span>
-          <Badge variant="outline" className="text-[10px]">
-            {isRule ? `${p.fromLabel} → ${p.toLabel}` : `${p.currentWindowDays}d → ${p.windowDays}d`}
-          </Badge>
+          <span className="font-medium">{proposalTitle(p)}</span>
+          <Badge variant="outline" className="text-[10px]">{proposalChange(p)}</Badge>
           {!isRule && <Badge variant="secondary" className="text-[10px]">needs your declaration</Badge>}
           {verdict && (
             <Badge variant={verdict.defensible ? 'secondary' : 'destructive'} className="text-[10px]">
@@ -493,7 +525,7 @@ function ProposalRow({ proposal: p, checked, onToggle, verdict }: {
             </Badge>
           )}
         </div>
-        <div className="text-xs text-muted-foreground">{isRule ? p.question : 'Is there a written agreement with this vendor?'}</div>
+        <div className="text-xs text-muted-foreground">{proposalQuestion(p)}</div>
         <div className="text-xs">{p.basis}</div>
         {isRule && (
           <div className="text-xs text-muted-foreground">

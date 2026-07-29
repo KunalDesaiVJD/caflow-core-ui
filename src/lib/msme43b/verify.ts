@@ -25,7 +25,7 @@ export function verifyVendor(
   const tol = Math.max(cfg.toleranceRupees, 2);
 
   // ── 1. Independent cross-check must agree with the primary engine ──
-  const x = crossCheckVendor(cy, fy, cfg);
+  const x = crossCheckVendor(cy, fy, cfg, primary.declaredGstRate);
   const cmp = (label: string, a: number, b: number) => {
     if (Math.abs(a - b) > tol) notes.push(`${label}: engine ₹${r2(a)} vs cross-check ₹${r2(b)} (diff ₹${r2(a - b)})`);
   };

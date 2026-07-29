@@ -27,6 +27,18 @@ const num = (v: unknown): number => {
 };
 const str = (v: unknown): string => (v == null ? '' : String(v));
 
+/**
+ * An OPTIONAL number: null/undefined/"" stay undefined rather than collapsing to
+ * 0. That distinction carries the whole GST safety story — "the document did not
+ * show the tax" (undefined) must never be confused with "the tax was nil" (0),
+ * because the first is flagged for a declaration and the second is taken as fact.
+ */
+const optNum = (v: unknown): number | undefined => {
+  if (v === null || v === undefined || v === '') return undefined;
+  const n = typeof v === 'number' ? v : parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+  return Number.isFinite(n) ? n : undefined;
+};
+
 interface AiExtractResult {
   ledgers: VendorLedger[];
   truncated: boolean;
@@ -50,13 +62,35 @@ function mapLedger(raw: unknown, sourceFile: string): VendorLedger {
   const r = (raw ?? {}) as Record<string, unknown>;
   const txns: LedgerTxn[] = (Array.isArray(r.txns) ? r.txns : []).map((t) => {
     const tt = (t ?? {}) as Record<string, unknown>;
+    const credit = num(tt.credit);
+    let taxableValue = optNum(tt.taxableValue);
+    let gstAmount = optNum(tt.gstAmount);
+    const gstRate = optNum(tt.gstRate);
+
+    // Sanity-check the model's tax split against the amount it sits on. A split
+    // that does not add up is DISCARDED rather than used — falling back to "tax
+    // not identified", which the engine flags for a human declaration. Trusting
+    // an inconsistent split would silently understate the disallowance.
+    if (taxableValue !== undefined && gstAmount !== undefined && credit > 0) {
+      if (Math.abs(taxableValue + gstAmount - credit) > 1) {
+        taxableValue = undefined;
+        gstAmount = undefined;
+      }
+    }
+    if (taxableValue !== undefined && (taxableValue < 0 || taxableValue > credit + 1)) taxableValue = undefined;
+    if (gstAmount !== undefined && (gstAmount < 0 || gstAmount > credit)) gstAmount = undefined;
+
     return {
       date: str(tt.date),
       particulars: str(tt.particulars),
       vchType: str(tt.vchType) || undefined,
       vchNo: str(tt.vchNo) || undefined,
       debit: num(tt.debit),
-      credit: num(tt.credit),
+      credit,
+      taxableValue,
+      gstAmount,
+      // Only keep a rate that is actually a GST rate.
+      gstRate: gstRate !== undefined && gstRate >= 0 && gstRate <= 28 ? gstRate : undefined,
     };
   }).filter((t) => t.date && (t.debit > 0 || t.credit > 0));
 

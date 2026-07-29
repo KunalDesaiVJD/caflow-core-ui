@@ -41,7 +41,11 @@
 import type { VendorLedger, Msme43bReport } from './types';
 import { DEFAULT_CONFIG, type Msme43bConfig } from './config';
 import { buildReport, normVendor } from './engine';
-import { RULE_SPACE, type RuleValue, type RuleProfile, type RuleChange, type VendorWindowDeclaration, emptyProfile, validateProfile } from './rules';
+import { PERMITTED_GST_RATES } from './config';
+import {
+  RULE_SPACE, type RuleValue, type RuleProfile, type RuleChange,
+  type VendorWindowDeclaration, type VendorGstDeclaration, emptyProfile, validateProfile,
+} from './rules';
 import { diffAgainstExpected, type DiffResult } from './diff';
 import type { ExpectedWorking } from './expected';
 
@@ -55,6 +59,7 @@ export interface GoldenCase {
   /** blessed disallowance by normalised vendor name */
   blessed: Record<string, number>;
   vendorWindows?: Record<string, number>;
+  vendorGstRates?: Record<string, number>;
 }
 
 export interface RuleProposal {
@@ -94,7 +99,22 @@ export interface VendorWindowProposal {
   basis: string;
 }
 
-export type Proposal = RuleProposal | VendorWindowProposal;
+/**
+ * A per-vendor GST rate. Also a declaration, not a dial: only the statutory
+ * rates are offered, it is used solely where the ledger does not show the tax
+ * split, and it must be confirmed by a human.
+ */
+export interface VendorGstProposal {
+  kind: 'vendor-gst';
+  vendorName: string;
+  key: string;
+  gstRate: number;
+  resolvesDelta: number;
+  requiresDeclaration: true;
+  basis: string;
+}
+
+export type Proposal = RuleProposal | VendorWindowProposal | VendorGstProposal;
 
 export interface CalibrationInput {
   cyLedgers: VendorLedger[];
@@ -104,6 +124,8 @@ export interface CalibrationInput {
   clientName?: string;
   /** already-declared per-vendor windows carried in from the saved profile */
   vendorWindows?: Record<string, number>;
+  /** already-declared per-vendor GST rates carried in from the saved profile */
+  vendorGstRates?: Record<string, number>;
   /** runs the firm has already blessed — a proposal may not change these */
   goldens?: GoldenCase[];
   /**
@@ -156,7 +178,7 @@ function goldensBroken(cfg: Msme43bConfig, goldens: GoldenCase[], tol: number): 
   const broken: string[] = [];
   for (const g of goldens) {
     const rep = buildReport(g.cyLedgers, g.fyLedgers, cfg, undefined, {
-      verify: false, vendorWindowDays: g.vendorWindows,
+      verify: false, vendorWindowDays: g.vendorWindows, vendorGstRate: g.vendorGstRates,
     });
     const changed = rep.vendors.some((v) => {
       const blessed = g.blessed[normVendor(v.vendorName)];
@@ -173,6 +195,7 @@ export function calibrate(input: CalibrationInput): CalibrationResult {
   const tol = input.matchTolerance ?? 1;
   const maxRounds = input.maxRounds ?? 6;
   const vendorWindows = { ...(input.vendorWindows ?? {}) };
+  const vendorGstRates = { ...(input.vendorGstRates ?? {}) };
 
   let variants = 0;
   const run = (cfg: Msme43bConfig): Msme43bReport => {
@@ -180,7 +203,7 @@ export function calibrate(input: CalibrationInput): CalibrationResult {
     // verify:false — the cross-check is run once at the end on the winning
     // configuration, not on every one of the hundred candidates.
     return buildReport(input.cyLedgers, input.fyLedgers, cfg, input.clientName, {
-      verify: false, vendorWindowDays: vendorWindows,
+      verify: false, vendorWindowDays: vendorWindows, vendorGstRate: vendorGstRates,
     });
   };
   const diffOf = (cfg: Msme43bConfig) => diffAgainstExpected(run(cfg), input.expected, tol);
@@ -266,7 +289,9 @@ export function calibrate(input: CalibrationInput): CalibrationResult {
     if (vendorWindows[key]) continue;
     const trial = { ...vendorWindows, [key]: alternate };
     variants++;
-    const rep = buildReport(input.cyLedgers, input.fyLedgers, cur, input.clientName, { verify: false, vendorWindowDays: trial });
+    const rep = buildReport(input.cyLedgers, input.fyLedgers, cur, input.clientName, {
+      verify: false, vendorWindowDays: trial, vendorGstRate: vendorGstRates,
+    });
     const row = rep.vendors.find((x) => normVendor(x.vendorName) === key);
     if (!row || !v.theirs) continue;
     if (Math.abs(row.totalDisallowedCY - v.theirs.disallowed) <= tol) {
@@ -285,10 +310,50 @@ export function calibrate(input: CalibrationInput): CalibrationResult {
     }
   }
 
+  // ── Per-vendor GST rate declarations ──
+  // Offered where the ledger did not show the tax split and the reviewer's
+  // figure lands exactly on one of the statutory rates. That is strong evidence
+  // of the rate the vendor charges — but it is still a fact about the vendor, so
+  // the preparer confirms it rather than the tool assuming it.
+  const gstProposals: VendorGstProposal[] = [];
+  if (cur.disallowanceBase === 'taxableValue') {
+    for (const v of stillOff) {
+      const key = normVendor(v.vendorName);
+      if (vendorGstRates[key] !== undefined) continue;
+      if (windowProposals.some((w) => w.key === key)) continue; // already explained
+      if (!v.theirs) continue;
+
+      for (const rate of PERMITTED_GST_RATES) {
+        if (rate === 0) continue; // 0% is the same as no split
+        const trial = { ...vendorGstRates, [key]: rate as number };
+        variants++;
+        const rep = buildReport(input.cyLedgers, input.fyLedgers, cur, input.clientName, {
+          verify: false, vendorWindowDays: vendorWindows, vendorGstRate: trial,
+        });
+        const row = rep.vendors.find((x) => normVendor(x.vendorName) === key);
+        if (row && Math.abs(row.totalDisallowedCY - v.theirs.disallowed) <= tol) {
+          gstProposals.push({
+            kind: 'vendor-gst',
+            vendorName: v.vendorName,
+            key,
+            gstRate: rate,
+            resolvesDelta: v.delta,
+            requiresDeclaration: true,
+            basis:
+              `Your figure matches this vendor's invoices carrying GST at ${rate}%. The ledger does not show the tax ` +
+              'split, so confirm this is the rate the vendor charges — the taxable value is then derived from it.',
+          });
+          break;
+        }
+      }
+    }
+  }
+
   const after = curDiff;
   const unexplained = after.vendors.filter((v) => {
     if (v.status === 'match') return false;
-    return !windowProposals.some((w) => w.vendorName === v.vendorName);
+    if (windowProposals.some((w) => w.vendorName === v.vendorName)) return false;
+    return !gstProposals.some((g) => g.vendorName === v.vendorName);
   });
   const unexplainedAmount = r2(unexplained.reduce((a, v) => a + Math.abs(v.delta), 0));
 
@@ -323,7 +388,7 @@ export function calibrate(input: CalibrationInput): CalibrationResult {
 
   return {
     before, after,
-    proposals: [...proposals, ...windowProposals],
+    proposals: [...proposals, ...windowProposals, ...gstProposals],
     proposedConfig: cur,
     unexplained, unexplainedAmount,
     variantsEvaluated: variants,
@@ -343,12 +408,29 @@ export function applyProposals(
   meta: { by?: string; at?: string; reason?: string; matchedBefore?: number; matchedAfter?: number } = {},
 ): { profile: RuleProfile; errors: string[] } {
   const next: RuleProfile = profile
-    ? { ...profile, overrides: { ...profile.overrides }, vendorWindows: [...profile.vendorWindows], history: [...profile.history] }
+    ? {
+        ...profile,
+        overrides: { ...profile.overrides },
+        vendorWindows: [...(profile.vendorWindows ?? [])],
+        vendorGstRates: [...(profile.vendorGstRates ?? [])],
+        history: [...(profile.history ?? [])],
+      }
     : emptyProfile();
   const at = meta.at ?? new Date().toISOString();
 
   for (const p of accepted) {
-    if (p.kind === 'rule') {
+    if (p.kind === 'vendor-gst') {
+      const decl: VendorGstDeclaration = {
+        key: p.key, vendorName: p.vendorName, gstRate: p.gstRate, declaredBy: meta.by, at,
+      };
+      next.vendorGstRates = next.vendorGstRates.filter((d) => d.key !== decl.key).concat(decl);
+      next.history.push({
+        key: `vendorGstRate:${p.vendorName}`,
+        from: 'not declared', to: `${p.gstRate}%`,
+        reason: meta.reason || p.basis,
+        at, by: meta.by,
+      });
+    } else if (p.kind === 'rule') {
       (next.overrides as Record<string, RuleValue>)[p.key] = p.to;
       const change: RuleChange = {
         key: p.key, from: p.from, to: p.to,
