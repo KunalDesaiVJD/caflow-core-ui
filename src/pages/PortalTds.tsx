@@ -141,18 +141,18 @@ export default function PortalTds() {
 
   // ── Load this entity's filings ────────────────────────────────────────────
   const fetchFilings = useCallback(async (opts?: { silent?: boolean }) => {
-    if (!activeClient) { setFilings([]); setFilingsLoading(false); return; }
+    if (!clientId) { setFilings([]); setFilingsLoading(false); return; }
     // Silent on live refreshes — filingsLoading gates the whole-page skeleton,
     // so setting it here would blank the screen every time staff save a row.
     if (!opts?.silent) setFilingsLoading(true);
     const { data } = await supabase
       .from("tds_filings")
       .select("id, client_id, financial_year, quarter, tds_forms, work_status, date_of_filing, acknowledgment_number")
-      .eq("client_id", activeClient.id);
+      .eq("client_id", clientId);
     const rows = ((data || []) as unknown as PortalFiling[]).slice().sort(sortFilings);
     setFilings(rows);
     setFilingsLoading(false);
-  }, [activeClient]);
+  }, [clientId]);
 
   useEffect(() => { fetchFilings(); }, [fetchFilings]);
 
@@ -204,8 +204,10 @@ export default function PortalTds() {
   // a slow earlier response must never overwrite a newer one.
   const detailReqRef = useRef(0);
 
+  const filingId = activeFiling?.id ?? null;
+
   const fetchDetail = useCallback(async (opts?: { silent?: boolean }) => {
-    if (!activeFiling || !activeClient) { setChallans([]); setDeductees([]); return; }
+    if (!filingId || !clientId) { setChallans([]); setDeductees([]); return; }
     const req = ++detailReqRef.current;
     // Live refreshes are silent — flashing skeletons over a table the client is
     // reading, every time staff save a row, would be worse than the stale ms.
@@ -214,13 +216,13 @@ export default function PortalTds() {
       supabase
         .from("tds_challans")
         .select("id, form_type, bsr_code, challan_serial_no, deposit_date, total_tax_deposited, interest_deposited, late_fees_234e, total_challan_amount, minor_head_of_challan, is_book_entry, bank_name")
-        .eq("filing_id", activeFiling.id)
-        .eq("client_id", activeClient.id),
+        .eq("filing_id", filingId)
+        .eq("client_id", clientId),
       supabase
         .from("tds_deductees")
         .select("id, challan_id, form_type, deductee_name, deductee_pan, pan_not_available, deductee_type, section_code, amount_paid_credited, date_of_payment, rate_of_tds, tds_amount, total_tax_deducted, interest_amount, reason_for_lower_or_nil_deduction, gross_salary, standard_deduction_allowed, net_taxable_salary")
-        .eq("filing_id", activeFiling.id)
-        .eq("client_id", activeClient.id),
+        .eq("filing_id", filingId)
+        .eq("client_id", clientId),
     ]);
     if (req !== detailReqRef.current) return;
     const forForm = (r: { form_type: string | null }) => !r.form_type || r.form_type === selForm;
@@ -230,7 +232,7 @@ export default function PortalTds() {
     setChallans(((ch || []) as unknown as PortalChallan[]).filter(forForm));
     setDeductees(((de || []) as unknown as PortalDeductee[]).filter(forForm));
     setDetailLoading(false);
-  }, [activeFiling, activeClient, selForm]);
+  }, [filingId, clientId, selForm]);
 
   useEffect(() => { fetchDetail(); }, [fetchDetail]);
 
@@ -241,14 +243,14 @@ export default function PortalTds() {
   refreshRef.current = () => { fetchFilings({ silent: true }); fetchDetail({ silent: true }); };
 
   useEffect(() => {
-    if (!activeClient) return;
+    if (!clientId) return;
     // One channel per entity, filtered server-side to that entity's rows. RLS
     // is still the boundary — this filter is about not shipping other rows down
     // the socket, not about trusting the client.
-    const scope = `client_id=eq.${activeClient.id}`;
+    const scope = `client_id=eq.${clientId}`;
     const onChange = () => { refreshRef.current(); setLiveAt(new Date()); };
     const channel = supabase
-      .channel(`portal-tds-${activeClient.id}`)
+      .channel(`portal-tds-${clientId}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "tds_filings", filter: scope }, onChange)
       .on("postgres_changes", { event: "*", schema: "public", table: "tds_challans", filter: scope }, onChange)
       .on("postgres_changes", { event: "*", schema: "public", table: "tds_deductees", filter: scope }, onChange)
@@ -258,7 +260,7 @@ export default function PortalTds() {
         if (status === "SUBSCRIBED") refreshRef.current();
       });
     return () => { supabase.removeChannel(channel); };
-  }, [activeClient]);
+  }, [clientId]);
 
   // Fallbacks for environments where WebSockets are blocked or the socket
   // silently dropped: refetch on focus/visibility/bfcache-restore, and poll
