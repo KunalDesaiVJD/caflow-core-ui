@@ -37,8 +37,11 @@ const NAV_ITEMS = [
   { key: "workspace",  label: "TDS Workspace",  icon: Combine },
   { key: "reports",    label: "Reports",        icon: BarChart3 },
   { key: "rate-master",label: "Rate Master",    icon: Settings },
-  { key: "audit-log",  label: "Audit Log",      icon: ClipboardList },
-  { key: "corrections",label: "Corrections",    icon: Repeat2 },
+  // Audit Log + Corrections & Patterns live under ONE nav tab with sub-tabs —
+  // same pattern as TDS Workspace (Data Entry / Validate & Finalise). Both read
+  // the same override/action history, so splitting them across two top-level
+  // tabs only made the user hop between them.
+  { key: "activity",   label: "Audit & Corrections", icon: ClipboardList },
 ] as const;
 
 type NavKey = typeof NAV_ITEMS[number]["key"];
@@ -49,6 +52,8 @@ const TdsFilings = () => {
   const [activeSection, setActiveSection] = useState<NavKey>("dashboard");
   // CP-02: sub-tab inside TDS Workspace
   const [workspaceTab, setWorkspaceTab] = useState<"data-entry" | "validate">("data-entry");
+  // Sub-tab inside Audit & Corrections
+  const [activityTab, setActivityTab] = useState<"audit-log" | "corrections">("audit-log");
 
   // ── Shared Workspace filing context ─────────────────────────────────────────
   // Client / FY / Quarter / Form are selected ONCE and shared by BOTH the Data
@@ -286,6 +291,11 @@ const TdsFilings = () => {
                   }
                   setWorkspaceTab("validate"); setActiveSection("workspace");
                 }
+                // Legacy deep-links to the two now-merged screens open the
+                // combined tab on the right sub-tab.
+                else if (section === "audit-log" || section === "corrections") {
+                  setActivityTab(section); setActiveSection("activity");
+                }
                 else setActiveSection(section as NavKey);
               }}
             />
@@ -348,8 +358,56 @@ const TdsFilings = () => {
 
           {activeSection === "reports" && <TdsReports clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
           {activeSection === "rate-master" && <TdsRateMaster resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />}
-          {activeSection === "audit-log" && <TdsAuditLog clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
-          {activeSection === "corrections" && <TdsCorrections clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
+
+          {/* ── Audit & Corrections — Audit Log + Corrections in one tab ────── */}
+          {activeSection === "activity" && (
+            <div>
+              <div className="mb-4">
+                <h2 className="text-xl font-bold text-foreground">Audit &amp; Corrections</h2>
+                <p className="text-sm text-muted-foreground">
+                  Every action recorded against a filing, and every manual override grouped into patterns — read-only.
+                </p>
+              </div>
+
+              {/* Tab bar */}
+              <div className="flex border-b mb-4">
+                <button
+                  onClick={() => setActivityTab("audit-log")}
+                  className={cn(
+                    "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+                    activityTab === "audit-log"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <ClipboardList size={14} /> Audit Log
+                  </span>
+                </button>
+                <button
+                  onClick={() => setActivityTab("corrections")}
+                  className={cn(
+                    "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+                    activityTab === "corrections"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  <span className="flex items-center gap-2">
+                    <Repeat2 size={14} /> Corrections &amp; Patterns
+                  </span>
+                </button>
+              </div>
+
+              {/* Tab content — rendered but hidden so filters/sort survive a switch */}
+              <div className={activityTab === "audit-log" ? "" : "hidden"}>
+                <TdsAuditLog clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
+              </div>
+              <div className={activityTab === "corrections" ? "" : "hidden"}>
+                <TdsCorrections clients={clients} users={users} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

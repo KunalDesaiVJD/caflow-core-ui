@@ -163,13 +163,12 @@ export function TdsCorrections({ clients, users, isSuperadmin, resolveFirmId }: 
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-bold text-foreground">Corrections &amp; Patterns</h2>
-        <p className="text-sm text-muted-foreground">
-          Every manual override across Stage 1/2/3, across every client — grouped by reason so a recurring issue is
-          visible before it's fixed one filing at a time. Read-only: nothing here changes any verdict.
-        </p>
-      </div>
+      {/* Title lives on the parent's "Audit & Corrections" tab header — this
+          screen only describes its own sub-tab. */}
+      <p className="text-sm text-muted-foreground">
+        Every manual override across Stage 1/2/3, across every client — grouped by reason so a recurring issue is
+        visible before it's fixed one filing at a time. Read-only: nothing here changes any verdict.
+      </p>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Card><CardContent className="p-3">

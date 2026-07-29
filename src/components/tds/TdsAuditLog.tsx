@@ -389,10 +389,9 @@ export function TdsAuditLog({ clients, users, isSuperadmin, resolveFirmId }: Pro
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-xl font-bold text-foreground">Audit Log</h2>
-        <p className="text-sm text-muted-foreground">All status changes, notes, and actions across TDS filings</p>
-      </div>
+      {/* Title lives on the parent's "Audit & Corrections" tab header — this
+          screen only describes its own sub-tab. */}
+      <p className="text-sm text-muted-foreground">All status changes, notes, and actions across TDS filings</p>
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-end">
