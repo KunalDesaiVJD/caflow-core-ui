@@ -58,6 +58,8 @@ npx supabase db query --linked "$(cat supabase/migrations/<file>.sql)"
 npx supabase migration repair --status applied <version>
 ```
 
+See §10 for whether Claude can run this itself in the current session.
+
 ---
 
 ## 6. Protected files
@@ -124,3 +126,81 @@ Applied **once** at the COA mapping step. Flows unchanged through notes → face
 - Remote: `https://github.com/KunalDesaiVJD/caflow-core-ui.git`
 - Default branch: `main`
 - Working directory: `C:/Users/Admin/OneDrive/Documents/GitHub/caflow-core-ui`
+
+---
+
+## 10. Supabase deployment access
+
+**Standing instruction from the user (29-Jul-2026): Claude should run the Supabase
+deploy steps in §4 and §5 itself rather than handing back a list of commands.**
+
+Whether that is possible depends on where the session is running.
+
+### Local sessions (Claude Code on the user's PC)
+
+The user's Chrome is signed in to Supabase. `npx supabase login` opens the browser
+and completes without further input. **Run §4 and §5 directly — do not ask.**
+
+### Cloud sessions (claude.ai/code, GitHub Actions, mobile/web)
+
+These run in an **isolated ephemeral container with no access to the user's
+machine** — a different computer, not a different window. The user's open Chrome
+is unreachable: no shared browser profile, no session cookies, no CDP bridge. A
+Chromium binary exists in the container but is a blank Playwright install, so
+"log in via the browser" would still need credentials and MFA.
+
+In a cloud session, `npx supabase <anything>` fails with:
+
+```
+LegacyPlatformAuthRequiredError: Access token not provided.
+```
+
+**Making cloud sessions able to deploy is possible, but carries a real
+trade-off** — read this before doing it.
+
+A `SUPABASE_ACCESS_TOKEN` in the cloud-environment variables makes the CLI
+non-interactive, and Claude can then run §4 and §5 unattended. However,
+Anthropic's own documentation is explicit that cloud environments have **no
+secrets store**, and that environment-variable values are readable by anyone
+who uses that environment:
+
+> "Anyone who uses the environment can read the values, and cloud environments
+> have no dedicated secrets store, so don't add API keys or other credentials."
+> — https://code.claude.com/docs/en/cloud-environments#set-environment-variables
+
+A Supabase personal access token cannot be scoped: it grants **full account
+access** to every project. That makes it one of the worst candidates for a
+readable environment variable.
+
+**Default position: run the deploys locally.** They take under a minute, need
+no standing credential, and `supabase login` already works there.
+
+**If the convenience is worth it anyway** (a personal, non-shared environment
+where the user is the only reader), the setup is:
+
+1. Create a token at https://supabase.com/dashboard/account/tokens
+2. At claude.ai/code, select the cloud icon showing the environment name in the
+   row above the message box (there is no settings page or direct URL), hover
+   the environment, select the gear icon, and add to **Environment variables**
+   in `.env` format:
+   `SUPABASE_ACCESS_TOKEN=sbp_...`
+   Optionally `SUPABASE_PROJECT_REF=hubyywmodekfdzhwiumb`.
+3. Start a **new** session — variables are copied once at startup, so a session
+   already running keeps the values it began with.
+
+Never paste the token into chat, into the repo, or into a shared environment.
+
+Until it is set, say so plainly and give the exact commands — do not claim the
+browser is reachable.
+
+### Secrets
+
+Never paste an API key into chat or a commit. Set it directly:
+
+```bash
+npx supabase secrets set OPENROUTER_API_KEY=<key>
+```
+
+Keys used by the MSME 43B(h) utility: `ANTHROPIC_API_KEY` (Claude — extraction,
+calibration, panel) and `OPENROUTER_API_KEY` (GPT — review panel; optional
+`OPENROUTER_MODEL` to pin the model).
