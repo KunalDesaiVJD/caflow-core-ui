@@ -49,12 +49,18 @@ import {
 } from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import {
-  CORRECTION_STATUS_META, isCorrectionLocked, createCorrection,
-  loadCorrectionDetail, submitCorrection, signAndFileCorrection,
+  CORRECTION_STATUS_META, isCorrectionLocked, isCorrectionEditable,
+  isSeniorReviewer, createCorrection, loadCorrectionDetail, submitCorrection,
+  signAsPreparer, approveAsSenior, markCorrectionFiled,
   rejectCorrection, summariseCorrection, logCorrectionAction,
   type Correction, type CorrectionStatus, type CorrectionChallan,
   type CorrectionDeductee, type CorrectionAction, type Actor,
 } from "@/lib/tdsCorrections";
+
+/** Every lifecycle state, in workflow order — used by the tiles and filters. */
+const ALL_STATUSES: CorrectionStatus[] = [
+  "draft", "awaiting_employee", "awaiting_senior", "ready_to_file", "filed", "rejected",
+];
 import {
   type RateEntry, getRateForSection, computeApplied, computeAllocatable,
   challanStatus, balanceColorClass, statusTextClass, calcAutoInterest,
@@ -221,12 +227,9 @@ function CorrectionDashboard({
     return true;
   }), [rows, fClient, fFy, fQuarter, fStatus, fFrom, fTo, search, clientMap]);
 
-  const counts = useMemo(() => ({
-    draft: rows.filter(r => r.status === "draft").length,
-    pending: rows.filter(r => r.status === "pending").length,
-    filed: rows.filter(r => r.status === "filed").length,
-    rejected: rows.filter(r => r.status === "rejected").length,
-  }), [rows]);
+  const counts = useMemo(() => Object.fromEntries(
+    ALL_STATUSES.map(s => [s, rows.filter(r => r.status === s).length]),
+  ) as Record<CorrectionStatus, number>, [rows]);
 
   const filtersActive = fClient !== "all" || fFy !== "all" || fQuarter !== "all"
     || fStatus !== "all" || !!fFrom || !!fTo || !!search.trim();
@@ -253,20 +256,21 @@ function CorrectionDashboard({
       </div>
 
       {/* Status tiles — compact, and each is a one-click filter */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        {(["draft", "pending", "filed", "rejected"] as CorrectionStatus[]).map(s => {
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        {ALL_STATUSES.map(s => {
           const on = fStatus === s;
           return (
             <button
               key={s}
               onClick={() => setFStatus(on ? "all" : s)}
               aria-pressed={on}
+              title={CORRECTION_STATUS_META[s].description}
               className={cn(
                 "flex items-center justify-between rounded-lg border px-3 py-2 text-left transition-colors",
                 on ? "border-primary bg-primary/5" : "hover:bg-muted/50",
               )}
             >
-              <span className="text-xs text-muted-foreground">{CORRECTION_STATUS_META[s].label}</span>
+              <span className="text-xs text-muted-foreground">{CORRECTION_STATUS_META[s].short}</span>
               <span className="text-lg font-bold leading-none">
                 {loading ? <Skeleton className="h-5 w-6" /> : counts[s]}
               </span>
@@ -599,6 +603,8 @@ function CorrectionDetail({
   const [addToChallan, setAddToChallan] = useState<CorrectionChallan | null>(null);
   const [editChallan, setEditChallan] = useState<CorrectionChallan | null>(null);
   const [signOpen, setSignOpen] = useState(false);
+  const [approveOpen, setApproveOpen] = useState(false);
+  const [fileOpen, setFileOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
 
   const [search, setSearch] = useState("");
@@ -629,6 +635,12 @@ function CorrectionDetail({
   useEffect(() => { load(); }, [load]);
 
   const locked = isCorrectionLocked(correction?.status);
+  // Entries freeze at the FIRST signature, not at filing — what the senior
+  // reviews must be exactly what the preparer signed. The DB enforces this
+  // too; `editable` only keeps the UI from offering a rejected action.
+  const editable = isCorrectionEditable(correction?.status);
+  const isSamePerson = !!correction?.prepared_by && correction.prepared_by === actor.id;
+  const canApprove = isSeniorReviewer(actor.role) && !isSamePerson;
   const clientName = clients.find(c => c.id === correction?.client_id)?.name || "—";
   const delta = useMemo(() => summariseCorrection(challans, deductees), [challans, deductees]);
   const hasChanges = delta.added + delta.modified + delta.deleted + delta.challansTouched > 0;
@@ -686,7 +698,7 @@ function CorrectionDetail({
 
   // ── Row actions ───────────────────────────────────────────────────────────
   const markDeleted = async (d: CorrectionDeductee) => {
-    if (locked || !correction) return;
+    if (!editable || !correction) return;
     setBusy(true);
     if (d.action === "add") {
       await supabase.from("tds_correction_deductees" as any).delete().eq("id", d.id);
@@ -703,7 +715,7 @@ function CorrectionDetail({
   };
 
   const restoreRow = async (d: CorrectionDeductee) => {
-    if (locked || !correction) return;
+    if (!editable || !correction) return;
     setBusy(true);
     await supabase.from("tds_correction_deductees" as any)
       .update({ action: "unchanged", updated_at: new Date().toISOString() }).eq("id", d.id);
@@ -759,27 +771,56 @@ function CorrectionDetail({
 
         <div className="flex-1" />
 
-        {!locked && correction.status === "draft" && (
+        {/* One action per stage — the workflow only ever offers its next step. */}
+        {correction.status === "draft" && (
           <Button size="sm" className="gap-1.5 h-8" disabled={busy} onClick={doSubmit}>
-            <Send size={13} /> Submit for filing
+            <Send size={13} /> Submit for signature
           </Button>
         )}
-        {!locked && correction.status === "pending" && (
+
+        {correction.status === "awaiting_employee" && (
+          <Button size="sm" className="gap-1.5 h-8" onClick={() => setSignOpen(true)}>
+            <PenTool size={13} /> Sign as preparer
+          </Button>
+        )}
+
+        {correction.status === "awaiting_senior" && (
           <>
             <Button size="sm" variant="outline" className="gap-1.5 h-8" onClick={() => setRejectOpen(true)}>
               <XCircle size={13} /> Reject
             </Button>
-            <Button size="sm" className="gap-1.5 h-8" onClick={() => setSignOpen(true)}>
-              <PenTool size={13} /> Sign &amp; File
+            <Button
+              size="sm" className="gap-1.5 h-8"
+              disabled={!canApprove}
+              title={
+                !isSeniorReviewer(actor.role)
+                  ? "Only a manager, partner or firm admin can give the senior approval"
+                  : isSamePerson
+                    ? "The senior approval must come from someone other than the preparer"
+                    : undefined
+              }
+              onClick={() => setApproveOpen(true)}
+            >
+              <ShieldCheck size={13} /> Approve as senior
             </Button>
           </>
         )}
-        {!locked && correction.status === "rejected" && (
+
+        {correction.status === "ready_to_file" && (
+          <Button size="sm" className="gap-1.5 h-8" onClick={() => setFileOpen(true)}>
+            <CheckCircle2 size={13} /> Mark as Filed
+          </Button>
+        )}
+
+        {correction.status === "rejected" && (
           <Button size="sm" className="gap-1.5 h-8" disabled={busy} onClick={doSubmit}>
             <Send size={13} /> Re-submit
           </Button>
         )}
       </div>
+
+      {/* Stage tracker — where the correction is, and what is next */}
+      <WorkflowTracker correction={correction} />
 
       {correction.reason && (
         <p className="text-xs text-muted-foreground -mt-1">
@@ -950,7 +991,7 @@ function CorrectionDetail({
 
                   <div className="flex-1" />
 
-                  {!locked && (
+                  {editable && (
                     <>
                       <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={() => setEditChallan(c)}>
                         <Pencil size={12} /> Challan
@@ -984,7 +1025,7 @@ function CorrectionDetail({
                   <EntryTable
                     rows={rows}
                     form={correction.form_type}
-                    locked={locked}
+                    locked={!editable}
                     onEdit={setEditRow}
                     onDelete={markDeleted}
                     onRestore={restoreRow}
@@ -1001,7 +1042,7 @@ function CorrectionDetail({
             <CardContent className="p-0">
               <EntryTable
                 rows={byChallan.get("__unlinked__") || []}
-                form={correction.form_type} locked={locked}
+                form={correction.form_type} locked={!editable}
                 onEdit={setEditRow} onDelete={markDeleted} onRestore={restoreRow}
               />
             </CardContent>
@@ -1033,10 +1074,37 @@ function CorrectionDetail({
         onSaved={() => { setEditChallan(null); load(); }}
         toast={toast}
       />
-      <SignDialog
+      {/* Signature 1 — the preparer */}
+      <SignatureDialog
         open={signOpen} onOpenChange={setSignOpen}
         correction={correction} actor={actor} delta={delta}
-        onSigned={() => { setSignOpen(false); load(); }}
+        title="Employee signature"
+        icon={<PenTool size={16} />}
+        attestation="I prepared this correction and confirm the corrected particulars are true and correct."
+        confirmLabel="Sign as preparer"
+        run={signAsPreparer}
+        onDone={() => { setSignOpen(false); load(); }}
+        toast={toast}
+      />
+
+      {/* Signature 2 — the senior reviewer */}
+      <SignatureDialog
+        open={approveOpen} onOpenChange={setApproveOpen}
+        correction={correction} actor={actor} delta={delta}
+        title="Senior approval"
+        icon={<ShieldCheck size={16} />}
+        attestation="I have reviewed this correction and authorise it for filing. This does not file it — filing is confirmed separately."
+        confirmLabel="Approve as senior"
+        run={approveAsSenior}
+        onDone={() => { setApproveOpen(false); load(); }}
+        toast={toast}
+      />
+
+      {/* Manual filing, only reachable once both signatures exist */}
+      <MarkFiledDialog
+        open={fileOpen} onOpenChange={setFileOpen}
+        correction={correction} actor={actor}
+        onFiled={() => { setFileOpen(false); load(); }}
         toast={toast}
       />
       <RejectDialog
@@ -1550,67 +1618,164 @@ function ChallanDialog({ challan, correction, actor, onClose, onSaved, toast }: 
 // Signature
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Sign-off block shown below the correction details once it has been raised. */
-export function SignatureSection({ correction }: { correction: Correction }) {
-  const signed = correction.status === "filed";
+/** Horizontal stage tracker: where the correction is and what happens next. */
+function WorkflowTracker({ correction }: { correction: Correction }) {
+  const order: CorrectionStatus[] = [
+    "draft", "awaiting_employee", "awaiting_senior", "ready_to_file", "filed",
+  ];
+  if (correction.status === "rejected") return null;
+  const at = order.indexOf(correction.status as CorrectionStatus);
+
   return (
-    <Card className={cn(signed && "border-emerald-200 dark:border-emerald-900")}>
-      <CardContent className="p-3">
-        <div className="flex items-center gap-2 mb-2">
-          <PenTool size={13} className={signed ? "text-emerald-600" : "text-muted-foreground"} />
-          <span className="text-sm font-semibold">Signature</span>
-        </div>
-        {signed ? (
-          <div className="space-y-1">
-            <div className="border-b border-foreground/40 w-56 pb-1">
-              <p className="font-semibold text-sm">{correction.signed_by_name || "—"}</p>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              {correction.signed_by_role || "Authorised signatory"}
-              {correction.signed_at ? ` · ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}
-            </p>
-            <p className="text-xs text-emerald-700 dark:text-emerald-400 flex items-center gap-1 pt-0.5">
-              <CheckCircle2 size={12} /> This signature filed the correction.
-            </p>
+    <div className="flex items-center gap-1 flex-wrap text-[11px]">
+      {order.map((s, i) => {
+        const done = i < at;
+        const current = i === at;
+        return (
+          <div key={s} className="flex items-center gap-1">
+            <span
+              className={cn(
+                "px-2 py-0.5 rounded-full border",
+                done && "bg-emerald-50 border-emerald-200 text-emerald-700",
+                current && "bg-primary text-primary-foreground border-primary font-medium",
+                !done && !current && "border-dashed text-muted-foreground",
+              )}
+            >
+              {done && <CheckCircle2 size={10} className="inline mr-1 -mt-0.5" />}
+              {CORRECTION_STATUS_META[s].short}
+            </span>
+            {i < order.length - 1 && <span className="text-muted-foreground/40">›</span>}
           </div>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            Not yet signed. A firm signature on this correction is what files it — once signed it
-            becomes read-only.
+        );
+      })}
+    </div>
+  );
+}
+
+/** One signature slot — signed shows the name/role/time, else what is awaited. */
+function SignatureSlot({ title, name, role, at, awaiting, note }: {
+  title: string; name: string | null; role: string | null; at: string | null;
+  awaiting: string; note?: string;
+}) {
+  const signed = !!at;
+  return (
+    <div className={cn(
+      "rounded-lg border p-3 flex-1 min-w-[220px]",
+      signed && "border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/10",
+    )}>
+      <div className="flex items-center gap-1.5 mb-2">
+        <PenTool size={12} className={signed ? "text-emerald-600" : "text-muted-foreground"} />
+        <span className="text-xs font-semibold">{title}</span>
+        {signed && <CheckCircle2 size={12} className="text-emerald-600" />}
+      </div>
+      {signed ? (
+        <>
+          <div className="border-b border-foreground/40 pb-1 mb-1">
+            <p className="font-semibold text-sm">{name || "—"}</p>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            {role || "Authorised signatory"}
+            {at ? ` · ${format(new Date(at), "dd/MM/yyyy HH:mm")}` : ""}
           </p>
-        )}
+        </>
+      ) : (
+        <p className="text-[11px] text-muted-foreground italic">{awaiting}</p>
+      )}
+      {note && <p className="text-[11px] text-muted-foreground mt-1">{note}</p>}
+    </div>
+  );
+}
+
+/**
+ * Both signatures plus the filing record. Approval and filing are shown as
+ * separate things on purpose — signing authorises, filing is the later manual
+ * confirmation that the department accepted the return.
+ */
+export function SignatureSection({ correction }: { correction: Correction }) {
+  const filed = correction.status === "filed";
+  return (
+    <Card>
+      <CardContent className="p-3 space-y-3">
+        <div className="flex flex-wrap gap-2">
+          <SignatureSlot
+            title="1 · Employee signature"
+            name={correction.prepared_by_name}
+            role={correction.prepared_by_role}
+            at={correction.prepared_at}
+            awaiting="Awaiting the preparer's signature."
+          />
+          <SignatureSlot
+            title="2 · Senior approval"
+            name={correction.approved_by_name || correction.signed_by_name}
+            role={correction.approved_by_role || correction.signed_by_role}
+            at={correction.approved_at || correction.signed_at}
+            awaiting="Awaiting a senior reviewer's approval."
+            note="Must be a different person from the preparer."
+          />
+        </div>
+
+        <div className={cn(
+          "rounded-lg border p-3",
+          filed && "border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/10",
+        )}>
+          <div className="flex items-center gap-1.5 mb-1">
+            <ShieldCheck size={12} className={filed ? "text-emerald-600" : "text-muted-foreground"} />
+            <span className="text-xs font-semibold">Filing</span>
+          </div>
+          {filed ? (
+            <p className="text-[11px] text-muted-foreground">
+              Marked filed by <span className="font-medium text-foreground">{correction.filed_by_name || "—"}</span>
+              {correction.filed_at ? ` on ${format(new Date(correction.filed_at), "dd/MM/yyyy HH:mm")}` : ""}
+              {correction.filing_reference ? ` · ref ${correction.filing_reference}` : ""}.
+            </p>
+          ) : (
+            <p className="text-[11px] text-muted-foreground italic">
+              Not filed. Both signatures authorise the correction; filing is confirmed manually once
+              the return has actually been accepted by the department.
+            </p>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
 }
 
-function SignDialog({ open, onOpenChange, correction, actor, delta, onSigned, toast }: {
+/**
+ * A signature dialog. Used for BOTH signatures — the only differences are the
+ * wording, the attestation text and which transition it calls — so the
+ * confirmation UX cannot drift between the two stages.
+ */
+function SignatureDialog({
+  open, onOpenChange, correction, actor, delta, title, icon, attestation,
+  confirmLabel, run, onDone, toast,
+}: {
   open: boolean; onOpenChange: (v: boolean) => void;
-  correction: Correction; actor: Actor; delta: ReturnType<typeof summariseCorrection>;
-  onSigned: () => void; toast: any;
+  correction: Correction; actor: Actor;
+  delta: ReturnType<typeof summariseCorrection>;
+  title: string; icon: React.ReactNode; attestation: string; confirmLabel: string;
+  run: (c: Correction, a: Actor) => Promise<string | null>;
+  onDone: () => void; toast: any;
 }) {
   const [confirmed, setConfirmed] = useState(false);
   const [saving, setSaving] = useState(false);
-
   useEffect(() => { if (!open) setConfirmed(false); }, [open]);
 
-  const sign = async () => {
+  const go = async () => {
     setSaving(true);
-    const err = await signAndFileCorrection(correction, actor);
+    const err = await run(correction, actor);
     setSaving(false);
-    if (err) { toast({ title: "Could not file", description: err, variant: "destructive" }); return; }
-    toast({ title: "Correction filed", description: "It is now signed and read-only." });
-    onSigned();
+    if (err) { toast({ title: "Could not sign", description: err, variant: "destructive" }); return; }
+    toast({ title: `${title} recorded` });
+    onDone();
   };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2"><PenTool size={16} /> Sign &amp; File</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">{icon} {title}</DialogTitle>
           <DialogDescription>
-            Your signature files this correction. Once signed it becomes permanently read-only —
-            this cannot be undone.
+            Your name, role and the current date and time are recorded in the audit trail.
           </DialogDescription>
         </DialogHeader>
 
@@ -1626,21 +1791,15 @@ function SignDialog({ open, onOpenChange, correction, actor, delta, onSigned, to
           </div>
 
           <label className="flex items-start gap-2 text-xs cursor-pointer">
-            <input
-              type="checkbox" className="mt-0.5"
-              checked={confirmed} onChange={e => setConfirmed(e.target.checked)}
-            />
-            <span>
-              I confirm these corrected particulars are true and correct, and I authorise this
-              correction to be filed.
-            </span>
+            <input type="checkbox" className="mt-0.5" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+            <span>{attestation}</span>
           </label>
         </div>
 
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button size="sm" className="gap-1.5" disabled={!confirmed || saving} onClick={sign}>
-            <PenTool size={14} /> {saving ? "Filing…" : "Sign & File"}
+          <Button size="sm" className="gap-1.5" disabled={!confirmed || saving} onClick={go}>
+            {saving ? "Recording…" : confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1648,6 +1807,82 @@ function SignDialog({ open, onOpenChange, correction, actor, delta, onSigned, to
   );
 }
 
+/**
+ * Mark as Filed — the deliberate, manual step. Signing authorised the
+ * correction; this records that it was actually filed with the department, and
+ * is what makes it permanently read-only.
+ */
+function MarkFiledDialog({ open, onOpenChange, correction, actor, onFiled, toast }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  correction: Correction; actor: Actor; onFiled: () => void; toast: any;
+}) {
+  const [reference, setReference] = useState("");
+  const [filedOn, setFiledOn] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) { setReference(""); setFiledOn(""); setConfirmed(false); }
+  }, [open]);
+
+  const go = async () => {
+    setSaving(true);
+    const err = await markCorrectionFiled(correction, actor, {
+      reference: reference.trim() || undefined,
+      // A date-only value is stored at local midnight; leaving it blank uses now.
+      filedOn: filedOn ? new Date(filedOn).toISOString() : undefined,
+    });
+    setSaving(false);
+    if (err) { toast({ title: "Could not mark as filed", description: err, variant: "destructive" }); return; }
+    toast({ title: "Correction filed", description: "It is now locked and read-only." });
+    onFiled();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2"><CheckCircle2 size={16} /> Mark as Filed</DialogTitle>
+          <DialogDescription>
+            Confirm the correction return has actually been filed with the Income Tax Department.
+            This locks it permanently — it cannot be undone.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">
+            <p><span className="text-muted-foreground">Signed by:</span> {correction.prepared_by_name || "—"} (preparer)</p>
+            <p><span className="text-muted-foreground">Approved by:</span> {correction.approved_by_name || "—"} (senior)</p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs">Filed on</Label>
+              <Input type="date" className="h-9 text-xs" value={filedOn} onChange={e => setFiledOn(e.target.value)} />
+              <p className="text-[10px] text-muted-foreground">Leave blank for now.</p>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Acknowledgement no.</Label>
+              <Input className="h-9 text-xs" value={reference} onChange={e => setReference(e.target.value)} placeholder="Optional" />
+            </div>
+          </div>
+
+          <label className="flex items-start gap-2 text-xs cursor-pointer">
+            <input type="checkbox" className="mt-0.5" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+            <span>I confirm this correction return has been filed with the Income Tax Department.</span>
+          </label>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button size="sm" className="gap-1.5" disabled={!confirmed || saving} onClick={go}>
+            <CheckCircle2 size={14} /> {saving ? "Filing…" : "Confirm Filed"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 function RejectDialog({ open, onOpenChange, correction, actor, onRejected, toast }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   correction: Correction; actor: Actor; onRejected: () => void; toast: any;

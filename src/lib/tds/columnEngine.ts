@@ -632,7 +632,7 @@ export function buildCanonicalRow(row: Record<string, unknown>, map: HeaderMap):
   for (const [header, field] of Object.entries(map)) {
     if (out[field] !== null) continue;
     const v = coerceField(field, row[header]);
-    if (v !== undefined) (out as Record<string, unknown>)[field] = v;
+    if (v !== undefined) (out as Record<CanonField, unknown>)[field] = v;
   }
   // A key that is ALREADY the canonical field name needs no mapping — it was
   // put there by a pre-processing pass that had evidence the header engine
@@ -645,7 +645,7 @@ export function buildCanonicalRow(row: Record<string, unknown>, map: HeaderMap):
   for (const field of Object.keys(out) as CanonField[]) {
     if (out[field] !== null || !(field in row)) continue;
     const v = coerceField(field, row[field]);
-    if (v !== undefined) (out as Record<string, unknown>)[field] = v;
+    if (v !== undefined) (out as Record<CanonField, unknown>)[field] = v;
   }
   return out;
 }

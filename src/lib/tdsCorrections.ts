@@ -15,36 +15,71 @@ import { supabase } from "@/integrations/supabase/client";
 
 // ─── Status ─────────────────────────────────────────────────────────────────
 
-export type CorrectionStatus = "draft" | "pending" | "filed" | "rejected";
+/**
+ * Approval and filing are SEPARATE events. Two signatures authorise the
+ * correction; filing happens later, when a person confirms the return was
+ * actually accepted by the Income Tax Department. Nothing auto-files —
+ * ready_to_file is where the workflow rests until someone acts.
+ *
+ *   draft -> awaiting_employee -> awaiting_senior -> ready_to_file -> filed
+ *                                       └-> rejected
+ */
+export type CorrectionStatus =
+  | "draft" | "awaiting_employee" | "awaiting_senior"
+  | "ready_to_file" | "filed" | "rejected";
 
 export const CORRECTION_STATUS_META: Record<CorrectionStatus, {
-  label: string; tone: string; description: string;
+  label: string; short: string; tone: string; description: string;
 }> = {
   draft: {
-    label: "Draft",
+    label: "Draft", short: "Draft",
     tone: "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300",
-    description: "Being prepared. Not yet submitted.",
+    description: "Being prepared. Not yet submitted for signature.",
   },
-  pending: {
-    label: "Pending",
+  awaiting_employee: {
+    label: "Awaiting Employee Signature", short: "Awaiting Employee",
+    tone: "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300",
+    description: "The preparer must review and sign before it goes for approval.",
+  },
+  awaiting_senior: {
+    label: "Awaiting Senior Approval", short: "Awaiting Senior",
     tone: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
-    description: "Submitted and awaiting a firm signature.",
+    description: "Signed by the preparer. A senior reviewer must approve it.",
+  },
+  ready_to_file: {
+    label: "Ready for Filing", short: "Ready to File",
+    tone: "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
+    description: "Both signatures complete. Authorised, but NOT yet filed.",
   },
   filed: {
-    label: "Correction Filed",
+    label: "Filed", short: "Filed",
     tone: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
-    description: "Signed and filed. Read-only.",
+    description: "Confirmed filed with the department. Read-only.",
   },
   rejected: {
-    label: "Rejected",
+    label: "Rejected", short: "Rejected",
     tone: "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
-    description: "Sent back by the firm. See the reason.",
+    description: "Sent back to the preparer. See the reason.",
   },
 };
 
-/** The single source of truth for "can this still be edited?". */
+/** Roles allowed to give the SECOND (senior) signature. */
+export const SENIOR_ROLES = ["manager", "partner_ca", "firm_admin", "superadmin"];
+
+export const isSeniorReviewer = (role: string | null | undefined) =>
+  !!role && SENIOR_ROLES.includes(role);
+
+/** Permanently read-only — the audit guarantee. */
 export const isCorrectionLocked = (status: string | null | undefined) =>
   status === "filed";
+
+/**
+ * Entries may only be changed BEFORE the first signature. Editing after
+ * signing would invalidate what was signed, so the DB freezes the line items
+ * from awaiting_senior onward; this mirrors that rule in the UI.
+ */
+export const isCorrectionEditable = (status: string | null | undefined) =>
+  status === "draft" || status === "awaiting_employee";
 
 // ─── Row shapes ─────────────────────────────────────────────────────────────
 
@@ -65,13 +100,35 @@ export interface Correction {
   raised_by_role: string | null;
   raised_at: string | null;
   submitted_at: string | null;
+
+  // Signature 1 — the employee who prepared the correction.
+  prepared_by: string | null;
+  prepared_by_name: string | null;
+  prepared_by_role: string | null;
+  prepared_at: string | null;
+
+  // Signature 2 — the senior reviewer. Enforced by the DB to be a different
+  // person from the preparer.
+  approved_by: string | null;
+  approved_by_name: string | null;
+  approved_by_role: string | null;
+  approved_at: string | null;
+
+  // Manual filing, only after both signatures.
+  filed_by: string | null;
+  filed_by_name: string | null;
+  filed_at: string | null;
+  filing_reference: string | null;
+
+  rejected_by: string | null;
+  rejected_at: string | null;
+  rejection_reason: string | null;
+
+  /** Legacy single-signature columns, retained for pre-existing rows. */
   signed_by: string | null;
   signed_by_name: string | null;
   signed_by_role: string | null;
   signed_at: string | null;
-  rejected_by: string | null;
-  rejected_at: string | null;
-  rejection_reason: string | null;
 }
 
 export interface CorrectionChallan {
@@ -308,39 +365,108 @@ export async function loadCorrectionDetail(correctionId: string) {
 
 // ─── Lifecycle transitions ──────────────────────────────────────────────────
 
+/** draft -> awaiting_employee. The preparer now has to sign what they wrote. */
 export async function submitCorrection(c: Correction, actor: Actor) {
+  const now = new Date().toISOString();
   const { error } = await supabase.from("tds_corrections" as any)
-    .update({ status: "pending", submitted_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .update({ status: "awaiting_employee", submitted_at: now, updated_at: now })
     .eq("id", c.id);
   if (!error) {
     await logCorrectionAction({
       correctionId: c.id, firmId: c.firm_id, clientId: c.client_id,
-      actionType: "CORRECTION_SUBMITTED", oldValue: c.status, newValue: "pending", actor,
+      actionType: "CORRECTION_SUBMITTED",
+      detail: "Submitted for employee signature",
+      oldValue: c.status, newValue: "awaiting_employee", actor,
     });
   }
   return error?.message ?? null;
 }
 
 /**
- * Sign & file. The signature IS the filing: recording who signed and when is
- * what flips the correction to filed, after which the DB trigger
- * tds_correction_block_when_filed() makes it immutable.
+ * SIGNATURE 1 — the employee who prepared the correction.
+ * awaiting_employee -> awaiting_senior. From here the DB freezes the entries,
+ * so what the senior reviews is exactly what was signed.
  */
-export async function signAndFileCorrection(c: Correction, actor: Actor) {
+export async function signAsPreparer(c: Correction, actor: Actor) {
   if (!actor.id) return "You must be signed in to sign a correction.";
   const now = new Date().toISOString();
   const { error } = await supabase.from("tds_corrections" as any)
     .update({
-      status: "filed",
-      signed_by: actor.id, signed_by_name: actor.name, signed_by_role: actor.role,
-      signed_at: now, updated_at: now,
+      status: "awaiting_senior",
+      prepared_by: actor.id, prepared_by_name: actor.name,
+      prepared_by_role: actor.role, prepared_at: now, updated_at: now,
     })
     .eq("id", c.id);
   if (!error) {
     await logCorrectionAction({
       correctionId: c.id, firmId: c.firm_id, clientId: c.client_id,
-      actionType: "CORRECTION_SIGNED_AND_FILED",
-      detail: `Signed by ${actor.name || "—"}`,
+      actionType: "CORRECTION_SIGNED_PREPARER",
+      detail: `Employee signature by ${actor.name || "—"}${actor.role ? ` (${actor.role})` : ""}`,
+      oldValue: c.status, newValue: "awaiting_senior", actor,
+    });
+  }
+  return error?.message ?? null;
+}
+
+/**
+ * SIGNATURE 2 — the senior reviewer.
+ * awaiting_senior -> ready_to_file. This AUTHORISES the correction; it does
+ * NOT file it. The database rejects a senior approval given by the preparer.
+ */
+export async function approveAsSenior(c: Correction, actor: Actor) {
+  if (!actor.id) return "You must be signed in to approve a correction.";
+  if (c.prepared_by && c.prepared_by === actor.id) {
+    return "The senior approval must be given by someone other than the preparer.";
+  }
+  if (!isSeniorReviewer(actor.role)) {
+    return "Only a senior reviewer (manager, partner, firm admin) can give the second signature.";
+  }
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("tds_corrections" as any)
+    .update({
+      status: "ready_to_file",
+      approved_by: actor.id, approved_by_name: actor.name,
+      approved_by_role: actor.role, approved_at: now, updated_at: now,
+    })
+    .eq("id", c.id);
+  if (!error) {
+    await logCorrectionAction({
+      correctionId: c.id, firmId: c.firm_id, clientId: c.client_id,
+      actionType: "CORRECTION_APPROVED_SENIOR",
+      detail: `Senior approval by ${actor.name || "—"}${actor.role ? ` (${actor.role})` : ""}`,
+      oldValue: c.status, newValue: "ready_to_file", actor,
+    });
+  }
+  return error?.message ?? null;
+}
+
+/**
+ * ready_to_file -> filed. A deliberate, manual confirmation that the return
+ * was actually filed with the department — never automatic. Locks the
+ * correction permanently (tds_correction_block_when_filed).
+ */
+export async function markCorrectionFiled(
+  c: Correction, actor: Actor, opts?: { reference?: string; filedOn?: string },
+) {
+  if (!actor.id) return "You must be signed in to file a correction.";
+  if (!c.prepared_at || !c.approved_at) {
+    return "Both signatures must be complete before the correction can be filed.";
+  }
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("tds_corrections" as any)
+    .update({
+      status: "filed",
+      filed_by: actor.id, filed_by_name: actor.name,
+      filed_at: opts?.filedOn || now,
+      filing_reference: opts?.reference || null,
+      updated_at: now,
+    })
+    .eq("id", c.id);
+  if (!error) {
+    await logCorrectionAction({
+      correctionId: c.id, firmId: c.firm_id, clientId: c.client_id,
+      actionType: "CORRECTION_FILED",
+      detail: `Marked filed by ${actor.name || "—"}${opts?.reference ? ` · ref ${opts.reference}` : ""}`,
       oldValue: c.status, newValue: "filed", actor,
     });
   }
