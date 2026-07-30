@@ -173,8 +173,24 @@ function isBetter(a: Score, b: Score): boolean {
   return gain > 100 && gain > b.absDelta * 0.05;
 }
 
+/**
+ * The regression guard's own tolerance — deliberately a CONSTANT, and deliberately
+ * NOT the preparer's matchTolerance.
+ *
+ * Those two numbers answer different questions. matchTolerance is "how close must
+ * we be to the reviewer's figure to call it agreement", and the preparer sets it.
+ * This one is "did a signed-off answer change", and nobody gets to set it: wiring
+ * the preparer's field into the guard meant typing 100000 into the Agreement bar
+ * silently disabled protection of every signed-off run, while the UI and the
+ * workpaper both went on saying those runs were protected.
+ *
+ * ₹1 is the smallest figure that ignores paise noise without ignoring anything a
+ * reviewer would recognise as a change.
+ */
+const GOLDEN_GUARD_TOLERANCE = 1;
+
 /** Does this configuration change an answer the firm already signed off? */
-function goldensBroken(cfg: Msme43bConfig, goldens: GoldenCase[], tol: number): string[] {
+function goldensBroken(cfg: Msme43bConfig, goldens: GoldenCase[]): string[] {
   const broken: string[] = [];
   for (const g of goldens) {
     const rep = buildReport(g.cyLedgers, g.fyLedgers, cfg, undefined, {
@@ -182,7 +198,7 @@ function goldensBroken(cfg: Msme43bConfig, goldens: GoldenCase[], tol: number): 
     });
     const changed = rep.vendors.some((v) => {
       const blessed = g.blessed[normVendor(v.vendorName)];
-      return blessed !== undefined && Math.abs(v.totalDisallowedCY - blessed) > tol;
+      return blessed !== undefined && Math.abs(v.totalDisallowedCY - blessed) > GOLDEN_GUARD_TOLERANCE;
     });
     if (changed) broken.push(g.label);
   }
@@ -228,7 +244,7 @@ export function calibrate(input: CalibrationInput): CalibrationResult {
         if (opt.value === from) continue;
         const cand = { ...cur, [rule.key]: opt.value } as Msme43bConfig;
 
-        const broken = goldens.length ? goldensBroken(cand, goldens, tol) : [];
+        const broken = goldens.length ? goldensBroken(cand, goldens) : [];
         if (broken.length) {
           const d = diffOf(cand);
           if (isBetter(scoreOf(d), curScore)) {
@@ -366,7 +382,17 @@ export function calibrate(input: CalibrationInput): CalibrationResult {
     `The bar for agreement (₹${tol}) was fixed before the search and was not changed by it.`,
   );
   if (goldens.length) {
-    honestNotes.push(`${goldens.length} previously signed-off run(s) were replayed under every candidate; any rule that would have changed them was discarded.`);
+    const blessedCounts = goldens.map((g) => Object.keys(g.blessed || {}).length);
+    const totalBlessed = blessedCounts.reduce((a, b) => a + b, 0);
+    honestNotes.push(
+      `${goldens.length} previously signed-off run(s) covering ${totalBlessed} vendor(s) were replayed under ` +
+      `every candidate at a fixed ₹${GOLDEN_GUARD_TOLERANCE} tolerance; any rule that would have changed them ` +
+      'was discarded. The guard checks the disallowance figure of the vendors recorded in each signed-off run — ' +
+      'a vendor absent from that record is not protected.',
+    );
+    if (goldens.some((g) => !g.blessed || Object.keys(g.blessed).length === 0)) {
+      honestNotes.push('WARNING: at least one signed-off run recorded no vendor figures, so it protects nothing.');
+    }
   } else {
     honestNotes.push('No previously signed-off runs were available to replay, so no regression guard was applied. Sign off a run to enable it.');
   }

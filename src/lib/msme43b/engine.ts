@@ -20,6 +20,7 @@ import type {
 import { classifyTxn } from './classify';
 import { DEFAULT_CONFIG, Msme43bConfig, fyEndDate, addDays, dueDateFor, treatmentOf, splitGst } from './config';
 import { verifyVendor } from './verify';
+import { classificationSensitivity, sensitivityWarnings } from './sensitivity';
 
 interface Alloc { date: string; amount: number; type: SettlementType; }
 interface WorkBill extends MatchedBill { allocs: Alloc[]; remaining: number; }
@@ -315,12 +316,23 @@ export function analyzeVendor(
     warnings, reviewCount,
   };
 
-  // Independent cross-check + invariants (see verify.ts).
+  // Cross-check + invariants (see verify.ts). The cross-check re-derives the
+  // arithmetic by a different route; it shares the classifier, so it cannot
+  // detect a misread narration. That gap is priced separately, below.
   if (verify) {
     const v = verifyVendor(result, cy, fy, cfg);
     result.verified = v.verified;
     result.verifyNotes = v.notes;
     if (!v.verified) warnings.push(...v.notes.map((n) => `Cross-check: ${n}`));
+
+    // What the figure would be if the narration-driven non-cash reductions were
+    // date-tested like any other payment — the exposure the cross-check is blind
+    // to, stated as a number rather than assumed away.
+    const sens = classificationSensitivity(cy, fy, cfg, declaredGstRate);
+    result.narrationSwing = sens.maxSwing;
+    const sw = sensitivityWarnings(sens, cfg);
+    result.sensitivityNotes = sw;
+    warnings.push(...sw);
   }
 
   return result;
@@ -371,11 +383,72 @@ export function buildReport(
   const totalStillOutstanding = r2(vendors.reduce((a, v) => a + v.totalStillOutstanding, 0));
   const totalGstExcluded = r2(vendors.reduce((a, v) => a + v.gstExcluded, 0));
   const totalGstUnidentified = r2(vendors.reduce((a, v) => a + v.gstUnidentifiedValue, 0));
-  const clean = vendors.every((v) => v.cyReconciled && (v.fyReconciled || true) && v.reviewCount === 0);
+
+  const blockers = deriveBlockers(vendors);
 
   return {
     clientName, cyLabel, fyLabel, windowDays: cfg.windowDays,
     vendors, totalDisallowedCY, totalAllowedFY, totalStillOutstanding,
-    totalGstExcluded, totalGstUnidentified, clean,
+    totalGstExcluded, totalGstUnidentified,
+    ...blockers,
+    clean: blockers.blockingReasons.length === 0 && vendors.every((v) => v.reviewCount === 0),
+  };
+}
+
+/** The blocking fields of a report, derived purely from its vendor results. */
+export interface ReportBlockers {
+  unreconciledVendors: string[];
+  unreconciledDisallowed: number;
+  blocksSignOff: boolean;
+  blockingReasons: string[];
+}
+
+/**
+ * Reconciliation exposure and the other sign-off blockers.
+ *
+ * A ledger that does not agree to its printed closing balance is NOT dropped:
+ * silently omitting a vendor would understate the disallowance, which is the
+ * worse error. Instead its contribution is quantified and sign-off is blocked,
+ * so the figure cannot be issued without a human deciding what to do about it.
+ * Before this, the code claimed "flagged, not used" while doing neither.
+ *
+ * Kept as a pure function of `vendors` so a run saved before these fields
+ * existed can be rehydrated with the same logic instead of defaulting to
+ * "nothing wrong" (see hydrateReport in persistence.ts).
+ */
+export function deriveBlockers(vendors: VendorResult[]): ReportBlockers {
+  const unreconciled = vendors.filter((v) => !v.cyReconciled);
+  const unreconciledVendors = unreconciled.map((v) => v.vendorName);
+  const unreconciledDisallowed = r2(unreconciled.reduce((a, v) => a + v.totalDisallowedCY, 0));
+
+  const blockingReasons: string[] = [];
+  if (unreconciled.length) {
+    blockingReasons.push(
+      `${unreconciled.length} ledger(s) did not agree to their printed closing balance, contributing ` +
+      `₹${unreconciledDisallowed.toLocaleString('en-IN')} of the disallowance: ${unreconciledVendors.join(', ')}. ` +
+      'Their figures are included in the totals but cannot be relied on until the extraction is corrected.',
+    );
+  }
+  const crossCheckFlagged = vendors.filter((v) => v.verified === false);
+  if (crossCheckFlagged.length) {
+    blockingReasons.push(
+      `${crossCheckFlagged.length} vendor(s) failed the cross-check or an internal invariant: ` +
+      crossCheckFlagged.map((v) => v.vendorName).join(', ') + '.',
+    );
+  }
+  const continuityBroken = vendors.filter((v) => !v.continuityOk);
+  if (continuityBroken.length) {
+    blockingReasons.push(
+      `${continuityBroken.length} vendor(s) have a following-year opening balance that does not equal the ` +
+      'current-year closing balance, so the two ledgers are not the same account: ' +
+      continuityBroken.map((v) => v.vendorName).join(', ') + '.',
+    );
+  }
+
+  return {
+    unreconciledVendors,
+    unreconciledDisallowed,
+    blocksSignOff: blockingReasons.length > 0,
+    blockingReasons,
   };
 }

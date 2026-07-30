@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import {
@@ -114,6 +115,12 @@ export default function Msme43b() {
   const [retention, setRetention] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [ingestFailures, setIngestFailures] = useState<Array<{ file: string; reason: string }>>([]);
+  /**
+   * The reviewer has read the blocking exceptions and still wants the file.
+   * Deliberately NOT persisted and reset on every new report: an acknowledgement
+   * belongs to the exact figures it was given for.
+   */
+  const [ackBlockers, setAckBlockers] = useState(false);
 
   const clientName = clients.find((c) => c.id === clientId)?.name || '';
 
@@ -372,6 +379,13 @@ export default function Msme43b() {
       )
     : null;
 
+  // An acknowledgement belongs to the figures it was given for, so it is reset
+  // whenever a new report object appears — a fresh run, a loaded run, or a
+  // re-run under a changed interpretation.
+  useEffect(() => { setAckBlockers(false); }, [report]);
+
+  const exportBlocked = !!report?.blocksSignOff && !ackBlockers;
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between">
@@ -392,6 +406,10 @@ export default function Msme43b() {
                 preparedBy: user?.name || user?.email || undefined,
               })}
               variant="outline"
+              disabled={exportBlocked}
+              title={exportBlocked
+                ? 'Exceptions must be acknowledged before the working paper can be exported — see the red panel below.'
+                : undefined}
             >
               <Download className="h-4 w-4 mr-2" /> Export working paper
             </Button>
@@ -572,6 +590,47 @@ export default function Msme43b() {
             <StatCard label="Still outstanding (FY end)" value={inr(report.totalStillOutstanding)} tone="warn" icon={<AlertTriangle className="h-4 w-4" />} />
             <StatCard label="GST excluded (not disallowable)" value={inr(report.totalGstExcluded)} tone="neutral" icon={<Landmark className="h-4 w-4" />} />
           </div>
+
+          {/*
+            Sign-off gate. The figures above are shown either way — hiding them
+            would only invite a re-run until the warning went away — but the
+            working paper cannot be exported until the reviewer has read these
+            exceptions and taken them on record.
+          */}
+          {report.blocksSignOff && (
+            <Alert variant="destructive">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>
+                Not ready for sign-off — {report.blockingReasons.length} exception
+                {report.blockingReasons.length === 1 ? '' : 's'} must be cleared
+              </AlertTitle>
+              <AlertDescription className="text-sm space-y-2">
+                <ul className="list-disc pl-5 space-y-1">
+                  {report.blockingReasons.map((r, i) => <li key={i}>{r}</li>)}
+                </ul>
+                {report.unreconciledDisallowed > 0 && (
+                  <p>
+                    Amount at risk: <b>₹{inr(report.unreconciledDisallowed)}</b> of the
+                    ₹{inr(report.totalDisallowedCY)} disallowance comes from ledgers that did not
+                    reconcile — that is {report.totalDisallowedCY > 0
+                      ? Math.round((report.unreconciledDisallowed / report.totalDisallowedCY) * 100)
+                      : 0}% of the total.
+                  </p>
+                )}
+                <label className="flex items-start gap-2 pt-1 font-medium cursor-pointer">
+                  <Checkbox
+                    checked={ackBlockers}
+                    onCheckedChange={(v) => setAckBlockers(v === true)}
+                    className="mt-0.5 border-current data-[state=checked]:bg-current"
+                  />
+                  <span>
+                    I have read these exceptions and accept them on record. Export the working
+                    paper — the exceptions will be printed on its cover and summary sheets.
+                  </span>
+                </label>
+              </AlertDescription>
+            </Alert>
+          )}
 
           {retention && (
             <div className="text-xs text-muted-foreground flex items-center gap-1.5">
@@ -798,8 +857,28 @@ function VendorChecks({ v }: { v: VendorResult }) {
       {v.continuityOk
         ? <Badge variant="outline" className="text-[10px]">continuity ✓</Badge>
         : <Badge variant="destructive" className="text-[10px]">continuity ✗</Badge>}
-      {v.verified === true && <Badge variant="outline" className="text-[10px] border-emerald-500 text-emerald-600">cross-checked ✓</Badge>}
+      {/*
+        The badge says "arithmetic", not "correct". The cross-check reproduces
+        the figures by a second code path but shares the classifier, so it
+        cannot vouch for the narrations — that is the separate badge below.
+      */}
+      {v.verified === true && (
+        <Badge
+          variant="outline" className="text-[10px] border-emerald-500 text-emerald-600"
+          title="A second, independently written computation reproduced these figures and all invariants hold. It shares the narration classifier, so it does not vouch for how entries were typed."
+        >
+          arithmetic re-derived ✓
+        </Badge>
+      )}
       {v.verified === false && <Badge variant="destructive" className="text-[10px]" title={(v.verifyNotes || []).join(' | ')}>cross-check: review</Badge>}
+      {!!v.narrationSwing && v.narrationSwing > 0 && (
+        <Badge
+          variant="secondary" className="text-[10px] text-amber-700"
+          title={(v.sensitivityNotes || []).join(' | ')}
+        >
+          ₹{inr(v.narrationSwing)} rests on narrations
+        </Badge>
+      )}
       {v.reviewCount > 0 && <Badge variant="secondary" className="text-[10px]">{v.reviewCount} review</Badge>}
     </div>
   );

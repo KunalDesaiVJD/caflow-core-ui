@@ -218,6 +218,53 @@ function buildCover(wb: ExcelJS.Workbook, report: Msme43bReport, opts: Workpaper
   line('Vendors analysed', String(report.vendors.length));
   line('Prepared', new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }));
   if (opts.preparedBy) line('Prepared by', opts.preparedBy);
+  line(
+    'Status',
+    report.blocksSignOff
+      ? `NOT READY FOR SIGN-OFF — ${report.blockingReasons.length} exception(s) below`
+      : 'All ledgers reconciled and cross-checked',
+  );
+  ws.getCell(r - 1, 3).font = {
+    name: 'Calibri', size: 11, bold: true,
+    color: { argb: report.blocksSignOff ? RED : GREEN },
+  };
+
+  // The blockers are stated on the cover, not buried on the Exceptions tab: this
+  // is the page a reviewer and a partner actually read before signing.
+  if (report.blocksSignOff) {
+    r++;
+    ws.mergeCells(r, 2, r, 3);
+    const head = ws.getCell(r, 2);
+    head.value = 'Exceptions to be cleared before this working paper is issued';
+    head.font = { name: 'Calibri', size: 11, bold: true, color: { argb: RED } };
+    head.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDECEC' } };
+    head.alignment = { vertical: 'middle' };
+    ws.getRow(r).height = 20;
+    r++;
+    for (const reason of report.blockingReasons) {
+      ws.mergeCells(r, 2, r, 3);
+      const c = ws.getCell(r, 2);
+      c.value = `•  ${reason}`;
+      c.font = { name: 'Calibri', size: 9.5, color: { argb: RED } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDECEC' } };
+      c.alignment = { wrapText: true, vertical: 'top' };
+      ws.getRow(r).height = 32;
+      r++;
+    }
+    if (report.unreconciledDisallowed > 0) {
+      ws.mergeCells(r, 2, r, 3);
+      const c = ws.getCell(r, 2);
+      c.value =
+        `•  Amount at risk: ₹${report.unreconciledDisallowed.toLocaleString('en-IN')} of the ` +
+        `₹${report.totalDisallowedCY.toLocaleString('en-IN')} disallowance is contributed by ledgers ` +
+        'that did not agree to their printed closing balance.';
+      c.font = { name: 'Calibri', size: 9.5, bold: true, color: { argb: RED } };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDECEC' } };
+      c.alignment = { wrapText: true, vertical: 'top' };
+      ws.getRow(r).height = 32;
+      r++;
+    }
+  }
 
   r++;
   ws.mergeCells(r, 2, r, 3);
@@ -227,7 +274,7 @@ function buildCover(wb: ExcelJS.Workbook, report: Msme43bReport, opts: Workpaper
   r++;
 
   const notes = [
-    'Each ledger is reconstructed from its transactions and agreed to the printed closing balance before any figure is used. Ledgers that do not agree are listed under Exceptions and are not relied upon.',
+    'Each ledger is reconstructed from its transactions and agreed to the printed closing balance. A ledger that does not agree is NOT excluded — omitting it would understate the disallowance — so its figures remain in the totals, but it is named under Exceptions, the disallowance it contributes is quantified separately, and sign-off is blocked until it is resolved.',
     'The disallowance is stated on the TAXABLE VALUE of each invoice. GST is not claimed as a deduction where input credit is available, so there is nothing in the tax component for section 43B(h) to disallow.',
     'The source ledgers carry no bill-wise references, so settlements are matched to bills on the basis set out in "Basis of preparation". That is an interpretation, and it is disclosed rather than assumed.',
     'Only vendors identified by the firm as registered micro or small enterprises are included. This working paper does not determine MSME status.',
@@ -535,9 +582,45 @@ function buildSummary(wb: ExcelJS.Workbook, report: Msme43bReport, carry: CarryF
   const flagged = report.vendors.filter((v) => v.verified === false).length;
   kv(ws, r++, 'Vendors analysed', report.vendors.length);
   kv(ws, r++, 'Ledgers agreed to printed closing balance', `${report.vendors.length - unrec} of ${report.vendors.length}`, { color: unrec ? RED : GREEN });
-  kv(ws, r++, 'Agreed by the independent cross-check engine', `${report.vendors.length - flagged} of ${report.vendors.length}`, { color: flagged ? AMBER : GREEN });
+  kv(ws, r++, 'Arithmetic re-derived by a second computation', `${report.vendors.length - flagged} of ${report.vendors.length}`, { color: flagged ? AMBER : GREEN });
+  const swing = report.vendors.reduce((a, v) => a + (v.narrationSwing ?? 0), 0);
+  kv(ws, r++, 'Disallowance dependent on narration-based classification', Math.round(swing * 100) / 100, { money: true, color: swing > 0 ? AMBER : GREEN });
+  ws.mergeCells(r, 1, r, 3);
+  const scope = ws.getCell(r, 1);
+  scope.value =
+    'The second computation is written independently of the first, so it tests the arithmetic — allocation order, '
+    + 'day counts, rounding, and the identity disallowed = paid later + still unpaid. It shares the narration '
+    + 'classifier with the first, so it cannot detect an entry that was typed wrongly. The line above states what '
+    + 'that is worth: the disallowance that would change if write-offs, discounts, notes and TDS debits were '
+    + 'date-tested as ordinary payments instead. Vendor-level detail is on the Exceptions sheet.';
+  scope.font = { name: 'Calibri', size: 9, italic: true, color: { argb: 'FF5A6675' } };
+  scope.alignment = { wrapText: true, vertical: 'top', indent: 1 };
+  ws.getRow(r).height = 46;
+  r++;
   kv(ws, r++, 'Window applied', `${report.windowDays} days`);
   if (opts.preparedBy) kv(ws, r++, 'Prepared by', opts.preparedBy);
+  kv(
+    ws, r++, 'Ready for sign-off',
+    report.blocksSignOff ? 'NO — see the exceptions below' : 'Yes',
+    { bold: true, color: report.blocksSignOff ? RED : GREEN },
+  );
+
+  if (report.blocksSignOff) {
+    r++;
+    sectionBand(ws, r, 'Exceptions to be cleared before issue', 3); r++;
+    if (report.unreconciledDisallowed > 0) {
+      kv(ws, r++, 'Disallowance contributed by unreconciled ledgers', report.unreconciledDisallowed, { money: true, bold: true, color: RED });
+    }
+    for (const reason of report.blockingReasons) {
+      ws.mergeCells(r, 1, r, 3);
+      const c = ws.getCell(r, 1);
+      c.value = `•  ${reason}`;
+      c.font = { name: 'Calibri', size: 9.5, color: { argb: RED } };
+      c.alignment = { wrapText: true, vertical: 'top', indent: 1 };
+      ws.getRow(r).height = 30;
+      r++;
+    }
+  }
 
   if (carry) {
     r++;
@@ -650,6 +733,20 @@ function buildExceptions(wb: ExcelJS.Workbook, report: Msme43bReport): void {
   r++;
 
   let n = 0;
+  // Report-level blockers first — a matter can block sign-off (e.g. broken
+  // year-on-year continuity) without producing a per-vendor warning line, so
+  // they are listed in their own right rather than left to be inferred.
+  for (const reason of report.blockingReasons) {
+    const row = ws.getRow(r);
+    row.getCell(1).value = 'BLOCKS SIGN-OFF';
+    row.getCell(2).value = reason;
+    for (let c = 1; c <= 2; c++) {
+      bodyCell(row.getCell(c), { bold: c === 1, color: RED, zebra: n % 2 === 1 });
+      row.getCell(c).alignment = { wrapText: true, vertical: 'top' };
+    }
+    row.height = 30;
+    r++; n++;
+  }
   for (const v of report.vendors) {
     const items = [...v.warnings, ...(v.verifyNotes ?? []).map((x) => `Cross-check: ${x}`)];
     for (const w of items) {
@@ -664,7 +761,7 @@ function buildExceptions(wb: ExcelJS.Workbook, report: Msme43bReport): void {
   if (!n) {
     const row = ws.getRow(r);
     row.getCell(1).value = '—';
-    row.getCell(2).value = 'No exceptions. Every ledger agreed to its printed closing balance and the independent cross-check agreed on every vendor.';
+    row.getCell(2).value = 'No exceptions. Every ledger agreed to its printed closing balance, and a second, independently written computation reproduced every figure.';
     for (let c = 1; c <= 2; c++) bodyCell(row.getCell(c), { color: GREEN });
   }
 

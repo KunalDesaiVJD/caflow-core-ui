@@ -202,10 +202,25 @@ export interface VendorResult {
   warnings: string[];
   /** entries the classifier could not confidently type */
   reviewCount: number;
-  /** true when the independent cross-check agrees and all invariants hold */
+  /**
+   * true when the cross-check engine agrees and all invariants hold.
+   *
+   * Scope, stated precisely because the badge is easy to over-read: the
+   * cross-check re-derives the figures by a different code path, so it catches
+   * arithmetic, allocation-order and day-count errors. It calls the SAME
+   * classifier, so it cannot catch a misread narration — see narrationSwing.
+   */
   verified?: boolean;
   /** cross-check / invariant discrepancies, if any */
   verifyNotes?: string[];
+  /**
+   * Largest amount of disallowance that depends on a narration-driven
+   * classification (see sensitivity.ts). The cross-check is blind to this class
+   * of error, so it is quantified instead of claimed away.
+   */
+  narrationSwing?: number;
+  /** the sensitivity findings in words, when material */
+  sensitivityNotes?: string[];
   // ── GST ──
   /** total GST excluded from the disallowance across this vendor's bills */
   gstExcluded: number;
@@ -231,6 +246,21 @@ export interface Msme43bReport {
   totalStillOutstanding: number;
   /** total GST excluded from the disallowance (not deductible, so not disallowable) */
   totalGstExcluded: number;
+  // ── reconciliation exposure ──
+  /**
+   * Vendors whose ledger did NOT agree to its printed closing balance. Their
+   * figures ARE included in the totals below — dropping them would understate
+   * the disallowance, which is worse — but the amount at risk is stated
+   * separately and blocksSignOff is set, so nobody can issue the working paper
+   * without deciding what to do about them.
+   */
+  unreconciledVendors: string[];
+  /** disallowance contributed by vendors whose ledger did not reconcile */
+  unreconciledDisallowed: number;
+  /** true when something must be resolved before this working paper is issued */
+  blocksSignOff: boolean;
+  /** plain-language reasons sign-off is blocked */
+  blockingReasons: string[];
   /** gross value of bills whose GST split could not be established */
   totalGstUnidentified: number;
   /** true when every ledger reconciled and there are no review items blocking */

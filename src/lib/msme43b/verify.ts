@@ -1,8 +1,13 @@
 // MSME 43B(h) — verification layer.
 //
-// Runs the independent cross-check engine and a set of invariants against the
-// primary engine's result for a vendor. Any failure is surfaced (verified=false
-// + notes) so the UI/workpaper can flag it instead of silently trusting a figure.
+// Runs the cross-check engine and a set of invariants against the primary
+// engine's result for a vendor. Any failure is surfaced (verified=false + notes)
+// so the UI/workpaper can flag it instead of silently trusting a figure.
+//
+// verified=true means "the arithmetic was reproduced by a second code path and
+// the invariants hold". It does NOT mean the classification is right — both
+// engines share the classifier (see the header of crosscheck.ts). The
+// classification exposure is quantified by sensitivity.ts and reported alongside.
 
 import type { VendorResult, VendorLedger } from './types';
 import { DEFAULT_CONFIG, Msme43bConfig } from './config';

@@ -1,4 +1,20 @@
-// MSME 43B(h) — INDEPENDENT cross-check computation.
+// MSME 43B(h) — cross-check computation.
+//
+// WHAT THIS DOES AND DOES NOT COVER — read before trusting the "cross-checked"
+// badge, which is easy to over-read:
+//
+//   CATCHES   arithmetic and control-flow errors: allocation order, day-count
+//             off-by-one, phase gating, rounding, the identity
+//             disallowed = allowedFY + stillOutstanding. Two programs written
+//             differently rarely make the same slip.
+//
+//   DOES NOT  classification errors. This module calls the SAME classifyTxn and
+//   CATCH     the SAME treatmentOf as engine.ts. A debit put in the wrong bucket
+//             is put in the same wrong bucket here, and the two agree on a wrong
+//             answer. Copying the keyword lists into this file would not change
+//             that — it would only make the shared assumption look independent.
+//             That gap is instead priced by sensitivity.ts, which re-runs the
+//             figures with the assumption varied and reports the swing.
 //
 // This deliberately re-derives the same disallowance/allowance figures by a
 // DIFFERENT route than engine.ts, so the two can be compared. engine.ts merges
@@ -11,8 +27,7 @@
 //            settled chunk into within-due-date (compliant) vs late
 //
 // If the two engines disagree on a figure, verify.ts flags it rather than
-// trusting either. Two independent programs agreeing catches implementation bugs
-// (off-by-one, allocation order, gating) that a single code path can hide.
+// trusting either.
 
 import type { VendorLedger } from './types';
 import { classifyTxn } from './classify';
@@ -132,7 +147,8 @@ function mkBill(date: string, amount: number, isOpening: boolean, cfg: Msme43bCo
 /**
  * Apply settlements to bills under the configured allocation rule, invoking
  * onChunk per allocation. Written independently of engine.ts's matcher — same
- * interpretation, different code — which is the point of the cross-check.
+ * interpretation, different code. That is the scope of the cross-check: it tests
+ * the code, not the interpretation.
  */
 function applyMatch(
   bills: XBill[],
