@@ -1,4 +1,4 @@
-const CACHE_NAME = "caflow-v3";
+const CACHE_NAME = "caflow-v4";
 const PRECACHE_URLS = ["/", "/index.html"];
 
 self.addEventListener("install", (event) => {
@@ -33,6 +33,19 @@ self.addEventListener("fetch", (event) => {
         }
         return response;
       })
-      .catch(() => caches.match(event.request).then((r) => r || caches.match("/")))
+      .catch(() =>
+        caches.match(event.request).then((r) => {
+          if (r) return r;
+          // Fall back to the app shell ONLY for a navigation. Doing it for any
+          // request handed index.html to whatever asked — so a JS module, a
+          // worker script or a font that hit a transient network failure came
+          // back as HTML and failed in a way that pointed nowhere near the cause.
+          // The 1.25 MB pdfjs worker was the likeliest victim: with HTML in place
+          // of its script, PDF text extraction dies, and the ledger reader then
+          // reported the file as an unreadable scan.
+          if (event.request.mode === "navigate") return caches.match("/");
+          return Response.error();
+        })
+      )
   );
 });

@@ -99,6 +99,57 @@ export async function pdfPageTexts(data: ArrayBuffer | Uint8Array): Promise<stri
   return pages.map((lines) => lines.map((l) => l.text).join('\n'));
 }
 
+/**
+ * Render the given 1-based page numbers to base64 JPEGs.
+ *
+ * A SCANNED ledger has no text layer, so it can only be read as an image. Before
+ * this, such a file had to go to the model whole — one call for the entire
+ * document — which overflows on anything sizeable and cannot be split, so the
+ * only advice was "go and split the PDF yourself". Rendering page by page makes a
+ * scan chunkable on exactly the same terms as a text PDF.
+ *
+ * JPEG, not PNG: a scanned page as PNG is several times larger, base64 adds
+ * another third on top, and the tax figures stay perfectly legible at q=0.85.
+ * TARGET_WIDTH is what decides whether small print survives — 1600px is about
+ * 200 DPI for A4, which reads a Tally ledger reliably.
+ */
+const TARGET_WIDTH = 1600;
+
+export async function pdfPageImages(
+  data: ArrayBuffer | Uint8Array,
+  pageNumbers: number[],
+): Promise<string[]> {
+  const pdfjs = await import('pdfjs-dist');
+  await setupPdfWorker(pdfjs);
+  const loadingTask = pdfjs.getDocument({ data: ownedBytes(data) });
+  const out: string[] = [];
+  try {
+    const doc = await loadingTask.promise;
+    for (const n of pageNumbers) {
+      if (n < 1 || n > doc.numPages) continue;
+      const page = await doc.getPage(n);
+      const unit = page.getViewport({ scale: 1 });
+      const viewport = page.getViewport({ scale: Math.min(3, TARGET_WIDTH / unit.width) });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('Could not get a 2D canvas context to render the PDF page.');
+      // A scan is opaque, but a PDF page can be transparent, and transparent
+      // pixels flatten to BLACK in a JPEG — which would hide the whole ledger.
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvas, viewport }).promise;
+      out.push(canvas.toDataURL('image/jpeg', 0.85).replace(/^data:image\/jpeg;base64,/, ''));
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  } finally {
+    await loadingTask.destroy();
+  }
+  return out;
+}
+
 /** Cheap page count without pulling the text of every page. */
 export async function pdfPageCount(data: ArrayBuffer | Uint8Array): Promise<number> {
   const pdfjs = await import('pdfjs-dist');
