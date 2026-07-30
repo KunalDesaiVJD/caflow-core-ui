@@ -118,43 +118,76 @@ export function buildEvidence(input: PanelEvidenceInput) {
   };
 }
 
-export async function runPanelReview(input: PanelEvidenceInput): Promise<PanelReview> {
-  const { data, error } = await supabase.functions.invoke('msme-panel-review', {
-    body: { evidence: buildEvidence(input) },
-  });
-  if (error) {
-    // Not error.message: that is the opaque "non-2xx status code" for every
-    // failure. The reason is in the response body — read it out.
-    const described = await describeFunctionError(error, 'msme-panel-review', 'The review panel');
-    throw new Error(described.message);
-  }
-  if (data?.error) throw new Error(data.error);
+/**
+ * Run the four-turn panel as FOUR calls, not one.
+ *
+ * Four turns in a single edge-function invocation could not finish: measured at
+ * 25-56 seconds per turn, four of them is 160-220 seconds against Supabase's
+ * 150-second idle limit, so the panel timed out whichever models were chosen.
+ * One call per turn gives each its own budget, and lets the transcript build on
+ * screen instead of the user watching nothing for two minutes.
+ *
+ * Each turn is handed the previous turns, so the argument still runs in sequence
+ * — the debate is unchanged, only the plumbing.
+ */
+export async function runPanelReview(
+  input: PanelEvidenceInput,
+  onTurn?: (turn: number, of: number, what: string) => void,
+): Promise<PanelReview> {
+  const evidence = buildEvidence(input);
+  const prior: Record<string, unknown> = {};
+  let models: PanelReview['models'] = { claude: 'claude', gpt: 'gpt' };
 
+  const TURNS: Array<{ n: number; key: string; what: string }> = [
+    { n: 1, key: 'claudeOpinion', what: 'stating an opinion on the interpretation' },
+    { n: 2, key: 'gptCritique', what: 'challenging that opinion' },
+    { n: 3, key: 'claudeResponse', what: 'answering the challenge' },
+    { n: 4, key: 'gptFinal', what: 'closing the review' },
+  ];
+
+  for (const t of TURNS) {
+    onTurn?.(t.n, TURNS.length, t.what);
+    const { data, error } = await supabase.functions.invoke('msme-panel-review', {
+      body: { evidence, turn: String(t.n), prior },
+    });
+    if (error) {
+      // Not error.message: that is the opaque "non-2xx status code" for every
+      // failure. The reason is in the response body — read it out, and say which
+      // turn it died on so a partial panel is not mistaken for a whole one.
+      const described = await describeFunctionError(error, 'msme-panel-review', `The review panel (turn ${t.n} of 4, ${t.what})`);
+      throw new Error(described.message);
+    }
+    if (data?.error) throw new Error(`Turn ${t.n} of 4 (${t.what}): ${data.error}`);
+    prior[t.key] = data?.result ?? {};
+    if (data?.models) models = data.models;
+  }
+
+  const d = prior as Record<string, Record<string, unknown>>;
   // Defensive shaping — a model that returns a partial object should degrade to
   // an empty section, not crash the page.
   return {
     claudeOpinion: {
-      positions: data?.claudeOpinion?.positions ?? [],
-      risks: data?.claudeOpinion?.risks ?? [],
-      overall: data?.claudeOpinion?.overall ?? '',
+      positions: (d.claudeOpinion?.positions as PanelReview['claudeOpinion']['positions']) ?? [],
+      risks: (d.claudeOpinion?.risks as string[]) ?? [],
+      overall: (d.claudeOpinion?.overall as string) ?? '',
     },
     gptCritique: {
-      challenges: data?.gptCritique?.challenges ?? [],
-      missed: data?.gptCritique?.missed ?? [],
-      overall: data?.gptCritique?.overall ?? '',
+      challenges: (d.gptCritique?.challenges as PanelReview['gptCritique']['challenges']) ?? [],
+      missed: (d.gptCritique?.missed as string[]) ?? [],
+      overall: (d.gptCritique?.overall as string) ?? '',
     },
     claudeResponse: {
-      responses: data?.claudeResponse?.responses ?? [],
-      revisedPositions: data?.claudeResponse?.revisedPositions ?? [],
-      overall: data?.claudeResponse?.overall ?? '',
+      responses: (d.claudeResponse?.responses as PanelReview['claudeResponse']['responses']) ?? [],
+      revisedPositions: (d.claudeResponse?.revisedPositions as string[]) ?? [],
+      overall: (d.claudeResponse?.overall as string) ?? '',
     },
     gptFinal: {
-      consensus: !!data?.gptFinal?.consensus,
-      agreed: data?.gptFinal?.agreed ?? [],
-      unresolved: data?.gptFinal?.unresolved ?? [],
-      recommendedActions: data?.gptFinal?.recommendedActions ?? [],
-      overall: data?.gptFinal?.overall ?? '',
+      consensus: !!d.gptFinal?.consensus,
+      agreed: (d.gptFinal?.agreed as string[]) ?? [],
+      unresolved: (d.gptFinal?.unresolved as PanelReview['gptFinal']['unresolved']) ?? [],
+      recommendedActions: (d.gptFinal?.recommendedActions as string[]) ?? [],
+      overall: (d.gptFinal?.overall as string) ?? '',
     },
-    models: data?.models ?? { claude: 'claude', gpt: 'gpt' },
+    models,
   };
 }
