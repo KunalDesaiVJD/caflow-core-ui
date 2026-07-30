@@ -54,6 +54,7 @@ import {
   isSeniorReviewer, createCorrection, loadCorrectionDetail, submitCorrection,
   signAsPreparer, approveAsSenior, markCorrectionFiled,
   rejectCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
+  undoCorrectionRow,
   type Correction, type CorrectionStatus, type CorrectionChallan,
   type CorrectionDeductee, type CorrectionAction, type Actor, type FieldDiff,
 } from "@/lib/tdsCorrections";
@@ -644,6 +645,23 @@ function CorrectionDetail({
   // own effects. Used after every edit — see the comment on `load`.
   const loadSilently = useCallback(() => { void load({ silent: true }); }, [load]);
 
+  // Undo one change back to the filed state. Silent refresh afterwards for the
+  // same reason every other edit uses one: never rebuild the screen under the
+  // user.
+  const handleUndoRow = useCallback(async (table: any, row: any) => {
+    if (!correction) return;
+    const err = await undoCorrectionRow(table, row);
+    if (err) { toast({ title: "Could not undo", description: err, variant: "destructive" }); return; }
+    await logCorrectionAction({
+      correctionId: correction.id, firmId: correction.firm_id, clientId: correction.client_id,
+      actionType: "CHANGE_UNDONE",
+      detail: `Reverted ${row?.deductee_name || row?.challan_serial_no || "row"} to its filed values`,
+      oldValue: row?.action ?? null, newValue: "unchanged", actor,
+    });
+    toast({ title: "Change undone", description: "The entry is back to its filed values." });
+    void load({ silent: true });
+  }, [correction, actor, toast, load]);
+
   const locked = isCorrectionLocked(correction?.status);
   // Entries freeze at the FIRST signature, not at filing — what the senior
   // reviews must be exactly what the preparer signed. The DB enforces this
@@ -656,6 +674,9 @@ function CorrectionDetail({
   // 20260729190000 made the correction tables column-identical to the live
   // ones and mirrors filing_id onto correction_id, so the engine's queries
   // work unchanged against this id.
+  // Memoised on PRIMITIVES, not on `correction` — a silent refresh replaces the
+  // correction object on every edit, and depending on the object would hand the
+  // grid a brand-new filingOverride each time, churning it for no reason.
   const correctionAsFiling = useMemo(() => correction ? ({
     id: correction.id,
     client_id: correction.client_id,
@@ -665,7 +686,11 @@ function CorrectionDetail({
     tds_forms: [correction.form_type],
     work_status: correction.status === "filed" ? "Filed" : "Under Process",
     tan: null,
-  }) as any : null, [correction]);
+  }) as any : null, [
+    correction?.id, correction?.client_id, correction?.firm_id,
+    correction?.financial_year, correction?.quarter, correction?.form_type,
+    correction?.status,
+  ]);
   const clientName = clients.find(c => c.id === correction?.client_id)?.name || "—";
   const delta = useMemo(() => summariseCorrection(challans, deductees), [challans, deductees]);
   const hasChanges = delta.added + delta.modified + delta.deleted + delta.challansTouched > 0;
@@ -923,6 +948,7 @@ function CorrectionDetail({
         // summary and the Original-vs-Corrected panel above this grid only
         // reflect an edit if we re-read after it.
         onCorrectionChanged={loadSilently}
+        onUndoCorrectionRow={handleUndoRow}
       />
 
       {/* Signature */}

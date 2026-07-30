@@ -35,7 +35,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  Plus, Trash2, Pencil, AlertTriangle, CheckCircle2,
+  Plus, Trash2, Pencil, AlertTriangle, CheckCircle2, Undo2,
   CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
 } from "lucide-react";
 import { generateGeniusExport } from "@/lib/genius-export";
@@ -129,6 +129,11 @@ interface Props {
    * trigger-set columns, so the parent has to re-read after every edit.
    */
   onCorrectionChanged?: () => void;
+  /** Revert one correction row to its filed state. */
+  onUndoCorrectionRow?: (
+    table: "tds_correction_challans" | "tds_correction_deductees",
+    row: any,
+  ) => void | Promise<void>;
 }
 
 /** The table pair this engine reads and writes. */
@@ -369,7 +374,7 @@ function CorrectionOriginalRow({ original, current, form }: {
 export function TdsDataEntry({
   clients, users, isSuperadmin, resolveFirmId,
   selClient, setSelClient, selFy, setSelFy, selQuarter, setSelQuarter, selForm, setSelForm,
-  source, filingOverride, forceReadOnly, onCorrectionChanged,
+  source, filingOverride, forceReadOnly, onCorrectionChanged, onUndoCorrectionRow,
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -438,9 +443,16 @@ export function TdsDataEntry({
   // the Dashboard's Status dropdown just to reflect that work has begun.
   const bumpUnderProcess = useCallback(async () => {
     if (!filing) return;
+    // NOT in correction mode. `filing.id` is the CORRECTION's id there, and
+    // this writes to tds_filings — so every correction edit issued a wrong-id
+    // write against the filings table, which then fired the module-wide
+    // tds_filings realtime subscription and refreshed the whole TDS module.
+    // A correction has its own lifecycle (draft → … → filed); it must not move
+    // the original filing's work_status either.
+    if (isCorrectionMode) return;
     const flipped = await markUnderProcessIfNotStarted(filing.id, filing.work_status, user?.id);
     if (flipped) setFiling(prev => (prev ? { ...prev, work_status: "Under Process" } : prev));
-  }, [filing, user?.id]);
+  }, [filing, user?.id, isCorrectionMode]);
 
   // ─── Load Filing (Issue 6: try-catch, never crash, empty state on error) ───
   const loadFiling = useCallback(async () => {
@@ -1912,7 +1924,12 @@ export function TdsDataEntry({
                             <Card
                               className={cn("cursor-pointer transition-all hover:shadow-sm flex-shrink-0 w-60",
                                 selectedChallan?.id === c.id ? "border-primary ring-1 ring-primary/30" : "",
-                                isFilingLocked ? "bg-muted/50" : "")}
+                                isFilingLocked ? "bg-muted/50" : "",
+                                // Same colour language as the entry rows.
+                                isCorrectionMode && (c as any).action === "add" && "border-l-[3px] border-l-emerald-500",
+                                isCorrectionMode && (c as any).action === "modify" && "border-l-[3px] border-l-amber-500",
+                                isCorrectionMode && (c as any).action === "delete" && "border-l-[3px] border-l-red-500 opacity-60",
+                              )}
                               onClick={() => selectChallan(c)}>
                               <CardContent className="p-2.5 space-y-1">
                                 <div className="flex items-start justify-between gap-1">
@@ -1928,6 +1945,17 @@ export function TdsDataEntry({
                                       <Badge variant="outline" className="text-[9px] px-1 border-primary/40 text-primary">
                                         Shared with {c.form_type}
                                       </Badge>
+                                    )}
+                                    {/* Correction mode: which challans changed, so a
+                                        long strip can be scanned at a glance. */}
+                                    {isCorrectionMode && (c as any).action === "add" && (
+                                      <Badge className="text-[9px] px-1 bg-emerald-100 text-emerald-700">Added</Badge>
+                                    )}
+                                    {isCorrectionMode && (c as any).action === "modify" && (
+                                      <Badge className="text-[9px] px-1 bg-amber-100 text-amber-700">Modified</Badge>
+                                    )}
+                                    {isCorrectionMode && (c as any).action === "delete" && (
+                                      <Badge className="text-[9px] px-1 bg-red-100 text-red-700">Deleted</Badge>
                                     )}
                                   </div>
                                   {/* Issue 2: Hide Edit/Delete when filed */}
@@ -2242,6 +2270,15 @@ export function TdsDataEntry({
                                       {act === "modify" && <Badge className="text-[9px] bg-amber-100 text-amber-700">Modified</Badge>}
                                       {act === "delete" && <Badge className="text-[9px] bg-red-100 text-red-700">Deleted</Badge>}
                                       {(!act || act === "unchanged") && <span className="text-muted-foreground">—</span>}
+                                      {act && act !== "unchanged" && !isFilingLocked && onUndoCorrectionRow && (
+                                        <Button
+                                          variant="ghost" size="icon" className="h-5 w-5 ml-1"
+                                          title="Undo this change — restore the filed values"
+                                          onClick={e => { e.stopPropagation(); onUndoCorrectionRow(SRC.deductees as any, d); }}
+                                        >
+                                          <Undo2 size={11} />
+                                        </Button>
+                                      )}
                                     </TableCell>
                                   )}
                                   {selForm === "24Q" ? (

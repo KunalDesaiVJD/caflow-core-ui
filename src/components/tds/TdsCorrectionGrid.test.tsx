@@ -3,7 +3,7 @@ import { describe, it, vi, expect } from "vitest";
 vi.mock("@/integrations/supabase/client", () => {
   const rowsFor = (n: string) => {
     if (n === "tds_corrections") return [{ id:"corr1",firm_id:"firm1",client_id:"c1",financial_year:"2025-26",quarter:"Q1",form_type:"26Q",status:"draft" }];
-    if (n === "tds_correction_challans") return [{ id:"cch1",filing_id:"corr1",correction_id:"corr1",action:"unchanged",challan_serial_no:"14755",client_id:"c1",form_type:"26Q",financial_year:"2025-26",quarter:"Q1",total_challan_amount:14214 }];
+    if (n === "tds_correction_challans") return [{ id:"cch1",filing_id:"corr1",correction_id:"corr1",action:"modify",challan_serial_no:"14755",client_id:"c1",form_type:"26Q",financial_year:"2025-26",quarter:"Q1",total_challan_amount:14214 }];
     if (n === "tds_correction_deductees") return [
       { id:"d1",filing_id:"corr1",challan_id:"cch1",correction_id:"corr1",action:"unchanged",client_id:"c1",deductee_name:"KEPT",total_tax_deducted:3800,interest_amount:0 },
       { id:"d3",filing_id:"corr1",challan_id:"cch1",correction_id:"corr1",action:"delete",client_id:"c1",deductee_name:"REMOVED",total_tax_deducted:900,interest_amount:0 },
@@ -46,5 +46,9 @@ describe("correction grid", () => {
     expect(t).toContain("Deductees: 1");
     // ...while the removed entry is still on screen, badged
     expect(t).toContain("Deleted");
+    // challan strip carries its own badge so a long strip can be scanned
+    expect(t).toContain("Modified");
+    // and an Undo control is offered on the changed entry
+    expect(document.querySelectorAll('[title^="Undo this change"]').length).toBeGreaterThan(0);
   });
 });

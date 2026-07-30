@@ -562,6 +562,59 @@ export function diffCorrectionRow(row: any): FieldDiff[] {
   return out;
 }
 
+// ─── Undo ───────────────────────────────────────────────────────────────────
+
+/**
+ * Undo one change, returning the row to exactly how it was filed.
+ *
+ *   added    -> the row only ever existed in this correction, so it is removed
+ *   modified -> every field is restored from the pre-edit snapshot
+ *   deleted  -> the row comes back (and its values are restored, since a
+ *               delete may have followed an edit)
+ *
+ * `original_values` is the snapshot the DB took the instant before the first
+ * edit, so restoring from it reproduces the filed state exactly rather than
+ * guessing. Clearing action + original_values afterwards makes the row
+ * indistinguishable from one that was never touched — which is the point.
+ */
+export async function undoCorrectionRow(
+  table: "tds_correction_challans" | "tds_correction_deductees",
+  row: { id: string; action: CorrectionAction; original_values?: any },
+): Promise<string | null> {
+  if (row.action === "add") {
+    // A row added inside this correction has no filed original. The soft-delete
+    // trigger only preserves rows that came from the filing, so this really
+    // removes it.
+    const { error } = await supabase.from(table as any).delete().eq("id", row.id);
+    return error?.message ?? null;
+  }
+
+  const snapshot = row.original_values;
+  if (!snapshot || typeof snapshot !== "object") {
+    // Nothing to restore from — at least clear the marking so the row stops
+    // claiming to be changed.
+    const { error } = await supabase.from(table as any)
+      .update({ action: "unchanged", updated_at: new Date().toISOString() })
+      .eq("id", row.id);
+    return error?.message ?? null;
+  }
+
+  // Restore every snapshotted column, then clear the marking. `action` is set
+  // last in the same statement so the mark-modified trigger — which only fires
+  // on an 'unchanged' row — cannot re-flag this as a modification.
+  const restore: Record<string, any> = {};
+  for (const [k, v] of Object.entries(snapshot)) {
+    if (k === "id" || k === "action" || k === "original_values") continue;
+    restore[k] = v;
+  }
+  restore.action = "unchanged";
+  restore.original_values = null;
+  restore.updated_at = new Date().toISOString();
+
+  const { error } = await supabase.from(table as any).update(restore).eq("id", row.id);
+  return error?.message ?? null;
+}
+
 // ─── Summary of what changed ────────────────────────────────────────────────
 
 export interface CorrectionDelta {
