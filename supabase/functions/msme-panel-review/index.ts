@@ -135,11 +135,7 @@ async function callClaude(apiKey: string, system: string, userText: string): Pro
   if (!res.ok) {
     const t = await res.text();
     console.error("Anthropic error:", res.status, t);
-    throw new Error(
-      res.status === 401 || res.status === 403
-        ? "Claude authentication failed — check ANTHROPIC_API_KEY."
-        : `Claude call failed (${res.status}).`,
-    );
+    throw new Error(describeProviderError(res.status, t, CLAUDE_MODEL).error);
   }
   const body = await res.json();
   return parseJson(body.content?.[0]?.text || "");
@@ -262,4 +258,58 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+/**
+ * Turn an Anthropic HTTP failure into something the firm can act on.
+ *
+ * The provider states the actual cause in the body, and each cause has a
+ * different remedy: a spent credit balance needs a payment, a retired model
+ * needs a code change, a rate limit needs a wait. Collapsing all of them into
+ * "AI extraction failed" is what sent a plain billing problem to the server
+ * logs instead of to the person who could fix it in two minutes.
+ */
+function describeProviderError(
+  status: number,
+  body: string,
+  model: string,
+): { error: string; status: number } {
+  let providerMsg = "";
+  try {
+    providerMsg = String((JSON.parse(body) as { error?: { message?: string } })?.error?.message ?? "");
+  } catch {
+    // Not JSON — fall through to the status-based cases.
+  }
+
+  // Billing. A 400, not a 401, so it used to land in the generic bucket.
+  if (/credit balance is too low|insufficient.*credit|purchase credits|billing/i.test(providerMsg)) {
+    return {
+      error:
+        "The Anthropic account has no credits left, so no ledger can be read. Add credits at " +
+        "console.anthropic.com under Plans & Billing. This affects every AI feature in the app, " +
+        "not only this one — the same key is shared.",
+      status: 402,
+    };
+  }
+  if (status === 401 || status === 403) {
+    return { error: "AI provider authentication failed. Update the ANTHROPIC_API_KEY secret.", status: 401 };
+  }
+  if (status === 429) {
+    return {
+      error: "The AI provider is rate-limiting this account. Wait a minute and try again, or upload fewer files at once.",
+      status: 429,
+    };
+  }
+  if (status === 404 || /model/i.test(providerMsg)) {
+    return {
+      error: `The AI provider will not serve the model "${model}": ${providerMsg || "model not found"}. ` +
+        "Update MODEL in this function and redeploy it.",
+      status: 502,
+    };
+  }
+  // Anything else: say what the provider said rather than inventing a summary.
+  return {
+    error: providerMsg ? `AI provider error (HTTP ${status}): ${providerMsg}` : `AI provider call failed (HTTP ${status}).`,
+    status: status >= 500 ? 502 : status,
+  };
 }
