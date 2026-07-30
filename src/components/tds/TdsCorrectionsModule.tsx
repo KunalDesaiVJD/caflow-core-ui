@@ -51,7 +51,7 @@ import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { TdsDataEntry, CORRECTION_TDS_SOURCE } from "./TdsDataEntry";
 import {
   CORRECTION_STATUS_META, isCorrectionLocked, isCorrectionEditable,
-  isSeniorReviewer, createCorrection, loadCorrectionDetail, submitCorrection,
+  createCorrection, loadCorrectionDetail, submitCorrection,
   signAsPreparer, approveAsSenior, markCorrectionFiled,
   rejectCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
   undoCorrectionRow, uploadCorrectionProof, canMarkFiled, effectiveCorrectionAction,

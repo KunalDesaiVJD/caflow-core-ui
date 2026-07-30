@@ -925,7 +925,7 @@ export function TdsValidateFinalise({
   useEffect(() => {
     setActiveFilter(null); setErrorTypeFilter(null);
     setAuditStatusFilter("all"); setAuditErrorTypeFilter("all"); setCollapsedStages(new Set());
-    setSignerNameInput(""); setAttestChecked(false); setSignature(null);
+    setAttestChecked(false); setSignature(null);
     setPanStatus(PAN_STATUS_BLOCKED); setTallyStatus({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 });
   }, [selClient, selFy, selQuarter, selForm]);
 
