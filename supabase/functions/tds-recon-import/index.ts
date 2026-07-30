@@ -50,6 +50,11 @@ const corsFor = (req: Request) => ({
 });
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+// Everything the firm routes through OpenRouter runs on Claude Haiku, by
+// standing instruction. One model across every function keeps the spend
+// predictable and the behaviour comparable between them.
+const OPENROUTER_DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
+
 
 const CANONICAL_INSTRUCTION = `You normalise a client's TDS statement into canonical rows.
 Client files use WILDLY different column headers, capitalisation, spacing,
@@ -220,7 +225,7 @@ async function callAI(opts: {
   let last: AIResult = { ok: false, status: 503, errText: "No AI provider configured. Set OPENROUTER_API_KEY, LOVABLE_API_KEY or ANTHROPIC_API_KEY.", content: "", truncated: false };
 
   if (OPENROUTER) {
-    const r = await openAICompat("https://openrouter.ai/api/v1/chat/completions", OPENROUTER, Deno.env.get("OPENROUTER_MODEL") || "google/gemini-2.5-flash", "file", { "HTTP-Referer": "https://caflow.app", "X-Title": "CAFlow TDS Recon" });
+    const r = await openAICompat("https://openrouter.ai/api/v1/chat/completions", OPENROUTER, Deno.env.get("OPENROUTER_MODEL") || OPENROUTER_DEFAULT_MODEL, "file", { "HTTP-Referer": "https://caflow.app", "X-Title": "CAFlow TDS Recon" });
     if (r.ok) return r; last = r; console.error("callAI: OpenRouter failed", r.status, r.errText.slice(0, 160));
   }
   if (LOVABLE) {
