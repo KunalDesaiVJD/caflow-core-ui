@@ -1143,7 +1143,7 @@ export function TdsValidateFinalise({
           { label: "Total", value: tallyStatus.total }, { label: "Matched", value: tallyStatus.matched },
           { label: "Issues", value: tallyStatus.issues }, { label: "Overridden", value: tallyStatus.overridden },
         ],
-        status: !tallyStatus.applicable ? "Not applicable" : !tallyStatus.ran ? "Not run" : tallyStatus.issues === 0 ? "Complete" : `${tallyStatus.issues} unresolved`,
+        status: tallyStatus.bypassed ? "Bypassed (client's Tally data not maintained)" : !tallyStatus.applicable ? "Not applicable" : !tallyStatus.ran ? "Not run" : tallyStatus.issues === 0 ? "Complete" : `${tallyStatus.issues} unresolved`,
       },
       {
         title: "Stage 4 · Checker Review", applicable: true, ran: stage1Ran,
@@ -1739,7 +1739,8 @@ export function TdsValidateFinalise({
                               {!tallyStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage3Ready ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
                               <span className={!tallyStatus.applicable ? "text-muted-foreground" : stage3Ready ? "text-foreground" : "text-muted-foreground"}>
                                 Stage 3 · Tally reconciliation{
-                                  !tallyStatus.applicable ? " — optional (no Tally ledger imported)"
+                                  tallyStatus.bypassed ? " — bypassed (client's Tally data not maintained)"
+                                  : !tallyStatus.applicable ? " — optional (no Tally ledger imported)"
                                   : !tallyStatus.ran ? " — not run"
                                   : tallyStatus.issues > 0 ? ` — ${tallyStatus.issues} unresolved`
                                   : " — complete"}

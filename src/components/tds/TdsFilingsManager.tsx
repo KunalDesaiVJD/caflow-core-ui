@@ -800,7 +800,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
    *  `!applicable || issues === 0` gate), not as an open issue. */
   const fetchVfStatuses = async (filingIds: string[]) => {
     if (filingIds.length === 0) { setVfStatuses(new Map()); return; }
-    const [s1Res, panBatchRes, panResRes, tallyBatchRes, tallyResRes, sigRes] = await Promise.all([
+    const [s1Res, panBatchRes, panResRes, tallyBatchRes, tallyResRes, sigRes, tallyBypassRes] = await Promise.all([
       supabase.from("tds_recon_results").select("filing_id, match_status, overridden").in("filing_id", filingIds),
       supabase.from("tds_pan_verification_batches").select("filing_id").in("filing_id", filingIds),
       supabase.from("tds_pan_verification_results").select("filing_id, validation_result, overridden").in("filing_id", filingIds),
@@ -808,6 +808,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       supabase.from("tds_tally_results").select("filing_id, result, overridden").in("filing_id", filingIds),
       supabase.from("tds_filing_audit_log").select("filing_id, action_type, new_value, changed_at")
         .in("filing_id", filingIds).in("action_type", ["CHECKER_SIGNATURE", "CHECKER_SIGNATURE_REVOKED"])
+        .order("changed_at", { ascending: true }),
+      // Bypass Tally Verification (TdsTallyRecon.tsx) — a client whose books
+      // aren't maintained in Tally at all. Without this, a bypassed filing's
+      // Dashboard badge would stay stuck on Stage 3 forever, since it would
+      // otherwise treat "no tds_tally_batches row" as Stage 3 still pending
+      // rather than deliberately skipped.
+      supabase.from("tds_filing_audit_log").select("filing_id, action_type, changed_at")
+        .in("filing_id", filingIds).in("action_type", ["TALLY_VERIFICATION_BYPASSED", "TALLY_VERIFICATION_BYPASS_UNDONE"])
         .order("changed_at", { ascending: true }),
     ]);
 
@@ -827,6 +835,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const s3ByFiling = groupByFiling(tallyResRes.data, (r) => r.result !== "Matched");
     const s2Applicable = new Set((panBatchRes.data || []).map((b: any) => b.filing_id));
     const s3Applicable = new Set((tallyBatchRes.data || []).map((b: any) => b.filing_id));
+
+    // Latest bypass action per filing wins — same "later action undoes an
+    // earlier one" rule as the signature below.
+    const s3Bypassed = new Set<string>();
+    for (const row of tallyBypassRes.data || []) {
+      if (row.action_type === "TALLY_VERIFICATION_BYPASSED") s3Bypassed.add(row.filing_id);
+      else s3Bypassed.delete(row.filing_id);
+    }
 
     // Latest signature action per filing wins — a later revoke undoes an
     // earlier sign (same rule TdsValidateFinalise's own loadAll uses).
@@ -849,10 +865,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       const s2: VfState = !s2app ? "done" : !s2c ? "none" : s2c.issues > 0 ? "warn" : "done";
       const s2Detail = !s2app ? "Not applicable (no TRACES file imported)" : !s2c ? "Not run" : s2c.issues > 0 ? `${s2c.issues} unresolved PAN issue${s2c.issues === 1 ? "" : "s"}` : "Completed";
 
-      const s3app = s3Applicable.has(id);
+      const s3bypassed = s3Bypassed.has(id);
+      const s3app = s3Applicable.has(id) && !s3bypassed;
       const s3c = s3ByFiling.get(id);
       const s3: VfState = !s3app ? "done" : !s3c ? "none" : s3c.issues > 0 ? "warn" : "done";
-      const s3Detail = !s3app ? "Not applicable (no Tally ledger imported)" : !s3c ? "Not run" : s3c.issues > 0 ? `${s3c.issues} unresolved mismatch${s3c.issues === 1 ? "" : "es"}` : "Completed";
+      const s3Detail = s3bypassed ? "Bypassed (client's Tally data not maintained)" : !s3app ? "Not applicable (no Tally ledger imported)" : !s3c ? "Not run" : s3c.issues > 0 ? `${s3c.issues} unresolved mismatch${s3c.issues === 1 ? "" : "es"}` : "Completed";
 
       // Stage 4 (Checker Review) has no data of its own — it's a consolidated
       // review of Stage 1-3, so it's "done" exactly when they all are, same

@@ -772,6 +772,46 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     setResults((p) => p ? p.map((x) => x.id === r.id ? { ...x, overridden: false, override_reason: null } : x) : p);
   };
 
+  /** Bypass Tally Verification — for a client whose books aren't maintained in
+   *  Tally at all, so there is nothing to ever import. One click + a single
+   *  confirmation, no typed reason: the checkbox text itself IS the reason
+   *  ("this client's data is not maintained in Tally"), so there's nothing a
+   *  free-text field would capture that the fixed remark below doesn't already
+   *  say. Persisted as a tds_filing_audit_log entry (no migration), mirroring
+   *  the Stage-4 CHECKER_SIGNATURE/CHECKER_SIGNATURE_REVOKED pair exactly. */
+  const handleBypassTally = async () => {
+    if (!filing || !user?.id) return;
+    if (!bypassConfirmChecked) { toast({ title: "Confirmation required", description: "Confirm the client's Tally data is not maintained before bypassing.", variant: "destructive" }); return; }
+    setBypassSaving(true);
+    const byName = userMap[user.id] || user.email || "Unknown";
+    await logReconAudit({
+      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: byName,
+      actionType: "TALLY_VERIFICATION_BYPASSED", newValue: byName,
+      remark: "Client's Tally data is not maintained — Stage 3 bypassed by user confirmation.",
+    });
+    // Same Realtime nudge the Stage-4 signature uses — bypassing changes
+    // whether this filing is ready-to-file, so the Dashboard badge (which
+    // only refetches on a tds_filings change) needs to hear about it too.
+    await supabase.from("tds_filings").update({ last_updated_by: user.id, last_updated_at: new Date().toISOString() }).eq("id", filing.id);
+    setBypass({ byName, at: new Date().toISOString() });
+    setBypassSaving(false); setBypassOpen(false); setBypassConfirmChecked(false);
+    toast({ title: "Tally verification bypassed", description: "Stage 3 is marked complete. You can undo this if the client's Tally data becomes available." });
+    onActivity?.();
+  };
+
+  const handleUndoBypassTally = async () => {
+    if (!filing || !user?.id || !bypass) return;
+    setBypassSaving(true);
+    await logReconAudit({
+      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: userMap[user.id],
+      actionType: "TALLY_VERIFICATION_BYPASS_UNDONE", oldValue: bypass.byName,
+      remark: "Bypass undone — Tally verification required again.",
+    });
+    await supabase.from("tds_filings").update({ last_updated_by: user.id, last_updated_at: new Date().toISOString() }).eq("id", filing.id);
+    setBypass(null);
+    setBypassSaving(false);
+  };
+
   /** Stage-3 report — the ledger reconciliation as it stands right now. */
   const stage3Report = (): StageReport => {
     const rs = results || [];
@@ -845,8 +885,15 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       }));
 
   useEffect(() => {
-    onStatusChange?.({ getReport: stage3Report, getAuditRows: tallyAuditRows, filingId, loaded: settled.current === filingId, applicable: batches.length > 0, ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden });
-  }, [filingId, batches, results, summary, onStatusChange]);
+    onStatusChange?.({
+      getReport: stage3Report, getAuditRows: tallyAuditRows, filingId, loaded: settled.current === filingId,
+      // A deliberate bypass makes this stage not-applicable exactly like never
+      // having imported a ledger does — see TallyStageStatus's own doc on why
+      // `bypassed` rides alongside rather than replacing that check.
+      applicable: batches.length > 0 && !bypass, bypassed: !!bypass,
+      ran: results !== null, total: summary.total, matched: summary.matched, issues: summary.issues, overridden: summary.overridden,
+    });
+  }, [filingId, batches, results, summary, bypass, onStatusChange]);
 
   /** Matches office_name OR tally_party — a name only ever embedded as text
    *  inside a DIFFERENT record's card (the ledger side of a paired dispute, or a
@@ -1291,6 +1338,32 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
 
   if (!filing) return null;
 
+  // Bypassed — Stage 3 is deliberately marked complete, no ledger to reconcile
+  // against. Replaces the normal import/reconcile UI entirely rather than
+  // sitting alongside it, so there's nothing left implying more is expected.
+  if (bypass) {
+    return (
+      <div className="space-y-3">
+        <Card className="border-emerald-200 dark:border-emerald-800">
+          <CardContent className="p-4 space-y-2">
+            <div className="flex items-center gap-2">
+              <ShieldCheck size={16} className="text-emerald-600" />
+              <p className="text-sm font-semibold">Tally Verification Bypassed</p>
+            </div>
+            <p className="text-xs text-emerald-700 dark:text-emerald-300">
+              ✓ Client's Tally data is not maintained — bypassed by <b>{bypass.byName}</b> on {new Date(bypass.at).toLocaleString("en-IN")}. Stage 3 is marked complete.
+            </p>
+            {!disabled && (
+              <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={bypassSaving} onClick={handleUndoBypassTally}>
+                <RotateCcw size={12} /> Undo Bypass
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       <div className="grid gap-2 md:grid-cols-2 items-start">
@@ -1348,6 +1421,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           {validating ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}{validating ? "Validating…" : "Run Validation"}
         </Button>
         {!batches.length ? <span className="text-xs text-muted-foreground">Import the Tally ledger to enable reconciliation.</span> : officeCount === 0 ? <span className="text-xs text-muted-foreground">No office records to reconcile.</span> : null}
+        {!batches.length && !disabled && (
+          <Button variant="outline" size="sm" className="gap-1.5 h-9 text-xs" onClick={() => setBypassOpen(true)}>
+            <ShieldCheck size={13} /> Bypass Tally Verification
+          </Button>
+        )}
         <div className="flex-1" />
         {results && (
           <TdsExportMenu
@@ -1432,6 +1510,27 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           </div>
           <DialogFooter><Button variant="outline" onClick={() => setOvOpen(false)}>Cancel</Button>
             <Button onClick={saveOverride} disabled={savingOv || !ovReason || (ovReason === "Other" && !ovOther.trim())}>{savingOv ? "Saving…" : "Confirm Override"}</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bypassOpen} onOpenChange={(v) => { setBypassOpen(v); if (!v) setBypassConfirmChecked(false); }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Bypass Tally Verification</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2">
+            <p className="text-sm text-muted-foreground">
+              Use this only when the client's books are not maintained in Tally at all, so there is no ledger to ever import. Stage 3 will be marked complete and the filing can proceed to Stage 4 without a Tally reconciliation.
+            </p>
+            <div className="flex items-start gap-2">
+              <Checkbox id="tally-bypass-confirm" checked={bypassConfirmChecked} onCheckedChange={(v) => setBypassConfirmChecked(!!v)} className="mt-0.5" />
+              <Label htmlFor="tally-bypass-confirm" className="text-xs font-normal leading-snug">
+                I confirm this client's Tally data is not maintained, and Stage 3 verification does not apply to this filing.
+              </Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setBypassOpen(false); setBypassConfirmChecked(false); }}>Cancel</Button>
+            <Button onClick={handleBypassTally} disabled={bypassSaving || !bypassConfirmChecked}>{bypassSaving ? "Saving…" : "Confirm Bypass"}</Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
