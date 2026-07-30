@@ -19,6 +19,7 @@ import type { Msme43bReport } from './types';
 import type { Msme43bConfig } from './config';
 import { disclosedAssumptions, type RuleProfile } from './rules';
 import type { CalibrationResult } from './calibrate';
+import { describeFunctionError } from './invokeError';
 
 export interface PanelPosition { topic: string; assessment: 'sound' | 'arguable' | 'wrong'; reasoning: string }
 export interface PanelChallenge { topic: string; agree: boolean; objection: string; authority: string }
@@ -121,7 +122,12 @@ export async function runPanelReview(input: PanelEvidenceInput): Promise<PanelRe
   const { data, error } = await supabase.functions.invoke('msme-panel-review', {
     body: { evidence: buildEvidence(input) },
   });
-  if (error) throw new Error(error.message || 'The review panel could not be run.');
+  if (error) {
+    // Not error.message: that is the opaque "non-2xx status code" for every
+    // failure. The reason is in the response body — read it out.
+    const described = await describeFunctionError(error, 'msme-panel-review', 'The review panel');
+    throw new Error(described.message);
+  }
   if (data?.error) throw new Error(data.error);
 
   // Defensive shaping — a model that returns a partial object should degrade to

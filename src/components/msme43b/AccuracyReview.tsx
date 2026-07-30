@@ -68,6 +68,14 @@ export function AccuracyReview(props: AccuracyReviewProps) {
   const [calib, setCalib] = useState<CalibrationResult | null>(null);
   const [accepted, setAccepted] = useState<Set<number>>(new Set());
   const [ai, setAi] = useState<AiReview | null>(null);
+  /**
+   * A failure with diagnostic text is KEPT ON SCREEN. A toast is fine for a
+   * validation slip the reviewer can retry immediately, but a server-side reason
+   * — a spent account, a withdrawn model, an unreadable layout — is the text they
+   * need in order to tell anyone what went wrong, and a toast takes it away
+   * before it can be read.
+   */
+  const [failure, setFailure] = useState<string | null>(null);
   const [showAssumptions, setShowAssumptions] = useState(false);
   const [matchTolerance, setMatchTolerance] = useState(1);
 
@@ -89,6 +97,7 @@ export function AccuracyReview(props: AccuracyReviewProps) {
   // ── upload the reviewer's working ───────────────────────────────────────
   const onUpload = useCallback(async (file: File) => {
     setBusy('parse');
+    setFailure(null);
     setCalib(null); setAi(null); setAccepted(new Set());
     try {
       const parsed = await parseExpectedWorking(file);
@@ -101,7 +110,7 @@ export function AccuracyReview(props: AccuracyReviewProps) {
       for (const w of parsed.warnings) toast.warning(w);
       toast.success(`Read ${parsed.rows.length} vendor row(s) from your working.`);
     } catch (e) {
-      toast.error(`Could not read the working paper: ${(e as Error).message}`);
+      setFailure(`Could not read the working paper: ${(e as Error).message}`);
     } finally {
       setBusy(null);
     }
@@ -111,6 +120,7 @@ export function AccuracyReview(props: AccuracyReviewProps) {
   const runCalibration = useCallback(() => {
     if (!expected) return;
     setBusy('calibrate');
+    setFailure(null);
     // Yield a frame so the spinner paints before the synchronous search.
     setTimeout(() => {
       try {
@@ -131,7 +141,7 @@ export function AccuracyReview(props: AccuracyReviewProps) {
           toast.success(`Found ${res.proposals.length} candidate rule change(s) from ${res.variantsEvaluated} configurations tested.`);
         }
       } catch (e) {
-        toast.error(`Calibration failed: ${(e as Error).message}`);
+        setFailure(`Calibration failed: ${(e as Error).message}`);
       } finally {
         setBusy(null);
       }
@@ -142,10 +152,11 @@ export function AccuracyReview(props: AccuracyReviewProps) {
   const askClaude = useCallback(async () => {
     if (!calib) return;
     setBusy('ai');
+    setFailure(null);
     try {
       setAi(await reviewDifference(calib, { cyLabel: report.cyLabel, fyLabel: report.fyLabel }));
     } catch (e) {
-      toast.error(`AI review failed: ${(e as Error).message}`);
+      setFailure(`AI review failed: ${(e as Error).message}`);
     } finally {
       setBusy(null);
     }
@@ -191,6 +202,20 @@ export function AccuracyReview(props: AccuracyReviewProps) {
       </CardHeader>
 
       <CardContent className="space-y-4">
+        {failure && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>That step could not be completed</AlertTitle>
+            <AlertDescription className="text-sm">
+              {failure}
+              <p className="text-xs mt-2">
+                The disallowance figures are unaffected — they come from the deterministic engine.
+                Nothing has been adopted or changed.
+              </p>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* ── assumptions in force ── */}
         <div className="rounded-md border bg-muted/30 p-3 space-y-2">
           <button
