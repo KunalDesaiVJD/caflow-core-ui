@@ -243,7 +243,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
     expect(rows[0].party).toBe("Nevil Thummar - Salary");
-    expect(rows[0].credit).toBe(31372);      // the voucher's own debit — NOT 49372
+    expect(rows[0].credit).toBe(31172);      // 31,372 debit, minus the 200 Professional Tax — NOT 49372
     expect(rows[0].date).toBe("30-Apr-26");
   });
 
@@ -262,7 +262,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
     expect(rows[0].party).toBe("Kunjal Hasmukhbhai Gami - Salary");
-    expect(rows[0].credit).toBe(39705);
+    expect(rows[0].credit).toBe(39505);   // 39,705 debit, minus the 200 Professional Tax
   });
 
   // TAXABLE INCOME IS SPLIT ACROSS SEVERAL Dr LINES. Reproduced verbatim from
@@ -293,7 +293,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
     expect(rows[0].party).toBe("Nevil Thummar - Salary");
-    expect(rows[0].credit).toBe(51372);          // 31,372 + 20,000
+    expect(rows[0].credit).toBe(51172);          // 31,372 + 20,000 - 200 Professional Tax
     expect(rows[0].amountKind).toBe("taxable_income");
   });
 
@@ -328,7 +328,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
     expect(rows[0].party).toBe("Krunal Rajendrakumar Nayak");
-    expect(rows[0].credit).toBe(32261);            // the voucher's own debit
+    expect(rows[0].credit).toBe(32061);            // 32,261 debit, minus the 200 Professional Tax
     expect(rows[0].amountKind).toBe("taxable_income");
   });
 
@@ -380,7 +380,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
     expect(rows[0].party).toBe("Madhukant Kanjibhai Patel - Salary");
-    expect(rows[0].credit).toBe(200000);   // NOT 219,800
+    expect(rows[0].credit).toBe(199800);   // NOT 219,800 (TDS contra) — 200,000 minus 200 Professional Tax
   });
 
   it("never adds an explicitly TDS-labelled debit either", () => {
@@ -509,7 +509,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
     expect(rows[0].party).toBe("Keshviben Hasmukhbhau Gami - Salary");
-    expect(rows[0].credit).toBe(25000);   // the voucher's own debit total
+    expect(rows[0].credit).toBe(24800);   // 25,000 debit, minus the 200 Professional Tax
   });
 
   it("does the same across two consecutive wrapped-name vouchers with no cross-contamination (real Devansiben/Uttamkumar case)", () => {
@@ -534,8 +534,8 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     ];
     const { rows } = parseTallyPdfPages([page]);
     expect(rows.map(r => ({ party: r.party, credit: r.credit }))).toEqual([
-      { party: "Uttamkumar Vinodbhai Thummar - Salary", credit: 73038 },
-      { party: "Devansiben Mukeshbhai Panchal - Salary", credit: 23038 },
+      { party: "Uttamkumar Vinodbhai Thummar - Salary", credit: 72838 },   // 73,038 - 200 PT
+      { party: "Devansiben Mukeshbhai Panchal - Salary", credit: 22838 },  // 23,038 - 200 PT
     ]);
   });
 });

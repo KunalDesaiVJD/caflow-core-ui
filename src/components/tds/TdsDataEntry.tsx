@@ -123,6 +123,12 @@ interface Props {
   filingOverride?: TdsFiling | null;
   /** Force read-only regardless of work_status (e.g. a filed correction). */
   forceReadOnly?: boolean;
+  /**
+   * Called after any successful write in correction mode. The change summary
+   * and Original-vs-Corrected panel live in the PARENT and are derived from
+   * trigger-set columns, so the parent has to re-read after every edit.
+   */
+  onCorrectionChanged?: () => void;
 }
 
 /** The table pair this engine reads and writes. */
@@ -363,7 +369,7 @@ function CorrectionOriginalRow({ original, current, form }: {
 export function TdsDataEntry({
   clients, users, isSuperadmin, resolveFirmId,
   selClient, setSelClient, selFy, setSelFy, selQuarter, setSelQuarter, selForm, setSelForm,
-  source, filingOverride, forceReadOnly,
+  source, filingOverride, forceReadOnly, onCorrectionChanged,
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -1031,6 +1037,7 @@ export function TdsDataEntry({
         auditChallanCreate();
         await refreshChallansAndCF(filing.id);
         await bumpUnderProcess();
+        onCorrectionChanged?.();
         return;
       }
     }
@@ -1040,6 +1047,7 @@ export function TdsDataEntry({
     auditChallanCreate();
     await refreshChallansAndCF(filing.id);
     await bumpUnderProcess();
+    onCorrectionChanged?.();
   };
 
   const deleteChallan = async (id: string) => {
@@ -1048,6 +1056,7 @@ export function TdsDataEntry({
     toast({ title: "Challan deleted" });
     if (filing) await refreshChallansAndCF(filing.id);
     await bumpUnderProcess();
+    onCorrectionChanged?.();
   };
 
   // ─── Deductee CRUD ───
@@ -1080,6 +1089,7 @@ export function TdsDataEntry({
       [selectedChallan.id]: [...(prev[selectedChallan.id] || []), newDed],
     }));
     await bumpUnderProcess();
+    onCorrectionChanged?.();
   };
 
   const updateDeducteeField = async (deducteeId: string, field: string, value: any) => {
@@ -1176,7 +1186,14 @@ export function TdsDataEntry({
       }
     }
 
-    const { error } = await supabase.from(SRC.deductees as any).update(updates).eq("id", deducteeId);
+    // Correction mode: return the stored row. action / original_values are set
+    // by DB TRIGGERS, so merging only what the client sent would leave the row
+    // looking unchanged (Change column "—", "No changes yet") until a reload —
+    // which is exactly the bug this avoids.
+    const upd = supabase.from(SRC.deductees as any).update(updates).eq("id", deducteeId);
+    const { data: savedRow, error } = isCorrectionMode
+      ? await (upd as any).select().maybeSingle()
+      : await upd;
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     // Audit trail — PAN / Section / LDC No. / LDC Rate edits only (the fields
     // explicitly asked to be tracked), and only when the value genuinely
@@ -1197,7 +1214,7 @@ export function TdsDataEntry({
         });
       }
     }
-    const merged = { ...deductee, ...updates };
+    const merged = { ...deductee, ...updates, ...((savedRow as any) || {}) };
     setDeductees(prev => prev.map(d => d.id === deducteeId ? merged : d));
     // Issue 7G: sync allChallanDeductees for instant balance update
     if (selectedChallan) {
@@ -1207,6 +1224,7 @@ export function TdsDataEntry({
       }));
     }
     await bumpUnderProcess();
+    onCorrectionChanged?.();
   };
 
   // Issue 7I: Delete + instant recalculation
@@ -1224,6 +1242,7 @@ export function TdsDataEntry({
     if (isCorrectionMode) {
       if (selectedChallan) await fetchDeductees(selectedChallan.id);
       await bumpUnderProcess();
+      onCorrectionChanged?.();
       return;
     }
 
@@ -1241,6 +1260,7 @@ export function TdsDataEntry({
       }
     }
     await bumpUnderProcess();
+    onCorrectionChanged?.();
   };
 
   // ─── 24Q Salary ───
@@ -1293,6 +1313,7 @@ export function TdsDataEntry({
     setSalaryDrawerOpen(false);
     toast({ title: "Salary details saved" });
     await bumpUnderProcess();
+    onCorrectionChanged?.();
   };
 
   // Entries that still COUNT. A correction shows deleted rows struck through
@@ -1423,6 +1444,7 @@ export function TdsDataEntry({
     setDeductees(prev => [...prev, data as unknown as Deductee]);
     toast({ title: "Row duplicated" });
     await bumpUnderProcess();
+    onCorrectionChanged?.();
   };
 
   useEffect(() => {
@@ -1602,6 +1624,7 @@ export function TdsDataEntry({
       }
 
       await bumpUnderProcess();
+      onCorrectionChanged?.();
     } catch (err: any) {
       console.error("[GeniusImport] Failed:", err);
       toast({

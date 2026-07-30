@@ -910,6 +910,10 @@ function CorrectionDetail({
         source={CORRECTION_TDS_SOURCE}
         filingOverride={correctionAsFiling}
         forceReadOnly={!editable}
+        // action / original_values are written by DB triggers, so the change
+        // summary and the Original-vs-Corrected panel above this grid only
+        // reflect an edit if we re-read after it.
+        onCorrectionChanged={load}
       />
 
       {/* Signature */}
