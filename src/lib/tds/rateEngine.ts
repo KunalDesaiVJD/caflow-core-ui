@@ -12,6 +12,26 @@ export interface RateEntry {
   rate_no_pan: number | null; threshold_individual: number | null;
   threshold_company: number | null;
   effective_from: string | null; effective_to: string | null;
+  // Income Tax Act 2025 / Section 393 reorganisation (effective 1-Apr-2026).
+  // Null on any row the reform doesn't (yet) have a verified mapping for —
+  // callers must fall back to the plain section_code label in that case.
+  payment_code?: string | null; new_section_code?: string | null;
+  new_section_description?: string | null;
+}
+
+/**
+ * Builds the "Payment Code : [Old Section] : New Section Code – Description"
+ * dropdown label mandated for the Section 393 reform, falling back to the
+ * plain "section_code — nature_of_payment" label when a row has no verified
+ * new-code mapping yet (see migration 20260730130000's header comment for
+ * why most sections are intentionally left unmapped).
+ */
+export function sectionDropdownLabel(r: RateEntry): string {
+  if (!r.payment_code || !r.new_section_code) {
+    return `${r.section_code} — ${r.nature_of_payment || ""}`;
+  }
+  const desc = r.new_section_description || r.nature_of_payment || "";
+  return `${r.payment_code} : [${r.section_code}] : ${r.new_section_code} – ${desc}`;
 }
 
 export const PAN_4TH_CHAR_MAP: Record<string, string> = {

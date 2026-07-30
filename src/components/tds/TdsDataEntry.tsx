@@ -4,6 +4,7 @@ import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import {
   PAN_4TH_CHAR_MAP, isValidPan, isIndividualRateType, getRateForSection as getRateForSectionPure,
   calcAutoInterest, isChallanOverApplied, isChallanFullyUtilised, computeApplied, balanceColorClass,
+  sectionDropdownLabel,
   type RateEntry,
 } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
@@ -436,7 +437,7 @@ export function TdsDataEntry({
   // getRateForSection in rateEngine.ts), so a rate that changed mid-year can
   // still resolve correctly by date_of_payment once such a row exists.
   const fetchRates = useCallback(async () => {
-    const { data } = await supabase.from("tds_rate_master").select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company, effective_from, effective_to")
+    const { data } = await supabase.from("tds_rate_master").select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company, effective_from, effective_to, payment_code, new_section_code, new_section_description")
       .eq("form_type", selForm).eq("financial_year", selFy).eq("is_active", true);
     setRateMaster((data || []) as RateEntry[]);
   }, [selForm, selFy]);
@@ -1369,6 +1370,31 @@ export function TdsDataEntry({
   );
 
   // ─── Challan breakdown (Issue 7A: cross-quarter total) ───
+  /**
+   * How many ENTRIES under a challan were changed in this correction.
+   *
+   * A challan's own `action` only flips when its own fields are edited — so a
+   * challan holding a modified or deleted deductee still reads 'unchanged',
+   * and its card showed nothing. With ten challans on screen that left no way
+   * to find the one carrying the change, which is the whole point of the
+   * badges. This surfaces the entries' changes on the challan that owns them.
+   */
+  const correctionChangesForChallan = useCallback((challanId: string) => {
+    if (!isCorrectionMode) return null;
+    const rows = challanId === selectedChallan?.id
+      ? deductees
+      : (allChallanDeductees[challanId] || []);
+    let add = 0, modify = 0, del = 0;
+    for (const r of rows) {
+      const a = (r as any).action;
+      if (a === "add") add++;
+      else if (a === "modify") modify++;
+      else if (a === "delete") del++;
+    }
+    const total = add + modify + del;
+    return total ? { add, modify, del, total } : null;
+  }, [isCorrectionMode, selectedChallan, deductees, allChallanDeductees]);
+
   const getChallanBreakdownAll = useCallback((challanId: string) => {
     // Use ALL entries across all quarters for accurate balance (7A)
     const allForChallanRaw = challanId === selectedChallan?.id
@@ -1517,7 +1543,7 @@ export function TdsDataEntry({
   const isRowReadOnly = (d: Deductee) => isFilingLocked || (filing ? d.filing_id !== filing.id : false);
 
   const sectionOptions = useMemo(() => {
-    return rateMaster.map(r => ({ value: r.section_code, label: `${r.section_code} — ${r.nature_of_payment || ""}` }));
+    return rateMaster.map(r => ({ value: r.section_code, label: sectionDropdownLabel(r) }));
   }, [rateMaster]);
 
   // Quarter-wise usage breakdown helper (Issue 7B)
@@ -1946,6 +1972,7 @@ export function TdsDataEntry({
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {challans.map(c => {
                     const bd = getChallanBreakdownAll(c.id);
+                    const entryChanges = correctionChangesForChallan(c.id);
                     // Issue 4: Late fees excluded from allocatable amount (they are a separate govt levy)
                     const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
                     const lateFeeBalance = (c.late_fees_234e || 0) - (c.late_fees_used || 0);
@@ -1961,6 +1988,8 @@ export function TdsDataEntry({
                                 isCorrectionMode && (c as any).action === "add" && "border-l-[3px] border-l-emerald-500",
                                 isCorrectionMode && (c as any).action === "modify" && "border-l-[3px] border-l-amber-500",
                                 isCorrectionMode && (c as any).action === "delete" && "border-l-[3px] border-l-red-500 opacity-60",
+                                // entries changed but the challan itself did not
+                                isCorrectionMode && entryChanges && (!(c as any).action || (c as any).action === "unchanged") && "border-l-[3px] border-l-amber-400",
                               )}
                               onClick={() => selectChallan(c)}>
                               <CardContent className="p-2.5 space-y-1">
@@ -1988,6 +2017,18 @@ export function TdsDataEntry({
                                     )}
                                     {isCorrectionMode && (c as any).action === "delete" && (
                                       <Badge className="text-[9px] px-1 bg-red-100 text-red-700">Deleted</Badge>
+                                    )}
+                                    {isCorrectionMode && entryChanges && (
+                                      <Badge
+                                        className="text-[9px] px-1 bg-amber-100 text-amber-700"
+                                        title={[
+                                          entryChanges.add ? entryChanges.add + " added" : null,
+                                          entryChanges.modify ? entryChanges.modify + " modified" : null,
+                                          entryChanges.del ? entryChanges.del + " deleted" : null,
+                                        ].filter(Boolean).join(" · ")}
+                                      >
+                                        {entryChanges.total} changed
+                                      </Badge>
                                     )}
                                     {isCorrectionMode && (c as any).action && (c as any).action !== "unchanged" && !isFilingLocked && (
                                       <Button
