@@ -39,6 +39,78 @@ export type Database = {
   }
   public: {
     Tables: {
+      ai_query_analysis: {
+        Row: {
+          detectable: boolean | null
+          exact_query: string | null
+          intent: string | null
+          query_id: string
+          rule: string | null
+          vouching: boolean | null
+        }
+        Insert: {
+          detectable?: boolean | null
+          exact_query?: string | null
+          intent?: string | null
+          query_id: string
+          rule?: string | null
+          vouching?: boolean | null
+        }
+        Update: {
+          detectable?: boolean | null
+          exact_query?: string | null
+          intent?: string | null
+          query_id?: string
+          rule?: string | null
+          vouching?: boolean | null
+        }
+        Relationships: []
+      }
+      ai_query_gap: {
+        Row: {
+          ai_covered: boolean | null
+          ai_evidence: string | null
+          analysis_depth: string | null
+          category: string | null
+          client_id: string | null
+          client_name: string | null
+          financial_year: string | null
+          ledger_name: string | null
+          permanent_fix: string | null
+          query_id: string
+          query_text: string | null
+          reason: string | null
+        }
+        Insert: {
+          ai_covered?: boolean | null
+          ai_evidence?: string | null
+          analysis_depth?: string | null
+          category?: string | null
+          client_id?: string | null
+          client_name?: string | null
+          financial_year?: string | null
+          ledger_name?: string | null
+          permanent_fix?: string | null
+          query_id: string
+          query_text?: string | null
+          reason?: string | null
+        }
+        Update: {
+          ai_covered?: boolean | null
+          ai_evidence?: string | null
+          analysis_depth?: string | null
+          category?: string | null
+          client_id?: string | null
+          client_name?: string | null
+          financial_year?: string | null
+          ledger_name?: string | null
+          permanent_fix?: string | null
+          query_id?: string
+          query_text?: string | null
+          reason?: string | null
+        }
+        Relationships: []
+      }
       ai_usage_log: {
         Row: {
           created_at: string | null
@@ -270,6 +342,7 @@ export type Database = {
       }
       audit_client_queries: {
         Row: {
+          attachments: Json
           carry_forward_from_year: string | null
           carry_forward_to_year: string | null
           client_id: string | null
@@ -279,19 +352,23 @@ export type Database = {
           engagement_id: string | null
           financial_year: string | null
           firm_id: string | null
+          group_name: string | null
           id: string
           internal_notes: string | null
+          ledger_name: string | null
           priority: string
           query_text: string
           ref_number: string | null
           replied_via: string | null
           reply_method: string | null
+          required_documents: string | null
           source: string
           source_ref_id: string | null
           status: string
           updated_at: string | null
         }
         Insert: {
+          attachments?: Json
           carry_forward_from_year?: string | null
           carry_forward_to_year?: string | null
           client_id?: string | null
@@ -301,19 +378,23 @@ export type Database = {
           engagement_id?: string | null
           financial_year?: string | null
           firm_id?: string | null
+          group_name?: string | null
           id?: string
           internal_notes?: string | null
+          ledger_name?: string | null
           priority?: string
           query_text: string
           ref_number?: string | null
           replied_via?: string | null
           reply_method?: string | null
+          required_documents?: string | null
           source?: string
           source_ref_id?: string | null
           status?: string
           updated_at?: string | null
         }
         Update: {
+          attachments?: Json
           carry_forward_from_year?: string | null
           carry_forward_to_year?: string | null
           client_id?: string | null
@@ -323,13 +404,16 @@ export type Database = {
           engagement_id?: string | null
           financial_year?: string | null
           firm_id?: string | null
+          group_name?: string | null
           id?: string
           internal_notes?: string | null
+          ledger_name?: string | null
           priority?: string
           query_text?: string
           ref_number?: string | null
           replied_via?: string | null
           reply_method?: string | null
+          required_documents?: string | null
           source?: string
           source_ref_id?: string | null
           status?: string
@@ -1592,6 +1676,134 @@ export type Database = {
           },
         ]
       }
+      billing_doc_sequences: {
+        Row: {
+          document_series: string
+          financial_year: string
+          firm_id: string
+          last_seq: number
+        }
+        Insert: {
+          document_series: string
+          financial_year: string
+          firm_id: string
+          last_seq?: number
+        }
+        Update: {
+          document_series?: string
+          financial_year?: string
+          firm_id?: string
+          last_seq?: number
+        }
+        Relationships: []
+      }
+      billing_kasars: {
+        Row: {
+          amount: number
+          client_id: string
+          created_at: string | null
+          created_by: string | null
+          financial_year: string | null
+          firm_id: string
+          id: string
+          invoice_id: string | null
+          kasar_date: string
+          narration: string | null
+        }
+        Insert: {
+          amount: number
+          client_id: string
+          created_at?: string | null
+          created_by?: string | null
+          financial_year?: string | null
+          firm_id: string
+          id?: string
+          invoice_id?: string | null
+          kasar_date: string
+          narration?: string | null
+        }
+        Update: {
+          amount?: number
+          client_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          financial_year?: string | null
+          firm_id?: string
+          id?: string
+          invoice_id?: string | null
+          kasar_date?: string
+          narration?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_kasars_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_kasars_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_kasars_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_kasars_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      billing_receipt_allocations: {
+        Row: {
+          amount: number
+          created_at: string | null
+          id: string
+          invoice_id: string
+          receipt_id: string
+        }
+        Insert: {
+          amount: number
+          created_at?: string | null
+          id?: string
+          invoice_id: string
+          receipt_id: string
+        }
+        Update: {
+          amount?: number
+          created_at?: string | null
+          id?: string
+          invoice_id?: string
+          receipt_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "billing_receipt_allocations_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "billing_receipt_allocations_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "billing_receipts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       billing_receipts: {
         Row: {
           amount_received: number
@@ -1600,6 +1812,7 @@ export type Database = {
           created_by: string | null
           firm_id: string
           gst_tds_amount: number | null
+          gstin: string | null
           id: string
           invoice_id: string | null
           payment_mode: string
@@ -1617,6 +1830,7 @@ export type Database = {
           created_by?: string | null
           firm_id: string
           gst_tds_amount?: number | null
+          gstin?: string | null
           id?: string
           invoice_id?: string | null
           payment_mode: string
@@ -1634,6 +1848,7 @@ export type Database = {
           created_by?: string | null
           firm_id?: string
           gst_tds_amount?: number | null
+          gstin?: string | null
           id?: string
           invoice_id?: string | null
           payment_mode?: string
@@ -1677,6 +1892,7 @@ export type Database = {
       }
       billing_reminder_rules: {
         Row: {
+          auto_send: boolean | null
           created_at: string | null
           created_by: string | null
           day_of_month: number | null
@@ -1697,6 +1913,7 @@ export type Database = {
           updated_at: string | null
         }
         Insert: {
+          auto_send?: boolean | null
           created_at?: string | null
           created_by?: string | null
           day_of_month?: number | null
@@ -1717,6 +1934,7 @@ export type Database = {
           updated_at?: string | null
         }
         Update: {
+          auto_send?: boolean | null
           created_at?: string | null
           created_by?: string | null
           day_of_month?: number | null
@@ -2151,6 +2369,67 @@ export type Database = {
           },
         ]
       }
+      client_billing_opening_balances: {
+        Row: {
+          amount: number
+          balance_date: string
+          client_id: string
+          created_at: string | null
+          created_by: string | null
+          firm_id: string
+          gstin: string | null
+          id: string
+          narration: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          amount?: number
+          balance_date: string
+          client_id: string
+          created_at?: string | null
+          created_by?: string | null
+          firm_id: string
+          gstin?: string | null
+          id?: string
+          narration?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          amount?: number
+          balance_date?: string
+          client_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          firm_id?: string
+          gstin?: string | null
+          id?: string
+          narration?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "client_billing_opening_balances_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_billing_opening_balances_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "client_billing_opening_balances_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_classification_history: {
         Row: {
           changed_at: string | null
@@ -2557,6 +2836,8 @@ export type Database = {
           tds_deactivated_from_q: string | null
           tds_effective_from_fy: string | null
           tds_effective_from_q: string | null
+          tds_end_fy: string | null
+          tds_end_quarter: string | null
           tds_forms_applicable: string[] | null
         }
         Insert: {
@@ -2579,6 +2860,8 @@ export type Database = {
           tds_deactivated_from_q?: string | null
           tds_effective_from_fy?: string | null
           tds_effective_from_q?: string | null
+          tds_end_fy?: string | null
+          tds_end_quarter?: string | null
           tds_forms_applicable?: string[] | null
         }
         Update: {
@@ -2601,6 +2884,8 @@ export type Database = {
           tds_deactivated_from_q?: string | null
           tds_effective_from_fy?: string | null
           tds_effective_from_q?: string | null
+          tds_end_fy?: string | null
+          tds_end_quarter?: string | null
           tds_forms_applicable?: string[] | null
         }
         Relationships: [
@@ -2636,6 +2921,7 @@ export type Database = {
           customer_id: string | null
           date_of_incorporation: string | null
           deleted_at: string | null
+          deleted_reason: string | null
           directors: Json | null
           dsc_expiry_date: string | null
           dsc_number: string | null
@@ -2680,6 +2966,7 @@ export type Database = {
           customer_id?: string | null
           date_of_incorporation?: string | null
           deleted_at?: string | null
+          deleted_reason?: string | null
           directors?: Json | null
           dsc_expiry_date?: string | null
           dsc_number?: string | null
@@ -2724,6 +3011,7 @@ export type Database = {
           customer_id?: string | null
           date_of_incorporation?: string | null
           deleted_at?: string | null
+          deleted_reason?: string | null
           directors?: Json | null
           dsc_expiry_date?: string | null
           dsc_number?: string | null
@@ -2777,10 +3065,54 @@ export type Database = {
           },
         ]
       }
+      coa_alias_index: {
+        Row: {
+          account_head: string
+          alias_normalized: string
+          canonical_id: string
+          confidence_score: number
+          created_at: string
+          entity_type: string
+          id: string
+          reason_type: string
+        }
+        Insert: {
+          account_head: string
+          alias_normalized: string
+          canonical_id: string
+          confidence_score?: number
+          created_at?: string
+          entity_type: string
+          id?: string
+          reason_type: string
+        }
+        Update: {
+          account_head?: string
+          alias_normalized?: string
+          canonical_id?: string
+          confidence_score?: number
+          created_at?: string
+          entity_type?: string
+          id?: string
+          reason_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "coa_alias_index_canonical_id_fkey"
+            columns: ["canonical_id"]
+            isOneToOne: false
+            referencedRelation: "coa_mapping_intelligence"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       coa_mapping_intelligence: {
         Row: {
           account_group: string | null
           account_head: string
+          ai_analysis: string | null
+          ai_analyzed_at: string | null
+          aliases: Json | null
           alternatives: Json
           bs_pl: string | null
           client_id: string | null
@@ -2794,6 +3126,7 @@ export type Database = {
           last_firm_id: string | null
           last_used_at: string
           normalized_name: string
+          override_reason: string | null
           scope: string
           times_confirmed: number
           times_overridden: number
@@ -2802,6 +3135,9 @@ export type Database = {
         Insert: {
           account_group?: string | null
           account_head: string
+          ai_analysis?: string | null
+          ai_analyzed_at?: string | null
+          aliases?: Json | null
           alternatives?: Json
           bs_pl?: string | null
           client_id?: string | null
@@ -2815,6 +3151,7 @@ export type Database = {
           last_firm_id?: string | null
           last_used_at?: string
           normalized_name: string
+          override_reason?: string | null
           scope?: string
           times_confirmed?: number
           times_overridden?: number
@@ -2823,6 +3160,9 @@ export type Database = {
         Update: {
           account_group?: string | null
           account_head?: string
+          ai_analysis?: string | null
+          ai_analyzed_at?: string | null
+          aliases?: Json | null
           alternatives?: Json
           bs_pl?: string | null
           client_id?: string | null
@@ -2836,6 +3176,7 @@ export type Database = {
           last_firm_id?: string | null
           last_used_at?: string
           normalized_name?: string
+          override_reason?: string | null
           scope?: string
           times_confirmed?: number
           times_overridden?: number
@@ -3057,6 +3398,73 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      cse_portfolios: {
+        Row: {
+          assigned_at: string
+          assigned_by: string | null
+          cse_user_id: string
+          firm_id: string
+          id: string
+        }
+        Insert: {
+          assigned_at?: string
+          assigned_by?: string | null
+          cse_user_id: string
+          firm_id: string
+          id?: string
+        }
+        Update: {
+          assigned_at?: string
+          assigned_by?: string | null
+          cse_user_id?: string
+          firm_id?: string
+          id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cse_portfolios_assigned_by_fkey"
+            columns: ["assigned_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cse_portfolios_cse_user_id_fkey"
+            columns: ["cse_user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "cse_portfolios_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      dbg: {
+        Row: {
+          cy_sum: number | null
+          n_keys: number | null
+          phase: string | null
+          py_sum: number | null
+        }
+        Insert: {
+          cy_sum?: number | null
+          n_keys?: number | null
+          phase?: string | null
+          py_sum?: number | null
+        }
+        Update: {
+          cy_sum?: number | null
+          n_keys?: number | null
+          phase?: string | null
+          py_sum?: number | null
+        }
+        Relationships: []
       }
       deductees: {
         Row: {
@@ -3384,6 +3792,50 @@ export type Database = {
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      engagement_audit_log: {
+        Row: {
+          action: string
+          changed_at: string
+          changed_by: string | null
+          changed_by_email: string | null
+          changed_by_name: string | null
+          engagement_id: string
+          firm_id: string | null
+          id: string
+          snapshot: Json | null
+        }
+        Insert: {
+          action: string
+          changed_at?: string
+          changed_by?: string | null
+          changed_by_email?: string | null
+          changed_by_name?: string | null
+          engagement_id: string
+          firm_id?: string | null
+          id?: string
+          snapshot?: Json | null
+        }
+        Update: {
+          action?: string
+          changed_at?: string
+          changed_by?: string | null
+          changed_by_email?: string | null
+          changed_by_name?: string | null
+          engagement_id?: string
+          firm_id?: string | null
+          id?: string
+          snapshot?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "engagement_audit_log_changed_by_fkey"
+            columns: ["changed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -4046,6 +4498,39 @@ export type Database = {
           },
         ]
       }
+      fix_report: {
+        Row: {
+          coa_cy: number | null
+          coa_py: number | null
+          detail: string | null
+          eng: string | null
+          note: string | null
+          post_cy: number | null
+          post_py: number | null
+          status: string | null
+        }
+        Insert: {
+          coa_cy?: number | null
+          coa_py?: number | null
+          detail?: string | null
+          eng?: string | null
+          note?: string | null
+          post_cy?: number | null
+          post_py?: number | null
+          status?: string | null
+        }
+        Update: {
+          coa_cy?: number | null
+          coa_py?: number | null
+          detail?: string | null
+          eng?: string | null
+          note?: string | null
+          post_cy?: number | null
+          post_py?: number | null
+          status?: string | null
+        }
+        Relationships: []
+      }
       form_3cd: {
         Row: {
           assessment_year: string | null
@@ -4179,6 +4664,62 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "form_3cd_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fs_reconciliation_log: {
+        Row: {
+          bs_face_cy: number | null
+          bs_face_py: number | null
+          changed_by: string | null
+          code: string
+          col: string | null
+          created_at: string
+          delta_cy: number | null
+          delta_py: number | null
+          engagement_id: string
+          id: string
+          note_total_cy: number | null
+          note_total_py: number | null
+          note_type: string
+        }
+        Insert: {
+          bs_face_cy?: number | null
+          bs_face_py?: number | null
+          changed_by?: string | null
+          code: string
+          col?: string | null
+          created_at?: string
+          delta_cy?: number | null
+          delta_py?: number | null
+          engagement_id: string
+          id?: string
+          note_total_cy?: number | null
+          note_total_py?: number | null
+          note_type: string
+        }
+        Update: {
+          bs_face_cy?: number | null
+          bs_face_py?: number | null
+          changed_by?: string | null
+          code?: string
+          col?: string | null
+          created_at?: string
+          delta_cy?: number | null
+          delta_py?: number | null
+          engagement_id?: string
+          id?: string
+          note_total_cy?: number | null
+          note_total_py?: number | null
+          note_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fs_reconciliation_log_engagement_id_fkey"
             columns: ["engagement_id"]
             isOneToOne: false
             referencedRelation: "audit_engagements"
@@ -4348,6 +4889,8 @@ export type Database = {
       invoices: {
         Row: {
           amount: number | null
+          amount_due: number | null
+          amount_paid: number
           bank_details_snapshot: Json | null
           base_turnover: number | null
           client_id: string | null
@@ -4357,8 +4900,10 @@ export type Database = {
           document_series: string
           document_type: string
           due_date: string | null
+          exchange_rate: number | null
+          export_currency: string | null
           financial_year: string | null
-          firm_id: string | null
+          firm_id: string
           footer_text: string | null
           from_address: string | null
           from_email: string | null
@@ -4372,11 +4917,15 @@ export type Database = {
           invoice_date: string | null
           invoice_format: string | null
           invoice_no: string | null
+          invoice_type: string | null
           is_intra_state: boolean | null
+          last_reminded_at: string | null
           line_items: Json | null
+          lut_number: string | null
           notes: string | null
           paid_at: string | null
           payment_due_days: number | null
+          payment_status: string | null
           payment_terms: string | null
           place_of_supply: string | null
           reference_no: string | null
@@ -4404,6 +4953,8 @@ export type Database = {
         }
         Insert: {
           amount?: number | null
+          amount_due?: number | null
+          amount_paid?: number
           bank_details_snapshot?: Json | null
           base_turnover?: number | null
           client_id?: string | null
@@ -4413,8 +4964,10 @@ export type Database = {
           document_series?: string
           document_type?: string
           due_date?: string | null
+          exchange_rate?: number | null
+          export_currency?: string | null
           financial_year?: string | null
-          firm_id?: string | null
+          firm_id: string
           footer_text?: string | null
           from_address?: string | null
           from_email?: string | null
@@ -4428,11 +4981,15 @@ export type Database = {
           invoice_date?: string | null
           invoice_format?: string | null
           invoice_no?: string | null
+          invoice_type?: string | null
           is_intra_state?: boolean | null
+          last_reminded_at?: string | null
           line_items?: Json | null
+          lut_number?: string | null
           notes?: string | null
           paid_at?: string | null
           payment_due_days?: number | null
+          payment_status?: string | null
           payment_terms?: string | null
           place_of_supply?: string | null
           reference_no?: string | null
@@ -4460,6 +5017,8 @@ export type Database = {
         }
         Update: {
           amount?: number | null
+          amount_due?: number | null
+          amount_paid?: number
           bank_details_snapshot?: Json | null
           base_turnover?: number | null
           client_id?: string | null
@@ -4469,8 +5028,10 @@ export type Database = {
           document_series?: string
           document_type?: string
           due_date?: string | null
+          exchange_rate?: number | null
+          export_currency?: string | null
           financial_year?: string | null
-          firm_id?: string | null
+          firm_id?: string
           footer_text?: string | null
           from_address?: string | null
           from_email?: string | null
@@ -4484,11 +5045,15 @@ export type Database = {
           invoice_date?: string | null
           invoice_format?: string | null
           invoice_no?: string | null
+          invoice_type?: string | null
           is_intra_state?: boolean | null
+          last_reminded_at?: string | null
           line_items?: Json | null
+          lut_number?: string | null
           notes?: string | null
           paid_at?: string | null
           payment_due_days?: number | null
+          payment_status?: string | null
           payment_terms?: string | null
           place_of_supply?: string | null
           reference_no?: string | null
@@ -4586,6 +5151,53 @@ export type Database = {
           },
         ]
       }
+      itr_profile_history: {
+        Row: {
+          assessment_year: string
+          changed_at: string
+          changed_by: string | null
+          changed_by_name: string | null
+          client_id: string
+          field_name: string
+          firm_id: string | null
+          id: string
+          new_value: string | null
+          old_value: string | null
+        }
+        Insert: {
+          assessment_year: string
+          changed_at?: string
+          changed_by?: string | null
+          changed_by_name?: string | null
+          client_id: string
+          field_name: string
+          firm_id?: string | null
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+        }
+        Update: {
+          assessment_year?: string
+          changed_at?: string
+          changed_by?: string | null
+          changed_by_name?: string | null
+          client_id?: string
+          field_name?: string
+          firm_id?: string | null
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "itr_profile_history_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       itr_profiles: {
         Row: {
           acknowledgment_no: string | null
@@ -4604,6 +5216,7 @@ export type Database = {
           itr_work_group_id: string | null
           prepared_by: string | null
           remarks: string | null
+          reviewed_by: string | null
           upload_by: string | null
         }
         Insert: {
@@ -4623,6 +5236,7 @@ export type Database = {
           itr_work_group_id?: string | null
           prepared_by?: string | null
           remarks?: string | null
+          reviewed_by?: string | null
           upload_by?: string | null
         }
         Update: {
@@ -4642,6 +5256,7 @@ export type Database = {
           itr_work_group_id?: string | null
           prepared_by?: string | null
           remarks?: string | null
+          reviewed_by?: string | null
           upload_by?: string | null
         }
         Relationships: [
@@ -4683,6 +5298,13 @@ export type Database = {
           {
             foreignKeyName: "itr_profiles_prepared_by_fkey"
             columns: ["prepared_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "itr_profiles_reviewed_by_fkey"
+            columns: ["reviewed_by"]
             isOneToOne: false
             referencedRelation: "users"
             referencedColumns: ["id"]
@@ -4972,6 +5594,378 @@ export type Database = {
           },
         ]
       }
+      msme_43b_attachments: {
+        Row: {
+          client_id: string
+          content_hash: string | null
+          created_at: string
+          file_name: string
+          firm_id: string | null
+          id: string
+          kind: string
+          mime_type: string | null
+          run_id: string | null
+          size_bytes: number | null
+          storage_path: string
+          uploaded_by: string | null
+          uploaded_by_name: string | null
+        }
+        Insert: {
+          client_id: string
+          content_hash?: string | null
+          created_at?: string
+          file_name: string
+          firm_id?: string | null
+          id?: string
+          kind: string
+          mime_type?: string | null
+          run_id?: string | null
+          size_bytes?: number | null
+          storage_path: string
+          uploaded_by?: string | null
+          uploaded_by_name?: string | null
+        }
+        Update: {
+          client_id?: string
+          content_hash?: string | null
+          created_at?: string
+          file_name?: string
+          firm_id?: string | null
+          id?: string
+          kind?: string
+          mime_type?: string | null
+          run_id?: string | null
+          size_bytes?: number | null
+          storage_path?: string
+          uploaded_by?: string | null
+          uploaded_by_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "msme_43b_attachments_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_attachments_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_attachments_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "msme_43b_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_attachments_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      msme_43b_goldens: {
+        Row: {
+          blessed: Json
+          client_id: string
+          config: Json
+          created_at: string
+          cy_label: string
+          cy_ledgers: Json
+          firm_id: string | null
+          fy_label: string | null
+          fy_ledgers: Json
+          id: string
+          label: string
+          signed_off_by: string | null
+          signed_off_by_name: string | null
+          vendor_gst_rates: Json
+          vendor_windows: Json
+        }
+        Insert: {
+          blessed: Json
+          client_id: string
+          config: Json
+          created_at?: string
+          cy_label: string
+          cy_ledgers: Json
+          firm_id?: string | null
+          fy_label?: string | null
+          fy_ledgers?: Json
+          id?: string
+          label: string
+          signed_off_by?: string | null
+          signed_off_by_name?: string | null
+          vendor_gst_rates?: Json
+          vendor_windows?: Json
+        }
+        Update: {
+          blessed?: Json
+          client_id?: string
+          config?: Json
+          created_at?: string
+          cy_label?: string
+          cy_ledgers?: Json
+          firm_id?: string | null
+          fy_label?: string | null
+          fy_ledgers?: Json
+          id?: string
+          label?: string
+          signed_off_by?: string | null
+          signed_off_by_name?: string | null
+          vendor_gst_rates?: Json
+          vendor_windows?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "msme_43b_goldens_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_goldens_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_goldens_signed_off_by_fkey"
+            columns: ["signed_off_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      msme_43b_rule_changes: {
+        Row: {
+          changed_by: string | null
+          changed_by_name: string | null
+          client_id: string
+          created_at: string
+          firm_id: string | null
+          from_value: Json | null
+          id: string
+          matched_after: number | null
+          matched_before: number | null
+          reason: string | null
+          rule_key: string
+          source_file: string | null
+          to_value: Json | null
+        }
+        Insert: {
+          changed_by?: string | null
+          changed_by_name?: string | null
+          client_id: string
+          created_at?: string
+          firm_id?: string | null
+          from_value?: Json | null
+          id?: string
+          matched_after?: number | null
+          matched_before?: number | null
+          reason?: string | null
+          rule_key: string
+          source_file?: string | null
+          to_value?: Json | null
+        }
+        Update: {
+          changed_by?: string | null
+          changed_by_name?: string | null
+          client_id?: string
+          created_at?: string
+          firm_id?: string | null
+          from_value?: Json | null
+          id?: string
+          matched_after?: number | null
+          matched_before?: number | null
+          reason?: string | null
+          rule_key?: string
+          source_file?: string | null
+          to_value?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "msme_43b_rule_changes_changed_by_fkey"
+            columns: ["changed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_rule_changes_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_rule_changes_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      msme_43b_rule_profiles: {
+        Row: {
+          client_id: string
+          created_at: string
+          firm_id: string | null
+          id: string
+          overrides: Json
+          revision: number
+          updated_at: string
+          updated_by: string | null
+          updated_by_name: string | null
+          vendor_gst_rates: Json
+          vendor_windows: Json
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          firm_id?: string | null
+          id?: string
+          overrides?: Json
+          revision?: number
+          updated_at?: string
+          updated_by?: string | null
+          updated_by_name?: string | null
+          vendor_gst_rates?: Json
+          vendor_windows?: Json
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          firm_id?: string | null
+          id?: string
+          overrides?: Json
+          revision?: number
+          updated_at?: string
+          updated_by?: string | null
+          updated_by_name?: string | null
+          vendor_gst_rates?: Json
+          vendor_windows?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "msme_43b_rule_profiles_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_rule_profiles_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_rule_profiles_updated_by_fkey"
+            columns: ["updated_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      msme_43b_runs: {
+        Row: {
+          client_id: string | null
+          created_at: string
+          created_by: string | null
+          created_by_name: string | null
+          cy_label: string
+          firm_id: string | null
+          fy_label: string | null
+          id: string
+          label: string | null
+          note: string | null
+          report: Json
+          total_allowed_fy: number
+          total_disallowed_cy: number
+          total_gst_excluded: number
+          total_gst_unidentified: number
+          total_still_outstanding: number
+          vendor_count: number
+          window_days: number
+        }
+        Insert: {
+          client_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          created_by_name?: string | null
+          cy_label: string
+          firm_id?: string | null
+          fy_label?: string | null
+          id?: string
+          label?: string | null
+          note?: string | null
+          report: Json
+          total_allowed_fy?: number
+          total_disallowed_cy?: number
+          total_gst_excluded?: number
+          total_gst_unidentified?: number
+          total_still_outstanding?: number
+          vendor_count?: number
+          window_days?: number
+        }
+        Update: {
+          client_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          created_by_name?: string | null
+          cy_label?: string
+          firm_id?: string | null
+          fy_label?: string | null
+          id?: string
+          label?: string | null
+          note?: string | null
+          report?: Json
+          total_allowed_fy?: number
+          total_disallowed_cy?: number
+          total_gst_excluded?: number
+          total_gst_unidentified?: number
+          total_still_outstanding?: number
+          vendor_count?: number
+          window_days?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "msme_43b_runs_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_runs_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "msme_43b_runs_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       narration_rules: {
         Row: {
           action: string | null
@@ -5087,6 +6081,80 @@ export type Database = {
           },
         ]
       }
+      nce_capital_note: {
+        Row: {
+          closing: number | null
+          coa_anchor_closing: number | null
+          col: string
+          created_at: string
+          drawings: number
+          engagement_id: string
+          financial_year: string
+          id: string
+          interest_on_cap: number
+          introduced: number
+          is_balancing_row: boolean
+          is_stale: boolean
+          opening: number
+          partner_name: string
+          profit_share: number
+          remuneration: number
+          sort_order: number
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          closing?: number | null
+          coa_anchor_closing?: number | null
+          col: string
+          created_at?: string
+          drawings?: number
+          engagement_id: string
+          financial_year: string
+          id?: string
+          interest_on_cap?: number
+          introduced?: number
+          is_balancing_row?: boolean
+          is_stale?: boolean
+          opening?: number
+          partner_name: string
+          profit_share?: number
+          remuneration?: number
+          sort_order?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          closing?: number | null
+          coa_anchor_closing?: number | null
+          col?: string
+          created_at?: string
+          drawings?: number
+          engagement_id?: string
+          financial_year?: string
+          id?: string
+          interest_on_cap?: number
+          introduced?: number
+          is_balancing_row?: boolean
+          is_stale?: boolean
+          opening?: number
+          partner_name?: string
+          profit_share?: number
+          remuneration?: number
+          sort_order?: number
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "nce_capital_note_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       nce_financial_notes: {
         Row: {
           created_at: string | null
@@ -5182,16 +6250,26 @@ export type Database = {
         Row: {
           additions_post: number | null
           additions_pre: number | null
+          additions_py: number
           asset_category: string
           asset_name: string
           closing_balance: number | null
+          closing_py: number
+          coa_anchor_depr: number | null
+          coa_anchor_net: number | null
+          coa_code: string | null
           created_at: string | null
           deletions: number | null
+          deletions_py: number
           depreciation: number | null
+          depreciation_py: number
           engagement_id: string
           financial_year: string
           id: string
+          is_balancing_class: boolean
+          is_stale: boolean
           opening_balance: number | null
+          opening_py: number
           rate_pct: number | null
           sort_order: number | null
           total: number | null
@@ -5199,16 +6277,26 @@ export type Database = {
         Insert: {
           additions_post?: number | null
           additions_pre?: number | null
+          additions_py?: number
           asset_category: string
           asset_name: string
           closing_balance?: number | null
+          closing_py?: number
+          coa_anchor_depr?: number | null
+          coa_anchor_net?: number | null
+          coa_code?: string | null
           created_at?: string | null
           deletions?: number | null
+          deletions_py?: number
           depreciation?: number | null
+          depreciation_py?: number
           engagement_id: string
           financial_year: string
           id?: string
+          is_balancing_class?: boolean
+          is_stale?: boolean
           opening_balance?: number | null
+          opening_py?: number
           rate_pct?: number | null
           sort_order?: number | null
           total?: number | null
@@ -5216,16 +6304,26 @@ export type Database = {
         Update: {
           additions_post?: number | null
           additions_pre?: number | null
+          additions_py?: number
           asset_category?: string
           asset_name?: string
           closing_balance?: number | null
+          closing_py?: number
+          coa_anchor_depr?: number | null
+          coa_anchor_net?: number | null
+          coa_code?: string | null
           created_at?: string | null
           deletions?: number | null
+          deletions_py?: number
           depreciation?: number | null
+          depreciation_py?: number
           engagement_id?: string
           financial_year?: string
           id?: string
+          is_balancing_class?: boolean
+          is_stale?: boolean
           opening_balance?: number | null
+          opening_py?: number
           rate_pct?: number | null
           sort_order?: number | null
           total?: number | null
@@ -5546,6 +6644,154 @@ export type Database = {
           },
         ]
       }
+      onboarding_instances: {
+        Row: {
+          assigned_ie_id: string | null
+          completed_at: string | null
+          created_at: string
+          firm_id: string
+          id: string
+          notes: string | null
+          plan_tier: string
+          progress_pct: number
+          status: string
+        }
+        Insert: {
+          assigned_ie_id?: string | null
+          completed_at?: string | null
+          created_at?: string
+          firm_id: string
+          id?: string
+          notes?: string | null
+          plan_tier: string
+          progress_pct?: number
+          status?: string
+        }
+        Update: {
+          assigned_ie_id?: string | null
+          completed_at?: string | null
+          created_at?: string
+          firm_id?: string
+          id?: string
+          notes?: string | null
+          plan_tier?: string
+          progress_pct?: number
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_instances_assigned_ie_id_fkey"
+            columns: ["assigned_ie_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_instances_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: true
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      onboarding_tasks: {
+        Row: {
+          assignee_id: string | null
+          created_at: string
+          done_at: string | null
+          done_by: string | null
+          due_at: string | null
+          id: string
+          instance_id: string
+          notes: string | null
+          status: string
+          task_desc: string | null
+          task_label: string
+          task_order: number
+        }
+        Insert: {
+          assignee_id?: string | null
+          created_at?: string
+          done_at?: string | null
+          done_by?: string | null
+          due_at?: string | null
+          id?: string
+          instance_id: string
+          notes?: string | null
+          status?: string
+          task_desc?: string | null
+          task_label: string
+          task_order: number
+        }
+        Update: {
+          assignee_id?: string | null
+          created_at?: string
+          done_at?: string | null
+          done_by?: string | null
+          due_at?: string | null
+          id?: string
+          instance_id?: string
+          notes?: string | null
+          status?: string
+          task_desc?: string | null
+          task_label?: string
+          task_order?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "onboarding_tasks_assignee_id_fkey"
+            columns: ["assignee_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_tasks_done_by_fkey"
+            columns: ["done_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "onboarding_tasks_instance_id_fkey"
+            columns: ["instance_id"]
+            isOneToOne: false
+            referencedRelation: "onboarding_instances"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      onboarding_templates: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          plan_tier: string
+          task_desc: string | null
+          task_label: string
+          task_order: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          plan_tier: string
+          task_desc?: string | null
+          task_label: string
+          task_order: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          plan_tier?: string
+          task_desc?: string | null
+          task_label?: string
+          task_order?: number
+        }
+        Relationships: []
+      }
       otp_requests: {
         Row: {
           created_at: string
@@ -5626,6 +6872,80 @@ export type Database = {
           },
         ]
       }
+      portal_activity_log: {
+        Row: {
+          activity: string
+          client_id: string | null
+          client_name: string | null
+          created_at: string | null
+          details: string | null
+          firm_id: string
+          id: string
+          notified: boolean | null
+        }
+        Insert: {
+          activity: string
+          client_id?: string | null
+          client_name?: string | null
+          created_at?: string | null
+          details?: string | null
+          firm_id: string
+          id?: string
+          notified?: boolean | null
+        }
+        Update: {
+          activity?: string
+          client_id?: string | null
+          client_name?: string | null
+          created_at?: string | null
+          details?: string | null
+          firm_id?: string
+          id?: string
+          notified?: boolean | null
+        }
+        Relationships: []
+      }
+      portal_query_messages: {
+        Row: {
+          attachment_name: string | null
+          attachment_path: string | null
+          created_at: string | null
+          id: string
+          message: string
+          query_id: string
+          sender_name: string | null
+          sender_role: string
+        }
+        Insert: {
+          attachment_name?: string | null
+          attachment_path?: string | null
+          created_at?: string | null
+          id?: string
+          message?: string
+          query_id: string
+          sender_name?: string | null
+          sender_role: string
+        }
+        Update: {
+          attachment_name?: string | null
+          attachment_path?: string | null
+          created_at?: string | null
+          id?: string
+          message?: string
+          query_id?: string
+          sender_name?: string | null
+          sender_role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "portal_query_messages_query_id_fkey"
+            columns: ["query_id"]
+            isOneToOne: false
+            referencedRelation: "audit_client_queries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       related_parties: {
         Row: {
           client_id: string | null
@@ -5663,6 +6983,42 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      required_documents_master: {
+        Row: {
+          category: string | null
+          created_at: string
+          description: string | null
+          doc_name: string
+          firm_id: string
+          id: string
+          is_active: boolean
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          category?: string | null
+          created_at?: string
+          description?: string | null
+          doc_name: string
+          firm_id: string
+          id?: string
+          is_active?: boolean
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          category?: string | null
+          created_at?: string
+          description?: string | null
+          doc_name?: string
+          firm_id?: string
+          id?: string
+          is_active?: boolean
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: []
       }
       role_permission_audit_log: {
         Row: {
@@ -5826,44 +7182,170 @@ export type Database = {
           },
         ]
       }
+      scrutiny_facts: {
+        Row: {
+          captured_at: string | null
+          captured_by: string | null
+          client_id: string | null
+          engagement_id: string | null
+          fact_key: string
+          fact_type: string
+          fact_value: string | null
+          financial_year: string | null
+          firm_id: string | null
+          id: string
+          note: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          captured_at?: string | null
+          captured_by?: string | null
+          client_id?: string | null
+          engagement_id?: string | null
+          fact_key: string
+          fact_type?: string
+          fact_value?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          note?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          captured_at?: string | null
+          captured_by?: string | null
+          client_id?: string | null
+          engagement_id?: string | null
+          fact_key?: string
+          fact_type?: string
+          fact_value?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string
+          note?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scrutiny_facts_captured_by_fkey"
+            columns: ["captured_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scrutiny_facts_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scrutiny_facts_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scrutiny_facts_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       scrutiny_findings: {
         Row: {
+          account_name: string | null
+          actioned_at: string | null
+          actioned_by: string | null
+          advisory: boolean | null
+          amount: number | null
+          category: string | null
           clause_3cd: string | null
           client_id: string | null
+          created_at: string | null
+          detection_level: string | null
+          engagement_id: string | null
           financial_year: string | null
+          finding_hash: string | null
+          firm_id: string | null
           flag_message: string | null
           id: string
           linked_query_id: string | null
           narration: string | null
+          override_reason: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
           rule_id: string | null
           severity: string | null
           status: string | null
+          tier: string
         }
         Insert: {
+          account_name?: string | null
+          actioned_at?: string | null
+          actioned_by?: string | null
+          advisory?: boolean | null
+          amount?: number | null
+          category?: string | null
           clause_3cd?: string | null
           client_id?: string | null
+          created_at?: string | null
+          detection_level?: string | null
+          engagement_id?: string | null
           financial_year?: string | null
+          finding_hash?: string | null
+          firm_id?: string | null
           flag_message?: string | null
           id?: string
           linked_query_id?: string | null
           narration?: string | null
+          override_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
           rule_id?: string | null
           severity?: string | null
           status?: string | null
+          tier?: string
         }
         Update: {
+          account_name?: string | null
+          actioned_at?: string | null
+          actioned_by?: string | null
+          advisory?: boolean | null
+          amount?: number | null
+          category?: string | null
           clause_3cd?: string | null
           client_id?: string | null
+          created_at?: string | null
+          detection_level?: string | null
+          engagement_id?: string | null
           financial_year?: string | null
+          finding_hash?: string | null
+          firm_id?: string | null
           flag_message?: string | null
           id?: string
           linked_query_id?: string | null
           narration?: string | null
+          override_reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
           rule_id?: string | null
           severity?: string | null
           status?: string | null
+          tier?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "scrutiny_findings_actioned_by_fkey"
+            columns: ["actioned_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "scrutiny_findings_client_id_fkey"
             columns: ["client_id"]
@@ -5871,7 +7353,126 @@ export type Database = {
             referencedRelation: "clients"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "scrutiny_findings_engagement_id_fkey"
+            columns: ["engagement_id"]
+            isOneToOne: false
+            referencedRelation: "audit_engagements"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scrutiny_findings_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scrutiny_findings_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
         ]
+      }
+      scrutiny_judgments: {
+        Row: {
+          client_id: string
+          created_at: string
+          decided: Json | null
+          decided_at: string | null
+          decided_by: string | null
+          financial_year: string
+          firm_id: string | null
+          id: string
+          kind: string
+          proposed: Json
+          rationale: string | null
+          status: string
+          subject: string | null
+          updated_at: string
+          version: number
+        }
+        Insert: {
+          client_id: string
+          created_at?: string
+          decided?: Json | null
+          decided_at?: string | null
+          decided_by?: string | null
+          financial_year: string
+          firm_id?: string | null
+          id?: string
+          kind: string
+          proposed?: Json
+          rationale?: string | null
+          status?: string
+          subject?: string | null
+          updated_at?: string
+          version?: number
+        }
+        Update: {
+          client_id?: string
+          created_at?: string
+          decided?: Json | null
+          decided_at?: string | null
+          decided_by?: string | null
+          financial_year?: string
+          firm_id?: string | null
+          id?: string
+          kind?: string
+          proposed?: Json
+          rationale?: string | null
+          status?: string
+          subject?: string | null
+          updated_at?: string
+          version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scrutiny_judgments_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scrutiny_rule_audit: {
+        Row: {
+          action: string
+          after: Json | null
+          before: Json | null
+          changed_at: string
+          changed_by: string | null
+          changed_by_name: string | null
+          id: string
+          rule_id: string
+          rule_uuid: string | null
+        }
+        Insert: {
+          action: string
+          after?: Json | null
+          before?: Json | null
+          changed_at?: string
+          changed_by?: string | null
+          changed_by_name?: string | null
+          id?: string
+          rule_id: string
+          rule_uuid?: string | null
+        }
+        Update: {
+          action?: string
+          after?: Json | null
+          before?: Json | null
+          changed_at?: string
+          changed_by?: string | null
+          changed_by_name?: string | null
+          id?: string
+          rule_id?: string
+          rule_uuid?: string | null
+        }
+        Relationships: []
       }
       scrutiny_rules: {
         Row: {
@@ -6218,6 +7819,125 @@ export type Database = {
           },
         ]
       }
+      support_ticket_replies: {
+        Row: {
+          author_id: string
+          created_at: string
+          id: string
+          is_internal: boolean
+          message: string
+          ticket_id: string
+        }
+        Insert: {
+          author_id: string
+          created_at?: string
+          id?: string
+          is_internal?: boolean
+          message: string
+          ticket_id: string
+        }
+        Update: {
+          author_id?: string
+          created_at?: string
+          id?: string
+          is_internal?: boolean
+          message?: string
+          ticket_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "support_ticket_replies_author_id_fkey"
+            columns: ["author_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "support_ticket_replies_ticket_id_fkey"
+            columns: ["ticket_id"]
+            isOneToOne: false
+            referencedRelation: "support_tickets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      support_tickets: {
+        Row: {
+          created_at: string
+          cse_id: string | null
+          firm_id: string
+          id: string
+          message: string
+          priority: string
+          raised_by: string
+          resolution_note: string | null
+          resolved_at: string | null
+          resolved_by: string | null
+          status: string
+          subject: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          cse_id?: string | null
+          firm_id: string
+          id?: string
+          message: string
+          priority?: string
+          raised_by: string
+          resolution_note?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          status?: string
+          subject: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          cse_id?: string | null
+          firm_id?: string
+          id?: string
+          message?: string
+          priority?: string
+          raised_by?: string
+          resolution_note?: string | null
+          resolved_at?: string | null
+          resolved_by?: string | null
+          status?: string
+          subject?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "support_tickets_cse_id_fkey"
+            columns: ["cse_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "support_tickets_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "support_tickets_raised_by_fkey"
+            columns: ["raised_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "support_tickets_resolved_by_fkey"
+            columns: ["resolved_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       sync_batches: {
         Row: {
           client_id: string | null
@@ -6320,6 +8040,146 @@ export type Database = {
         }
         Relationships: []
       }
+      tally_element_map: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          candidates: Json
+          created_at: string
+          element_key: string
+          element_label: string | null
+          element_type: string
+          firm_id: string
+          id: string
+          match_confidence: number
+          match_method: string
+          status: string
+          tally_company_name: string | null
+          tally_ledger_name: string | null
+          updated_at: string
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          candidates?: Json
+          created_at?: string
+          element_key?: string
+          element_label?: string | null
+          element_type: string
+          firm_id: string
+          id?: string
+          match_confidence?: number
+          match_method?: string
+          status?: string
+          tally_company_name?: string | null
+          tally_ledger_name?: string | null
+          updated_at?: string
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          candidates?: Json
+          created_at?: string
+          element_key?: string
+          element_label?: string | null
+          element_type?: string
+          firm_id?: string
+          id?: string
+          match_confidence?: number
+          match_method?: string
+          status?: string
+          tally_company_name?: string | null
+          tally_ledger_name?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tally_element_map_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_element_map_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tally_firm_companies: {
+        Row: {
+          aliases: string[]
+          created_at: string
+          firm_id: string
+          gateway_url: string
+          gstin: string | null
+          id: string
+          is_active: boolean
+          notes: string | null
+          tally_company_name: string
+          updated_at: string
+        }
+        Insert: {
+          aliases?: string[]
+          created_at?: string
+          firm_id: string
+          gateway_url?: string
+          gstin?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          tally_company_name: string
+          updated_at?: string
+        }
+        Update: {
+          aliases?: string[]
+          created_at?: string
+          firm_id?: string
+          gateway_url?: string
+          gstin?: string | null
+          id?: string
+          is_active?: boolean
+          notes?: string | null
+          tally_company_name?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tally_firm_companies_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tally_group_map: {
+        Row: {
+          canonical_family: string
+          client_count: number | null
+          derived: boolean | null
+          ledger_count: number | null
+          parent_group_norm: string
+        }
+        Insert: {
+          canonical_family: string
+          client_count?: number | null
+          derived?: boolean | null
+          ledger_count?: number | null
+          parent_group_norm: string
+        }
+        Update: {
+          canonical_family?: string
+          client_count?: number | null
+          derived?: boolean | null
+          ledger_count?: number | null
+          parent_group_norm?: string
+        }
+        Relationships: []
+      }
       tally_groups: {
         Row: {
           client_id: string | null
@@ -6419,6 +8279,76 @@ export type Database = {
         }
         Relationships: []
       }
+      tally_party_map: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          candidates: Json
+          client_id: string
+          created_at: string
+          firm_id: string
+          id: string
+          match_confidence: number
+          match_method: string
+          status: string
+          tally_company_name: string | null
+          tally_ledger_name: string | null
+          updated_at: string
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          candidates?: Json
+          client_id: string
+          created_at?: string
+          firm_id: string
+          id?: string
+          match_confidence?: number
+          match_method?: string
+          status?: string
+          tally_company_name?: string | null
+          tally_ledger_name?: string | null
+          updated_at?: string
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          candidates?: Json
+          client_id?: string
+          created_at?: string
+          firm_id?: string
+          id?: string
+          match_confidence?: number
+          match_method?: string
+          status?: string
+          tally_company_name?: string | null
+          tally_ledger_name?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tally_party_map_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_party_map_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_party_map_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tally_processing_logs: {
         Row: {
           created_at: string
@@ -6447,6 +8377,243 @@ export type Database = {
             columns: ["upload_id"]
             isOneToOne: false
             referencedRelation: "tally_xml_uploads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tally_receipt_staging: {
+        Row: {
+          amount: number
+          bank_ledger: string | null
+          created_at: string
+          error: string | null
+          firm_id: string
+          id: string
+          imported_at: string | null
+          kasar_amount: number
+          match_confidence: number
+          match_method: string
+          matched_client_id: string | null
+          narration: string | null
+          party_ledger: string | null
+          raw: Json
+          receipt_id: string | null
+          reviewed_by: string | null
+          status: string
+          tally_company_name: string | null
+          tally_guid: string
+          tds_amount: number
+          voucher_date: string | null
+          voucher_number: string | null
+        }
+        Insert: {
+          amount?: number
+          bank_ledger?: string | null
+          created_at?: string
+          error?: string | null
+          firm_id: string
+          id?: string
+          imported_at?: string | null
+          kasar_amount?: number
+          match_confidence?: number
+          match_method?: string
+          matched_client_id?: string | null
+          narration?: string | null
+          party_ledger?: string | null
+          raw?: Json
+          receipt_id?: string | null
+          reviewed_by?: string | null
+          status?: string
+          tally_company_name?: string | null
+          tally_guid: string
+          tds_amount?: number
+          voucher_date?: string | null
+          voucher_number?: string | null
+        }
+        Update: {
+          amount?: number
+          bank_ledger?: string | null
+          created_at?: string
+          error?: string | null
+          firm_id?: string
+          id?: string
+          imported_at?: string | null
+          kasar_amount?: number
+          match_confidence?: number
+          match_method?: string
+          matched_client_id?: string | null
+          narration?: string | null
+          party_ledger?: string | null
+          raw?: Json
+          receipt_id?: string | null
+          reviewed_by?: string | null
+          status?: string
+          tally_company_name?: string | null
+          tally_guid?: string
+          tds_amount?: number
+          voucher_date?: string | null
+          voucher_number?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tally_receipt_staging_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_receipt_staging_matched_client_id_fkey"
+            columns: ["matched_client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_receipt_staging_receipt_id_fkey"
+            columns: ["receipt_id"]
+            isOneToOne: false
+            referencedRelation: "billing_receipts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_receipt_staging_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tally_recon: {
+        Row: {
+          as_of: string | null
+          caflow_outstanding: number
+          client_id: string | null
+          created_at: string
+          diff: number
+          firm_id: string
+          id: string
+          status: string
+          tally_closing: number
+          tally_company_name: string | null
+          tally_ledger_name: string | null
+        }
+        Insert: {
+          as_of?: string | null
+          caflow_outstanding?: number
+          client_id?: string | null
+          created_at?: string
+          diff?: number
+          firm_id: string
+          id?: string
+          status?: string
+          tally_closing?: number
+          tally_company_name?: string | null
+          tally_ledger_name?: string | null
+        }
+        Update: {
+          as_of?: string | null
+          caflow_outstanding?: number
+          client_id?: string | null
+          created_at?: string
+          diff?: number
+          firm_id?: string
+          id?: string
+          status?: string
+          tally_closing?: number
+          tally_company_name?: string | null
+          tally_ledger_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tally_recon_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_recon_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tally_sync_queue: {
+        Row: {
+          action: string
+          attempts: number
+          direction: string
+          document_no: string | null
+          firm_id: string
+          id: string
+          invoice_id: string | null
+          last_error: string | null
+          max_attempts: number
+          payload: Json | null
+          processed_at: string | null
+          requested_at: string
+          requested_by: string | null
+          status: string
+          tally_vch_id: string | null
+        }
+        Insert: {
+          action?: string
+          attempts?: number
+          direction?: string
+          document_no?: string | null
+          firm_id: string
+          id?: string
+          invoice_id?: string | null
+          last_error?: string | null
+          max_attempts?: number
+          payload?: Json | null
+          processed_at?: string | null
+          requested_at?: string
+          requested_by?: string | null
+          status?: string
+          tally_vch_id?: string | null
+        }
+        Update: {
+          action?: string
+          attempts?: number
+          direction?: string
+          document_no?: string | null
+          firm_id?: string
+          id?: string
+          invoice_id?: string | null
+          last_error?: string | null
+          max_attempts?: number
+          payload?: Json | null
+          processed_at?: string | null
+          requested_at?: string
+          requested_by?: string | null
+          status?: string
+          tally_vch_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tally_sync_queue_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_sync_queue_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_sync_queue_requested_by_fkey"
+            columns: ["requested_by"]
+            isOneToOne: false
+            referencedRelation: "users"
             referencedColumns: ["id"]
           },
         ]
@@ -6526,6 +8693,7 @@ export type Database = {
           opening_type: string | null
           parent_group: string | null
           sync_batch_id: string | null
+          sync_code_version: string | null
           synced_at: string | null
           tally_company: string | null
         }
@@ -6544,6 +8712,7 @@ export type Database = {
           opening_type?: string | null
           parent_group?: string | null
           sync_batch_id?: string | null
+          sync_code_version?: string | null
           synced_at?: string | null
           tally_company?: string | null
         }
@@ -6562,10 +8731,62 @@ export type Database = {
           opening_type?: string | null
           parent_group?: string | null
           sync_batch_id?: string | null
+          sync_code_version?: string | null
           synced_at?: string | null
           tally_company?: string | null
         }
         Relationships: []
+      }
+      tally_voucher_log: {
+        Row: {
+          direction: string
+          firm_id: string
+          id: string
+          invoice_id: string | null
+          posted_at: string
+          status: string
+          tally_company_name: string
+          tally_vch_id: string | null
+          voucher_number: string | null
+        }
+        Insert: {
+          direction?: string
+          firm_id: string
+          id?: string
+          invoice_id?: string | null
+          posted_at?: string
+          status?: string
+          tally_company_name: string
+          tally_vch_id?: string | null
+          voucher_number?: string | null
+        }
+        Update: {
+          direction?: string
+          firm_id?: string
+          id?: string
+          invoice_id?: string | null
+          posted_at?: string
+          status?: string
+          tally_company_name?: string
+          tally_vch_id?: string | null
+          voucher_number?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tally_voucher_log_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tally_voucher_log_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "invoices"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       tally_vouchers: {
         Row: {
@@ -7116,6 +9337,532 @@ export type Database = {
           },
         ]
       }
+      tds_correction_audit_log: {
+        Row: {
+          action_type: string
+          actor_id: string | null
+          actor_name: string | null
+          actor_role: string | null
+          client_id: string | null
+          correction_id: string
+          created_at: string
+          detail: string | null
+          firm_id: string | null
+          id: string
+          new_value: string | null
+          old_value: string | null
+        }
+        Insert: {
+          action_type: string
+          actor_id?: string | null
+          actor_name?: string | null
+          actor_role?: string | null
+          client_id?: string | null
+          correction_id: string
+          created_at?: string
+          detail?: string | null
+          firm_id?: string | null
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+        }
+        Update: {
+          action_type?: string
+          actor_id?: string | null
+          actor_name?: string | null
+          actor_role?: string | null
+          client_id?: string | null
+          correction_id?: string
+          created_at?: string
+          detail?: string | null
+          firm_id?: string | null
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_correction_audit_log_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_correction_audit_log_correction_id_fkey"
+            columns: ["correction_id"]
+            isOneToOne: false
+            referencedRelation: "tds_corrections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_correction_challans: {
+        Row: {
+          action: string
+          bank_name: string | null
+          bsr_code: string | null
+          challan_remarks: string | null
+          challan_serial_no: string | null
+          cheque_dd_no: string | null
+          client_id: string
+          correction_id: string
+          created_at: string
+          deposit_date: string | null
+          education_cess_deposited: number | null
+          filing_id: string | null
+          financial_year: string | null
+          firm_id: string
+          form_type: string | null
+          fully_utilized: boolean | null
+          id: string
+          interest_deposited: number | null
+          is_book_entry: boolean | null
+          late_fees_234e: number | null
+          late_fees_used: number | null
+          minor_head_of_challan: string | null
+          origin_fy: string | null
+          origin_quarter: string | null
+          original_challan_id: string | null
+          original_values: Json | null
+          others_deposited: number | null
+          quarter: string | null
+          section_code: string | null
+          surcharge_deposited: number | null
+          total_challan_amount: number | null
+          total_tax_deposited: number | null
+          transfer_voucher_no: string | null
+          updated_at: string
+        }
+        Insert: {
+          action?: string
+          bank_name?: string | null
+          bsr_code?: string | null
+          challan_remarks?: string | null
+          challan_serial_no?: string | null
+          cheque_dd_no?: string | null
+          client_id: string
+          correction_id: string
+          created_at?: string
+          deposit_date?: string | null
+          education_cess_deposited?: number | null
+          filing_id?: string | null
+          financial_year?: string | null
+          firm_id: string
+          form_type?: string | null
+          fully_utilized?: boolean | null
+          id?: string
+          interest_deposited?: number | null
+          is_book_entry?: boolean | null
+          late_fees_234e?: number | null
+          late_fees_used?: number | null
+          minor_head_of_challan?: string | null
+          origin_fy?: string | null
+          origin_quarter?: string | null
+          original_challan_id?: string | null
+          original_values?: Json | null
+          others_deposited?: number | null
+          quarter?: string | null
+          section_code?: string | null
+          surcharge_deposited?: number | null
+          total_challan_amount?: number | null
+          total_tax_deposited?: number | null
+          transfer_voucher_no?: string | null
+          updated_at?: string
+        }
+        Update: {
+          action?: string
+          bank_name?: string | null
+          bsr_code?: string | null
+          challan_remarks?: string | null
+          challan_serial_no?: string | null
+          cheque_dd_no?: string | null
+          client_id?: string
+          correction_id?: string
+          created_at?: string
+          deposit_date?: string | null
+          education_cess_deposited?: number | null
+          filing_id?: string | null
+          financial_year?: string | null
+          firm_id?: string
+          form_type?: string | null
+          fully_utilized?: boolean | null
+          id?: string
+          interest_deposited?: number | null
+          is_book_entry?: boolean | null
+          late_fees_234e?: number | null
+          late_fees_used?: number | null
+          minor_head_of_challan?: string | null
+          origin_fy?: string | null
+          origin_quarter?: string | null
+          original_challan_id?: string | null
+          original_values?: Json | null
+          others_deposited?: number | null
+          quarter?: string | null
+          section_code?: string | null
+          surcharge_deposited?: number | null
+          total_challan_amount?: number | null
+          total_tax_deposited?: number | null
+          transfer_voucher_no?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_correction_challans_correction_id_fkey"
+            columns: ["correction_id"]
+            isOneToOne: false
+            referencedRelation: "tds_corrections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_correction_deductees: {
+        Row: {
+          action: string
+          amount_paid_credited: number | null
+          cess_amount: number | null
+          challan_id: string | null
+          client_id: string
+          correction_challan_id: string | null
+          correction_id: string
+          country_of_residence: string | null
+          created_at: string
+          date_of_deduction: string | null
+          date_of_payment: string | null
+          deductee_name: string | null
+          deductee_pan: string | null
+          deductee_ref_no: string | null
+          deductee_type: string | null
+          designation: string | null
+          filing_id: string | null
+          financial_year: string | null
+          firm_id: string
+          form_type: string | null
+          gross_salary: number | null
+          id: string
+          interest_amount: number | null
+          late_fees_amount: number | null
+          lower_deduction_certificate_no: string | null
+          lower_deduction_rate: number | null
+          nature_of_payment: string | null
+          net_taxable_salary: number | null
+          original_deductee_id: string | null
+          original_values: Json | null
+          pan_not_available: boolean | null
+          quarter: string | null
+          rate_of_tds: number | null
+          reason_for_lower_or_nil_deduction: string | null
+          remarks: string | null
+          section_code: string | null
+          standard_deduction_allowed: number | null
+          surcharge_amount: number | null
+          tds_amount: number | null
+          total_tax_deducted: number | null
+          updated_at: string
+        }
+        Insert: {
+          action?: string
+          amount_paid_credited?: number | null
+          cess_amount?: number | null
+          challan_id?: string | null
+          client_id: string
+          correction_challan_id?: string | null
+          correction_id: string
+          country_of_residence?: string | null
+          created_at?: string
+          date_of_deduction?: string | null
+          date_of_payment?: string | null
+          deductee_name?: string | null
+          deductee_pan?: string | null
+          deductee_ref_no?: string | null
+          deductee_type?: string | null
+          designation?: string | null
+          filing_id?: string | null
+          financial_year?: string | null
+          firm_id: string
+          form_type?: string | null
+          gross_salary?: number | null
+          id?: string
+          interest_amount?: number | null
+          late_fees_amount?: number | null
+          lower_deduction_certificate_no?: string | null
+          lower_deduction_rate?: number | null
+          nature_of_payment?: string | null
+          net_taxable_salary?: number | null
+          original_deductee_id?: string | null
+          original_values?: Json | null
+          pan_not_available?: boolean | null
+          quarter?: string | null
+          rate_of_tds?: number | null
+          reason_for_lower_or_nil_deduction?: string | null
+          remarks?: string | null
+          section_code?: string | null
+          standard_deduction_allowed?: number | null
+          surcharge_amount?: number | null
+          tds_amount?: number | null
+          total_tax_deducted?: number | null
+          updated_at?: string
+        }
+        Update: {
+          action?: string
+          amount_paid_credited?: number | null
+          cess_amount?: number | null
+          challan_id?: string | null
+          client_id?: string
+          correction_challan_id?: string | null
+          correction_id?: string
+          country_of_residence?: string | null
+          created_at?: string
+          date_of_deduction?: string | null
+          date_of_payment?: string | null
+          deductee_name?: string | null
+          deductee_pan?: string | null
+          deductee_ref_no?: string | null
+          deductee_type?: string | null
+          designation?: string | null
+          filing_id?: string | null
+          financial_year?: string | null
+          firm_id?: string
+          form_type?: string | null
+          gross_salary?: number | null
+          id?: string
+          interest_amount?: number | null
+          late_fees_amount?: number | null
+          lower_deduction_certificate_no?: string | null
+          lower_deduction_rate?: number | null
+          nature_of_payment?: string | null
+          net_taxable_salary?: number | null
+          original_deductee_id?: string | null
+          original_values?: Json | null
+          pan_not_available?: boolean | null
+          quarter?: string | null
+          rate_of_tds?: number | null
+          reason_for_lower_or_nil_deduction?: string | null
+          remarks?: string | null
+          section_code?: string | null
+          standard_deduction_allowed?: number | null
+          surcharge_amount?: number | null
+          tds_amount?: number | null
+          total_tax_deducted?: number | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_correction_deductees_correction_challan_id_fkey"
+            columns: ["correction_challan_id"]
+            isOneToOne: false
+            referencedRelation: "tds_correction_challans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_correction_deductees_correction_id_fkey"
+            columns: ["correction_id"]
+            isOneToOne: false
+            referencedRelation: "tds_corrections"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_corrections: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          approved_by_name: string | null
+          approved_by_role: string | null
+          client_id: string
+          created_at: string
+          filed_at: string | null
+          filed_by: string | null
+          filed_by_name: string | null
+          filing_reference: string | null
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id: string
+          original_filing_id: string | null
+          prepared_at: string | null
+          prepared_by: string | null
+          prepared_by_name: string | null
+          prepared_by_role: string | null
+          proof_file_name: string | null
+          proof_file_url: string | null
+          proof_uploaded_at: string | null
+          proof_uploaded_by: string | null
+          quarter: string
+          raised_at: string
+          raised_by: string | null
+          raised_by_name: string | null
+          raised_by_role: string | null
+          reason: string | null
+          rejected_at: string | null
+          rejected_by: string | null
+          rejection_reason: string | null
+          signed_at: string | null
+          signed_by: string | null
+          signed_by_name: string | null
+          signed_by_role: string | null
+          status: string
+          submission_mode: string | null
+          submitted_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          approved_by_name?: string | null
+          approved_by_role?: string | null
+          client_id: string
+          created_at?: string
+          filed_at?: string | null
+          filed_by?: string | null
+          filed_by_name?: string | null
+          filing_reference?: string | null
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id?: string
+          original_filing_id?: string | null
+          prepared_at?: string | null
+          prepared_by?: string | null
+          prepared_by_name?: string | null
+          prepared_by_role?: string | null
+          proof_file_name?: string | null
+          proof_file_url?: string | null
+          proof_uploaded_at?: string | null
+          proof_uploaded_by?: string | null
+          quarter: string
+          raised_at?: string
+          raised_by?: string | null
+          raised_by_name?: string | null
+          raised_by_role?: string | null
+          reason?: string | null
+          rejected_at?: string | null
+          rejected_by?: string | null
+          rejection_reason?: string | null
+          signed_at?: string | null
+          signed_by?: string | null
+          signed_by_name?: string | null
+          signed_by_role?: string | null
+          status?: string
+          submission_mode?: string | null
+          submitted_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          approved_by_name?: string | null
+          approved_by_role?: string | null
+          client_id?: string
+          created_at?: string
+          filed_at?: string | null
+          filed_by?: string | null
+          filed_by_name?: string | null
+          filing_reference?: string | null
+          financial_year?: string
+          firm_id?: string
+          form_type?: string
+          id?: string
+          original_filing_id?: string | null
+          prepared_at?: string | null
+          prepared_by?: string | null
+          prepared_by_name?: string | null
+          prepared_by_role?: string | null
+          proof_file_name?: string | null
+          proof_file_url?: string | null
+          proof_uploaded_at?: string | null
+          proof_uploaded_by?: string | null
+          quarter?: string
+          raised_at?: string
+          raised_by?: string | null
+          raised_by_name?: string | null
+          raised_by_role?: string | null
+          reason?: string | null
+          rejected_at?: string | null
+          rejected_by?: string | null
+          rejection_reason?: string | null
+          signed_at?: string | null
+          signed_by?: string | null
+          signed_by_name?: string | null
+          signed_by_role?: string | null
+          status?: string
+          submission_mode?: string | null
+          submitted_at?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_corrections_approved_by_fkey"
+            columns: ["approved_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_corrections_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_corrections_filed_by_fkey"
+            columns: ["filed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_corrections_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_corrections_original_filing_id_fkey"
+            columns: ["original_filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_corrections_prepared_by_fkey"
+            columns: ["prepared_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_corrections_proof_uploaded_by_fkey"
+            columns: ["proof_uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_corrections_raised_by_fkey"
+            columns: ["raised_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_corrections_rejected_by_fkey"
+            columns: ["rejected_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_corrections_signed_by_fkey"
+            columns: ["signed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tds_deductees: {
         Row: {
           amount_paid_credited: number | null
@@ -7291,6 +10038,114 @@ export type Database = {
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_demand_items: {
+        Row: {
+          amount_paid: number | null
+          client_id: string
+          computation_date: string
+          computation_note: string | null
+          created_at: string
+          deductible_date: string | null
+          deduction_date: string | null
+          dispute_note: string | null
+          fee_234e: number
+          financial_year: string
+          firm_id: string
+          flag_id: string | null
+          flag_type: string
+          goal_number: number
+          id: string
+          interest_201_1a: number
+          interest_months: number | null
+          interest_rate_pct: number | null
+          item_status: string
+          late_filing_days: number | null
+          nature_of_payment: string | null
+          payment_date: string | null
+          section_code: string | null
+          tb_ledger_name: string | null
+          tds_deductee_name: string | null
+          tds_shortfall: number
+          total_demand: number
+          updated_at: string
+        }
+        Insert: {
+          amount_paid?: number | null
+          client_id: string
+          computation_date?: string
+          computation_note?: string | null
+          created_at?: string
+          deductible_date?: string | null
+          deduction_date?: string | null
+          dispute_note?: string | null
+          fee_234e?: number
+          financial_year: string
+          firm_id: string
+          flag_id?: string | null
+          flag_type: string
+          goal_number: number
+          id?: string
+          interest_201_1a?: number
+          interest_months?: number | null
+          interest_rate_pct?: number | null
+          item_status?: string
+          late_filing_days?: number | null
+          nature_of_payment?: string | null
+          payment_date?: string | null
+          section_code?: string | null
+          tb_ledger_name?: string | null
+          tds_deductee_name?: string | null
+          tds_shortfall?: number
+          total_demand?: number
+          updated_at?: string
+        }
+        Update: {
+          amount_paid?: number | null
+          client_id?: string
+          computation_date?: string
+          computation_note?: string | null
+          created_at?: string
+          deductible_date?: string | null
+          deduction_date?: string | null
+          dispute_note?: string | null
+          fee_234e?: number
+          financial_year?: string
+          firm_id?: string
+          flag_id?: string | null
+          flag_type?: string
+          goal_number?: number
+          id?: string
+          interest_201_1a?: number
+          interest_months?: number | null
+          interest_rate_pct?: number | null
+          item_status?: string
+          late_filing_days?: number | null
+          nature_of_payment?: string | null
+          payment_date?: string | null
+          section_code?: string | null
+          tb_ledger_name?: string | null
+          tds_deductee_name?: string | null
+          tds_shortfall?: number
+          total_demand?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_demand_items_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_demand_items_flag_id_fkey"
+            columns: ["flag_id"]
+            isOneToOne: false
+            referencedRelation: "tds_recon_flags"
             referencedColumns: ["id"]
           },
         ]
@@ -7656,198 +10511,372 @@ export type Database = {
           },
         ]
       }
-      tds_recon_flags: {
+      tds_import_batches: {
         Row: {
-          id: string
           client_id: string
-          firm_id: string
-          financial_year: string
-          flag_type: string
-          goal_number: number | null
-          tb_ledger_name: string | null
-          tds_deductee_name: string | null
-          section_code: string | null
-          nature_of_payment: string | null
-          book_amount: number | null
-          tds_amount: number | null
-          expected_tds: number | null
-          actual_tds: number | null
-          variance_amount: number | null
-          expected_rate: number | null
-          actual_rate: number | null
-          threshold_amount: number | null
-          voucher_ids: string[] | null
-          deductee_ids: string[] | null
-          mapping_id: string | null
-          ai_reasoning: string | null
-          ai_confidence: number | null
-          sample_narrations: string[] | null
-          flag_status: string
-          query_id: string | null
-          actioned_by: string | null
-          actioned_at: string | null
-          action_note: string | null
           created_at: string | null
+          file_name: string | null
+          file_type: string | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id: string
+          imported_at: string | null
+          imported_by: string | null
+          quarter: string
+          row_count: number | null
+          status: string
           updated_at: string | null
         }
         Insert: {
-          id?: string
           client_id: string
-          firm_id: string
-          financial_year: string
-          flag_type: string
-          goal_number?: number | null
-          tb_ledger_name?: string | null
-          tds_deductee_name?: string | null
-          section_code?: string | null
-          nature_of_payment?: string | null
-          book_amount?: number | null
-          tds_amount?: number | null
-          expected_tds?: number | null
-          actual_tds?: number | null
-          variance_amount?: number | null
-          expected_rate?: number | null
-          actual_rate?: number | null
-          threshold_amount?: number | null
-          voucher_ids?: string[] | null
-          deductee_ids?: string[] | null
-          mapping_id?: string | null
-          ai_reasoning?: string | null
-          ai_confidence?: number | null
-          sample_narrations?: string[] | null
-          flag_status?: string
-          query_id?: string | null
-          actioned_by?: string | null
-          actioned_at?: string | null
-          action_note?: string | null
           created_at?: string | null
+          file_name?: string | null
+          file_type?: string | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          quarter: string
+          row_count?: number | null
+          status?: string
           updated_at?: string | null
         }
         Update: {
-          id?: string
           client_id?: string
-          firm_id?: string
-          financial_year?: string
-          flag_type?: string
-          goal_number?: number | null
-          tb_ledger_name?: string | null
-          tds_deductee_name?: string | null
-          section_code?: string | null
-          nature_of_payment?: string | null
-          book_amount?: number | null
-          tds_amount?: number | null
-          expected_tds?: number | null
-          actual_tds?: number | null
-          variance_amount?: number | null
-          expected_rate?: number | null
-          actual_rate?: number | null
-          threshold_amount?: number | null
-          voucher_ids?: string[] | null
-          deductee_ids?: string[] | null
-          mapping_id?: string | null
-          ai_reasoning?: string | null
-          ai_confidence?: number | null
-          sample_narrations?: string[] | null
-          flag_status?: string
-          query_id?: string | null
-          actioned_by?: string | null
-          actioned_at?: string | null
-          action_note?: string | null
           created_at?: string | null
+          file_name?: string | null
+          file_type?: string | null
+          filing_id?: string
+          financial_year?: string
+          firm_id?: string
+          form_type?: string
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          quarter?: string
+          row_count?: number | null
+          status?: string
           updated_at?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "tds_recon_flags_client_id_fkey"
+            foreignKeyName: "tds_import_batches_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "tds_recon_flags_mapping_id_fkey"
-            columns: ["mapping_id"]
+            foreignKeyName: "tds_import_batches_filing_id_fkey"
+            columns: ["filing_id"]
             isOneToOne: false
-            referencedRelation: "tds_tb_party_mappings"
+            referencedRelation: "tds_filings"
             referencedColumns: ["id"]
-          }
+          },
         ]
       }
-      tds_tb_party_mappings: {
+      tds_imported_rows: {
         Row: {
-          id: string
-          client_id: string
-          firm_id: string
-          financial_year: string
-          tb_ledger_name: string
-          tb_parent_group: string | null
-          tb_total_debit: number | null
-          tds_deductee_name: string
-          tds_section_code: string | null
-          tds_total_amount: number | null
-          tds_tds_amount: number | null
-          tds_filing_ids: string[] | null
-          match_confidence: number | null
-          match_method: string | null
-          ai_reasoning: string | null
-          mapping_status: string
-          mapped_by: string | null
-          notes: string | null
+          amount_paid: number | null
+          batch_id: string
+          challan_bsr: string | null
+          challan_no: string | null
           created_at: string | null
+          date_of_deduction: string | null
+          date_of_payment: string | null
+          deductee_name: string | null
+          filing_id: string
+          firm_id: string
+          id: string
+          interest: number | null
+          pan: string | null
+          rate: number | null
+          raw: Json | null
+          row_index: number | null
+          section_code: string | null
+          tds_amount: number | null
+        }
+        Insert: {
+          amount_paid?: number | null
+          batch_id: string
+          challan_bsr?: string | null
+          challan_no?: string | null
+          created_at?: string | null
+          date_of_deduction?: string | null
+          date_of_payment?: string | null
+          deductee_name?: string | null
+          filing_id: string
+          firm_id: string
+          id?: string
+          interest?: number | null
+          pan?: string | null
+          rate?: number | null
+          raw?: Json | null
+          row_index?: number | null
+          section_code?: string | null
+          tds_amount?: number | null
+        }
+        Update: {
+          amount_paid?: number | null
+          batch_id?: string
+          challan_bsr?: string | null
+          challan_no?: string | null
+          created_at?: string | null
+          date_of_deduction?: string | null
+          date_of_payment?: string | null
+          deductee_name?: string | null
+          filing_id?: string
+          firm_id?: string
+          id?: string
+          interest?: number | null
+          pan?: string | null
+          rate?: number | null
+          raw?: Json | null
+          row_index?: number | null
+          section_code?: string | null
+          tds_amount?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_imported_rows_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "tds_import_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_imported_rows_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_pan_verification_batches: {
+        Row: {
+          client_id: string
+          created_at: string | null
+          file_name: string | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id: string
+          imported_at: string | null
+          imported_by: string | null
+          quarter: string
+          row_count: number | null
+          status: string
           updated_at: string | null
         }
         Insert: {
-          id?: string
           client_id: string
-          firm_id: string
-          financial_year: string
-          tb_ledger_name: string
-          tb_parent_group?: string | null
-          tb_total_debit?: number | null
-          tds_deductee_name: string
-          tds_section_code?: string | null
-          tds_total_amount?: number | null
-          tds_tds_amount?: number | null
-          tds_filing_ids?: string[] | null
-          match_confidence?: number | null
-          match_method?: string | null
-          ai_reasoning?: string | null
-          mapping_status?: string
-          mapped_by?: string | null
-          notes?: string | null
           created_at?: string | null
+          file_name?: string | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          quarter: string
+          row_count?: number | null
+          status?: string
           updated_at?: string | null
         }
         Update: {
-          id?: string
           client_id?: string
-          firm_id?: string
-          financial_year?: string
-          tb_ledger_name?: string
-          tb_parent_group?: string | null
-          tb_total_debit?: number | null
-          tds_deductee_name?: string
-          tds_section_code?: string | null
-          tds_total_amount?: number | null
-          tds_tds_amount?: number | null
-          tds_filing_ids?: string[] | null
-          match_confidence?: number | null
-          match_method?: string | null
-          ai_reasoning?: string | null
-          mapping_status?: string
-          mapped_by?: string | null
-          notes?: string | null
           created_at?: string | null
+          file_name?: string | null
+          filing_id?: string
+          financial_year?: string
+          firm_id?: string
+          form_type?: string
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          quarter?: string
+          row_count?: number | null
+          status?: string
           updated_at?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "tds_tb_party_mappings_client_id_fkey"
+            foreignKeyName: "tds_pan_verification_batches_client_id_fkey"
             columns: ["client_id"]
             isOneToOne: false
             referencedRelation: "clients"
             referencedColumns: ["id"]
-          }
+          },
+          {
+            foreignKeyName: "tds_pan_verification_batches_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_pan_verification_results: {
+        Row: {
+          batch_id: string | null
+          created_at: string | null
+          detail: Json | null
+          filing_id: string
+          firm_id: string
+          id: string
+          office_deductee_id: string | null
+          overridden: boolean
+          overridden_at: string | null
+          overridden_by: string | null
+          override_reason: string | null
+          pan: string | null
+          pan_row_id: string | null
+          pan_status: string | null
+          party_name: string | null
+          quarter: string | null
+          updated_at: string | null
+          validation_result: string
+          verified_name: string | null
+        }
+        Insert: {
+          batch_id?: string | null
+          created_at?: string | null
+          detail?: Json | null
+          filing_id: string
+          firm_id: string
+          id?: string
+          office_deductee_id?: string | null
+          overridden?: boolean
+          overridden_at?: string | null
+          overridden_by?: string | null
+          override_reason?: string | null
+          pan?: string | null
+          pan_row_id?: string | null
+          pan_status?: string | null
+          party_name?: string | null
+          quarter?: string | null
+          updated_at?: string | null
+          validation_result: string
+          verified_name?: string | null
+        }
+        Update: {
+          batch_id?: string | null
+          created_at?: string | null
+          detail?: Json | null
+          filing_id?: string
+          firm_id?: string
+          id?: string
+          office_deductee_id?: string | null
+          overridden?: boolean
+          overridden_at?: string | null
+          overridden_by?: string | null
+          override_reason?: string | null
+          pan?: string | null
+          pan_row_id?: string | null
+          pan_status?: string | null
+          party_name?: string | null
+          quarter?: string | null
+          updated_at?: string | null
+          validation_result?: string
+          verified_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_pan_verification_results_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "tds_pan_verification_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_pan_verification_results_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_pan_verification_results_office_deductee_id_fkey"
+            columns: ["office_deductee_id"]
+            isOneToOne: false
+            referencedRelation: "tds_deductees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_pan_verification_results_pan_row_id_fkey"
+            columns: ["pan_row_id"]
+            isOneToOne: false
+            referencedRelation: "tds_pan_verification_rows"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_pan_verification_rows: {
+        Row: {
+          batch_id: string
+          created_at: string | null
+          filing_id: string
+          firm_id: string
+          id: string
+          mismatch_in_name: string | null
+          name: string | null
+          pan: string | null
+          pan_status: string | null
+          raw: Json | null
+          row_index: number | null
+          verified_name: string | null
+        }
+        Insert: {
+          batch_id: string
+          created_at?: string | null
+          filing_id: string
+          firm_id: string
+          id?: string
+          mismatch_in_name?: string | null
+          name?: string | null
+          pan?: string | null
+          pan_status?: string | null
+          raw?: Json | null
+          row_index?: number | null
+          verified_name?: string | null
+        }
+        Update: {
+          batch_id?: string
+          created_at?: string | null
+          filing_id?: string
+          firm_id?: string
+          id?: string
+          mismatch_in_name?: string | null
+          name?: string | null
+          pan?: string | null
+          pan_status?: string | null
+          raw?: Json | null
+          row_index?: number | null
+          verified_name?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_pan_verification_rows_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "tds_pan_verification_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_pan_verification_rows_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
         ]
       }
       tds_rate_master: {
@@ -7863,7 +10892,10 @@ export type Database = {
           id: string
           is_active: boolean | null
           nature_of_payment: string | null
+          new_section_code: string | null
+          new_section_description: string | null
           notes: string | null
+          payment_code: string | null
           rate_company: number | null
           rate_individual: number | null
           rate_no_pan: number | null
@@ -7885,7 +10917,10 @@ export type Database = {
           id?: string
           is_active?: boolean | null
           nature_of_payment?: string | null
+          new_section_code?: string | null
+          new_section_description?: string | null
           notes?: string | null
+          payment_code?: string | null
           rate_company?: number | null
           rate_individual?: number | null
           rate_no_pan?: number | null
@@ -7907,7 +10942,10 @@ export type Database = {
           id?: string
           is_active?: boolean | null
           nature_of_payment?: string | null
+          new_section_code?: string | null
+          new_section_description?: string | null
           notes?: string | null
+          payment_code?: string | null
           rate_company?: number | null
           rate_individual?: number | null
           rate_no_pan?: number | null
@@ -7923,6 +10961,683 @@ export type Database = {
             columns: ["firm_id"]
             isOneToOne: false
             referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_rate_master_audit_log: {
+        Row: {
+          action_type: string
+          changed_at: string | null
+          changed_by: string | null
+          changed_by_name: string | null
+          firm_id: string | null
+          id: string
+          new_value: string | null
+          old_value: string | null
+          rate_master_id: string | null
+          remark: string | null
+        }
+        Insert: {
+          action_type: string
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_name?: string | null
+          firm_id?: string | null
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+          rate_master_id?: string | null
+          remark?: string | null
+        }
+        Update: {
+          action_type?: string
+          changed_at?: string | null
+          changed_by?: string | null
+          changed_by_name?: string | null
+          firm_id?: string | null
+          id?: string
+          new_value?: string | null
+          old_value?: string | null
+          rate_master_id?: string | null
+          remark?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_rate_master_audit_log_changed_by_fkey"
+            columns: ["changed_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_rate_master_audit_log_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_rate_master_audit_log_rate_master_id_fkey"
+            columns: ["rate_master_id"]
+            isOneToOne: false
+            referencedRelation: "tds_rate_master"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_recon_flags: {
+        Row: {
+          action_note: string | null
+          actioned_at: string | null
+          actioned_by: string | null
+          actual_rate: number | null
+          actual_tds: number | null
+          ai_confidence: number | null
+          ai_reasoning: string | null
+          book_amount: number | null
+          client_id: string
+          created_at: string | null
+          deductee_ids: string[] | null
+          expected_rate: number | null
+          expected_tds: number | null
+          financial_year: string
+          firm_id: string
+          flag_status: string
+          flag_type: string
+          goal_number: number | null
+          id: string
+          mapping_id: string | null
+          nature_of_payment: string | null
+          query_id: string | null
+          sample_narrations: string[] | null
+          section_code: string | null
+          tb_ledger_name: string | null
+          tds_amount: number | null
+          tds_deductee_name: string | null
+          threshold_amount: number | null
+          updated_at: string | null
+          variance_amount: number | null
+          voucher_ids: string[] | null
+        }
+        Insert: {
+          action_note?: string | null
+          actioned_at?: string | null
+          actioned_by?: string | null
+          actual_rate?: number | null
+          actual_tds?: number | null
+          ai_confidence?: number | null
+          ai_reasoning?: string | null
+          book_amount?: number | null
+          client_id: string
+          created_at?: string | null
+          deductee_ids?: string[] | null
+          expected_rate?: number | null
+          expected_tds?: number | null
+          financial_year: string
+          firm_id: string
+          flag_status?: string
+          flag_type: string
+          goal_number?: number | null
+          id?: string
+          mapping_id?: string | null
+          nature_of_payment?: string | null
+          query_id?: string | null
+          sample_narrations?: string[] | null
+          section_code?: string | null
+          tb_ledger_name?: string | null
+          tds_amount?: number | null
+          tds_deductee_name?: string | null
+          threshold_amount?: number | null
+          updated_at?: string | null
+          variance_amount?: number | null
+          voucher_ids?: string[] | null
+        }
+        Update: {
+          action_note?: string | null
+          actioned_at?: string | null
+          actioned_by?: string | null
+          actual_rate?: number | null
+          actual_tds?: number | null
+          ai_confidence?: number | null
+          ai_reasoning?: string | null
+          book_amount?: number | null
+          client_id?: string
+          created_at?: string | null
+          deductee_ids?: string[] | null
+          expected_rate?: number | null
+          expected_tds?: number | null
+          financial_year?: string
+          firm_id?: string
+          flag_status?: string
+          flag_type?: string
+          goal_number?: number | null
+          id?: string
+          mapping_id?: string | null
+          nature_of_payment?: string | null
+          query_id?: string | null
+          sample_narrations?: string[] | null
+          section_code?: string | null
+          tb_ledger_name?: string | null
+          tds_amount?: number | null
+          tds_deductee_name?: string | null
+          threshold_amount?: number | null
+          updated_at?: string | null
+          variance_amount?: number | null
+          voucher_ids?: string[] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_recon_flags_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_recon_flags_mapping_id_fkey"
+            columns: ["mapping_id"]
+            isOneToOne: false
+            referencedRelation: "tds_tb_party_mappings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_recon_results: {
+        Row: {
+          batch_id: string
+          created_at: string | null
+          field_diffs: Json | null
+          filing_id: string
+          firm_id: string
+          id: string
+          imported_row_id: string | null
+          match_status: string
+          mismatch_fields: string[] | null
+          office_deductee_id: string | null
+          overridden: boolean
+          overridden_at: string | null
+          overridden_by: string | null
+          override_note: string | null
+          record_label: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          batch_id: string
+          created_at?: string | null
+          field_diffs?: Json | null
+          filing_id: string
+          firm_id: string
+          id?: string
+          imported_row_id?: string | null
+          match_status?: string
+          mismatch_fields?: string[] | null
+          office_deductee_id?: string | null
+          overridden?: boolean
+          overridden_at?: string | null
+          overridden_by?: string | null
+          override_note?: string | null
+          record_label?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          batch_id?: string
+          created_at?: string | null
+          field_diffs?: Json | null
+          filing_id?: string
+          firm_id?: string
+          id?: string
+          imported_row_id?: string | null
+          match_status?: string
+          mismatch_fields?: string[] | null
+          office_deductee_id?: string | null
+          overridden?: boolean
+          overridden_at?: string | null
+          overridden_by?: string | null
+          override_note?: string | null
+          record_label?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_recon_results_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "tds_import_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_recon_results_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_recon_results_imported_row_id_fkey"
+            columns: ["imported_row_id"]
+            isOneToOne: false
+            referencedRelation: "tds_imported_rows"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_recon_results_office_deductee_id_fkey"
+            columns: ["office_deductee_id"]
+            isOneToOne: false
+            referencedRelation: "tds_deductees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_section_aliases: {
+        Row: {
+          created_at: string | null
+          firm_id: string | null
+          id: string
+          note: string | null
+          pattern: string
+          priority: number
+          section_code: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          firm_id?: string | null
+          id?: string
+          note?: string | null
+          pattern: string
+          priority?: number
+          section_code: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          firm_id?: string | null
+          id?: string
+          note?: string | null
+          pattern?: string
+          priority?: number
+          section_code?: string
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      tds_tally_batches: {
+        Row: {
+          client_id: string
+          created_at: string | null
+          file_name: string | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id: string
+          imported_at: string | null
+          imported_by: string | null
+          quarter: string
+          row_count: number | null
+          section: string | null
+          status: string
+          updated_at: string | null
+        }
+        Insert: {
+          client_id: string
+          created_at?: string | null
+          file_name?: string | null
+          filing_id: string
+          financial_year: string
+          firm_id: string
+          form_type: string
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          quarter: string
+          row_count?: number | null
+          section?: string | null
+          status?: string
+          updated_at?: string | null
+        }
+        Update: {
+          client_id?: string
+          created_at?: string | null
+          file_name?: string | null
+          filing_id?: string
+          financial_year?: string
+          firm_id?: string
+          form_type?: string
+          id?: string
+          imported_at?: string | null
+          imported_by?: string | null
+          quarter?: string
+          row_count?: number | null
+          section?: string | null
+          status?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_tally_batches_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_tally_batches_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_tally_party_maps: {
+        Row: {
+          client_id: string
+          created_at: string | null
+          created_by: string | null
+          firm_id: string
+          id: string
+          office_name: string | null
+          office_name_norm: string
+          tally_party: string
+        }
+        Insert: {
+          client_id: string
+          created_at?: string | null
+          created_by?: string | null
+          firm_id: string
+          id?: string
+          office_name?: string | null
+          office_name_norm: string
+          tally_party: string
+        }
+        Update: {
+          client_id?: string
+          created_at?: string | null
+          created_by?: string | null
+          firm_id?: string
+          id?: string
+          office_name?: string | null
+          office_name_norm?: string
+          tally_party?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_tally_party_maps_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_tally_results: {
+        Row: {
+          amount_basis: string | null
+          batch_id: string | null
+          confidence: number | null
+          created_at: string | null
+          filing_id: string
+          firm_id: string
+          id: string
+          mapped: boolean
+          office_amount: number | null
+          office_date: string | null
+          office_deductee_id: string | null
+          office_name: string | null
+          office_section: string | null
+          office_tds: number | null
+          overridden: boolean
+          overridden_at: string | null
+          overridden_by: string | null
+          override_reason: string | null
+          quarter: string | null
+          reason: string | null
+          result: string
+          salary_tally_credit: number | null
+          salary_tally_date: string | null
+          salary_tally_party: string | null
+          salary_tally_row_index: number | null
+          tally_credit: number | null
+          tally_date: string | null
+          tally_party: string | null
+          tally_row_index: number | null
+          taxable_income_status: string | null
+          tds_status: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          amount_basis?: string | null
+          batch_id?: string | null
+          confidence?: number | null
+          created_at?: string | null
+          filing_id: string
+          firm_id: string
+          id?: string
+          mapped?: boolean
+          office_amount?: number | null
+          office_date?: string | null
+          office_deductee_id?: string | null
+          office_name?: string | null
+          office_section?: string | null
+          office_tds?: number | null
+          overridden?: boolean
+          overridden_at?: string | null
+          overridden_by?: string | null
+          override_reason?: string | null
+          quarter?: string | null
+          reason?: string | null
+          result: string
+          salary_tally_credit?: number | null
+          salary_tally_date?: string | null
+          salary_tally_party?: string | null
+          salary_tally_row_index?: number | null
+          tally_credit?: number | null
+          tally_date?: string | null
+          tally_party?: string | null
+          tally_row_index?: number | null
+          taxable_income_status?: string | null
+          tds_status?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          amount_basis?: string | null
+          batch_id?: string | null
+          confidence?: number | null
+          created_at?: string | null
+          filing_id?: string
+          firm_id?: string
+          id?: string
+          mapped?: boolean
+          office_amount?: number | null
+          office_date?: string | null
+          office_deductee_id?: string | null
+          office_name?: string | null
+          office_section?: string | null
+          office_tds?: number | null
+          overridden?: boolean
+          overridden_at?: string | null
+          overridden_by?: string | null
+          override_reason?: string | null
+          quarter?: string | null
+          reason?: string | null
+          result?: string
+          salary_tally_credit?: number | null
+          salary_tally_date?: string | null
+          salary_tally_party?: string | null
+          salary_tally_row_index?: number | null
+          tally_credit?: number | null
+          tally_date?: string | null
+          tally_party?: string | null
+          tally_row_index?: number | null
+          taxable_income_status?: string | null
+          tds_status?: string | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_tally_results_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "tds_tally_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_tally_results_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_tally_results_office_deductee_id_fkey"
+            columns: ["office_deductee_id"]
+            isOneToOne: false
+            referencedRelation: "tds_deductees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_tally_rows: {
+        Row: {
+          batch_id: string
+          created_at: string | null
+          credit: number | null
+          date_iso: string | null
+          date_text: string | null
+          debit: number | null
+          filing_id: string
+          firm_id: string
+          id: string
+          party: string | null
+          raw: Json | null
+          row_index: number | null
+          section: string | null
+          vch_no: string | null
+          vch_type: string | null
+        }
+        Insert: {
+          batch_id: string
+          created_at?: string | null
+          credit?: number | null
+          date_iso?: string | null
+          date_text?: string | null
+          debit?: number | null
+          filing_id: string
+          firm_id: string
+          id?: string
+          party?: string | null
+          raw?: Json | null
+          row_index?: number | null
+          section?: string | null
+          vch_no?: string | null
+          vch_type?: string | null
+        }
+        Update: {
+          batch_id?: string
+          created_at?: string | null
+          credit?: number | null
+          date_iso?: string | null
+          date_text?: string | null
+          debit?: number | null
+          filing_id?: string
+          firm_id?: string
+          id?: string
+          party?: string | null
+          raw?: Json | null
+          row_index?: number | null
+          section?: string | null
+          vch_no?: string | null
+          vch_type?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_tally_rows_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "tds_tally_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tds_tally_rows_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      tds_tb_party_mappings: {
+        Row: {
+          ai_reasoning: string | null
+          client_id: string
+          created_at: string | null
+          financial_year: string
+          firm_id: string
+          id: string
+          mapped_by: string | null
+          mapping_status: string
+          match_confidence: number | null
+          match_method: string | null
+          notes: string | null
+          tb_ledger_name: string
+          tb_parent_group: string | null
+          tb_total_debit: number | null
+          tds_deductee_name: string
+          tds_filing_ids: string[] | null
+          tds_section_code: string | null
+          tds_total_amount: number | null
+          updated_at: string | null
+        }
+        Insert: {
+          ai_reasoning?: string | null
+          client_id: string
+          created_at?: string | null
+          financial_year: string
+          firm_id: string
+          id?: string
+          mapped_by?: string | null
+          mapping_status?: string
+          match_confidence?: number | null
+          match_method?: string | null
+          notes?: string | null
+          tb_ledger_name: string
+          tb_parent_group?: string | null
+          tb_total_debit?: number | null
+          tds_deductee_name: string
+          tds_filing_ids?: string[] | null
+          tds_section_code?: string | null
+          tds_total_amount?: number | null
+          updated_at?: string | null
+        }
+        Update: {
+          ai_reasoning?: string | null
+          client_id?: string
+          created_at?: string | null
+          financial_year?: string
+          firm_id?: string
+          id?: string
+          mapped_by?: string | null
+          mapping_status?: string
+          match_confidence?: number | null
+          match_method?: string | null
+          notes?: string | null
+          tb_ledger_name?: string
+          tb_parent_group?: string | null
+          tb_total_debit?: number | null
+          tds_deductee_name?: string
+          tds_filing_ids?: string[] | null
+          tds_section_code?: string | null
+          tds_total_amount?: number | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_tb_party_mappings_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
             referencedColumns: ["id"]
           },
         ]
@@ -8299,6 +12014,67 @@ export type Database = {
           },
         ]
       }
+      user_firm_access: {
+        Row: {
+          can_create: boolean
+          can_delete: boolean
+          can_edit: boolean
+          can_export: boolean
+          can_view: boolean
+          firm_id: string
+          granted_at: string
+          granted_by: string | null
+          id: string
+          user_id: string
+        }
+        Insert: {
+          can_create?: boolean
+          can_delete?: boolean
+          can_edit?: boolean
+          can_export?: boolean
+          can_view?: boolean
+          firm_id: string
+          granted_at?: string
+          granted_by?: string | null
+          id?: string
+          user_id: string
+        }
+        Update: {
+          can_create?: boolean
+          can_delete?: boolean
+          can_edit?: boolean
+          can_export?: boolean
+          can_view?: boolean
+          firm_id?: string
+          granted_at?: string
+          granted_by?: string | null
+          id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_firm_access_firm_id_fkey"
+            columns: ["firm_id"]
+            isOneToOne: false
+            referencedRelation: "firms"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_firm_access_granted_by_fkey"
+            columns: ["granted_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "user_firm_access_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       users: {
         Row: {
           avatar_url: string | null
@@ -8471,6 +12247,90 @@ export type Database = {
           },
         ]
       }
+      zz_bkp_cle_20260620: {
+        Row: {
+          balance: number | null
+          client_id: string | null
+          created_at: string | null
+          credit_amount: number | null
+          debit_amount: number | null
+          document_id: string | null
+          entry_date: string | null
+          entry_type: string | null
+          financial_year: string | null
+          firm_id: string | null
+          id: string | null
+          narration: string | null
+        }
+        Insert: {
+          balance?: number | null
+          client_id?: string | null
+          created_at?: string | null
+          credit_amount?: number | null
+          debit_amount?: number | null
+          document_id?: string | null
+          entry_date?: string | null
+          entry_type?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string | null
+          narration?: string | null
+        }
+        Update: {
+          balance?: number | null
+          client_id?: string | null
+          created_at?: string | null
+          credit_amount?: number | null
+          debit_amount?: number | null
+          document_id?: string | null
+          entry_date?: string | null
+          entry_type?: string | null
+          financial_year?: string | null
+          firm_id?: string | null
+          id?: string | null
+          narration?: string | null
+        }
+        Relationships: []
+      }
+      zz_bkp_ob_20260620: {
+        Row: {
+          amount: number | null
+          balance_date: string | null
+          client_id: string | null
+          created_at: string | null
+          created_by: string | null
+          firm_id: string | null
+          gstin: string | null
+          id: string | null
+          narration: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          amount?: number | null
+          balance_date?: string | null
+          client_id?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          firm_id?: string | null
+          gstin?: string | null
+          id?: string | null
+          narration?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          amount?: number | null
+          balance_date?: string | null
+          client_id?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          firm_id?: string | null
+          gstin?: string | null
+          id?: string | null
+          narration?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       fa_summary_by_fy: {
@@ -8504,9 +12364,50 @@ export type Database = {
           },
         ]
       }
+      scrutiny_open_finding_counts: {
+        Row: {
+          client_id: string | null
+          financial_year: string | null
+          open_count: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scrutiny_findings_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      v_billing_reconciliation: {
+        Row: {
+          canonical_closing: number | null
+          client_id: string | null
+          credit_notes: number | null
+          drift: number | null
+          firm_id: string | null
+          invoiced: number | null
+          is_balanced: boolean | null
+          kasar: number | null
+          ledger_closing: number | null
+          opening: number | null
+          received: number | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       _tally_flip: { Args: { p: string }; Returns: string }
+      allocate_doc_number: {
+        Args: {
+          p_financial_year: string
+          p_firm_id: string
+          p_invoice_date: string
+          p_series: string
+        }
+        Returns: number
+      }
       approve_week_timesheets: {
         Args: {
           p_approved_by: string
@@ -8560,6 +12461,19 @@ export type Database = {
         }
         Returns: number
       }
+      get_portal_clients_by_email: {
+        Args: never
+        Returns: {
+          email: string
+          entity_type: string
+          firm_id: string
+          gstin: string[]
+          id: string
+          mobile: string
+          name: string
+          pan: string
+        }[]
+      }
       is_chat_conversation_admin: {
         Args: { _conversation_id: string; _user_id: string }
         Returns: boolean
@@ -8586,8 +12500,41 @@ export type Database = {
           voucher_count: number
         }[]
       }
+      portal_client_ids: { Args: never; Returns: string[] }
+      post_receipt: {
+        Args: {
+          p_amount: number
+          p_client_id: string
+          p_created_by: string
+          p_financial_year: string
+          p_firm_id: string
+          p_gst_tds: number
+          p_gstin: string
+          p_invoice_id: string
+          p_payment_mode: string
+          p_payment_reference: string
+          p_receipt_date: string
+          p_receipt_type: string
+          p_remarks: string
+          p_tds: number
+          p_tds_date: string
+        }
+        Returns: string
+      }
+      recalc_invoice_paid_for: {
+        Args: { p_invoice_id: string }
+        Returns: undefined
+      }
       refresh_tb_period_totals: {
         Args: { p_engagement_id: string }
+        Returns: number
+      }
+      replace_tally_results: {
+        Args: { p_filing_id: string; p_rows: Json }
+        Returns: undefined
+      }
+      run_billing_reminders: {
+        Args: { p_service_key: string }
         Returns: number
       }
       set_user_context: {
@@ -8612,6 +12559,11 @@ export type Database = {
             }
             Returns: number
           }
+      sync_tds_filings_for_service: {
+        Args: { p_cs_id: string }
+        Returns: undefined
+      }
+      tally_billing_firm_access: { Args: { fid: string }; Returns: boolean }
       update_overdue_invoices: { Args: { p_firm_id: string }; Returns: number }
       upsert_coa_intelligence:
         | {
@@ -8641,6 +12593,10 @@ export type Database = {
             }
             Returns: undefined
           }
+      user_firm_can: {
+        Args: { p_action: string; p_firm_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never
