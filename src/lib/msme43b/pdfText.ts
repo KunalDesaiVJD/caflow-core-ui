@@ -6,6 +6,26 @@
 
 import type { TextToken, TextLine } from './types';
 
+/**
+ * WHY THE LEGACY BUILD, NOT THE DEFAULT ONE.
+ *
+ * pdfjs v6's default worker calls `Uint8Array.prototype.toHex()` while OPENING a
+ * document (pdf.worker.mjs: `[hashOriginal.toHex(), hashModified?.toHex()]` in the
+ * `fingerprints` getter). That method is a 2025 addition to JavaScript — Chrome
+ * 140+, Firefox 133+, Safari 18.4+. On anything older, getDocument() dies with
+ * "a.toHex is not a function" before a single page is read, and every PDF feature
+ * in this app fails with it.
+ *
+ * The default build carries no fallback. The LEGACY build ships a guarded
+ * polyfill for exactly this, so it works on both old and new browsers. The API is
+ * identical; the only cost is a slightly larger bundle.
+ *
+ * This cost a firm most of a working day: the failure surfaced as "the PDF has no
+ * text layer", so it looked like a scanned-document problem and was chased as one
+ * through four rounds of fixes. Do not "modernise" these two specifiers without a
+ * deliberate decision about the oldest browser the firm actually uses.
+ */
+
 export interface RawItem {
   str: string;
   x: number;
@@ -62,7 +82,7 @@ export function ownedBytes(data: ArrayBuffer | Uint8Array): Uint8Array {
  * The pdfjs worker must be configured once at app start (see setupPdfWorker).
  */
 export async function pdfToLines(data: ArrayBuffer | Uint8Array): Promise<TextLine[][]> {
-  const pdfjs = await import('pdfjs-dist');
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs') as typeof import('pdfjs-dist');
   await setupPdfWorker(pdfjs);
   const bytes = ownedBytes(data);
   // Keep the loading task: pdfjs v6's PDFDocumentProxy has no destroy(); cleanup
@@ -119,7 +139,7 @@ export async function pdfPageImages(
   data: ArrayBuffer | Uint8Array,
   pageNumbers: number[],
 ): Promise<string[]> {
-  const pdfjs = await import('pdfjs-dist');
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs') as typeof import('pdfjs-dist');
   await setupPdfWorker(pdfjs);
   const loadingTask = pdfjs.getDocument({ data: ownedBytes(data) });
   const out: string[] = [];
@@ -152,7 +172,7 @@ export async function pdfPageImages(
 
 /** Cheap page count without pulling the text of every page. */
 export async function pdfPageCount(data: ArrayBuffer | Uint8Array): Promise<number> {
-  const pdfjs = await import('pdfjs-dist');
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs') as typeof import('pdfjs-dist');
   await setupPdfWorker(pdfjs);
   const loadingTask = pdfjs.getDocument({ data: ownedBytes(data) });
   try {
@@ -167,7 +187,7 @@ let workerReady = false;
 async function setupPdfWorker(pdfjs: typeof import('pdfjs-dist')): Promise<void> {
   if (workerReady) return;
   // Vite resolves the worker asset URL at build time.
-  const workerUrl = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
+  const workerUrl = (await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')).default;
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   workerReady = true;
 }

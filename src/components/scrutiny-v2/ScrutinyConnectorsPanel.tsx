@@ -64,12 +64,15 @@ async function parseFile(file: File): Promise<Record<string, unknown>[]> {
 // PDF text extraction (pdfjs). Reconstructs lines from text-item Y positions so amounts keep their
 // row context. pdfjs (heavy) is dynamically imported so it only loads when a PDF is actually opened.
 async function extractPdfText(file: File): Promise<string> {
-  const pdfjs = await import("pdfjs-dist") as unknown as {
+  // LEGACY build: the default one needs Uint8Array.prototype.toHex (2025) and
+  // dies with "a.toHex is not a function" on older browsers. See
+  // src/lib/msme43b/pdfText.ts for the full note.
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs") as unknown as {
     GlobalWorkerOptions: { workerSrc: string };
     getDocument: (src: { data: ArrayBuffer }) => { promise: Promise<{ numPages: number; getPage: (n: number) => Promise<{ getTextContent: () => Promise<{ items: { str?: string; transform?: number[] }[] }> }> }> };
   };
   try {
-    const workerUrl = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default as string;
+    const workerUrl = (await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url")).default as string;
     pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
   } catch { /* worker url resolution is best-effort */ }
   const buf = await file.arrayBuffer();

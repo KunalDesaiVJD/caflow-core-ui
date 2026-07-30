@@ -18,12 +18,15 @@ let workerReady = false;
 
 /** Extract every page's positioned text runs from a PDF file. */
 export async function pdfToTextPages(file: File | ArrayBuffer): Promise<PdfTextItem[][]> {
-  const pdfjs = await import("pdfjs-dist") as unknown as {
+  // LEGACY build: the default one needs Uint8Array.prototype.toHex (2025) and
+  // dies with "a.toHex is not a function" on older browsers. See
+  // src/lib/msme43b/pdfText.ts for the full note.
+  const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs") as unknown as {
     GlobalWorkerOptions: { workerSrc: string };
     getDocument: (opts: unknown) => { promise: Promise<any> };
   };
   if (!workerReady) {
-    const workerUrl = (await import("pdfjs-dist/build/pdf.worker.min.mjs?url")).default as string;
+    const workerUrl = (await import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url")).default as string;
     pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
     workerReady = true;
   }
