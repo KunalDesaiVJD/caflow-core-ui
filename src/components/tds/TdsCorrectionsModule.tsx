@@ -1988,6 +1988,73 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
   );
 }
 
+/**
+ * A signature dialog. Used for BOTH signatures — the only differences are the
+ * wording, the attestation text and which transition it calls — so the
+ * confirmation UX cannot drift between the two stages.
+ */
+function SignatureDialog({
+  open, onOpenChange, correction, actor, delta, title, icon, attestation,
+  confirmLabel, run, onDone, toast,
+}: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  correction: Correction; actor: Actor;
+  delta: ReturnType<typeof summariseCorrection>;
+  title: string; icon: React.ReactNode; attestation: string; confirmLabel: string;
+  run: (c: Correction, a: Actor) => Promise<string | null>;
+  onDone: () => void; toast: any;
+}) {
+  const [confirmed, setConfirmed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { if (!open) setConfirmed(false); }, [open]);
+
+  const go = async () => {
+    setSaving(true);
+    const err = await run(correction, actor);
+    setSaving(false);
+    if (err) { toast({ title: "Could not sign", description: err, variant: "destructive" }); return; }
+    toast({ title: `${title} recorded` });
+    onDone();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">{icon} {title}</DialogTitle>
+          <DialogDescription>
+            Your name, role and the current date and time are recorded in the audit trail.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div className="rounded-md border bg-muted/40 p-3 text-xs space-y-1">
+            <p><span className="text-muted-foreground">Period:</span> {correction.form_type} · {correction.quarter} {correction.financial_year}</p>
+            <p>
+              <span className="text-muted-foreground">Changes:</span>{" "}
+              {delta.added} added, {delta.modified} modified, {delta.deleted} deleted
+              {delta.challansTouched > 0 ? `, ${delta.challansTouched} challan(s) changed` : ""}
+            </p>
+            <p><span className="text-muted-foreground">Signing as:</span> {actor.name || "—"}{actor.role ? ` (${actor.role})` : ""}</p>
+          </div>
+
+          <label className="flex items-start gap-2 text-xs cursor-pointer">
+            <input type="checkbox" className="mt-0.5" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+            <span>{attestation}</span>
+          </label>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button size="sm" className="gap-1.5" disabled={!confirmed || saving} onClick={go}>
+            {saving ? "Recording…" : confirmLabel}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function RejectDialog({ open, onOpenChange, correction, actor, onRejected, toast }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   correction: Correction; actor: Actor; onRejected: () => void; toast: any;
