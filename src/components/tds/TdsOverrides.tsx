@@ -27,7 +27,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { format } from "date-fns";
 import { ChevronRight, Repeat2 } from "lucide-react";
@@ -159,7 +158,6 @@ export function TdsOverrides({ clients, users, isSuperadmin, resolveFirmId }: Pr
 
   const distinctClients = useMemo(() => new Set(filtered.map((r) => r.clientId)).size, [filtered]);
   const recurringPatterns = patterns.filter((p) => p.items.length > 1).length;
-  const openGroup = patterns.find((p) => p.key === openKey) || null;
 
   return (
     <div className="space-y-4">
@@ -228,9 +226,29 @@ export function TdsOverrides({ clients, users, isSuperadmin, resolveFirmId }: Pr
         ) : patterns.map((p) => (
           <Card key={p.key} className={p.items.length > 1 ? "border-amber-200 dark:border-amber-900" : undefined}>
             <CardContent className="p-3">
-              <button className="w-full flex items-center gap-3 text-left" onClick={() => setOpenKey(p.key)}>
+              {/* Expands IN PLACE rather than opening a dialog: this is a
+                  read-only list a reviewer scans down, so a modal that covers
+                  it and has to be dismissed before looking at the next pattern
+                  fought the way the page is actually used. */}
+              <button
+                className="w-full flex items-center gap-3 text-left"
+                aria-expanded={openKey === p.key}
+                onClick={() => setOpenKey(openKey === p.key ? null : p.key)}
+              >
                 <Badge className={`text-[10px] shrink-0 ${STAGE_BADGE[p.stage]}`}>{STAGE_LABEL[p.stage]}</Badge>
-                <span className="text-sm font-medium min-w-0 truncate flex-1">{p.reason}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm font-medium truncate">{p.reason}</div>
+                  {/* The PARTY is what identifies an override at a glance, so it
+                      belongs on the collapsed row — not one click away. */}
+                  <div className="text-[11px] text-muted-foreground truncate">
+                    {[...new Set(p.items.map((i) => i.recordLabel).filter(Boolean))].slice(0, 3).join(" · ")}
+                    {new Set(p.items.map((i) => i.recordLabel).filter(Boolean)).size > 3 && " …"}
+                    {(() => {
+                      const names = [...new Set(p.items.map((i) => clientMap[i.clientId]?.name).filter(Boolean))];
+                      return names.length ? ` — ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}` : "";
+                    })()}
+                  </div>
+                </div>
                 {p.items.length > 1 && (
                   <span className="flex items-center gap-1 text-xs text-amber-600 shrink-0">
                     <Repeat2 size={12} /> {p.items.length}× across {new Set(p.items.map((i) => i.clientId)).size} client
@@ -238,46 +256,37 @@ export function TdsOverrides({ clients, users, isSuperadmin, resolveFirmId }: Pr
                   </span>
                 )}
                 {p.items.length === 1 && <span className="text-xs text-muted-foreground shrink-0">1 instance</span>}
-                <ChevronRight size={14} className="text-muted-foreground shrink-0" />
+                <ChevronRight
+                  size={14}
+                  className={`text-muted-foreground shrink-0 transition-transform ${openKey === p.key ? "rotate-90" : ""}`}
+                />
               </button>
+
+              {openKey === p.key && (
+                <div className="mt-2 pt-2 border-t space-y-2">
+                  {p.items
+                    .slice()
+                    .sort((a, b) => (b.overriddenAt || "").localeCompare(a.overriddenAt || ""))
+                    .map((i) => (
+                      <div key={i.id} className="flex items-center gap-2 text-xs border rounded-md px-2 py-1.5 flex-wrap">
+                        <span className="font-medium min-w-0 truncate">{clientMap[i.clientId]?.name || "—"}</span>
+                        <Badge variant="outline" className="text-[9px] shrink-0">{i.form} · {i.financialYear} {i.quarter}</Badge>
+                        <span className="text-muted-foreground truncate">{i.recordLabel}</span>
+                        <Badge variant="secondary" className="text-[9px] shrink-0">{humanize(i.verdict)}</Badge>
+                        <div className="flex-1" />
+                        <span className="text-muted-foreground shrink-0">
+                          {i.overriddenBy ? userMap[i.overriddenBy] || "—" : "—"}
+                          {i.overriddenAt ? ` · ${format(new Date(i.overriddenAt), "dd/MM/yyyy HH:mm")}` : ""}
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         ))}
       </div>
 
-      <Dialog open={openGroup != null} onOpenChange={(v) => !v && setOpenKey(null)}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              {openGroup && <Badge className={`text-[10px] ${STAGE_BADGE[openGroup.stage]}`}>{STAGE_LABEL[openGroup.stage]}</Badge>}
-              <span className="truncate">{openGroup?.reason}</span>
-            </DialogTitle>
-          </DialogHeader>
-          <ScrollArea className="max-h-[60vh]">
-            <div className="space-y-2 pr-3">
-              {openGroup?.items
-                .slice()
-                .sort((a, b) => (b.overriddenAt || "").localeCompare(a.overriddenAt || ""))
-                .map((i) => (
-                  <div key={i.id} className="flex items-center gap-2 text-xs border rounded-md px-2 py-1.5 flex-wrap">
-                    <span className="font-medium min-w-0 truncate">{clientMap[i.clientId]?.name || "—"}</span>
-                    <Badge variant="outline" className="text-[9px] shrink-0">{i.form} · {i.financialYear} {i.quarter}</Badge>
-                    <span className="text-muted-foreground truncate">{i.recordLabel}</span>
-                    <Badge variant="secondary" className="text-[9px] shrink-0">{humanize(i.verdict)}</Badge>
-                    <div className="flex-1" />
-                    <span className="text-muted-foreground shrink-0">
-                      {i.overriddenBy ? userMap[i.overriddenBy] || "—" : "—"}
-                      {i.overriddenAt ? ` · ${format(new Date(i.overriddenAt), "dd/MM/yyyy HH:mm")}` : ""}
-                    </span>
-                  </div>
-                ))}
-            </div>
-          </ScrollArea>
-          <div className="flex justify-end">
-            <Button variant="outline" size="sm" onClick={() => setOpenKey(null)}>Close</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
