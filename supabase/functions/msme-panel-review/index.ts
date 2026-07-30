@@ -47,14 +47,19 @@ const corsHeaders = {
 // The opening/answering side is resolved by callModel() from MSME_CLAUDE_MODEL.
 // The CHALLENGING side is:
 //
-// Kimi K2 — and the lineage matters more here than the price. Two models trained
+// Kimi K2.6, and the lineage matters more here than the price: two models trained
 // by the same lab share blind spots, and a panel that agrees for that reason is
-// worse than no panel, because it manufactures comfort. DeepSeek opens and
+// worse than no panel because it manufactures comfort. DeepSeek opens and
 // answers, Moonshot challenges and closes.
 //
-// Override with OPENROUTER_MODEL. `kimi-k2-thinking` is the reasoning variant at
-// a similar price, if the challenges come back thin.
-const DEFAULT_GPT_MODEL = "moonshotai/kimi-k2";
+// .6 rather than plain k2 for a measured reason. `moonshotai/kimi-k2` is served
+// by exactly ONE provider (Novita) and it does not implement structured outputs,
+// so asking for guaranteed JSON fails the request outright. k2.6 is served by 22
+// providers, 21 of which do — so with require_parameters below, routing lands on
+// one that enforces it. Measured: 56s, valid JSON, clean stop.
+//
+// Override with OPENROUTER_MODEL.
+const DEFAULT_GPT_MODEL = "moonshotai/kimi-k2.6";
 
 const CONTEXT =
   'CONTEXT — how this computation is produced, so you review the right thing:\n' +
@@ -125,9 +130,34 @@ const GPT_FINAL_SYSTEM =
   '"unresolved":[{"topic":string,"claudeView":string,"gptView":string,"whoDecides":string}],' +
   '"recommendedActions":[string],"overall":string}';
 
-function parseJson(content: string) {
+/**
+ * Get an object out of a model's reply, tolerantly.
+ *
+ * A strict JSON.parse over the whole string fails on things that are not really
+ * failures: a ```json fence, a "Here is the JSON:" preamble, a trailing remark.
+ * So the fence is stripped, and if that still will not parse, the first BALANCED
+ * {...} is extracted — balanced, not regex-matched, because a ledger narration
+ * can contain braces and a greedy match would cut the object short.
+ */
+function parseJson(content: string): unknown {
   const cleaned = content.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-  return JSON.parse(cleaned);
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const start = cleaned.indexOf("{");
+    if (start < 0) throw new Error("no JSON object in the reply");
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < cleaned.length; i++) {
+      const ch = cleaned[i];
+      if (esc) { esc = false; continue; }
+      if (ch === "\\") { esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === "{") depth++;
+      else if (ch === "}" && --depth === 0) return JSON.parse(cleaned.slice(start, i + 1));
+    }
+    throw new Error("the JSON object in the reply is not closed — the reply was cut off");
+  }
 }
 
 /**
@@ -165,12 +195,15 @@ async function callGpt(apiKey: string, model: string, system: string, userText: 
       // look like a model fault rather than a budget one. Unused tokens are not
       // billed, so the headroom costs nothing and removes a whole failure mode.
       max_tokens: 8000,
-      // NO response_format. Kimi K2 rejects it outright — the provider returns
-      // "model moonshotai/kimi-k2-instruct does not support feature:
-      // structured-outputs" and the whole panel fails. Tested both ways: without
-      // it Kimi returns clean, parseable JSON, because the system prompt already
-      // demands JSON only and parseJson() strips any code fence. The Claude side
-      // has never used it either.
+      // Guaranteed JSON, two ways at once:
+      //   response_format            the provider constrains the model's output
+      //   provider.require_parameters  OpenRouter routes ONLY to providers that
+      //                              actually implement it, instead of picking
+      //                              one that rejects the request
+      // Without the second flag this fails outright on a model whose only
+      // provider lacks the feature — which is exactly what plain kimi-k2 did.
+      response_format: { type: "json_object" },
+      provider: { require_parameters: true },
       messages: [
         { role: "system", content: system },
         { role: "user", content: userText },
@@ -211,62 +244,59 @@ serve(async (req) => {
     const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
     if (authError || !user) return json({ error: "Unauthorized" }, 401);
 
-    const { evidence } = await req.json();
+    // ONE TURN PER CALL. Four turns in a single invocation could not finish:
+    // measured at 25-56s each, four of them is 160-220s against Supabase's
+    // 150-second idle limit, so the panel timed out no matter which models were
+    // chosen. The client now drives the four turns as four calls, each with its
+    // own budget — and each turn appears on screen as it lands instead of after
+    // a long silence.
+    const { evidence, turn, prior } = await req.json();
     if (!evidence) return json({ error: "Missing evidence" }, 400);
 
-    // The Claude side picks its own transport (see callModel). The GPT side is
-    // OpenRouter by definition — it is the only way this project reaches a
-    // non-Anthropic model — so its key is required either way.
     const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
-    if (!OPENROUTER_API_KEY) {
-      return json({
-        error: "The GPT reviewer is not configured. Set it with: npx supabase secrets set OPENROUTER_API_KEY=sk-or-v1-...",
-      }, 503);
-    }
     const gptModel = Deno.env.get("OPENROUTER_MODEL") || DEFAULT_GPT_MODEL;
     const claudeModel = resolveProvider()?.model ?? "unavailable";
-
     const pack = JSON.stringify(evidence).slice(0, 100_000);
+    const p = prior ?? {};
 
-    // ── Turn 1: Claude opens ──
-    const claudeOpinion = await callClaude(
-      CLAUDE_OPEN_SYSTEM,
-      `Here is the computation and the interpretation applied.\n\n${pack}`,
-    );
+    const needGpt = () => {
+      if (!OPENROUTER_API_KEY) {
+        throw new Error("The challenging reviewer is not configured. Set it with: npx supabase secrets set OPENROUTER_API_KEY=sk-or-v1-...");
+      }
+      return OPENROUTER_API_KEY;
+    };
 
-    // ── Turn 2: GPT challenges ──
-    const gptCritique = await callGpt(
-      OPENROUTER_API_KEY, gptModel, GPT_CHALLENGE_SYSTEM,
-      `The computation and the interpretation applied:\n\n${pack}\n\n` +
-      `The first adviser's opinion:\n\n${JSON.stringify(claudeOpinion)}`,
-    );
+    let result: unknown;
+    switch (String(turn ?? "1")) {
+      case "1":
+        result = await callClaude(CLAUDE_OPEN_SYSTEM,
+          `Here is the computation and the interpretation applied.\n\n${pack}`);
+        break;
+      case "2":
+        result = await callGpt(needGpt(), gptModel, GPT_CHALLENGE_SYSTEM,
+          `The computation and the interpretation applied:\n\n${pack}\n\n` +
+          `The first adviser's opinion:\n\n${JSON.stringify(p.claudeOpinion)}`);
+        break;
+      case "3":
+        result = await callClaude(CLAUDE_RESPOND_SYSTEM,
+          `The computation:\n\n${pack}\n\n` +
+          `Your opinion:\n\n${JSON.stringify(p.claudeOpinion)}\n\n` +
+          `The reviewer's challenge:\n\n${JSON.stringify(p.gptCritique)}`);
+        break;
+      case "4":
+        result = await callGpt(needGpt(), gptModel, GPT_FINAL_SYSTEM,
+          `The computation:\n\n${pack}\n\n` +
+          `Original opinion:\n\n${JSON.stringify(p.claudeOpinion)}\n\n` +
+          `Your challenge:\n\n${JSON.stringify(p.gptCritique)}\n\n` +
+          `The response:\n\n${JSON.stringify(p.claudeResponse)}`);
+        break;
+      default:
+        return json({ error: `Unknown panel turn "${turn}".` }, 400);
+    }
 
-    // ── Turn 3: Claude answers ──
-    const claudeResponse = await callClaude(
-      CLAUDE_RESPOND_SYSTEM,
-      `The computation:\n\n${pack}\n\n` +
-      `Your opinion:\n\n${JSON.stringify(claudeOpinion)}\n\n` +
-      `The reviewer's challenge:\n\n${JSON.stringify(gptCritique)}`,
-    );
-
-    // ── Turn 4: GPT closes ──
-    const gptFinal = await callGpt(
-      OPENROUTER_API_KEY, gptModel, GPT_FINAL_SYSTEM,
-      `The computation:\n\n${pack}\n\n` +
-      `Original opinion:\n\n${JSON.stringify(claudeOpinion)}\n\n` +
-      `Your challenge:\n\n${JSON.stringify(gptCritique)}\n\n` +
-      `The response:\n\n${JSON.stringify(claudeResponse)}`,
-    );
-
-    return json({
-      claudeOpinion,
-      gptCritique,
-      claudeResponse,
-      gptFinal,
-      // The panel names its own members: which two models actually argued is
-      // part of the working paper, not an implementation detail.
-      models: { claude: claudeModel, gpt: gptModel },
-    });
+    // The panel names its own members: which two models actually argued is part
+    // of the working paper, not an implementation detail.
+    return json({ result, models: { claude: claudeModel, gpt: gptModel } });
   } catch (e) {
     console.error("msme-panel-review error:", e);
     return json({ error: e instanceof Error ? e.message : "Unknown error" }, 500);

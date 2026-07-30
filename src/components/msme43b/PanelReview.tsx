@@ -29,12 +29,15 @@ export function PanelReview({ input }: { input: PanelEvidenceInput }) {
    * or passed on, and the card just sat there looking like nothing had happened.
    */
   const [failure, setFailure] = useState<string | null>(null);
+  /** which of the four turns is running — the panel takes a couple of minutes */
+  const [turn, setTurn] = useState<string | null>(null);
 
   const run = async () => {
     setBusy(true);
     setFailure(null);
+    setTurn(null);
     try {
-      const r = await runPanelReview(input);
+      const r = await runPanelReview(input, (n, of, what) => setTurn(`Turn ${n} of ${of} — ${what}`));
       setReview(r);
       setOpen(true);
       if (r.gptFinal.consensus) toast.success('The panel reached consensus.');
@@ -43,6 +46,7 @@ export function PanelReview({ input }: { input: PanelEvidenceInput }) {
       setFailure((e as Error).message);
     } finally {
       setBusy(false);
+      setTurn(null);
     }
   };
 
@@ -65,7 +69,11 @@ export function PanelReview({ input }: { input: PanelEvidenceInput }) {
             {busy ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Scale className="h-4 w-4 mr-2" />}
             {review ? 'Run the panel again' : 'Run the review panel'}
           </Button>
-          {busy && <span className="text-xs text-muted-foreground">Four turns between two models — this takes 30–60 seconds.</span>}
+          {busy && (
+            <span className="text-xs text-muted-foreground">
+              {turn ?? 'Starting…'} · four turns, about two minutes in total
+            </span>
+          )}
           {review && (
             <>
               <Badge variant={review.gptFinal.consensus ? 'secondary' : 'destructive'}>
