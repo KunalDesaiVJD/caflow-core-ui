@@ -23,8 +23,15 @@ vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id:"u9",name:"Ravi
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 import { TdsCorrectionsModule } from "@/components/tds/TdsCorrectionsModule";
 
-describe("probe3", () => {
-  it("excludes deleted rows from the challan balance", async () => {
+/**
+ * Correction grid invariants.
+ *
+ * A correction keeps deleted entries VISIBLE (struck through) so the removal
+ * can be seen — but a removed entry no longer consumes the challan. These pin
+ * that the display and the arithmetic disagree in the right direction.
+ */
+describe("correction grid", () => {
+  it("shows deleted rows but excludes them from balance and count", async () => {
     render(<TdsCorrectionsModule clients={[{id:"c1",name:"Acme"}] as any} users={[]} isSuperadmin={false} resolveFirmId={async()=>"firm1"} />);
     await waitFor(() => expect(screen.getAllByTitle("Open correction").length).toBeGreaterThan(0));
     fireEvent.click(screen.getAllByTitle("Open correction")[0]);
@@ -35,5 +42,9 @@ describe("probe3", () => {
     // 3,800 kept + 900 deleted = 4,700 if the bug were present.
     expect(t).toContain("Applied: ₹3,800");
     expect(t).not.toContain("Applied: ₹4,700");
+    // ...and the count follows the same rule
+    expect(t).toContain("Deductees: 1");
+    // ...while the removed entry is still on screen, badged
+    expect(t).toContain("Deleted");
   });
 });
