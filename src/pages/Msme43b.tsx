@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo, Fragment } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, Fragment } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import {
   Scale, Upload, FileText, Download, Loader2, AlertTriangle, CheckCircle2,
   ChevronRight, ChevronDown, Info, Landmark, Save, Trash2, History, Pencil, Check, X,
+  RotateCcw,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -22,12 +23,13 @@ import { PanelReview } from '@/components/msme43b/PanelReview';
 import {
   extractLedgersViaAI,
   buildReport, downloadWorkpaper, msme43bToForm3cd,
-  saveRun, listRuns, loadRun, renameRun, deleteRun, computeCarryForward,
+  saveRun, listRuns, loadRunSession, savePanelReview, renameRun, deleteRun, computeCarryForward,
   loadRuleProfile, saveRuleProfile, saveGolden, loadGoldens,
   configFromProfile, vendorWindowMap, vendorGstMap,
-  storeFiles, linkToRun, workpaperBlob, workpaperFileName,
+  storeFiles, workpaperBlob, workpaperFileName,
+  readSession, writeSession, clearSession,
   DEFAULT_CONFIG, type VendorLedger, type Msme43bReport, type VendorResult,
-  type Msme43bRunSummary, type RuleProfile, type GoldenCase,
+  type Msme43bRunSummary, type RuleProfile, type GoldenCase, type PanelReview as PanelReviewData,
 } from '@/lib/msme43b';
 
 interface ClientOpt { id: string; name: string }
@@ -115,6 +117,22 @@ export default function Msme43b() {
   const [retention, setRetention] = useState<string | null>(null);
   const [progress, setProgress] = useState<string | null>(null);
   const [ingestFailures, setIngestFailures] = useState<Array<{ file: string; reason: string }>>([]);
+  /** the saved run the screen is showing, once it has one */
+  const [runId, setRunId] = useState<string | null>(null);
+  /**
+   * The review-panel transcript lives here, not inside the panel component, so
+   * it can be filed against the run and restored with it. Four model turns and
+   * about two minutes — far too expensive to lose to a refresh.
+   */
+  const [panel, setPanel] = useState<PanelReviewData | null>(null);
+  const [panelNote, setPanelNote] = useState<string | null>(null);
+  /** set when this screen came back from a refresh rather than from a fresh run */
+  const [restoredAt, setRestoredAt] = useState<string | null>(null);
+  /**
+   * Nothing may be written to the local snapshot until the restore has read it,
+   * or the first render would overwrite the saved session with an empty one.
+   */
+  const hydrated = useRef(false);
   /**
    * The reviewer has read the blocking exceptions and still wants the file.
    * Deliberately NOT persisted and reset on every new report: an acknowledgement
@@ -164,6 +182,75 @@ export default function Msme43b() {
 
   useEffect(() => { refreshCalibration(clientId); }, [clientId, refreshCalibration]);
 
+  // ── Surviving a refresh ───────────────────────────────────────────────────
+  /**
+   * Put back what was on screen when this browser last left the page: the
+   * client, the report, the extracted ledgers and the review panel.
+   *
+   * The local snapshot goes up first because it is instant and because it is
+   * the only thing that covers a run which was never saved to Supabase — no
+   * client selected, migrations not applied, network out. The saved run is then
+   * re-read from the database and takes over, because that is the copy of
+   * record and the one that holds the full ledgers.
+   */
+  useEffect(() => {
+    const s = readSession();
+    hydrated.current = true;
+    if (!s) return;
+
+    if (s.clientId) setClientId(s.clientId);
+    if (s.windowDays) setWindowDays(s.windowDays);
+    setRunId(s.runId);
+    if (s.snapshot) {
+      setReport(s.snapshot.report);
+      setCyLedgers(s.snapshot.cyLedgers || []);
+      setFyLedgers(s.snapshot.fyLedgers || []);
+      setPanel(s.snapshot.panelReview ?? null);
+      setRestoredAt(s.savedAt);
+    }
+    if (!s.runId) return;
+
+    void (async () => {
+      const res = await loadRunSession(s.runId!);
+      // A failure here is not worth a toast: whatever the snapshot restored is
+      // still on screen, and the run is still in the saved-runs table.
+      if (res.error || !res.data) return;
+      setReport(res.data.report);
+      setWindowDays(res.data.report.windowDays);
+      if (res.data.cyLedgers.length) setCyLedgers(res.data.cyLedgers);
+      if (res.data.fyLedgers.length) setFyLedgers(res.data.fyLedgers);
+      if (res.data.panelReview) setPanel(res.data.panelReview);
+      setRestoredAt(s.savedAt);
+    })();
+  }, []);
+
+  /** Keep the local snapshot in step with the screen, so a refresh loses nothing. */
+  useEffect(() => {
+    if (!hydrated.current) return;
+    if (!report && !clientId) return;
+    writeSession({
+      clientId, clientName: clientName || undefined, runId, windowDays,
+      savedAt: new Date().toISOString(),
+      snapshot: report ? { report, cyLedgers, fyLedgers, panelReview: panel } : null,
+    });
+  }, [report, cyLedgers, fyLedgers, panel, clientId, clientName, runId, windowDays]);
+
+  /** Put the page back to empty — the restored run is finished with. */
+  const startFresh = useCallback(() => {
+    clearSession();
+    setReport(null);
+    setCyLedgers([]);
+    setFyLedgers([]);
+    setPanel(null);
+    setPanelNote(null);
+    setRunId(null);
+    setRestoredAt(null);
+    setRetention(null);
+    setIngestFailures([]);
+    setCyFiles([]);
+    setFyFiles([]);
+  }, []);
+
   const run = useCallback(async () => {
     if (cyFiles.length === 0) {
       toast.error('Upload at least the current-year ledger PDF(s).');
@@ -171,6 +258,12 @@ export default function Msme43b() {
     }
     setRunning(true);
     setIngestFailures([]);
+    // A new analysis is a new run: the previous run's id, and the panel that
+    // reviewed the previous figures, must not be carried onto it.
+    setRunId(null);
+    setPanel(null);
+    setPanelNote(null);
+    setRestoredAt(null);
     setProgress(`Reading ${cyFiles.length + fyFiles.length} ledger(s)…`);
     try {
       // Sequential, not parallel: each file is a Claude call, and a firm-sized
@@ -220,8 +313,10 @@ export default function Msme43b() {
         toast.success(`Read ${cy.length} CY + ${fy.length} FY ledger(s) via Claude${aiCount ? '' : ''}, all reconciled.`);
       }
       // Retention runs after the result is on screen — it must never delay or
-      // block the analysis, and a storage failure must not lose the work.
-      void retain(rep);
+      // block the analysis, and a storage failure must not lose the work. The
+      // ledgers are passed rather than read from state, which has not settled
+      // yet at this point.
+      void retain(rep, cy, fy);
     } catch (e) {
       console.error(e);
       toast.error(`Analysis failed: ${(e as Error).message}`);
@@ -233,55 +328,74 @@ export default function Msme43b() {
   }, [cyFiles, fyFiles, clientName, activeConfig, profile, clientId, user, saveLabel]);
 
   /**
-   * Keep everything, permanently: the uploaded ledgers, the computed run, and
-   * the exported working paper — all linked together so the run can be
-   * reproduced from its own sources later.
+   * Keep everything, permanently: the computed run with the ledgers it was
+   * computed from, the uploaded PDFs, and the exported working paper — all
+   * linked together so the run can be reproduced from its own sources later.
+   *
+   * ORDER MATTERS. The run is written FIRST and on its own. It is the thing
+   * that took the time and the API calls to produce, and it must not be lost
+   * because the file store is missing or a bucket policy is wrong. Files are
+   * stored afterwards, and a failure there costs the copies of the PDFs — not
+   * the analysis.
    *
    * Re-running the same ledgers is expressly allowed and simply creates another
    * run; nothing is overwritten.
    */
-  const retain = useCallback(async (rep: Msme43bReport) => {
+  const retain = useCallback(async (rep: Msme43bReport, cy: VendorLedger[], fy: VendorLedger[]) => {
     if (!clientId || !user?.firm_id) {
-      setRetention('Not retained — select a client before running to keep the uploads and the output on file.');
+      setRetention(
+        'Not saved to the server — no client selected. The result is kept in this browser and survives a refresh, ' +
+        'but it is not on file and nobody else can see it. Select a client and run again to save it properly.',
+      );
       return;
     }
-    setRetention('Saving uploads and output…');
+    setRetention('Saving the run…');
     const base = {
       clientId, firmId: user.firm_id, userId: user.id,
       userName: user.name || user.email || null,
     };
+    let savedId: string | null = null;
     try {
-      const [cyStore, fyStore] = await Promise.all([
-        storeFiles({ ...base, files: cyFiles, kind: 'cy_ledger' }),
-        storeFiles({ ...base, files: fyFiles, kind: 'fy_ledger' }),
-      ]);
-      if (cyStore.unavailable || fyStore.unavailable) {
-        setRetention('Retention not deployed yet — apply the migrations to keep uploads and outputs on file.');
-        return;
-      }
-
       const saved = await saveRun({
         ...base,
         label: saveLabel.trim() || `${rep.cyLabel} · ${new Date().toLocaleString('en-IN')}`,
         report: rep,
+        cyLedgers: cy,
+        fyLedgers: fy,
       });
-      if (saved.unavailable) { setPersistOff(true); setRetention('Saved-runs table not deployed yet.'); return; }
+      if (saved.unavailable) {
+        setPersistOff(true);
+        setRetention('Saved-runs table not deployed yet — apply the migrations. The result is kept in this browser only.');
+        return;
+      }
       if (saved.error || !saved.data) { setRetention(`Could not save the run: ${saved.error}`); return; }
 
-      const runId = saved.data;
-      const ids = [...cyStore.stored, ...fyStore.stored].map((a) => a.id);
-      await linkToRun(ids, runId);
+      savedId = saved.data;
+      setRunId(savedId);
+      setSaveLabel('');
+      refreshRuns(clientId);
+      setRetention('Run saved. Storing the uploaded ledgers…');
+
+      const [cyStore, fyStore] = await Promise.all([
+        storeFiles({ ...base, files: cyFiles, kind: 'cy_ledger', runId: savedId }),
+        storeFiles({ ...base, files: fyFiles, kind: 'fy_ledger', runId: savedId }),
+      ]);
+      if (cyStore.unavailable || fyStore.unavailable) {
+        setRetention('Run saved. File retention is not deployed yet, so the uploaded PDFs themselves are not on file.');
+        return;
+      }
+      const fileCount = cyStore.stored.length + fyStore.stored.length;
 
       // The deliverable itself is retained too, so what was issued is on file.
       const blob = await workpaperBlob(rep, null, { config: activeConfig, profile, preparedBy: base.userName || undefined });
       const file = new File([blob], workpaperFileName(rep), { type: blob.type });
-      await storeFiles({ ...base, files: [file], kind: 'workpaper_export', runId });
+      await storeFiles({ ...base, files: [file], kind: 'workpaper_export', runId: savedId });
 
-      setSaveLabel('');
-      setRetention(`Retained: ${ids.length} ledger file(s) + the working paper, against this run.`);
-      refreshRuns(clientId);
+      setRetention(`Saved: the run, ${fileCount} ledger file(s) and the working paper.`);
     } catch (e) {
-      setRetention(`Retention failed: ${(e as Error).message}`);
+      setRetention(savedId
+        ? `Run saved, but storing the files failed: ${(e as Error).message}`
+        : `Could not save the run: ${(e as Error).message}`);
     }
   }, [clientId, user, cyFiles, fyFiles, saveLabel, activeConfig, profile, refreshRuns]);
 
@@ -292,20 +406,46 @@ export default function Msme43b() {
     setSavedRuns((rows) => rows.map((r) => (r.id === id ? { ...r, label: editingLabel.trim() || null } : r)));
   }, [editingLabel]);
 
+  /** Load a saved run whole — report, the ledgers behind it, and its review panel. */
   const doLoad = useCallback(async (id: string) => {
-    const res = await loadRun(id);
+    const res = await loadRunSession(id);
     if (res.error || !res.data) { toast.error(`Load failed: ${res.error || 'not found'}`); return; }
-    setReport(res.data);
-    setWindowDays(res.data.windowDays);
-    toast.success('Loaded saved run.');
+    setReport(res.data.report);
+    setWindowDays(res.data.report.windowDays);
+    setCyLedgers(res.data.cyLedgers);
+    setFyLedgers(res.data.fyLedgers);
+    setPanel(res.data.panelReview);
+    setPanelNote(null);
+    setRunId(id);
+    setRestoredAt(null);
+    toast.success(res.data.cyLedgers.length
+      ? 'Loaded saved run, with the ledgers it was computed from.'
+      : 'Loaded saved run. It was saved before ledgers were kept, so the accuracy panel needs them re-uploaded.');
   }, []);
 
   const doDelete = useCallback(async (id: string) => {
     const res = await deleteRun(id);
     if (res.error) { toast.error(`Delete failed: ${res.error}`); return; }
+    // The screen must not go on pointing at a run that no longer exists.
+    if (id === runId) { setRunId(null); setRestoredAt(null); }
     toast.success('Run deleted.');
     refreshRuns(clientId);
-  }, [clientId, refreshRuns]);
+  }, [clientId, refreshRuns, runId]);
+
+  /**
+   * The panel has spoken — file the transcript against the run immediately.
+   * Four turns and about two minutes; it does not get re-run because a tab was
+   * closed.
+   */
+  const onPanelResult = useCallback(async (r: PanelReviewData) => {
+    setPanel(r);
+    if (!runId) {
+      setPanelNote('Kept in this browser — this run was not saved to the server.');
+      return;
+    }
+    const res = await savePanelReview(runId, r);
+    setPanelNote(res.error ? `Not filed against the run: ${res.error}` : 'Filed against the saved run.');
+  }, [runId]);
 
   // ── Accuracy loop ───────────────────────────────────────────────────────
   /** The reviewer confirms this run — store it as a replayable golden case. */
@@ -342,13 +482,23 @@ export default function Msme43b() {
     setProfile(next);
     const cfg = { ...configFromProfile(next, DEFAULT_CONFIG) };
     if (next.overrides.windowDays) setWindowDays(next.overrides.windowDays);
-    setReport(buildReport(cyLedgers, fyLedgers, cfg, clientName || undefined, {
+    const rebuilt = buildReport(cyLedgers, fyLedgers, cfg, clientName || undefined, {
       vendorWindowDays: vendorWindowMap(next),
       vendorGstRate: vendorGstMap(next),
-    }));
+    });
+    setReport(rebuilt);
+    // These are different figures under a different interpretation, so the
+    // panel that reviewed the previous ones no longer applies to what is on
+    // screen, and the run id would otherwise file the next panel against the
+    // wrong figures. Saved as its own run — nothing is overwritten.
+    setPanel(null);
+    setPanelNote(null);
+    setRunId(null);
+    setRestoredAt(null);
     toast.success('Rules adopted and the working re-computed.');
     refreshCalibration(clientId);
-  }, [clientId, user, cyLedgers, fyLedgers, clientName, refreshCalibration]);
+    void retain(rebuilt, cyLedgers, fyLedgers);
+  }, [clientId, user, cyLedgers, fyLedgers, clientName, refreshCalibration, retain]);
 
   const toggle = (name: string) =>
     setExpanded((s) => {
@@ -416,6 +566,27 @@ export default function Msme43b() {
           </div>
         )}
       </div>
+
+      {/*
+        A restored screen must say so. Figures that reappear without explanation
+        after a refresh look like a fresh run on whatever files are in the boxes
+        now, and that is exactly how the wrong year gets signed.
+      */}
+      {restoredAt && report && (
+        <Alert>
+          <RotateCcw className="h-4 w-4" />
+          <AlertTitle>Restored where you left off</AlertTitle>
+          <AlertDescription className="text-sm flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span>
+              {report.clientName || clientName || 'This run'} · {report.cyLabel} → {report.fyLabel}
+              {' '}· last on screen {new Date(restoredAt).toLocaleString('en-IN')}.
+              {panel && ' The review panel is restored with it.'}
+              {!runId && ' It was not saved to the server, so this browser is the only copy.'}
+            </span>
+            <Button size="sm" variant="outline" onClick={startFresh}>Start a new analysis</Button>
+          </AlertDescription>
+        </Alert>
+      )}
 
       {/* ── Inputs ── */}
       <Card>
@@ -731,7 +902,12 @@ export default function Msme43b() {
           )}
 
           {/* ── Claude ↔ GPT panel on the interpretation applied ── */}
-          <PanelReview input={{ report, config: activeConfig, profile }} />
+          <PanelReview
+            input={{ report, config: activeConfig, profile }}
+            value={panel}
+            onResult={onPanelResult}
+            savedNote={panelNote}
+          />
 
           {/* ── Vendor table with drilldown ── */}
           <Card>

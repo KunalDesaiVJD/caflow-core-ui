@@ -21,7 +21,14 @@ export {
   findPriorRunsForHashes, hashFile,
   type AttachmentKind, type StoredAttachment, type RetentionResult,
 } from './attachments';
-export { saveRun, listRuns, loadRun, renameRun, deleteRun, type Msme43bRunSummary } from './persistence';
+export {
+  saveRun, listRuns, loadRun, loadRunSession, savePanelReview, renameRun, deleteRun,
+  type Msme43bRunSummary, type Msme43bRunSession,
+} from './persistence';
+export {
+  readSession, writeSession, clearSession,
+  type Msme43bSession, type Msme43bSnapshot,
+} from './sessionStore';
 export { computeCarryForward, type CarryForward, type CarryForwardInput } from './carryForward';
 export { reconcileLedger } from './reconcile';
 export { extractLedgersViaAI } from './aiExtract';

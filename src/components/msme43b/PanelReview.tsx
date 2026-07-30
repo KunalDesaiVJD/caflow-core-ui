@@ -18,9 +18,25 @@ import {
   runPanelReview, type PanelReview as PanelReviewData, type PanelEvidenceInput,
 } from '@/lib/msme43b';
 
-export function PanelReview({ input }: { input: PanelEvidenceInput }) {
+export interface PanelReviewProps {
+  input: PanelEvidenceInput;
+  /**
+   * The transcript held by the page, so it can be filed against the run and
+   * restored after a refresh. Passing the prop at all makes this component
+   * controlled — `null` then means "no panel has been run on these figures",
+   * which is exactly what should be shown after a new analysis.
+   */
+  value?: PanelReviewData | null;
+  onResult?: (review: PanelReviewData) => void;
+  /** e.g. "Filed against the saved run." — shown next to the badge */
+  savedNote?: string | null;
+}
+
+export function PanelReview({ input, value, onResult, savedNote }: PanelReviewProps) {
   const [busy, setBusy] = useState(false);
-  const [review, setReview] = useState<PanelReviewData | null>(null);
+  const [local, setLocal] = useState<PanelReviewData | null>(null);
+  const controlled = value !== undefined;
+  const review = controlled ? value : local;
   const [open, setOpen] = useState(false);
   /**
    * A failure is KEPT ON SCREEN, not flashed as a toast. A toast disappears in a
@@ -38,7 +54,8 @@ export function PanelReview({ input }: { input: PanelEvidenceInput }) {
     setTurn(null);
     try {
       const r = await runPanelReview(input, (n, of, what) => setTurn(`Turn ${n} of ${of} — ${what}`));
-      setReview(r);
+      if (!controlled) setLocal(r);
+      onResult?.(r);
       setOpen(true);
       if (r.gptFinal.consensus) toast.success('The panel reached consensus.');
       else toast.warning(`The panel left ${r.gptFinal.unresolved.length} point(s) unresolved — these need your judgement.`);
@@ -83,6 +100,7 @@ export function PanelReview({ input }: { input: PanelEvidenceInput }) {
               <Button size="sm" variant="ghost" onClick={() => setOpen((o) => !o)}>
                 {open ? 'Hide transcript' : 'Show transcript'}
               </Button>
+              {savedNote && <span className="text-xs text-muted-foreground">{savedNote}</span>}
             </>
           )}
         </div>
