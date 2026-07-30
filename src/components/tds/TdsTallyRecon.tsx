@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2, Unlink, Search } from "lucide-react";
+import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2, Unlink, Search, Pencil } from "lucide-react";
 import { pdfToTextPages } from "@/lib/tds/pdfText";
 import { parseTallyPdfPages } from "@/lib/tds/tallyPdf";
 import { parseExpertPdfPages } from "@/lib/tds/expertPdf";
@@ -251,6 +251,21 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const [bypassConfirmChecked, setBypassConfirmChecked] = useState(false);
   const [bypassSaving, setBypassSaving] = useState(false);
 
+  // Correct an imported ledger's own SECTION after the fact — a real,
+  // confirmed need: a client's Tally ledger can be mislabelled at the source
+  // (e.g. a ledger titled "TDS on Machinery Rent 2% (194IA) - 1008" is
+  // genuinely Section 194-I — Plant & Machinery rent's own rate is 2%; 194-IA,
+  // property purchase, has no 2%/rent concept at all), which otherwise
+  // permanently blocks both automatic AND manual matching against Office
+  // Data's correctly-coded records — the section filter applies uniformly to
+  // both (see pickSectionBlockedCount's own doc). Corrects tds_tally_batches
+  // AND every tds_tally_rows row it owns (rows carry their own section, not a
+  // batch-level lookup — see handleImport's own comment on why), then
+  // re-validates so the newly-unblocked records get a real chance to match.
+  const [editingSectionBatchId, setEditingSectionBatchId] = useState<string | null>(null);
+  const [editingSectionValue, setEditingSectionValue] = useState("");
+  const [savingSectionEdit, setSavingSectionEdit] = useState(false);
+
   const filingId = filing?.id ?? null;
   const officeCount = office.length;
   const ledgerRowCount = useMemo(() => batches.reduce((s, b: any) => s + (Number(b.row_count) || 0), 0), [batches]);
@@ -426,6 +441,37 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       await loadAll();
     } catch (e: any) { toast({ title: "Could not remove the ledger", description: e.message, variant: "destructive" }); }
     setImporting(false);
+  };
+
+  const startEditingSection = (b: any) => { setEditingSectionBatchId(b.id); setEditingSectionValue(b.section || ""); };
+  const cancelEditingSection = () => { setEditingSectionBatchId(null); setEditingSectionValue(""); };
+  /** Correct a batch's own section — see the state's own doc for why this is
+   *  needed (a ledger mislabelled at the source, in the client's own Tally
+   *  books, permanently blocks both automatic and manual matching). Updates
+   *  every row the batch owns, not just the batch row itself — see
+   *  handleImport's own comment on why section lives per-row. */
+  const saveEditedSection = async (b: any) => {
+    const canon = canonicalSection(editingSectionValue) || editingSectionValue.trim().toUpperCase() || null;
+    if (!canon) { toast({ title: "Enter a section code", variant: "destructive" }); return; }
+    if (canon === (b.section || null)) { cancelEditingSection(); return; }
+    setSavingSectionEdit(true);
+    try {
+      const { error: e1 } = await supabase.from("tds_tally_batches").update({ section: canon }).eq("id", b.id);
+      if (e1) throw new Error(e1.message);
+      const { error: e2 } = await supabase.from("tds_tally_rows").update({ section: canon }).eq("batch_id", b.id);
+      if (e2) throw new Error(e2.message);
+      await logReconAudit({
+        filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+        actionType: "TALLY_LEDGER_IMPORTED", oldValue: `section: ${b.section || "—"}`, newValue: `section: ${canon}`,
+        remark: `Corrected the imported ledger's section for "${b.file_name}" — the client's own Tally ledger name printed a different section than its actual content.`,
+      });
+      await supabase.from("tds_tally_results").delete().eq("filing_id", filing.id);
+      setResults(null);
+      toast({ title: "Section corrected", description: `"${b.file_name}" is now treated as ${canon}. Run Validation again to reconcile against it.` });
+      cancelEditingSection();
+      await loadAll();
+    } catch (e: any) { toast({ title: "Could not update the section", description: e.message, variant: "destructive" }); }
+    setSavingSectionEdit(false);
   };
 
   const runAudit = useCallback(async (fId: string) => {
@@ -1437,7 +1483,23 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
                   <div key={b.id} className="flex items-center gap-2 text-[11px] rounded border px-2 py-1">
                     <FileSpreadsheet size={11} className="text-muted-foreground shrink-0" />
                     <span className="truncate flex-1" title={b.file_name}>{b.file_name}</span>
-                    <span className="text-muted-foreground shrink-0">{b.section || "—"} · {b.row_count}</span>
+                    {editingSectionBatchId === b.id ? (
+                      <>
+                        <Input value={editingSectionValue} onChange={(e) => setEditingSectionValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") saveEditedSection(b); if (e.key === "Escape") cancelEditingSection(); }}
+                          className="h-5 w-20 text-[11px] px-1 shrink-0" placeholder="e.g. 194I" autoFocus disabled={savingSectionEdit} />
+                        <button className="text-emerald-600 shrink-0" title="Save" disabled={savingSectionEdit} onClick={() => saveEditedSection(b)}>
+                          {savingSectionEdit ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />}
+                        </button>
+                        <button className="text-muted-foreground shrink-0" title="Cancel" disabled={savingSectionEdit} onClick={cancelEditingSection}><X size={11} /></button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-muted-foreground shrink-0">{b.section || "—"} · {b.row_count}</span>
+                        <button className="text-muted-foreground hover:text-foreground shrink-0" title="Correct this ledger's section — e.g. if Tally's own ledger name is mislabelled"
+                          disabled={disabled || importing} onClick={() => startEditingSection(b)}><Pencil size={11} /></button>
+                      </>
+                    )}
                     <button className="text-muted-foreground hover:text-destructive shrink-0" title="Remove this ledger"
                       disabled={disabled || importing} onClick={() => deleteBatch(b.id)}><X size={11} /></button>
                   </div>
