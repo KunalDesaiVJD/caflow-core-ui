@@ -626,6 +626,25 @@ export function effectiveCorrectionAction(row: any): CorrectionAction {
 // ─── Proof of submission ────────────────────────────────────────────────────
 
 /**
+ * Where filing proof lives.
+ *
+ * `documents` is the bucket this app already uses for filing acknowledgements
+ * (TdsFilingsManager writes real ACKs there), it is public-read with an
+ * authenticated INSERT policy, and it caps objects at 10 MB.
+ *
+ * NOTE the private `tds-ack-files` bucket is NOT used: it carries no storage
+ * policies at all, so every client read and write against it is rejected by
+ * RLS. It is legacy.
+ */
+export const PROOF_BUCKET = "documents";
+
+/** Matches the bucket's own file_size_limit, checked before the round trip. */
+export const PROOF_MAX_BYTES = 10 * 1024 * 1024;
+
+/** An ACK is a PDF or a scan; a submission screenshot is an image. */
+export const PROOF_ALLOWED_EXT = ["pdf", "png", "jpg", "jpeg", "webp", "txt"];
+
+/**
  * Upload the acknowledgement (offline) or submission screenshot (online) and
  * attach it to the correction.
  *
@@ -636,13 +655,36 @@ export function effectiveCorrectionAction(row: any): CorrectionAction {
 export async function uploadCorrectionProof(
   c: Correction, mode: SubmissionMode, file: File, actor: Actor,
 ): Promise<{ error: string | null }> {
-  const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
+  // ── Checks the bucket would otherwise fail on, with a usable message ──────
+  // The `documents` bucket caps objects at 10 MB. Without this the user gets
+  // a raw storage error ("Payload too large") after waiting for the upload.
+  if (file.size > PROOF_MAX_BYTES) {
+    return {
+      error: `That file is ${(file.size / 1024 / 1024).toFixed(1)} MB. The limit is `
+        + `${PROOF_MAX_BYTES / 1024 / 1024} MB — compress it or attach a smaller scan.`,
+    };
+  }
+  if (file.size === 0) {
+    return { error: "That file is empty. Please attach the actual document." };
+  }
+
+  // The `accept` attribute is only a hint in the file picker; a user can still
+  // choose anything, so the real check is here.
+  const rawExt = (file.name.split(".").pop() || "").toLowerCase();
+  const ext = /^[a-z0-9]{1,8}$/.test(rawExt) ? rawExt : "bin";
+  if (!PROOF_ALLOWED_EXT.includes(ext)) {
+    return {
+      error: `.${ext} files are not accepted here. Attach a PDF or an image `
+        + `(${PROOF_ALLOWED_EXT.filter(e => e !== "bin").join(", ")}).`,
+    };
+  }
+
   const path = `tds-corrections/${c.id}/${mode}-${Date.now()}.${ext}`;
 
-  const { error: upErr } = await supabase.storage.from("documents").upload(path, file, { upsert: true });
+  const { error: upErr } = await supabase.storage.from(PROOF_BUCKET).upload(path, file, { upsert: true });
   if (upErr) return { error: upErr.message };
 
-  const { data: pub } = supabase.storage.from("documents").getPublicUrl(path);
+  const { data: pub } = supabase.storage.from(PROOF_BUCKET).getPublicUrl(path);
   const url = pub?.publicUrl;
   if (!url) return { error: "Uploaded, but no URL was returned for the file." };
 
@@ -659,7 +701,7 @@ export async function uploadCorrectionProof(
     .eq("id", c.id);
   if (error) {
     // Do not leave an orphan object behind if the row could not be updated.
-    await supabase.storage.from("documents").remove([path]).catch(() => {});
+    await supabase.storage.from(PROOF_BUCKET).remove([path]).catch(() => {});
     return { error: error.message };
   }
 

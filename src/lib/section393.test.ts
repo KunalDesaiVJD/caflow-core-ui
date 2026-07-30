@@ -127,7 +127,14 @@ describe("resolveSection393 — indicative codes are flagged, not guessed", () =
     expect(i.codeStatus).toBe("unmapped");
   });
 
-  it("never assigns the same payment code to two different sections (internal consistency)", () => {
+  it("attaches the same payment code to 194LB/194LB-NR — the same provision recorded under two form types (26Q vs 27Q), confirmed identical across two independent research passes", () => {
+    const lb = resolveSection393("194LB")!;
+    const lbNr = resolveSection393("194LB-NR")!;
+    expect(lb.paymentCode).toBe("1044");
+    expect(lbNr.paymentCode).toBe("1044");
+  });
+
+  it("never assigns the same payment code to two different sections, except the documented 194LB/194LB-NR case (internal consistency)", () => {
     const codes = [
       "192", "192A", "193", "194", "194A", "194A(a)", "194A(b)", "194A(c)",
       "194B", "194BB", "194BA", "194C", "194C(a)", "194C(b)",
@@ -138,6 +145,16 @@ describe("resolveSection393 — indicative codes are flagged, not guessed", () =
       "195", "196A", "196B", "196C", "196D", "206C(1)", "206C(1C)",
       "206C(1G)(a)", "206C(1G)(b)",
     ];
+    // 194LB/194LB-NR are the ONE known, verified exception — same
+    // provision, two form types. Any other pair sharing a code would be a
+    // real bug.
+    const ALLOWED_SHARED_CODE_GROUPS = [["194LB", "194LB-NR"]];
+    const allowedPartner = new Map<string, string>();
+    for (const group of ALLOWED_SHARED_CODE_GROUPS) {
+      for (const code of group) {
+        for (const other of group) if (other !== code) allowedPartner.set(code, other);
+      }
+    }
     const seen = new Map<string, string>();
     for (const code of codes) {
       const i = resolveSection393(code)!;
@@ -151,7 +168,9 @@ describe("resolveSection393 — indicative codes are flagged, not guessed", () =
       expect(Boolean(i.paymentCode || i.tableRef), code).toBe(true);
       if (i.paymentCode) {
         const prior = seen.get(i.paymentCode);
-        expect(prior, `payment code ${i.paymentCode} reused: ${prior} vs ${code}`).toBeUndefined();
+        if (prior !== undefined && allowedPartner.get(code) !== prior) {
+          expect.fail(`payment code ${i.paymentCode} reused: ${prior} vs ${code} (not a documented exception)`);
+        }
         seen.set(i.paymentCode, code);
       }
     }

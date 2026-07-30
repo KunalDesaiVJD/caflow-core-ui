@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { evaluateAckMismatch, buildAckRejectMessage, buildAckWarningMessage, normalizeFy, type AckFilingIdentity } from "./ackMismatch";
 import type { AckFields } from "./ackPdf";
+import { nameCompare } from "./match";
 
 // Real extracted fields from a genuine Form 24Q e-filing acknowledgement
 // (Form 24Q_ARN_770000388680821.pdf) — the exact fixture pinned in
@@ -79,6 +80,90 @@ describe("evaluateAckMismatch — regression: real 24Q receipt vs a 26Q filing",
   });
 });
 
+describe("evaluateAckMismatch — regression: new IT-portal 'Form 140' receipt for a genuine 26Q return", () => {
+  // Real extracted fields from a genuine e-filing receipt (Form
+  // 140_ARN_770000408905932.pdf) for ATC LOGISTICS, Tax Year 2026-27, Q1.
+  // The portal's newer "Acknowledgement Receipt of Income Tax Forms (Other
+  // Than Income Tax Return)" template — seen starting Tax Year 2026-27,
+  // apparently tied to the new Income Tax Act 2025 renumbering (this receipt
+  // cites section 397(3)(b), not the old Act's 200(3)) — prints "Form No. :
+  // Form 140" instead of "Form 26Q". Ground truth that this genuinely IS a
+  // 26Q return: the receipt lists its own attachment as "26QRQ1.zip" and its
+  // Form Description as "...deduction of tax...in respect of payments made
+  // other than salary" (26Q's own defining description). Before this fix,
+  // this real, correct receipt was REJECTED with "Form Type (140 vs 26Q)".
+  const REAL_FORM_140_FIELDS: AckFields = {
+    ackNumber: "796898970300726",
+    name: "Atc Logistics",
+    financialYear: "2026-27", // extracted via the Tax Year fallback — see ackPdf.test.ts
+    quarter: "Q1",
+    formNo: "140",
+    tan: "AHMA14484B",
+  };
+  const atcFiling = baseFiling({
+    financial_year: "2026-27", quarter: "Q1", tan: "AHMA14484B", tds_forms: ["26Q"],
+  });
+  const atcClient = { name: "ATC LOGISTICS", tan_number: "AHMA14484B" };
+
+  it("does NOT reject — Form 140 is recognised as the portal's own code for 26Q", () => {
+    const result = evaluateAckMismatch(REAL_FORM_140_FIELDS, atcFiling, atcClient);
+    expect(result.rejectReasons).toEqual([]);
+    expect(result.warnReasons).toEqual([]);
+  });
+
+  it("still rejects a genuine Form 140 receipt attached to an actually-different filing (24Q)", () => {
+    const wrongFiling = baseFiling({
+      financial_year: "2026-27", quarter: "Q1", tan: "AHMA14484B", tds_forms: ["24Q"],
+    });
+    const result = evaluateAckMismatch(REAL_FORM_140_FIELDS, wrongFiling, atcClient);
+    expect(result.rejectReasons).toEqual(["Form Type (140 vs 24Q)"]);
+  });
+});
+
+describe("evaluateAckMismatch — regression: proprietorship receipt printing the proprietor's own name, TAN confirms identity", () => {
+  // Real extracted fields from a genuine e-filing receipt (Form
+  // 140_ARN_770000408961162.pdf) for NEW FORTUNE TYRE, a proprietorship
+  // whose TAN (AHMA25870F, confirmed against the live clients table) is
+  // registered at the tax department under the PROPRIETOR'S OWN name,
+  // "Adam Asmal Dyma" — not the trade name this app records the client
+  // under, "NEW FORTUNE TYRE (ADAM ASMAL DAYMA)". Before this fix, this
+  // real, correct receipt was REJECTED with a Client Name mismatch despite
+  // the TAN matching exactly.
+  const REAL_PROPRIETOR_FIELDS: AckFields = {
+    ackNumber: "801390580300726",
+    name: "Adam Asmal Dyma",
+    financialYear: "2026-27",
+    quarter: "Q1",
+    formNo: "140",
+    tan: "AHMA25870F",
+  };
+  const fortuneTyreFiling = baseFiling({
+    financial_year: "2026-27", quarter: "Q1", tan: "AHMA25870F", tds_forms: ["26Q"],
+  });
+  const fortuneTyreClient = { name: "NEW FORTUNE TYRE (ADAM ASMAL DAYMA)", tan_number: "AHMA25870F" };
+
+  it("does NOT reject on Client Name when the TAN matches exactly, even though nameCompare alone would call it a mismatch", () => {
+    expect(nameCompare(fortuneTyreClient.name, REAL_PROPRIETOR_FIELDS.name)).not.toBe("match");
+    const result = evaluateAckMismatch(REAL_PROPRIETOR_FIELDS, fortuneTyreFiling, fortuneTyreClient);
+    expect(result.rejectReasons).toEqual([]);
+    expect(result.warnReasons).toEqual([]);
+  });
+
+  it("still rejects on Client Name when the TAN does NOT match — a real different party isn't waved through", () => {
+    const otherClient = { name: "SOME OTHER PROPRIETORSHIP", tan_number: "AHMB99999Z" };
+    const result = evaluateAckMismatch(REAL_PROPRIETOR_FIELDS, baseFiling({
+      financial_year: "2026-27", quarter: "Q1", tan: "AHMB99999Z", tds_forms: ["26Q"],
+    }), otherClient);
+    expect(result.rejectReasons).toEqual([`Client Name ("Adam Asmal Dyma" vs "SOME OTHER PROPRIETORSHIP")`]);
+  });
+
+  it("still rejects on Client Name when TAN was not extracted from the receipt at all", () => {
+    const fieldsNoTan: AckFields = { ...REAL_PROPRIETOR_FIELDS, tan: null };
+    const result = evaluateAckMismatch(fieldsNoTan, fortuneTyreFiling, fortuneTyreClient);
+    expect(result.rejectReasons).toEqual([`Client Name ("Adam Asmal Dyma" vs "NEW FORTUNE TYRE (ADAM ASMAL DAYMA)")`]);
+  });
+});
+
 describe("evaluateAckMismatch — Financial Year", () => {
   it("rejects a genuine Financial Year mismatch", () => {
     const filing = baseFiling({ financial_year: "2024-25" });
@@ -136,11 +221,13 @@ describe("evaluateAckMismatch — extraction failure is NOT a mismatch (nothing 
 
 describe("evaluateAckMismatch — Client Name is now a REJECT (upgraded from warn-only)", () => {
   it("rejects on a genuine name mismatch, even when FY/Quarter/Form all match", () => {
+    // TAN deliberately differs too — a genuinely different company would
+    // never share the filer's TAN, and a shared TAN would (correctly, see
+    // the proprietorship regression above) override the name check.
     const filing = baseFiling();
-    const result = evaluateAckMismatch(REAL_Q4_FIELDS, filing, { name: "SOME COMPLETELY DIFFERENT COMPANY LIMITED", tan_number: "AHMK08204A" });
+    const result = evaluateAckMismatch(REAL_Q4_FIELDS, filing, { name: "SOME COMPLETELY DIFFERENT COMPANY LIMITED", tan_number: "AHMZ99999Z" });
     expect(result.rejectReasons.length).toBeGreaterThan(0);
     expect(result.rejectReasons[0]).toContain("Client Name");
-    expect(result.warnReasons).toEqual([]);
   });
 
   it("does not reject on equivalent name spellings (PVT/PRIVATE, LTD/LIMITED handled by nameCompare)", () => {

@@ -4,21 +4,33 @@
  * filing row it's being attached to, and decide REJECT vs WARN per field.
  *
  * Split deliberately by field:
- *   - Form Type / Financial Year / Quarter / Client Name — HARD BLOCK. All
- *     four are printed verbatim on the government receipt as closed,
+ *   - Form Type / Financial Year / Quarter — HARD BLOCK, unconditionally. All
+ *     three are printed verbatim on the government receipt as closed,
  *     unambiguous values (Form is one of 24Q/26Q/27Q/27EQ, FY is "YYYY-YY",
- *     Quarter is exactly Q1-Q4, Name is compared via the same nameCompare()
- *     every other TDS stage in this app already trusts for real
- *     reconciliation decisions). There is no realistic way for a
+ *     Quarter is exactly Q1-Q4). There is no realistic way for a
  *     genuinely-extracted "24Q"/"Q4" to be confused with a genuinely-filed
- *     "26Q"/"Q1" — a definite mismatch on any of these four is always a real
+ *     "26Q"/"Q1" — a definite mismatch on any of these three is always a real
  *     data error (wrong receipt attached to the wrong filing), never a false
  *     positive from OCR noise. Regression history: a Q4 acknowledgement was
  *     once attached to a Q1 filing, and separately a 24Q acknowledgement was
  *     attached to a 26Q filing, both accepted with no effective block (each
  *     was only a soft warning, easy to miss/overwrite) — this module exists
- *     so none of these four fields can ever again result in a successful,
+ *     so none of these fields can ever again result in a successful,
  *     un-blocked attach when they genuinely disagree.
+ *   - Client Name — HARD BLOCK, UNLESS the TAN already matches exactly. TAN
+ *     is the actual unique legal identifier a TDS return is filed under; a
+ *     free-text "Name" is not. For a proprietorship, the government receipt
+ *     legitimately prints the PROPRIETOR'S OWN name ("Adam Asmal Dyma")
+ *     while this app records the TRADE name ("NEW FORTUNE TYRE (ADAM ASMAL
+ *     DAYMA)") — both correctly describe the same real deductor, and
+ *     nameCompare() has no way to know that without external knowledge a
+ *     name-similarity heuristic can't have. A confirmed, exact TAN match
+ *     settles identity beyond what any name check could, so it overrides a
+ *     Name-only disagreement rather than being second-guessed by it — see
+ *     tanConfirmsIdentity below. When TAN does NOT confirm identity (missing,
+ *     unextracted, or genuinely different), Name reverts to its original
+ *     hard-block behaviour, via the same nameCompare() every other TDS stage
+ *     in this app already trusts for real reconciliation decisions.
  *
  * Extraction failure is NOT a mismatch: every check below only fires when
  * `fields.<x>` was actually extracted from the PDF's text layer. A
@@ -69,6 +81,25 @@ export const normalizeFy = (v: string | null | undefined): string => {
 
 const normalizeQuarter = (v: string | null | undefined): string => (v ?? "").trim().toUpperCase();
 
+// The Income Tax e-filing portal's "Acknowledgement Receipt of Income Tax
+// Forms (Other Than Income Tax Return)" template — seen starting Tax Year
+// 2026-27, evidently tied to the new Income Tax Act 2025 renumbering
+// (this template cites "section 397(3)(b)", not the old Act's 200(3)) —
+// prints a bare portal form CODE ("Form 140") instead of the familiar
+// 24Q/26Q/27Q/27EQ label. Confirmed real: a genuine "Form 140" receipt for
+// an ATC LOGISTICS 26Q Q1 FY2026-27 return lists its own attachment as
+// "26QRQ1.zip" and describes itself as "...deduction of tax...in respect of
+// payments made other than salary" — the defining description of 26Q — so
+// this was a real return being falsely REJECTED, not OCR noise. Only 140→26Q
+// is confirmed; the other three forms' new portal codes are unknown until a
+// real receipt surfaces one — add them here the same way when they do,
+// rather than guessing numbers with no evidence behind them.
+const FORM_NO_PORTAL_ALIASES: Record<string, string> = { "140": "26Q" };
+const normalizeFormNo = (v: string): string => {
+  const s = v.trim().toUpperCase();
+  return FORM_NO_PORTAL_ALIASES[s] ?? s;
+};
+
 /** Evaluate every cross-check field. Pure function — no I/O, no React,
  *  directly unit-testable with a synthetic AckFields + filing row. */
 export function evaluateAckMismatch(
@@ -89,24 +120,34 @@ export function evaluateAckMismatch(
     rejectReasons.push(`Quarter (${fields.quarter} vs ${filing.quarter})`);
   }
 
-  // ── Name — REJECT. Uses the same nameCompare() every other TDS stage
-  // relies on for real reconciliation decisions elsewhere in this system, so
-  // its "match" verdict is already trusted at that level of confidence — a
+  // ── TAN — computed before Name so Name can defer to it. Exact match here
+  // is a strong identity signal (see the module doc above); an extraction
+  // failure or genuine difference is NOT treated as identity confirmed. ──
+  const clientTan = client?.tan_number || filing.tan || "";
+  const tanConfirmsIdentity = !!(fields.tan && clientTan && normalizePan(fields.tan) === normalizePan(clientTan));
+
+  // ── Name — REJECT, unless TAN already confirmed this is the same
+  // deductor (see module doc — proprietor's own name vs the trade name).
+  // Uses the same nameCompare() every other TDS stage relies on for real
+  // reconciliation decisions elsewhere in this system, so its "match"
+  // verdict is already trusted at that level of confidence — a
   // "mismatch"/"different" verdict is a real, actionable signal, not OCR
-  // noise. "unknown" (blank/unusable on one side) is deliberately NOT a
-  // mismatch, since there's nothing to compare. ──────────────────────────
+  // noise, WHEN TAN hasn't already settled the question. "unknown"
+  // (blank/unusable on one side) is deliberately NOT a mismatch, since
+  // there's nothing to compare. ──────────────────────────
   const clientName = client?.name || "";
-  if (fields.name && clientName) {
+  if (fields.name && clientName && !tanConfirmsIdentity) {
     const cmp = nameCompare(clientName, fields.name);
     if (cmp === "mismatch" || cmp === "different") {
       rejectReasons.push(`Client Name ("${fields.name}" vs "${clientName}")`);
     }
   }
 
-  // ── TAN — WARN. Not part of the required Form/Client/FY/Quarter set; kept
-  // as a bonus, non-blocking signal. ─────────────────────────────────────
-  const clientTan = client?.tan_number || filing.tan || "";
-  if (fields.tan && clientTan && normalizePan(fields.tan) !== normalizePan(clientTan)) {
+  // ── TAN — WARN only when it's extracted but does NOT confirm identity.
+  // Not part of the required Form/Client/FY/Quarter set on its own; kept as
+  // a bonus, non-blocking signal for that case. When it DOES match, it was
+  // already used above to settle Name — nothing further to warn about. ──
+  if (fields.tan && clientTan && !tanConfirmsIdentity) {
     warnReasons.push(`TAN (${fields.tan} vs ${clientTan})`);
   }
 
@@ -117,7 +158,7 @@ export function evaluateAckMismatch(
   // by extractAckFields). Regression: a 24Q acknowledgement was attached to
   // a 26Q filing and accepted with no block — this was a soft warning only,
   // easy to miss, exactly the same class of gap FY/Quarter closed earlier. ─
-  if (fields.formNo && filing.tds_forms?.[0] && fields.formNo.toUpperCase() !== filing.tds_forms[0].toUpperCase()) {
+  if (fields.formNo && filing.tds_forms?.[0] && normalizeFormNo(fields.formNo) !== normalizeFormNo(filing.tds_forms[0])) {
     rejectReasons.push(`Form Type (${fields.formNo} vs ${filing.tds_forms[0]})`);
   }
 

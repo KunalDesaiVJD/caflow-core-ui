@@ -195,3 +195,48 @@ describe("extractAckFields", () => {
     });
   });
 });
+
+describe("extractAckFields — the newer 'Acknowledgement Receipt of Income Tax Forms (Other Than Income Tax Return)' template", () => {
+  // Faithful reproduction of the raw band dump from a genuine receipt (Form
+  // 140_ARN_770000408905932.pdf, ATC LOGISTICS, Tax Year 2026-27 Q1) — first
+  // seen starting Tax Year 2026-27, apparently tied to the new Income Tax
+  // Act 2025 renumbering (this receipt cites "section 397(3)(b)", not the
+  // old Act's 200(3)). Two real differences from the older Form 24Q/26Q
+  // template pinned above: (1) "Form No. : Form 140" — a bare portal CODE,
+  // not the familiar 24Q/26Q/27Q/27EQ label (see ackMismatch.ts's own
+  // FORM_NO_PORTAL_ALIASES for why "140" genuinely means 26Q here); (2)
+  // "Financial Year : -" is blank, with the real year under "Tax Year"
+  // instead; (3) the PAN/TAN row is labelled "PAN/TAN/Other ID :".
+  const items: PdfTextItem[] = [
+    cell(40, 681.3, "e-Filing"), cell(120, 681.3, "Acknowledgement"), cell(280, 681.3, "Number"),
+    cell(500, 681.3, "Date"), cell(540, 681.3, "of"), cell(570, 681.3, "e-Filing"),
+    cell(40, 662.7, "796898970300726"), cell(500, 662.7, "30-Jul-2026"),
+    cell(40, 645.5, "RRR"), cell(100, 645.5, "Number"),
+    cell(40, 626.9, "770000408905932"),
+    cell(40, 588.9, "Name"), cell(90, 588.9, ":"), cell(110, 588.9, "Atc"), cell(140, 588.9, "Logistics"),
+    cell(40, 562.3, "PAN/TAN/Other"), cell(160, 562.3, "ID"), cell(180, 562.3, ":"), cell(200, 562.3, "AHMA14484B"),
+    cell(40, 535.7, "Address"), cell(90, 535.7, "of"), cell(120, 535.7, "the"), cell(150, 535.7, "assessee"), cell(210, 535.7, ":"),
+    cell(230, 535.7, "216, SUNRISE SHOPPING MALL,JUDGES BUNGLOW ROAD,ahmedabad,VASTRAPUR"),
+    cell(40, 496.8, "Form"), cell(75, 496.8, "No."), cell(100, 496.8, ":"), cell(120, 496.8, "Form"), cell(150, 496.8, "140"),
+    cell(40, 470.0, "Form"), cell(90, 470.0, "Description"), cell(150, 470.0, ":"),
+    cell(170, 470.0, "Quarterly"), cell(230, 470.0, "statement"), cell(300, 470.0, "of"), cell(320, 470.0, "deduction"),
+    cell(390, 470.0, "of"), cell(410, 470.0, "tax"), cell(440, 470.0, "under"), cell(480, 470.0, "section"), cell(520, 470.0, "397(3)(b)"),
+    cell(170, 452.0, "in"), cell(190, 452.0, "respect"), cell(240, 452.0, "of"), cell(260, 452.0, "payments"),
+    cell(320, 452.0, "made"), cell(360, 452.0, "other"), cell(400, 452.0, "than"), cell(430, 452.0, "salary"),
+    cell(40, 419.0, "Tax"), cell(80, 419.0, "Year"), cell(120, 419.0, ":"), cell(140, 419.0, "2026-27"),
+    cell(40, 392.4, "Financial"), cell(100, 392.4, "Year"), cell(150, 392.4, ":"), cell(170, 392.4, "-"),
+    cell(40, 365.8, "Quarter"), cell(100, 365.8, ":"), cell(120, 365.8, "Q1"),
+    cell(40, 339.2, "Month"), cell(90, 339.2, ":"), cell(110, 339.2, "-"),
+  ];
+
+  it("extracts Financial Year via the Tax Year fallback, PAN/TAN via the '/Other ID' label variant, and the bare portal Form code", () => {
+    expect(extractAckFields([items])).toEqual({
+      ackNumber: "796898970300726",
+      name: "Atc Logistics",
+      financialYear: "2026-27",
+      quarter: "Q1",
+      formNo: "140",
+      tan: "AHMA14484B",
+    });
+  });
+});

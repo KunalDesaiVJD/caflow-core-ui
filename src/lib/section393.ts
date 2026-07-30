@@ -134,13 +134,25 @@ const RAW_ENTRIES: RawEntry[] = [
 
   // ── Section 393(2) — Non-residents (Form 27Q) ──────────────────────
   { codes: ["194E"], newSection: "393(2)", category: "non-resident", tableRef: "Sl. No. 1", paymentCode: "1039" },
-  { codes: ["194LB-NR"], newSection: "393(2)", category: "non-resident" },
+  // Same provision as "194LB" below, recorded under a different form_type
+  // (27Q non-resident vs 26Q) — confirmed identical rate/citation/code
+  // across two independent research passes, not a genuine collision.
+  { codes: ["194LB-NR"], newSection: "393(2)", category: "non-resident", tableRef: "S.No. 5", paymentCode: "1044" },
   { codes: ["194LB"], newSection: "393(2)", category: "non-resident", tableRef: "S.No. 5", paymentCode: "1044" },
+  // 194LC splits into 4 different payment codes (1040-1043) depending on
+  // bond/loan sub-type, which this app's single section_code doesn't
+  // capture — left unmapped rather than guess which sub-type applies.
   { codes: ["194LC"], newSection: "393(2)", category: "non-resident" },
+  // Research traced the code some sources attribute to 194LD and found it
+  // actually belongs to 194LC (near-identical phrasing, confirmed via bare
+  // Act text) — genuinely no code found, not just low confidence.
   { codes: ["194LD"], newSection: "393(2)", category: "non-resident" },
   { codes: ["195"], newSection: "393(2)", category: "non-resident", tableRef: "Sl. No. 17", paymentCode: "1057" },
   { codes: ["196A"], newSection: "393(2)", category: "non-resident", paymentCode: "1050" },
-  { codes: ["196B"], newSection: "393(2)", category: "non-resident" },
+  { codes: ["196B"], newSection: "393(2)", category: "non-resident", tableRef: "Sl. No. 11", paymentCode: "1051" },
+  // 196C splits into 2 codes (1053 interest/dividend, 1054 LTCG) depending
+  // on which limb of the old provision applies — left unmapped rather than
+  // guess which one a given row represents.
   { codes: ["196C"], newSection: "393(2)", category: "non-resident" },
   { codes: ["196D"], newSection: "393(2)", category: "non-resident", tableRef: "Sl. No. 15", paymentCode: "1055" },
 
@@ -162,6 +174,11 @@ const RAW_ENTRIES: RawEntry[] = [
     // took effect — so it has no new-Act mapping to attach at all, not
     // merely an unverified one. Kept selectable in the app (existing
     // is_active row) only for pre-abolition historical reference.
+    //
+    // 206C(1C) itself splits into 3 codes (parking lot/toll plaza/mining)
+    // and 206C(1G)(a) splits into 2 (education-medical vs other purpose) —
+    // both left unmapped since this app's single section_code per entry
+    // doesn't capture which sub-type applies.
     codes: ["206C(1C)", "206C(1G)(a)", "206C(1G)(b)"],
     newSection: "394",
     category: "tcs",
@@ -199,7 +216,7 @@ const RAW_ENTRIES: RawEntry[] = [
   { codes: ["194J(b)"], newSection: "393(1)", category: "resident", tableRef: "Sl. No. 6(iii).D(a)", paymentCode: "1026" },
   { codes: ["194K"], newSection: "393(1)", category: "resident", tableRef: "Sl. No. 4(i)", paymentCode: "1013" },
   { codes: ["194LA"], newSection: "393(1)", category: "resident", tableRef: "S.No. 3(iii)", paymentCode: "1012" },
-  { codes: ["194LBC"], newSection: "393(1)", category: "resident" },
+  { codes: ["194LBC"], newSection: "393(1)", category: "resident", tableRef: "Sl. No. 4(iv)", paymentCode: "1018" },
   { codes: ["194M"], newSection: "393(1)", category: "resident", tableRef: "S.No. 6(ii)" },
   {
     // 194O: a fresh research pass found code 1035, but that collides with

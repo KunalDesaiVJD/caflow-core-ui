@@ -134,9 +134,20 @@ export interface AckFields {
 // "quarter ended ...") can never qualify as a "label: value" row.
 const NAME_LABEL_RE = /^Name\s*:\s*/i;
 const FY_LABEL_RE = /^Financial\s+Year\s*:\s*/i;
+// The newer "Acknowledgement Receipt of Income Tax Forms (Other Than Income
+// Tax Return)" template (seen from Tax Year 2026-27 on) prints "Financial
+// Year : -" (genuinely blank) and puts the real year under "Tax Year"
+// instead — confirmed against a real receipt. Tried only as a fallback, after
+// FY_LABEL_RE, so the older/normal template's own "Financial Year" row is
+// still preferred whenever it's actually populated.
+const TAX_YEAR_LABEL_RE = /^Tax\s+Year\s*:\s*/i;
 const QUARTER_LABEL_RE = /^Quarter\s*:\s*/i;
 const FORM_NO_LABEL_RE = /^Form\s+No\.?\s*:\s*/i;
-const PAN_TAN_LABEL_RE = /^PAN\s*\/\s*TAN\s*:\s*/i;
+// The newer template (see TAX_YEAR_LABEL_RE above) labels this row
+// "PAN/TAN/Other ID :" rather than the older template's plain "PAN/TAN :" —
+// confirmed against a real receipt. The optional "/Other ID" suffix keeps
+// both templates working under one pattern.
+const PAN_TAN_LABEL_RE = /^PAN\s*\/\s*TAN(?:\s*\/\s*Other\s+ID)?\s*:\s*/i;
 // Safety net beyond the regex tightening above: a genuine Quarter value is
 // always exactly Q1–Q4. If a matched band still produces anything else,
 // something is wrong (e.g. an unforeseen boilerplate collision) and the
@@ -182,7 +193,7 @@ export function extractAckFields(pages: PdfTextItem[][]): AckFields {
   for (const items of pages) {
     const bands = toBands(items);
     name ??= extractLabelledValue(bands, NAME_LABEL_RE);
-    financialYear ??= extractLabelledValue(bands, FY_LABEL_RE);
+    financialYear ??= extractLabelledValue(bands, FY_LABEL_RE) ?? extractLabelledValue(bands, TAX_YEAR_LABEL_RE);
     quarter ??= extractLabelledValue(bands, QUARTER_LABEL_RE, QUARTER_VALUE_RE);
     formNo ??= extractLabelledValue(bands, FORM_NO_LABEL_RE);
     tan ??= extractLabelledValue(bands, PAN_TAN_LABEL_RE);

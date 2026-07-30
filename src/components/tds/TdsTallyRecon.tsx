@@ -13,7 +13,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2, Unlink, Search } from "lucide-react";
+import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2, Unlink, Search, Pencil } from "lucide-react";
 import { pdfToTextPages } from "@/lib/tds/pdfText";
 import { parseTallyPdfPages } from "@/lib/tds/tallyPdf";
 import { parseExpertPdfPages } from "@/lib/tds/expertPdf";
@@ -251,6 +251,21 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const [bypassConfirmChecked, setBypassConfirmChecked] = useState(false);
   const [bypassSaving, setBypassSaving] = useState(false);
 
+  // Correct an imported ledger's own SECTION after the fact — a real,
+  // confirmed need: a client's Tally ledger can be mislabelled at the source
+  // (e.g. a ledger titled "TDS on Machinery Rent 2% (194IA) - 1008" is
+  // genuinely Section 194-I — Plant & Machinery rent's own rate is 2%; 194-IA,
+  // property purchase, has no 2%/rent concept at all), which otherwise
+  // permanently blocks both automatic AND manual matching against Office
+  // Data's correctly-coded records — the section filter applies uniformly to
+  // both (see pickSectionBlockedCount's own doc). Corrects tds_tally_batches
+  // AND every tds_tally_rows row it owns (rows carry their own section, not a
+  // batch-level lookup — see handleImport's own comment on why), then
+  // re-validates so the newly-unblocked records get a real chance to match.
+  const [editingSectionBatchId, setEditingSectionBatchId] = useState<string | null>(null);
+  const [editingSectionValue, setEditingSectionValue] = useState("");
+  const [savingSectionEdit, setSavingSectionEdit] = useState(false);
+
   const filingId = filing?.id ?? null;
   const officeCount = office.length;
   const ledgerRowCount = useMemo(() => batches.reduce((s, b: any) => s + (Number(b.row_count) || 0), 0), [batches]);
@@ -426,6 +441,37 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       await loadAll();
     } catch (e: any) { toast({ title: "Could not remove the ledger", description: e.message, variant: "destructive" }); }
     setImporting(false);
+  };
+
+  const startEditingSection = (b: any) => { setEditingSectionBatchId(b.id); setEditingSectionValue(b.section || ""); };
+  const cancelEditingSection = () => { setEditingSectionBatchId(null); setEditingSectionValue(""); };
+  /** Correct a batch's own section — see the state's own doc for why this is
+   *  needed (a ledger mislabelled at the source, in the client's own Tally
+   *  books, permanently blocks both automatic and manual matching). Updates
+   *  every row the batch owns, not just the batch row itself — see
+   *  handleImport's own comment on why section lives per-row. */
+  const saveEditedSection = async (b: any) => {
+    const canon = canonicalSection(editingSectionValue) || editingSectionValue.trim().toUpperCase() || null;
+    if (!canon) { toast({ title: "Enter a section code", variant: "destructive" }); return; }
+    if (canon === (b.section || null)) { cancelEditingSection(); return; }
+    setSavingSectionEdit(true);
+    try {
+      const { error: e1 } = await supabase.from("tds_tally_batches").update({ section: canon }).eq("id", b.id);
+      if (e1) throw new Error(e1.message);
+      const { error: e2 } = await supabase.from("tds_tally_rows").update({ section: canon }).eq("batch_id", b.id);
+      if (e2) throw new Error(e2.message);
+      await logReconAudit({
+        filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+        actionType: "TALLY_LEDGER_IMPORTED", oldValue: `section: ${b.section || "—"}`, newValue: `section: ${canon}`,
+        remark: `Corrected the imported ledger's section for "${b.file_name}" — the client's own Tally ledger name printed a different section than its actual content.`,
+      });
+      await supabase.from("tds_tally_results").delete().eq("filing_id", filing.id);
+      setResults(null);
+      toast({ title: "Section corrected", description: `"${b.file_name}" is now treated as ${canon}. Run Validation again to reconcile against it.` });
+      cancelEditingSection();
+      await loadAll();
+    } catch (e: any) { toast({ title: "Could not update the section", description: e.message, variant: "destructive" }); }
+    setSavingSectionEdit(false);
   };
 
   const runAudit = useCallback(async (fId: string) => {
@@ -1056,6 +1102,27 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     return [...hit].sort((a, b) => (b.suggested ? 1 : 0) - (a.suggested ? 1 : 0) || a.i - b.i);
   }, [results, tallyRows, pickTarget, pickQuery]);
 
+  /** When pickRows is empty, is that because nothing matches at all, or because
+   *  candidates exist but were excluded by the section-equality filter above?
+   *  Those two are very different situations for the user — "no such ledger
+   *  entry exists" vs "the entry exists but is booked under the wrong section,
+   *  which mapping can never fix" — and the generic "no match" message used to
+   *  say the same thing for both, sending the user hunting for a typo in their
+   *  search when the real issue was a section code that needs correcting at
+   *  the source (Office Data or the imported ledger), not in this dialog. */
+  const pickSectionBlockedCount = useMemo(() => {
+    if (pickRows.length > 0) return 0;
+    const targetSection = canonicalSection(pickTarget?.office_section ?? null);
+    if (!targetSection) return 0;
+    const q = pickQuery.trim().toLowerCase();
+    return tallyRows
+      .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0 && t.amountKind !== "taxable_income")
+      .filter((t) => { const tSection = canonicalSection(t.section); return !!tSection && tSection !== targetSection; })
+      .filter((t) => !q || [t.party, t.date, t.iso, t.section, t.credit == null ? "" : String(t.credit), inr(t.credit)]
+        .filter(Boolean).join(" ").toLowerCase().includes(q))
+      .length;
+  }, [pickRows.length, tallyRows, pickTarget, pickQuery]);
+
   /** Office records offered by the REVERSE picker (opened from a ledger-only card).
    *  Candidates are every OPEN office record (see isOpenRow) — not just ones whose
    *  own result happens to be exactly "Ledger Entry Not Found". An office record
@@ -1083,6 +1150,22 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           .filter(Boolean).join(" ").toLowerCase().includes(q))
       : rows;
   }, [results, officePickQuery, officePickTarget, tallyRows]);
+
+  /** Mirrors pickSectionBlockedCount above, for the reverse picker — see that
+   *  one's own doc for why this distinction (nothing matches at all vs.
+   *  candidates exist but are booked under a different section) matters. */
+  const pickOfficeSectionBlockedCount = useMemo(() => {
+    if (pickOfficeRows.length > 0) return 0;
+    const targetSection = canonicalSection(officePickTarget ? ledgerSectionOf(officePickTarget) : null);
+    if (!targetSection) return 0;
+    const q = officePickQuery.trim().toLowerCase();
+    return (results || [])
+      .filter((r) => r.office_name && r.id !== officePickTarget?.id && isOpenRow(r))
+      .filter((r) => { const rSection = canonicalSection(r.office_section); return !!rSection && rSection !== targetSection; })
+      .filter((r) => !q || [r.office_name, r.office_date, r.office_section, r.office_tds == null ? "" : String(r.office_tds), inr(r.office_tds)]
+        .filter(Boolean).join(" ").toLowerCase().includes(q))
+      .length;
+  }, [pickOfficeRows.length, results, officePickTarget, officePickQuery]);
 
   /** The Override button's label. Every genuine DISPUTE over an existing pairing
    *  (Party Name Mismatch, Date Mismatch, …) keeps the plain generic "Override".
@@ -1400,7 +1483,23 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
                   <div key={b.id} className="flex items-center gap-2 text-[11px] rounded border px-2 py-1">
                     <FileSpreadsheet size={11} className="text-muted-foreground shrink-0" />
                     <span className="truncate flex-1" title={b.file_name}>{b.file_name}</span>
-                    <span className="text-muted-foreground shrink-0">{b.section || "—"} · {b.row_count}</span>
+                    {editingSectionBatchId === b.id ? (
+                      <>
+                        <Input value={editingSectionValue} onChange={(e) => setEditingSectionValue(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === "Enter") saveEditedSection(b); if (e.key === "Escape") cancelEditingSection(); }}
+                          className="h-5 w-20 text-[11px] px-1 shrink-0" placeholder="e.g. 194I" autoFocus disabled={savingSectionEdit} />
+                        <button className="text-emerald-600 shrink-0" title="Save" disabled={savingSectionEdit} onClick={() => saveEditedSection(b)}>
+                          {savingSectionEdit ? <Loader2 size={11} className="animate-spin" /> : <CheckCircle2 size={11} />}
+                        </button>
+                        <button className="text-muted-foreground shrink-0" title="Cancel" disabled={savingSectionEdit} onClick={cancelEditingSection}><X size={11} /></button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-muted-foreground shrink-0">{b.section || "—"} · {b.row_count}</span>
+                        <button className="text-muted-foreground hover:text-foreground shrink-0" title="Correct this ledger's section — e.g. if Tally's own ledger name is mislabelled"
+                          disabled={disabled || importing} onClick={() => startEditingSection(b)}><Pencil size={11} /></button>
+                      </>
+                    )}
                     <button className="text-muted-foreground hover:text-destructive shrink-0" title="Remove this ledger"
                       disabled={disabled || importing} onClick={() => deleteBatch(b.id)}><X size={11} /></button>
                   </div>
@@ -1545,7 +1644,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             <ScrollArea className="h-72 rounded-md border">
               {pickRows.length === 0 ? (
                 <p className="p-6 text-center text-xs text-muted-foreground">
-                  {tallyRows.length ? "No ledger record matches that search." : "No ledger records — import the Tally ledger PDF first."}
+                  {pickSectionBlockedCount > 0
+                    ? `${pickSectionBlockedCount} ledger record${pickSectionBlockedCount === 1 ? "" : "s"} match${pickSectionBlockedCount === 1 ? "es" : ""} by name/date/amount but ${pickSectionBlockedCount === 1 ? "is" : "are"} booked under a different section (${pickTarget?.office_section || "—"} expected). A TDS section can't be changed by mapping — if one side's section code is wrong, correct it (Office Data or the ledger import) and re-run validation.`
+                    : tallyRows.length ? "No ledger record matches that search." : "No ledger records — import the Tally ledger PDF first."}
                 </p>
               ) : (
                 <div className="p-1 space-y-0.5">
@@ -1579,7 +1680,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             <ScrollArea className="h-72 rounded-md border">
               {pickOfficeRows.length === 0 ? (
                 <p className="p-6 text-center text-xs text-muted-foreground">
-                  {(results || []).some((r) => r.office_name) ? "No unmatched office record matches that search." : "No office records to reconcile for this filing."}
+                  {pickOfficeSectionBlockedCount > 0
+                    ? `${pickOfficeSectionBlockedCount} office record${pickOfficeSectionBlockedCount === 1 ? "" : "s"} match${pickOfficeSectionBlockedCount === 1 ? "es" : ""} by name/date/amount but ${pickOfficeSectionBlockedCount === 1 ? "is" : "are"} booked under a different section than this ledger entry. A TDS section can't be changed by mapping — if one side's section code is wrong, correct it (Office Data or the ledger import) and re-run validation.`
+                    : (results || []).some((r) => r.office_name) ? "No unmatched office record matches that search." : "No office records to reconcile for this filing."}
                 </p>
               ) : (
                 <div className="p-1 space-y-0.5">
