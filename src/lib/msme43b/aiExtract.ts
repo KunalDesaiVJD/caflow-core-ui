@@ -111,19 +111,33 @@ async function readErrorBody(context: unknown): Promise<string | null> {
 }
 
 /**
- * Pages per request when a merged export has to be split. A whole year for one
- * vendor is typically 1–3 pages, so 8 keeps several vendors together (which
- * helps the model see each ledger's header and totals) while staying well inside
- * one reply.
+ * Pages per request when a merged export has to be split.
+ *
+ * THE BINDING CONSTRAINT IS TIME, NOT SIZE. A Supabase edge function is killed
+ * after 150 seconds with no bytes written to the response, and the function does
+ * not write anything until the model has finished, so the whole model call has
+ * to fit inside 150 seconds. This was 8 pages against a 32,000-token output cap
+ * — a reply that long takes several minutes to generate and could never have
+ * arrived in time, which is exactly the 504 the firm hit.
+ *
+ * 3 pages against an 8,000-token cap (see msme-extract-ledger) is a call that
+ * completes in tens of seconds. It means more requests per file, and the page
+ * range of each is shown as it runs, so a long file visibly progresses instead
+ * of appearing to hang.
  */
-const PAGES_PER_CHUNK = 8;
+const PAGES_PER_CHUNK = 3;
 
 /**
  * Above this, the file is treated as a merged export and split. Below it, the
  * PDF is sent whole as a document, which reads better and is the only way a
  * SCANNED ledger can be read at all.
  */
-const CHUNK_THRESHOLD_PAGES = 12;
+const CHUNK_THRESHOLD_PAGES = 4;
+
+/** A 504/timeout from the platform rather than a refusal by the model. */
+function isTimeout(message: string): boolean {
+  return /idle timeout|504|timed out|timeout/i.test(message);
+}
 
 /** Extract vendor ledgers from a PDF of any format via Claude. */
 export async function extractLedgersViaAI(
@@ -180,7 +194,7 @@ async function extractByChunks(
   if (!chunks.length) {
     throw new Error(
       `"${file.name}" has ${pages} pages but no readable text — it is probably a scan. ` +
-      'Split it into files of 12 pages or fewer so each can be read as an image.',
+      `Split it into files of ${CHUNK_THRESHOLD_PAGES} pages or fewer so each can be read as an image.`,
     );
   }
 
@@ -188,21 +202,53 @@ async function extractByChunks(
   let truncated = false;
   const failures: string[] = [];
 
-  for (const c of chunks) {
+  /** Read one page range. Returns null and records the reason on failure. */
+  const readRange = async (c: { from: number; to: number; text: string }): Promise<unknown[] | null> => {
     onProgress?.(`${file.name}: pages ${c.from}–${c.to} of ${pages}`);
     const { data, error } = await supabase.functions.invoke('msme-extract-ledger', {
       body: { text_content: c.text, filename: file.name, page_range: `${c.from}-${c.to}` },
     });
-    if (error) throw await describeInvokeError(error, file.name);
+    if (error) {
+      const described = await describeInvokeError(error, file.name);
+      // A timeout is about THIS range being too dense, not about the file, so it
+      // is retried smaller below rather than abandoning the other ranges.
+      if (isTimeout(described.message)) return null;
+      throw described;
+    }
     if (data?.error) {
-      // One bad range should not lose the other fifteen.
       failures.push(`pages ${c.from}–${c.to}: ${data.error}`);
-      continue;
+      return [];
     }
     truncated = truncated || !!data?.truncated;
-    for (const raw of Array.isArray(data?.ledgers) ? data.ledgers : []) {
-      collected.push(mapLedger(raw, file.name, false));
+    return Array.isArray(data?.ledgers) ? data.ledgers : [];
+  };
+
+  for (const c of chunks) {
+    let got = await readRange(c);
+
+    // Timed out: a dense range can hold more rows than one call can emit inside
+    // the platform's 150-second window. Retry it a page at a time — one page of
+    // a ledger is always small enough — instead of losing the range entirely.
+    if (got === null) {
+      onProgress?.(`${file.name}: pages ${c.from}–${c.to} were too dense, retrying page by page`);
+      got = [];
+      for (let p = c.from; p <= c.to; p++) {
+        const single = {
+          from: p,
+          to: p,
+          text: `--- page ${p} ---\n${texts[p - 1] ?? ''}`,
+        };
+        if (!single.text.trim()) continue;
+        const one = await readRange(single);
+        if (one === null) {
+          failures.push(`page ${p}: timed out even on its own — the page is unusually dense`);
+          continue;
+        }
+        got.push(...one);
+      }
     }
+
+    for (const raw of got) collected.push(mapLedger(raw, file.name, false));
   }
 
   if (!collected.length) {

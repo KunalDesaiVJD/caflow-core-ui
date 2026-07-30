@@ -2,12 +2,15 @@
 // format and return a canonical JSON ledger, using Claude with native PDF
 // document input, reached through OpenRouter or the Anthropic API direct.
 //
-// WHY A DEDICATED FUNCTION: the deterministic Tally/Expert parsers in
-// src/lib/msme43b handle those two formats exactly (balance reconciles to the
-// printed closing). This function is the fallback for OTHER formats the parser
-// can't read. The API key never leaves the server; whatever Claude returns is
-// re-checked client-side against the printed closing balance (the reconciliation
-// oracle) before any figure is trusted — a wrong extraction is flagged, not used.
+// WHY EVERY PDF COMES HERE: the deterministic Tally/Expert parsers still exist
+// and still reconcile to zero drift, but they only ever saw a single gross
+// amount per row — no tax split. Since the disallowance is stated on the taxable
+// value, they cannot produce it. So this is the only ingestion route, not a
+// fallback, and behaviour no longer depends on which software made the file.
+//
+// The API key never leaves the server; whatever comes back is re-checked
+// client-side against the printed closing balance (the reconciliation oracle)
+// before any figure is trusted — a wrong extraction is flagged, not used.
 //
 // AUTH: Supabase JWT, mirroring claude-gateway.
 // KEY + MODEL: see the transport block at the foot of this file. One
@@ -106,9 +109,18 @@ serve(async (req) => {
     }
 
     // --- Model call: PDF document part, or the text of a page range ---
-    // A ledger year can run to hundreds of rows. 8192 truncated real files
-    // mid-JSON, which the parser then discarded entirely — the whole reply lost
-    // for want of headroom.
+    //
+    // THE OUTPUT CAP IS A TIME BUDGET, NOT A SIZE BUDGET. This function writes
+    // nothing to its response until the model has finished, so Supabase's
+    // 150-second idle timeout applies to the whole model call. A 32,000-token
+    // reply takes several minutes to generate and could never arrive in time —
+    // it produced a guaranteed 504 on every real file.
+    //
+    // 8,000 tokens is what a call can emit and still return. The client sends 3
+    // pages at a time to fit inside it (PAGES_PER_CHUNK in aiExtract.ts), and
+    // retries a range page-by-page if even that was too dense. If a reply is
+    // still cut off, stop_reason is reported as `truncated` and the caller says
+    // so rather than trusting a half-read ledger.
     const parts: Part[] = pdf_base64
       ? [
           { kind: "pdf", filename: filename || "ledger.pdf", base64: pdf_base64 },
@@ -132,7 +144,7 @@ serve(async (req) => {
           },
         ];
 
-    const reply = await callModel(SYSTEM_PROMPT, parts, 32000);
+    const reply = await callModel(SYSTEM_PROMPT, parts, 8000);
     if (isModelError(reply)) return json({ error: reply.error }, reply.status);
 
     let parsed: unknown;
