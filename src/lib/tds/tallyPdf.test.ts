@@ -124,6 +124,36 @@ function challanPaymentRow(y: number, opts: { date: string; bank: string; vchNo:
   ];
 }
 
+/** A TDS-liability compound Journal where the TDS amount is NEVER restated
+ *  on the Dr side (unlike compoundJournalRows above) — Dr is purely the
+ *  gross expense + its GST input lines, and the vendor is named on a single
+ *  Cr line for the net payable (Dr total = Cr vendor + this row's own TDS
+ *  credit, by double-entry). Exactly reproduces a real Bindra Construction
+ *  works-contract voucher's layout (194c-partnership.pdf). */
+function worksContractVoucherRows(y: number, opts: {
+  date?: string; vchNo: string; credit: number;
+  drLines: { label: string; amount: number }[];
+  vendor: string; vendorCr: number;
+}): PdfTextItem[] {
+  const items: PdfTextItem[] = [];
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+  if (opts.date) items.push({ x: 39.6, y, w: 58.6, str: `${opts.date} By` });
+  else items.push({ x: 86.6, y, w: 11.6, str: "By" });
+  items.push({ x: 426.2, y, w: 10.0, str: opts.vchNo });
+  items.push({ x: 280.7, y: y - 0.3, w: 32.6, str: "Journal" });
+  items.push({ x: 553.0, y: y - 0.8, w: 38.7, str: fmt(opts.credit) });
+  items.push({ x: 104.3, y: y - 1.2, w: 70.2, str: "(as per details)" });
+  let lineY = y - 11;
+  for (const dr of opts.drLines) {
+    items.push({ x: 105.0, y: lineY, w: dr.label.length * 5.2, str: dr.label });
+    items.push({ x: 291.8, y: lineY, w: 52.8, str: `${fmt(dr.amount)} Dr` });
+    lineY -= 10.8;
+  }
+  items.push({ x: 105.0, y: lineY, w: opts.vendor.length * 4.3, str: opts.vendor });
+  items.push({ x: 291.8, y: lineY, w: 52.8, str: `${fmt(opts.vendorCr)} Cr` });
+  return items;
+}
+
 describe("parseTallyPdfPages — compound '(as per details)' Journal rows", () => {
   it("resolves the real deductee name and a clean date for the exact Skylark 194A case", () => {
     const page = [
@@ -191,11 +221,19 @@ describe("parseTallyPdfPages — compound '(as per details)' Journal rows", () =
     expect(rows[0].credit).toBe(1000);
   });
 
-  it("leaves the party as '(as per details)' (not corrupted) when no breakdown line's Dr amount matches the row credit", () => {
+  it("still recovers the real deductee from the duplicate Cr line's fallback, even when the Dr line's amount doesn't match the row credit", () => {
     // Deliberately mismatched: row credit is 999, but the deductee's Dr line
-    // (the thing that's supposed to match) shows 2959 instead — simulates a
-    // malformed/edited PDF. Must not misattribute a wrong name; degrade to
-    // the same "(as per details)" the pre-fix code always showed.
+    // (the thing the ORIGINAL amount-match branch keys on) shows 2959
+    // instead — simulates a malformed/edited PDF. Before the Cr-line
+    // fallback existed (see the "TDS-liability voucher, no Dr-side
+    // restatement" branch in tallyPdf.ts), this degraded all the way to
+    // "(as per details)" rather than risk a wrong name. Now the SAME
+    // deductee name printed on the voucher's own Cr line (the net-payable
+    // line, present on every real compound voucher of this shape) is
+    // recovered instead — a strictly better outcome, not a regression: the
+    // Cr line names the real payee independently of whatever went wrong on
+    // the Dr side, exactly the same trust this codebase already places on a
+    // Cr line elsewhere (see the expense-ledger "- Salary" branch below).
     const page = [
       ...HEADER,
       ...compoundJournalRows(485.5, {
@@ -206,8 +244,8 @@ describe("parseTallyPdfPages — compound '(as per details)' Journal rows", () =
     ];
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
-    expect(rows[0].party).toBe("(as per details)");
-    expect(rows[0].credit).toBe(999);
+    expect(rows[0].party).toBe("Nikhilbhai Bhikhabhai Patel (UK)");
+    expect(rows[0].credit).toBe(999);   // the row's own TDS credit, untouched by the fallback
   });
 
   it("still drops a compound 'To (as per details)' challan/payment voucher entirely (debit side, no credit)", () => {
@@ -224,6 +262,76 @@ describe("parseTallyPdfPages — compound '(as per details)' Journal rows", () =
     expect(rows).toHaveLength(1);           // only the genuine deduction
     expect(rows[0].party).toBe("Nikhilbhai Bhikhabhai Patel (UK)");
     expect(skipped.payments).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("parseTallyPdfPages — TDS-liability compound Journal with NO Dr-side TDS restatement (real Bindra Construction case)", () => {
+  // Verbatim from a real voucher (194c-partnership.pdf, "Elite Infraspace"):
+  //
+  //   7-Apr-26 By (as per details)      Journal   3    8,291.04
+  //     Works Contract @ 18%          8,29,104.21 Dr
+  //     SGST Input @ 9%                  74,619.38 Dr
+  //     CGST Input @ 9%                  74,619.38 Dr
+  //     Elite Infraspace               9,70,051.93 Cr
+  //
+  // Dr 8,29,104.21 + 74,619.38 + 74,619.38 = 9,78,342.97 = Cr 9,70,051.93 +
+  // this row's own 8,291.04 TDS credit. No Dr line ever equals 8,291.04 (the
+  // ORIGINAL amount-match branch never fires), and this was also the ONLY
+  // row on its page — before the fix, the party stayed "(as per details)"
+  // and the record read as a false mismatch against Office Data's identical
+  // ₹8,291 TDS figure (a ₹0 difference, misreported as unresolved because
+  // the PARTY, not the amount, failed to reconcile).
+  it("resolves the vendor from the lone Cr line when no Dr line ever matches the row's TDS credit, as the ONLY row on its page", () => {
+    const page = [
+      ...HEADER,
+      ...worksContractVoucherRows(485.5, {
+        date: "7-Apr-26", vchNo: "3", credit: 8291.04,
+        drLines: [
+          { label: "Works Contract @ 18%", amount: 829104.21 },
+          { label: "SGST Input @ 9%", amount: 74619.38 },
+          { label: "CGST Input @ 9%", amount: 74619.38 },
+        ],
+        vendor: "Elite Infraspace", vendorCr: 970051.93,
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Elite Infraspace");
+    expect(rows[0].credit).toBe(8291.04);   // the row's own TDS credit, untouched by the fallback
+  });
+
+  it("never lets the fallback pre-empt a REAL Dr-side match, even when Cr lines are also present", () => {
+    // Regression guard: the fallback only captures a CANDIDATE, applied only
+    // if the whole voucher ends with no Dr-side match ever found. A genuine
+    // Dr-line restatement (the ORIGINAL, higher-confidence signal) must
+    // still win over the new fallback whenever it's actually present.
+    const page = [
+      ...HEADER,
+      ...compoundJournalRows(485.5, {
+        date: "20-May-26", vchNo: "32", credit: 2959,
+        expenseHead: "Interest on Unsecured Loan", gross: 29590,
+        deductee: "Nikhilbhai Bhikhabhai Patel (UK)",
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Nikhilbhai Bhikhabhai Patel (UK)");
+  });
+
+  it("does not leak the fallback across vouchers — a normal simple row printed right after is unaffected", () => {
+    const page = [
+      ...HEADER,
+      ...worksContractVoucherRows(485.5, {
+        date: "7-Apr-26", vchNo: "3", credit: 8291.04,
+        drLines: [{ label: "Works Contract @ 18%", amount: 829104.21 }],
+        vendor: "Elite Infraspace", vendorCr: 820813.17,
+      }),
+      ...simpleByRow(414.1, { date: "10-Apr-26", party: "Some Other Vendor", vchNo: "4", credit: 5000 }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ party: "Elite Infraspace", credit: 8291.04 });
+    expect(rows[1]).toMatchObject({ party: "Some Other Vendor", credit: 5000 });
   });
 });
 

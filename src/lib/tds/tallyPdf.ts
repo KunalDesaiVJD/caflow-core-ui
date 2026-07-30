@@ -479,6 +479,20 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
     // rather than applied immediately because the PT line can print BEFORE the
     // employee's own "- Salary" line, i.e. before `current.credit` exists yet.
     let ptCr = 0;
+    // TDS-LIABILITY VOUCHER, NO Dr-SIDE RESTATEMENT OF THE TDS AMOUNT — some
+    // works-contract-style vouchers never repeat the TDS figure on the Dr
+    // side at all (unlike the "interest"/"director remuneration" shape the
+    // branch below handles): Dr is purely the gross expense + its GST input
+    // lines, and the vendor is named ONLY on a single Cr line for the net
+    // payable. Real Bindra Construction voucher: Works Contract 8,29,104.21
+    // Dr + SGST/CGST Input 74,619.38 Dr each = Elite Infraspace 9,70,051.93
+    // Cr + this row's own 8,291.04 TDS credit (double-entry: Dr total = Cr
+    // total). Holds the first non-tax/non-statutory Cr line seen as a
+    // fallback CANDIDATE only — never committed to current.party directly —
+    // so a genuine Dr-side match arriving later in read order always wins;
+    // only applied by finalizeCompoundFallback() once the whole voucher ends
+    // with no Dr-side match ever found. Reset per-voucher below.
+    let compoundCrFallback: { text: string } | null = null;
     // True for exactly one line after the deductee's name was committed, so a
     // wrapped name can absorb its own continuation — see its use below.
     let justNamedDeductee = false;
@@ -499,6 +513,14 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         current.credit != null && Math.abs(amount - current.credit) < 0.005
       ) {
         current.party = partyText; return true;
+      }
+      if (
+        current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
+        current.credit != null && marker && /^cr$/i.test(marker) && amount > 0 &&
+        !isTaxLine(partyText) && !NON_EMPLOYEE_PARTY_RE.test(partyText) && !SALARY_DEDUCTION_HEAD.test(partyText)
+      ) {
+        if (!compoundCrFallback) compoundCrFallback = { text: partyText };
+        return false;   // a candidate, not a commit — see the variable's own doc
       }
       if (
         // A pure EXPENSE ledger (e.g. "Staff Salary Expense") books every
@@ -569,6 +591,19 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       }
       return false;
     };
+    /** Applies compoundCrFallback to the CURRENTLY-ending voucher, only if it
+     *  never got a real Dr-side match (still literally "(as per details)").
+     *  Must run at every point a compound voucher's breakdown block can end —
+     *  a new proper row starting mid-page, OR the page's bands simply running
+     *  out while the LAST voucher on the page is still awaiting one (the real
+     *  Bindra Construction case: the target voucher was the only/last row on
+     *  its page, so it never reached a "new row starts" transition at all). */
+    const finalizeCompoundFallback = () => {
+      if (current && current.party && AS_PER_DETAILS_RE.test(current.party) && compoundCrFallback) {
+        current.party = compoundCrFallback.text;
+      }
+      compoundCrFallback = null;
+    };
     for (const band of bands) {
       const f = readBand(band, a);
 
@@ -633,6 +668,7 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         }
         awaitingCompoundParty = false;     // anything else starts the NEXT real entry
         pendingAmount = null;               // and any unconsumed amount belonged to nothing
+        finalizeCompoundFallback();          // the ending voucher's last chance to use its Cr fallback
       }
 
       if (f.onlyParticulars) {
@@ -671,6 +707,7 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       // on it) must never leak into it.
       extraDr = [];
       ptCr = 0;
+      compoundCrFallback = null;
       current = {
         row_index: pageNo * 100_000 + idx++,
         date: f.date ?? lastDate,          // inherit — Tally prints a date only when it changes
@@ -686,6 +723,11 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       all.push(current);
       awaitingCompoundParty = !!(current.party && AS_PER_DETAILS_RE.test(current.party));
     }
+    // The page's bands can run out while the LAST voucher is still awaiting
+    // its Cr fallback (see finalizeCompoundFallback's own doc) — the real
+    // Bindra Construction case, where the target voucher was the only row on
+    // its page and so never reached the mid-loop "new row starts" call above.
+    finalizeCompoundFallback();
   });
 
   const section = canonicalSection(ledgerName);

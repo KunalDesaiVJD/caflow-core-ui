@@ -1056,6 +1056,27 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     return [...hit].sort((a, b) => (b.suggested ? 1 : 0) - (a.suggested ? 1 : 0) || a.i - b.i);
   }, [results, tallyRows, pickTarget, pickQuery]);
 
+  /** When pickRows is empty, is that because nothing matches at all, or because
+   *  candidates exist but were excluded by the section-equality filter above?
+   *  Those two are very different situations for the user — "no such ledger
+   *  entry exists" vs "the entry exists but is booked under the wrong section,
+   *  which mapping can never fix" — and the generic "no match" message used to
+   *  say the same thing for both, sending the user hunting for a typo in their
+   *  search when the real issue was a section code that needs correcting at
+   *  the source (Office Data or the imported ledger), not in this dialog. */
+  const pickSectionBlockedCount = useMemo(() => {
+    if (pickRows.length > 0) return 0;
+    const targetSection = canonicalSection(pickTarget?.office_section ?? null);
+    if (!targetSection) return 0;
+    const q = pickQuery.trim().toLowerCase();
+    return tallyRows
+      .filter((t) => t.party && t.credit != null && Number(t.credit) !== 0 && t.amountKind !== "taxable_income")
+      .filter((t) => { const tSection = canonicalSection(t.section); return !!tSection && tSection !== targetSection; })
+      .filter((t) => !q || [t.party, t.date, t.iso, t.section, t.credit == null ? "" : String(t.credit), inr(t.credit)]
+        .filter(Boolean).join(" ").toLowerCase().includes(q))
+      .length;
+  }, [pickRows.length, tallyRows, pickTarget, pickQuery]);
+
   /** Office records offered by the REVERSE picker (opened from a ledger-only card).
    *  Candidates are every OPEN office record (see isOpenRow) — not just ones whose
    *  own result happens to be exactly "Ledger Entry Not Found". An office record
@@ -1083,6 +1104,22 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           .filter(Boolean).join(" ").toLowerCase().includes(q))
       : rows;
   }, [results, officePickQuery, officePickTarget, tallyRows]);
+
+  /** Mirrors pickSectionBlockedCount above, for the reverse picker — see that
+   *  one's own doc for why this distinction (nothing matches at all vs.
+   *  candidates exist but are booked under a different section) matters. */
+  const pickOfficeSectionBlockedCount = useMemo(() => {
+    if (pickOfficeRows.length > 0) return 0;
+    const targetSection = canonicalSection(officePickTarget ? ledgerSectionOf(officePickTarget) : null);
+    if (!targetSection) return 0;
+    const q = officePickQuery.trim().toLowerCase();
+    return (results || [])
+      .filter((r) => r.office_name && r.id !== officePickTarget?.id && isOpenRow(r))
+      .filter((r) => { const rSection = canonicalSection(r.office_section); return !!rSection && rSection !== targetSection; })
+      .filter((r) => !q || [r.office_name, r.office_date, r.office_section, r.office_tds == null ? "" : String(r.office_tds), inr(r.office_tds)]
+        .filter(Boolean).join(" ").toLowerCase().includes(q))
+      .length;
+  }, [pickOfficeRows.length, results, officePickTarget, officePickQuery]);
 
   /** The Override button's label. Every genuine DISPUTE over an existing pairing
    *  (Party Name Mismatch, Date Mismatch, …) keeps the plain generic "Override".
@@ -1545,7 +1582,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             <ScrollArea className="h-72 rounded-md border">
               {pickRows.length === 0 ? (
                 <p className="p-6 text-center text-xs text-muted-foreground">
-                  {tallyRows.length ? "No ledger record matches that search." : "No ledger records — import the Tally ledger PDF first."}
+                  {pickSectionBlockedCount > 0
+                    ? `${pickSectionBlockedCount} ledger record${pickSectionBlockedCount === 1 ? "" : "s"} match${pickSectionBlockedCount === 1 ? "es" : ""} by name/date/amount but ${pickSectionBlockedCount === 1 ? "is" : "are"} booked under a different section (${pickTarget?.office_section || "—"} expected). A TDS section can't be changed by mapping — if one side's section code is wrong, correct it (Office Data or the ledger import) and re-run validation.`
+                    : tallyRows.length ? "No ledger record matches that search." : "No ledger records — import the Tally ledger PDF first."}
                 </p>
               ) : (
                 <div className="p-1 space-y-0.5">
@@ -1579,7 +1618,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             <ScrollArea className="h-72 rounded-md border">
               {pickOfficeRows.length === 0 ? (
                 <p className="p-6 text-center text-xs text-muted-foreground">
-                  {(results || []).some((r) => r.office_name) ? "No unmatched office record matches that search." : "No office records to reconcile for this filing."}
+                  {pickOfficeSectionBlockedCount > 0
+                    ? `${pickOfficeSectionBlockedCount} office record${pickOfficeSectionBlockedCount === 1 ? "" : "s"} match${pickOfficeSectionBlockedCount === 1 ? "es" : ""} by name/date/amount but ${pickOfficeSectionBlockedCount === 1 ? "is" : "are"} booked under a different section than this ledger entry. A TDS section can't be changed by mapping — if one side's section code is wrong, correct it (Office Data or the ledger import) and re-run validation.`
+                    : (results || []).some((r) => r.office_name) ? "No unmatched office record matches that search." : "No office records to reconcile for this filing."}
                 </p>
               ) : (
                 <div className="p-1 space-y-0.5">

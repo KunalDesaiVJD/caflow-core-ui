@@ -134,9 +134,18 @@ const RAW_ENTRIES: RawEntry[] = [
 
   // ── Section 393(2) — Non-residents (Form 27Q) ──────────────────────
   { codes: ["194E"], newSection: "393(2)", category: "non-resident", tableRef: "Sl. No. 1", paymentCode: "1039" },
-  { codes: ["194LB-NR"], newSection: "393(2)", category: "non-resident" },
+  // Same provision as "194LB" below, recorded under a different form_type
+  // (27Q non-resident vs 26Q) — confirmed identical rate/citation/code
+  // across two independent research passes, not a genuine collision.
+  { codes: ["194LB-NR"], newSection: "393(2)", category: "non-resident", tableRef: "S.No. 5", paymentCode: "1044" },
   { codes: ["194LB"], newSection: "393(2)", category: "non-resident", tableRef: "S.No. 5", paymentCode: "1044" },
+  // 194LC splits into 4 different payment codes (1040-1043) depending on
+  // bond/loan sub-type, which this app's single section_code doesn't
+  // capture — left unmapped rather than guess which sub-type applies.
   { codes: ["194LC"], newSection: "393(2)", category: "non-resident" },
+  // Research traced the code some sources attribute to 194LD and found it
+  // actually belongs to 194LC (near-identical phrasing, confirmed via bare
+  // Act text) — genuinely no code found, not just low confidence.
   { codes: ["194LD"], newSection: "393(2)", category: "non-resident" },
   { codes: ["195"], newSection: "393(2)", category: "non-resident", tableRef: "Sl. No. 17", paymentCode: "1057" },
   { codes: ["196A"], newSection: "393(2)", category: "non-resident", paymentCode: "1050" },

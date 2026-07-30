@@ -79,6 +79,46 @@ describe("evaluateAckMismatch — regression: real 24Q receipt vs a 26Q filing",
   });
 });
 
+describe("evaluateAckMismatch — regression: new IT-portal 'Form 140' receipt for a genuine 26Q return", () => {
+  // Real extracted fields from a genuine e-filing receipt (Form
+  // 140_ARN_770000408905932.pdf) for ATC LOGISTICS, Tax Year 2026-27, Q1.
+  // The portal's newer "Acknowledgement Receipt of Income Tax Forms (Other
+  // Than Income Tax Return)" template — seen starting Tax Year 2026-27,
+  // apparently tied to the new Income Tax Act 2025 renumbering (this receipt
+  // cites section 397(3)(b), not the old Act's 200(3)) — prints "Form No. :
+  // Form 140" instead of "Form 26Q". Ground truth that this genuinely IS a
+  // 26Q return: the receipt lists its own attachment as "26QRQ1.zip" and its
+  // Form Description as "...deduction of tax...in respect of payments made
+  // other than salary" (26Q's own defining description). Before this fix,
+  // this real, correct receipt was REJECTED with "Form Type (140 vs 26Q)".
+  const REAL_FORM_140_FIELDS: AckFields = {
+    ackNumber: "796898970300726",
+    name: "Atc Logistics",
+    financialYear: "2026-27", // extracted via the Tax Year fallback — see ackPdf.test.ts
+    quarter: "Q1",
+    formNo: "140",
+    tan: "AHMA14484B",
+  };
+  const atcFiling = baseFiling({
+    financial_year: "2026-27", quarter: "Q1", tan: "AHMA14484B", tds_forms: ["26Q"],
+  });
+  const atcClient = { name: "ATC LOGISTICS", tan_number: "AHMA14484B" };
+
+  it("does NOT reject — Form 140 is recognised as the portal's own code for 26Q", () => {
+    const result = evaluateAckMismatch(REAL_FORM_140_FIELDS, atcFiling, atcClient);
+    expect(result.rejectReasons).toEqual([]);
+    expect(result.warnReasons).toEqual([]);
+  });
+
+  it("still rejects a genuine Form 140 receipt attached to an actually-different filing (24Q)", () => {
+    const wrongFiling = baseFiling({
+      financial_year: "2026-27", quarter: "Q1", tan: "AHMA14484B", tds_forms: ["24Q"],
+    });
+    const result = evaluateAckMismatch(REAL_FORM_140_FIELDS, wrongFiling, atcClient);
+    expect(result.rejectReasons).toEqual(["Form Type (140 vs 24Q)"]);
+  });
+});
+
 describe("evaluateAckMismatch — Financial Year", () => {
   it("rejects a genuine Financial Year mismatch", () => {
     const filing = baseFiling({ financial_year: "2024-25" });

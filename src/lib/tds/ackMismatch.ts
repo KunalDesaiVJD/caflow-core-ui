@@ -69,6 +69,25 @@ export const normalizeFy = (v: string | null | undefined): string => {
 
 const normalizeQuarter = (v: string | null | undefined): string => (v ?? "").trim().toUpperCase();
 
+// The Income Tax e-filing portal's "Acknowledgement Receipt of Income Tax
+// Forms (Other Than Income Tax Return)" template — seen starting Tax Year
+// 2026-27, evidently tied to the new Income Tax Act 2025 renumbering
+// (this template cites "section 397(3)(b)", not the old Act's 200(3)) —
+// prints a bare portal form CODE ("Form 140") instead of the familiar
+// 24Q/26Q/27Q/27EQ label. Confirmed real: a genuine "Form 140" receipt for
+// an ATC LOGISTICS 26Q Q1 FY2026-27 return lists its own attachment as
+// "26QRQ1.zip" and describes itself as "...deduction of tax...in respect of
+// payments made other than salary" — the defining description of 26Q — so
+// this was a real return being falsely REJECTED, not OCR noise. Only 140→26Q
+// is confirmed; the other three forms' new portal codes are unknown until a
+// real receipt surfaces one — add them here the same way when they do,
+// rather than guessing numbers with no evidence behind them.
+const FORM_NO_PORTAL_ALIASES: Record<string, string> = { "140": "26Q" };
+const normalizeFormNo = (v: string): string => {
+  const s = v.trim().toUpperCase();
+  return FORM_NO_PORTAL_ALIASES[s] ?? s;
+};
+
 /** Evaluate every cross-check field. Pure function — no I/O, no React,
  *  directly unit-testable with a synthetic AckFields + filing row. */
 export function evaluateAckMismatch(
@@ -117,7 +136,7 @@ export function evaluateAckMismatch(
   // by extractAckFields). Regression: a 24Q acknowledgement was attached to
   // a 26Q filing and accepted with no block — this was a soft warning only,
   // easy to miss, exactly the same class of gap FY/Quarter closed earlier. ─
-  if (fields.formNo && filing.tds_forms?.[0] && fields.formNo.toUpperCase() !== filing.tds_forms[0].toUpperCase()) {
+  if (fields.formNo && filing.tds_forms?.[0] && normalizeFormNo(fields.formNo) !== normalizeFormNo(filing.tds_forms[0])) {
     rejectReasons.push(`Form Type (${fields.formNo} vs ${filing.tds_forms[0]})`);
   }
 
