@@ -84,40 +84,75 @@ describe("resolveSection393 — indicative codes are flagged, not guessed", () =
     expect(i.codeStatus).toBe("indicative");
   });
 
-  it("leaves 194C unmapped (its screenshot code 1023 was refuted in research)", () => {
+  it("attaches payment codes to the bifurcated 194C(a)/(b) — restored after adversarial re-verification", () => {
+    // An earlier version of this file left 194C unmapped, citing a "107-
+    // agent deep-research pass" that supposedly refuted 1023. A fresh
+    // adversarial re-verification (3 blind researchers + prosecution +
+    // defense + judge) found 1023/1024 independently corroborated by a
+    // real TDS-compliance vendor's post-launch production rate chart AND
+    // TaxGuru, with the rival numbers a defense pass surfaced (1006, 1017)
+    // shown to already belong to different sections in those same sources
+    // — a hallucination signature, not a genuine competing data point.
+    const a = resolveSection393("194C(a)")!;
+    expect(a.paymentCode).toBe("1023");
+    expect(a.tableRef).toBe("Sl. No. 6(i).D(a)");
+    expect(a.codeStatus).toBe("indicative");
+
+    const b = resolveSection393("194C(b)")!;
+    expect(b.paymentCode).toBe("1024");
+    expect(b.tableRef).toBe("Sl. No. 6(i).D(b)");
+    expect(b.codeStatus).toBe("indicative");
+  });
+
+  it("leaves the legacy un-split 194C unmapped (ambiguous which lettered variant, not a refuted code)", () => {
     const i = resolveSection393("194C")!;
     expect(i.paymentCode).toBeNull();
     expect(i.tableRef).toBeNull();
     expect(i.codeStatus).toBe("unmapped");
   });
 
-  it("leaves 194J(a)/(b) unmapped pending the (a)/(b) label-swap fix", () => {
-    for (const code of ["194J(a)", "194J(b)"]) {
-      const i = resolveSection393(code)!;
-      expect(i.paymentCode, code).toBeNull();
-      expect(i.codeStatus, code).toBe("unmapped");
-    }
+  it("attaches payment codes to 194J(a)/(b) — the label-swap concern resolved by keying off actual rate/nature, not the letter", () => {
+    const a = resolveSection393("194J(a)")!;
+    expect(a.paymentCode).toBe("1027");
+    expect(a.codeStatus).toBe("indicative");
+
+    const b = resolveSection393("194J(b)")!;
+    expect(b.paymentCode).toBe("1026");
+    expect(b.codeStatus).toBe("indicative");
   });
 
-  it("never reports a payment code while codeStatus is unmapped (internal consistency)", () => {
+  it("leaves 194O unmapped (a candidate code collided with 194R(b), excluded as a likely research error)", () => {
+    const i = resolveSection393("194O")!;
+    expect(i.paymentCode).toBeNull();
+    expect(i.codeStatus).toBe("unmapped");
+  });
+
+  it("never assigns the same payment code to two different sections (internal consistency)", () => {
     const codes = [
-      "192", "192A", "193", "194", "194A", "194B", "194BB", "194BA", "194C",
+      "192", "192A", "193", "194", "194A", "194A(a)", "194A(b)", "194A(c)",
+      "194B", "194BB", "194BA", "194C", "194C(a)", "194C(b)",
       "194D", "194DA", "194F", "194G", "194H", "194I(a)", "194I(b)", "194IA",
       "194IB", "194IC", "194J(a)", "194J(b)", "194K", "194LA", "194LB",
       "194LBC", "194LB-NR", "194LC", "194LD", "194M", "194N-F", "194N-NF",
-      "194O", "194Q", "194R", "194S", "194T", "194E", "195", "196A", "196B",
-      "196C", "196D", "206C(1)", "206C(1C)", "206C(1G)(a)", "206C(1G)(b)",
-      "206C(1H)",
+      "194O", "194Q", "194R", "194R(a)", "194R(b)", "194S", "194T", "194E",
+      "195", "196A", "196B", "196C", "196D", "206C(1)", "206C(1C)",
+      "206C(1G)(a)", "206C(1G)(b)",
     ];
+    const seen = new Map<string, string>();
     for (const code of codes) {
       const i = resolveSection393(code)!;
       expect(i, code).not.toBeNull();
       if (i.codeStatus === "unmapped") {
         expect(i.paymentCode, code).toBeNull();
         expect(i.tableRef, code).toBeNull();
-      } else {
-        // indicative ⇒ at least one of the two is present
-        expect(Boolean(i.paymentCode || i.tableRef), code).toBe(true);
+        continue;
+      }
+      // indicative ⇒ at least one of the two is present
+      expect(Boolean(i.paymentCode || i.tableRef), code).toBe(true);
+      if (i.paymentCode) {
+        const prior = seen.get(i.paymentCode);
+        expect(prior, `payment code ${i.paymentCode} reused: ${prior} vs ${code}`).toBeUndefined();
+        seen.set(i.paymentCode, code);
       }
     }
   });
