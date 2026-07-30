@@ -10,6 +10,7 @@
 
 import { supabase } from '@/integrations/supabase/client';
 import type { CalibrationResult } from './calibrate';
+import { describeFunctionError } from './invokeError';
 
 export interface AiRuleVerdict {
   rule: string;
@@ -79,7 +80,10 @@ export async function reviewDifference(
   const { data, error } = await supabase.functions.invoke('msme-calibrate', {
     body: { mode: 'review-difference', summary: summarise(result, ctx) },
   });
-  if (error) throw new Error(error.message || 'AI review failed.');
+  if (error) {
+    const described = await describeFunctionError(error, 'msme-calibrate', 'The AI review');
+    throw new Error(described.message);
+  }
   if (data?.error) throw new Error(data.error);
 
   return {

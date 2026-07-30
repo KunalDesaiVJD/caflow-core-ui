@@ -22,9 +22,17 @@ export function PanelReview({ input }: { input: PanelEvidenceInput }) {
   const [busy, setBusy] = useState(false);
   const [review, setReview] = useState<PanelReviewData | null>(null);
   const [open, setOpen] = useState(false);
+  /**
+   * A failure is KEPT ON SCREEN, not flashed as a toast. A toast disappears in a
+   * few seconds, so the one piece of text that says what to fix — a spent
+   * account, a withdrawn model, a missing key — was gone before it could be read
+   * or passed on, and the card just sat there looking like nothing had happened.
+   */
+  const [failure, setFailure] = useState<string | null>(null);
 
   const run = async () => {
     setBusy(true);
+    setFailure(null);
     try {
       const r = await runPanelReview(input);
       setReview(r);
@@ -32,7 +40,7 @@ export function PanelReview({ input }: { input: PanelEvidenceInput }) {
       if (r.gptFinal.consensus) toast.success('The panel reached consensus.');
       else toast.warning(`The panel left ${r.gptFinal.unresolved.length} point(s) unresolved — these need your judgement.`);
     } catch (e) {
-      toast.error((e as Error).message);
+      setFailure((e as Error).message);
     } finally {
       setBusy(false);
     }
@@ -70,6 +78,21 @@ export function PanelReview({ input }: { input: PanelEvidenceInput }) {
             </>
           )}
         </div>
+
+        {failure && (
+          <Alert variant="destructive">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertTitle>The review panel could not be run</AlertTitle>
+            <AlertDescription className="text-sm">
+              {failure}
+              <p className="text-xs mt-2">
+                This affects the panel only. The disallowance figures above come from the
+                deterministic engine and are unchanged — the panel reviews the reasoning, it never
+                produces a number.
+              </p>
+            </AlertDescription>
+          </Alert>
+        )}
 
         {review && (
           <>
