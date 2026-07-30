@@ -594,6 +594,33 @@ export function diffCorrectionRow(row: any): FieldDiff[] {
   return out;
 }
 
+/**
+ * The action a row should be TREATED as, which is not always the one stored.
+ *
+ * A row can carry a 'modify' marking while holding values identical to its
+ * snapshot — the user edited it, thought better of it, and typed the original
+ * values back by hand rather than using Undo. It is not a change, and every
+ * surface has to agree on that: the row badge, the change summary, the Changes
+ * panel and the challan badge. Reading `action` directly in four places is how
+ * they would disagree, so they all come through here.
+ *
+ * The database self-corrects on the next write (migration 20260730140000);
+ * this keeps rows already in that state consistent in the meantime.
+ */
+export function effectiveCorrectionAction(row: any): CorrectionAction {
+  const action: CorrectionAction = row?.action ?? "unchanged";
+  if (action !== "modify") return action;
+
+  // No snapshot means we cannot show WHAT changed — it does not mean nothing
+  // did. Downgrading here would silently erase a real modification (rows
+  // marked before the snapshot column existed, for one). Trust the marking.
+  if (!row?.original_values) return "modify";
+
+  // With a snapshot, "no differing field" is proof the row is back to its
+  // filed values, whether via Undo or by retyping them.
+  return diffCorrectionRow(row).length > 0 ? "modify" : "unchanged";
+}
+
 // ─── Proof of submission ────────────────────────────────────────────────────
 
 /**
@@ -706,13 +733,15 @@ export interface CorrectionDelta {
 export function summariseCorrection(
   challans: CorrectionChallan[], deductees: CorrectionDeductee[],
 ): CorrectionDelta {
+  // effectiveCorrectionAction, not `action` — a row reverted to its filed
+  // values by hand still carries a 'modify' marking and must not be counted.
   const count = (a: CorrectionAction) =>
-    deductees.filter(d => d.action === a).length;
+    deductees.filter(d => effectiveCorrectionAction(d) === a).length;
   return {
     added: count("add"),
     modified: count("modify"),
     deleted: count("delete"),
     unchanged: count("unchanged"),
-    challansTouched: challans.filter(c => c.action !== "unchanged").length,
+    challansTouched: challans.filter(c => effectiveCorrectionAction(c) !== "unchanged").length,
   };
 }

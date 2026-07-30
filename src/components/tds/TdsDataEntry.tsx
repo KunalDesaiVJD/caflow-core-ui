@@ -39,7 +39,7 @@ import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2, Undo2,
   CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
 } from "lucide-react";
-import { undoCorrectionRow } from "@/lib/tdsCorrections";
+import { undoCorrectionRow, diffCorrectionRow, effectiveCorrectionAction } from "@/lib/tdsCorrections";
 import { generateGeniusExport } from "@/lib/genius-export";
 import { importGeniusXls, repairFilingSectionCodes } from "@/lib/genius-import";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
@@ -1386,7 +1386,7 @@ export function TdsDataEntry({
       : (allChallanDeductees[challanId] || []);
     let add = 0, modify = 0, del = 0;
     for (const r of rows) {
-      const a = (r as any).action;
+      const a = effectiveCorrectionAction(r as any);
       if (a === "add") add++;
       else if (a === "modify") modify++;
       else if (a === "delete") del++;
@@ -1985,9 +1985,9 @@ export function TdsDataEntry({
                                 selectedChallan?.id === c.id ? "border-primary ring-1 ring-primary/30" : "",
                                 isFilingLocked ? "bg-muted/50" : "",
                                 // Same colour language as the entry rows.
-                                isCorrectionMode && (c as any).action === "add" && "border-l-[3px] border-l-emerald-500",
-                                isCorrectionMode && (c as any).action === "modify" && "border-l-[3px] border-l-amber-500",
-                                isCorrectionMode && (c as any).action === "delete" && "border-l-[3px] border-l-red-500 opacity-60",
+                                isCorrectionMode && effectiveCorrectionAction(c as any) === "add" && "border-l-[3px] border-l-emerald-500",
+                                isCorrectionMode && effectiveCorrectionAction(c as any) === "modify" && "border-l-[3px] border-l-amber-500",
+                                isCorrectionMode && effectiveCorrectionAction(c as any) === "delete" && "border-l-[3px] border-l-red-500 opacity-60",
                                 // entries changed but the challan itself did not
                                 isCorrectionMode && entryChanges && (!(c as any).action || (c as any).action === "unchanged") && "border-l-[3px] border-l-amber-400",
                               )}
@@ -2012,10 +2012,10 @@ export function TdsDataEntry({
                                     {isCorrectionMode && (c as any).action === "add" && (
                                       <Badge className="text-[9px] px-1 bg-emerald-100 text-emerald-700">Added</Badge>
                                     )}
-                                    {isCorrectionMode && (c as any).action === "modify" && (
+                                    {isCorrectionMode && effectiveCorrectionAction(c as any) === "modify" && (
                                       <Badge className="text-[9px] px-1 bg-amber-100 text-amber-700">Modified</Badge>
                                     )}
-                                    {isCorrectionMode && (c as any).action === "delete" && (
+                                    {isCorrectionMode && effectiveCorrectionAction(c as any) === "delete" && (
                                       <Badge className="text-[9px] px-1 bg-red-100 text-red-700">Deleted</Badge>
                                     )}
                                     {isCorrectionMode && entryChanges && (
@@ -2030,7 +2030,7 @@ export function TdsDataEntry({
                                         {entryChanges.total} changed
                                       </Badge>
                                     )}
-                                    {isCorrectionMode && (c as any).action && (c as any).action !== "unchanged" && !isFilingLocked && (
+                                    {isCorrectionMode && effectiveCorrectionAction(c as any) !== "unchanged" && !isFilingLocked && (
                                       <Button
                                         variant="ghost" size="icon" className="h-5 w-5"
                                         title="Undo this challan change — restore the filed values"
@@ -2330,7 +2330,17 @@ export function TdsDataEntry({
                             {deductees.map((d, idx) => {
                               // A row already marked deleted in this correction is history —
                               // it is shown struck through, not offered for further editing.
-                              const act = isCorrectionMode ? (d as any).action : undefined;
+                              const rawAct = isCorrectionMode ? (d as any).action : undefined;
+                              // A row can carry a 'modify' marking while holding values
+                              // identical to its snapshot — e.g. the user edited it, thought
+                              // better of it and typed the original values back by hand.
+                              // Rendering that as Modified WITH an Original row beneath shows
+                              // two rows containing the same data, which reads as a duplicate.
+                              // The database clears the marking on the next write
+                              // (20260730140000); this makes rows ALREADY in that state read
+                              // correctly without waiting for one.
+                              const rowDiffs = rawAct === "modify" ? diffCorrectionRow(d as any) : [];
+                              const act = isCorrectionMode ? effectiveCorrectionAction(d as any) : undefined;
                               const locked = isFilingLocked || act === "delete";
                               return (
                                 <Fragment key={d.id}>
@@ -2638,7 +2648,7 @@ export function TdsDataEntry({
                                     </Button>
                                   </TableCell>
                                 </TableRow>
-                                {isCorrectionMode && act === "modify" && (d as any).original_values && (
+                                {isCorrectionMode && act === "modify" && rowDiffs.length > 0 && (d as any).original_values && (
                                   <CorrectionOriginalRow
                                     original={(d as any).original_values}
                                     current={d}

@@ -54,7 +54,7 @@ import {
   isSeniorReviewer, createCorrection, loadCorrectionDetail, submitCorrection,
   signAsPreparer, approveAsSenior, markCorrectionFiled,
   rejectCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
-  undoCorrectionRow, uploadCorrectionProof, canMarkFiled,
+  undoCorrectionRow, uploadCorrectionProof, canMarkFiled, effectiveCorrectionAction,
   SUBMISSION_MODE_META, type SubmissionMode,
   type Correction, type CorrectionStatus, type CorrectionChallan,
   type CorrectionDeductee, type CorrectionAction, type Actor, type FieldDiff,
@@ -1559,9 +1559,11 @@ function ChangesPanel({ challans, deductees }: {
     // entries, and each group's own rows stay in order.
     const rank = { modify: 0, add: 1, delete: 2, unchanged: 3 } as const;
     const changedChallans = challans
+      .map(c => ({ ...c, action: effectiveCorrectionAction(c) }))
       .filter(c => c.action !== "unchanged")
       .sort((a, b) => rank[a.action] - rank[b.action]);
     const changedEntries = deductees
+      .map(d => ({ ...d, action: effectiveCorrectionAction(d) }))
       .filter(d => d.action !== "unchanged")
       .sort((a, b) => rank[a.action] - rank[b.action]);
 
