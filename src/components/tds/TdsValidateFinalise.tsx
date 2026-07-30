@@ -747,6 +747,13 @@ export function TdsValidateFinalise({
       actionType: "CHECKER_SIGNATURE", newValue: signedByName,
       remark: "Digitally signed — confirms review of every Stage 1-3 exception, override and mapping.",
     });
+    // Also touch the tds_filings row itself (not just the audit log) — the
+    // Dashboard's "Ready" badge (TdsFilingsManager's fetchVfStatuses) only
+    // recomputes on a Realtime event from client_services/tds_filings, or a
+    // 45s poll/tab-focus. A signature alone never fired that event, so a
+    // freshly-signed return kept showing red "✗ Ready" until one of those
+    // happened to fire — this makes the Dashboard update immediately.
+    await supabase.from("tds_filings").update({ last_updated_by: user.id, last_updated_at: new Date().toISOString() }).eq("id", filing.id);
     setSignature({ signedByName, signedAt: new Date().toISOString() });
     setSigning(false);
     toast({ title: "Digitally signed", description: "You can now mark this return as ready to file." });
@@ -760,6 +767,9 @@ export function TdsValidateFinalise({
       actionType: "CHECKER_SIGNATURE_REVOKED", oldValue: signature.signedByName,
       remark: "Signature revoked before filing.",
     });
+    // Same Realtime nudge as handleSign, so a revoke also reaches the
+    // Dashboard immediately instead of waiting on the next poll.
+    await supabase.from("tds_filings").update({ last_updated_by: user.id, last_updated_at: new Date().toISOString() }).eq("id", filing.id);
     setSignature(null); setAttestChecked(false);
     setSigning(false);
   };
