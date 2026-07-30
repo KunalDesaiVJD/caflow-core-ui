@@ -139,6 +139,17 @@ interface Props {
    * nothing". This hook is only for logging / parent refresh.
    */
   onCorrectionRowUndone?: (row: any) => void;
+  /**
+   * Why the screen is read-only, in the caller's own words.
+   *
+   * The engine equated "locked" with "Filed", which is wrong for a correction:
+   * its entries also freeze while it is awaiting senior approval, and again
+   * once authorised but not yet filed. Telling the user it is "Filed" in
+   * those states is simply untrue.
+   */
+  lockNotice?: string;
+  /** Short label for the inline lock badges. Defaults to "Filed". */
+  lockBadgeLabel?: string;
 }
 
 /** The table pair this engine reads and writes. */
@@ -381,6 +392,7 @@ export function TdsDataEntry({
   clients, users, isSuperadmin, resolveFirmId,
   selClient, setSelClient, selFy, setSelFy, selQuarter, setSelQuarter, selForm, setSelForm,
   source, filingOverride, forceReadOnly, onCorrectionChanged, onCorrectionRowUndone,
+  lockNotice, lockBadgeLabel,
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -1858,7 +1870,7 @@ export function TdsDataEntry({
           {isFilingLocked && (
             <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-amber-50 border-2 border-amber-300 text-amber-900 text-sm font-medium">
               <Lock size={16} className="shrink-0" />
-              <span>This filing is <strong>Filed</strong>. All data is read-only. Change status in Filings list to unlock.</span>
+              <span>{lockNotice ?? <>This filing is <strong>Filed</strong>. All data is read-only. Change status in Filings list to unlock.</>}</span>
             </div>
           )}
 
@@ -2066,7 +2078,7 @@ export function TdsDataEntry({
                                     style={{ width: c.total_challan_amount > 0 ? `${Math.min(100, (bd.applied / c.total_challan_amount) * 100)}%` : "0%" }} />
                                 </div>
                                 {isFilingLocked && (
-                                  <Badge variant="secondary" className="text-[9px] gap-1"><Lock size={8} /> Filed</Badge>
+                                  <Badge variant="secondary" className="text-[9px] gap-1"><Lock size={8} /> {lockBadgeLabel ?? "Filed"}</Badge>
                                 )}
                                 {/* Issue 6: Late Fees 234E tracking — kept inline since it's an editable field, not just display */}
                                 {(c.late_fees_234e || 0) > 0 && (
@@ -2169,7 +2181,7 @@ export function TdsDataEntry({
                             )}
                             <div className="flex-1" />
                             {isFilingLocked && (
-                              <Badge variant="secondary" className="text-[9px] gap-1"><Lock size={8} /> Filed — Read Only</Badge>
+                              <Badge variant="secondary" className="text-[9px] gap-1"><Lock size={8} /> {lockBadgeLabel ?? "Filed"} — Read Only</Badge>
                             )}
                           </div>
                         </CardContent>
