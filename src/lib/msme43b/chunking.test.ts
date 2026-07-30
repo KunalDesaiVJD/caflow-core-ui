@@ -23,7 +23,7 @@ vi.mock('./pdfText', () => ({
   pdfPageCount: vi.fn(),
 }));
 
-const { extractLedgersViaAI } = await import('./aiExtract');
+const { extractLedgersViaAI, LINES_PER_CHUNK } = await import('./aiExtract');
 
 /** A supabase-js FunctionsHttpError as the real client shapes it. */
 function overflowError() {
@@ -83,9 +83,10 @@ beforeEach(() => {
 
 describe('a short but DENSE file — the case that kept failing', () => {
   it('is split even though it is only 3 pages', async () => {
-    // 3 pages x 100 lines = 300 lines. Page-based routing sent this whole, in one
-    // call, on the path with no retry. It must now be split by line count.
-    pdfPageTexts.mockResolvedValue(pages(3, 100));
+    // 3 pages, but three chunks' worth of lines crammed onto them. Page-based
+    // routing sent exactly this whole, in one call, on the path with no retry.
+    // Sized from the constant so tuning it cannot quietly void the test.
+    pdfPageTexts.mockResolvedValue(pages(3, LINES_PER_CHUNK));
     invoke.mockResolvedValue(ok(2));
 
     await extractLedgersViaAI(pdf());
@@ -99,7 +100,7 @@ describe('a short but DENSE file — the case that kept failing', () => {
   });
 
   it('halves a chunk that overflows, instead of losing the file', async () => {
-    pdfPageTexts.mockResolvedValue(pages(1, 80));
+    pdfPageTexts.mockResolvedValue(pages(1, LINES_PER_CHUNK));
     // First call overflows; everything after it succeeds.
     invoke.mockResolvedValueOnce(overflowError()).mockResolvedValue(ok(1));
 
@@ -110,7 +111,7 @@ describe('a short but DENSE file — the case that kept failing', () => {
   });
 
   it('keeps halving until it fits', async () => {
-    pdfPageTexts.mockResolvedValue(pages(1, 80));
+    pdfPageTexts.mockResolvedValue(pages(1, LINES_PER_CHUNK));
     // The first three attempts overflow (80 → 40 → 20), then success.
     invoke
       .mockResolvedValueOnce(overflowError())
@@ -123,7 +124,7 @@ describe('a short but DENSE file — the case that kept failing', () => {
   });
 
   it('stops halving at the floor and reports it, rather than looping', async () => {
-    pdfPageTexts.mockResolvedValue(pages(1, 20));
+    pdfPageTexts.mockResolvedValue(pages(1, 20)); // small: halves to the floor in a few steps
     // A FRESH error object each time, as the real client produces — a Response
     // body can only be read once, so a shared one would not survive the retries.
     invoke.mockImplementation(async () => overflowError());
@@ -137,7 +138,7 @@ describe('a short but DENSE file — the case that kept failing', () => {
   it('still retries when the error body cannot be read at all', async () => {
     // A 502 whose body is already consumed carries no `code`. Treating that as
     // "not retryable" would lose the whole file, so the status alone is enough.
-    pdfPageTexts.mockResolvedValue(pages(1, 80));
+    pdfPageTexts.mockResolvedValue(pages(1, LINES_PER_CHUNK));
     const consumed = new Response(JSON.stringify({ code: 'truncated' }), { status: 502 });
     await consumed.text(); // drain it, as a double-read would
     invoke
@@ -219,7 +220,7 @@ describe('routing', () => {
   });
 
   it('does not treat a non-overflow failure as something to retry', async () => {
-    pdfPageTexts.mockResolvedValue(pages(1, 20));
+    pdfPageTexts.mockResolvedValue(pages(1, 20)); // small: halves to the floor in a few steps
     invoke.mockResolvedValue({
       data: null,
       error: {
@@ -239,19 +240,21 @@ describe('routing', () => {
 
 describe('a long file still works', () => {
   it('splits 40 sparse pages by line count and stitches the vendors back', async () => {
-    pdfPageTexts.mockResolvedValue(pages(40, 10)); // 400 lines
+    // 40 pages holding exactly five chunks' worth of lines, spread thinly.
+    const perPage = (LINES_PER_CHUNK * 5) / 40;
+    pdfPageTexts.mockResolvedValue(pages(40, perPage));
     invoke.mockResolvedValue(ok(2, 'Same Vendor'));
 
     const res = await extractLedgersViaAI(pdf());
 
-    expect(invoke.mock.calls.length).toBe(5); // 400 lines / 80
+    expect(invoke.mock.calls.length).toBe(5);
     // Every chunk reported the same vendor, so they merge into one ledger.
     expect(res.ledgers).toHaveLength(1);
     expect(res.ledgers[0].vendorName).toBe('Same Vendor');
   });
 
   it('reports the page range it is working on, so a long run does not look hung', async () => {
-    pdfPageTexts.mockResolvedValue(pages(10, 30));
+    pdfPageTexts.mockResolvedValue(pages(10, LINES_PER_CHUNK / 5));
     invoke.mockResolvedValue(ok(1));
     const notes: string[] = [];
 

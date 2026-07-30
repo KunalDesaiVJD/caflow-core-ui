@@ -163,8 +163,23 @@ async function readErrorBody(
  * independent of how the pages happen to be laid out, and it lets a chunk be
  * halved again and again until it fits (see readChunk) — which terminates,
  * because a chunk of one line always fits.
+ *
+ * THE SIZE IS MEASURED, NOT GUESSED. On the firm's own merged exports:
+ *
+ *   98 pages → 4,464 lines of text →   729 dated transaction rows  (16%)
+ *   46 pages → 1,854 lines of text →   280 dated transaction rows  (15%)
+ *
+ * Only about one line in six becomes a row, because a Tally ledger carries page
+ * headers, column headers, GST detail lines and carried-forward lines. So 500
+ * lines is roughly 80 rows, which as compact arrays is about 2,000 output tokens
+ * against the 8,000-token cap — comfortable, with the halving retry as the
+ * backstop for an unusually dense stretch.
+ *
+ * The first version of this used 80 lines, sized by guesswork. That was ~13 rows
+ * per call and would have made 80 sequential requests of those two files, each
+ * using a quarter of the budget it was given.
  */
-const LINES_PER_CHUNK = 80;
+export const LINES_PER_CHUNK = 500;
 
 /**
  * A chunk this small that STILL overflows is not a size problem — something is
