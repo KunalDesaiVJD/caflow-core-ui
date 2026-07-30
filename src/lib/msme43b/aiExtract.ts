@@ -10,7 +10,7 @@ import { supabase } from '@/integrations/supabase/client';
 import type { VendorLedger, LedgerTxn } from './types';
 import { reconcileLedger } from './reconcile';
 import { fyFromStart } from './parseUtils';
-import { pdfPageCount, pdfPageTexts } from './pdfText';
+import { pdfPageTexts } from './pdfText';
 
 async function bufferToBase64(buf: ArrayBuffer): Promise<string> {
   const bytes = new Uint8Array(buf);
@@ -94,13 +94,24 @@ async function describeInvokeError(
   // A non-2xx: the function ran and reported something. Get it out of the body.
   const body = await readErrorBody(error.context);
   const status = (error.context as Response | undefined)?.status;
+
+  // An explicit signal from the function wins. With NO signal at all — the body
+  // was unreadable, already consumed, or empty — a 502/504 still means the reply
+  // did not come back whole, so the safe default is "try a smaller chunk", not
+  // "lose the file". Guessing wrong here costs a few extra requests; guessing
+  // the other way costs the whole ledger.
+  const rangeTooDense = body ? body.rangeTooDense : status === 502 || status === 504;
+
   if (body?.detail) {
     return new LedgerReadError(
       `The ledger-reading service failed${status ? ` (HTTP ${status})` : ''}: ${body.detail}`,
-      body.rangeTooDense,
+      rangeTooDense,
     );
   }
-  return new LedgerReadError(msg || 'The ledger-reading service failed.', false);
+  return new LedgerReadError(
+    msg || `The ledger-reading service failed${status ? ` (HTTP ${status})` : ''}.`,
+    rangeTooDense,
+  );
 }
 
 /**
@@ -138,29 +149,32 @@ async function readErrorBody(
 }
 
 /**
- * Pages per request when a merged export has to be split.
+ * How much of a ledger goes in one call — measured in LINES, not pages.
  *
- * THE BINDING CONSTRAINT IS TIME, NOT SIZE. A Supabase edge function is killed
- * after 150 seconds with no bytes written to the response, and the function does
- * not write anything until the model has finished, so the whole model call has
- * to fit inside 150 seconds. This was 8 pages against a 32,000-token output cap
- * — a reply that long takes several minutes to generate and could never have
- * arrived in time, which is exactly the 504 the firm hit.
+ * THIS IS THE ROOT-CAUSE FIX, and the reason three previous attempts failed.
+ * What overflows a reply is the number of ROWS. Pages were being used as a proxy
+ * for rows, and they are not one: a merged export can pack a hundred rows onto
+ * one page. So a dense 3-page file was never split at all (it was under the
+ * page threshold and went whole in a single call), and even when splitting did
+ * happen, splitting a single overflowing page by page could not make it smaller.
+ * Tuning pages-per-call was tuning the wrong dimension.
  *
- * 3 pages against an 8,000-token cap (see msme-extract-ledger) is a call that
- * completes in tens of seconds. It means more requests per file, and the page
- * range of each is shown as it runs, so a long file visibly progresses instead
- * of appearing to hang.
+ * Chunking by lines makes the unit of work proportional to the actual output,
+ * independent of how the pages happen to be laid out, and it lets a chunk be
+ * halved again and again until it fits (see readChunk) — which terminates,
+ * because a chunk of one line always fits.
  */
-const PAGES_PER_CHUNK = 3;
+const LINES_PER_CHUNK = 80;
 
 /**
- * Above this, the file is treated as a merged export and split. Below it, the
- * PDF is sent whole as a document, which reads better and is the only way a
- * SCANNED ledger can be read at all.
+ * A chunk this small that STILL overflows is not a size problem — something is
+ * wrong with the page (unreadable text, a pathological row) and halving further
+ * would just multiply requests. It is reported instead.
  */
-const CHUNK_THRESHOLD_PAGES = 4;
+const MIN_LINES_PER_CHUNK = 8;
 
+/** One physical line of the PDF, tagged with the page it came from. */
+interface SourceLine { page: number; text: string }
 
 /** Extract vendor ledgers from a PDF of any format via Claude. */
 export async function extractLedgersViaAI(
@@ -169,121 +183,147 @@ export async function extractLedgersViaAI(
 ): Promise<AiExtractResult> {
   const buf = await file.arrayBuffer();
 
-  let pages = 0;
+  // Text first, and always. Previously the page COUNT decided the route, and a
+  // failure to read it fell through to `pages = 0` — routing the file to the one
+  // path with no splitting and no retry, which is the opposite of what an
+  // unknown-size file needs.
+  let pageTexts: string[] = [];
   try {
-    pages = await pdfPageCount(buf);
+    pageTexts = await pdfPageTexts(buf);
   } catch {
-    // Not readable as a PDF here — let the model try the whole file.
+    // pdfjs could not read it here. The model still can, as a document.
   }
 
-  if (pages > CHUNK_THRESHOLD_PAGES) {
-    return extractByChunks(file, buf, pages, onProgress);
-  }
-
-  const { data, error } = await supabase.functions.invoke('msme-extract-ledger', {
-    body: { pdf_base64: await bufferToBase64(buf), filename: file.name },
+  const lines: SourceLine[] = [];
+  pageTexts.forEach((pageText, i) => {
+    for (const raw of pageText.split('\n')) {
+      const text = raw.trim();
+      if (text) lines.push({ page: i + 1, text });
+    }
   });
-  if (error) throw await describeInvokeError(error, file.name);
-  if (data?.error) throw new Error(data.error);
 
-  const rawLedgers: unknown[] = Array.isArray(data?.ledgers) ? data.ledgers : [];
-  const ledgers = rawLedgers.map((raw) => mapLedger(raw, file.name));
-  return { ledgers, truncated: !!data?.truncated };
+  // No extractable text means a scan, and a scan can ONLY be read as an image.
+  // That is the single case where the whole file must go in one call.
+  if (!lines.length) return extractWholeFile(file, buf, pageTexts.length, onProgress);
+
+  return extractByLineChunks(file, lines, pageTexts.length, onProgress);
 }
 
 /**
- * A MERGED export — every vendor's ledger in one PDF — read in page ranges.
- *
- * Sent whole, such a file blows past a single reply and comes back truncated
- * mid-JSON, which is discarded: the entire upload fails for want of headroom.
- * So the text is split by page range, each range read separately, and the
- * vendors stitched back together afterwards. A ledger that straddles a boundary
- * is rejoined by name in mergeLedgers().
+ * The scanned-PDF route: send the document itself, because there is no text to
+ * split. If it overflows there is nothing this code can do about it — the remedy
+ * is a smaller file — so it says exactly that instead of a generic failure.
  */
-async function extractByChunks(
+async function extractWholeFile(
   file: File,
   buf: ArrayBuffer,
   pages: number,
   onProgress?: (note: string) => void,
 ): Promise<AiExtractResult> {
-  const texts = await pdfPageTexts(buf);
-  const chunks: Array<{ from: number; to: number; text: string }> = [];
-  for (let i = 0; i < texts.length; i += PAGES_PER_CHUNK) {
-    const slice = texts.slice(i, i + PAGES_PER_CHUNK);
-    const text = slice.map((t, j) => `--- page ${i + j + 1} ---\n${t}`).join('\n\n');
-    if (text.trim()) chunks.push({ from: i + 1, to: Math.min(i + PAGES_PER_CHUNK, texts.length), text });
+  onProgress?.(`${file.name}: no text layer — reading ${pages || 'the'} page(s) as images`);
+  const { data, error } = await supabase.functions.invoke('msme-extract-ledger', {
+    body: { pdf_base64: await bufferToBase64(buf), filename: file.name },
+  });
+  if (error) {
+    const described = await describeInvokeError(error, file.name);
+    if (described.rangeTooDense) {
+      throw new Error(
+        `"${file.name}" is a scan with no text layer${pages ? ` (${pages} pages)` : ''}, so it has to be read ` +
+        'as a whole image and cannot be split automatically — and it holds more rows than one read can return. ' +
+        'Split the PDF into smaller files (one vendor each is safest) and upload those.',
+      );
+    }
+    throw described;
   }
+  if (data?.error) throw new Error(data.error);
 
-  if (!chunks.length) {
-    throw new Error(
-      `"${file.name}" has ${pages} pages but no readable text — it is probably a scan. ` +
-      `Split it into files of ${CHUNK_THRESHOLD_PAGES} pages or fewer so each can be read as an image.`,
-    );
-  }
+  const rawLedgers: unknown[] = Array.isArray(data?.ledgers) ? data.ledgers : [];
+  return { ledgers: rawLedgers.map((raw) => mapLedger(raw, file.name)), truncated: !!data?.truncated };
+}
 
+/**
+ * The normal route: read the ledger in line-bounded chunks and stitch the
+ * vendors back together. A ledger that straddles a boundary is rejoined by name
+ * in mergeLedgers(), so the boundaries need not fall between vendors.
+ */
+async function extractByLineChunks(
+  file: File,
+  lines: SourceLine[],
+  pages: number,
+  onProgress?: (note: string) => void,
+): Promise<AiExtractResult> {
   const collected: VendorLedger[] = [];
-  let truncated = false;
   const failures: string[] = [];
+  let truncated = false;
 
-  /** Read one page range. Returns null and records the reason on failure. */
-  const readRange = async (c: { from: number; to: number; text: string }): Promise<unknown[] | null> => {
-    onProgress?.(`${file.name}: pages ${c.from}–${c.to} of ${pages}`);
+  /** "pages 3–4" / "page 3", for progress and for error messages. */
+  const span = (group: SourceLine[]): string => {
+    const from = group[0].page;
+    const to = group[group.length - 1].page;
+    return from === to ? `page ${from}` : `pages ${from}–${to}`;
+  };
+
+  /** Re-emit a chunk as text, keeping the page markers the model benefits from. */
+  const render = (group: SourceLine[]): string => {
+    const out: string[] = [];
+    let current = -1;
+    for (const l of group) {
+      if (l.page !== current) { out.push(`--- page ${l.page} ---`); current = l.page; }
+      out.push(l.text);
+    }
+    return out.join('\n');
+  };
+
+  /**
+   * Read one chunk, halving it on overflow until it fits. Recursion terminates:
+   * each step halves, and the floor is MIN_LINES_PER_CHUNK.
+   */
+  const readChunk = async (group: SourceLine[]): Promise<unknown[]> => {
+    const label = span(group);
+    onProgress?.(`${file.name}: ${label} of ${pages} (${group.length} lines)`);
+
     const { data, error } = await supabase.functions.invoke('msme-extract-ledger', {
-      body: { text_content: c.text, filename: file.name, page_range: `${c.from}-${c.to}` },
+      body: { text_content: render(group), filename: file.name, page_range: label },
     });
+
     if (error) {
       const described = await describeInvokeError(error, file.name);
-      // Too dense is about THIS range, not the file — whether it ran out of time
-      // or ran out of output tokens. Either way it is retried smaller below,
-      // rather than abandoning the other ranges.
-      if (described.rangeTooDense) return null;
-      throw described;
+      if (!described.rangeTooDense) throw described;
+
+      if (group.length <= MIN_LINES_PER_CHUNK) {
+        failures.push(`${label}: ${group.length} lines still would not fit in one read — ${described.message}`);
+        return [];
+      }
+      const mid = Math.ceil(group.length / 2);
+      onProgress?.(`${file.name}: ${label} too dense, splitting ${group.length} lines in half`);
+      return [...await readChunk(group.slice(0, mid)), ...await readChunk(group.slice(mid))];
     }
+
     if (data?.error) {
-      failures.push(`pages ${c.from}–${c.to}: ${data.error}`);
+      failures.push(`${label}: ${data.error}`);
       return [];
     }
     truncated = truncated || !!data?.truncated;
     return Array.isArray(data?.ledgers) ? data.ledgers : [];
   };
 
-  for (const c of chunks) {
-    let got = await readRange(c);
-
-    // Timed out: a dense range can hold more rows than one call can emit inside
-    // the platform's 150-second window. Retry it a page at a time — one page of
-    // a ledger is always small enough — instead of losing the range entirely.
-    if (got === null) {
-      onProgress?.(`${file.name}: pages ${c.from}–${c.to} were too dense, retrying page by page`);
-      got = [];
-      for (let p = c.from; p <= c.to; p++) {
-        const single = {
-          from: p,
-          to: p,
-          text: `--- page ${p} ---\n${texts[p - 1] ?? ''}`,
-        };
-        if (!single.text.trim()) continue;
-        const one = await readRange(single);
-        if (one === null) {
-          failures.push(`page ${p}: timed out even on its own — the page is unusually dense`);
-          continue;
-        }
-        got.push(...one);
-      }
-    }
-
-    for (const raw of got) collected.push(mapLedger(raw, file.name, false));
+  for (let i = 0; i < lines.length; i += LINES_PER_CHUNK) {
+    const group = lines.slice(i, i + LINES_PER_CHUNK);
+    for (const raw of await readChunk(group)) collected.push(mapLedger(raw, file.name, false));
   }
 
   if (!collected.length) {
-    throw new Error(`Could not read any ledger from "${file.name}". ${failures.join('; ')}`);
+    throw new Error(
+      `Could not read any ledger from "${file.name}" (${pages} pages, ${lines.length} lines of text). ` +
+      (failures.length ? failures.join('; ') : 'The service returned no ledgers.'),
+    );
   }
 
   const merged = mergeLedgers(collected);
   // Reconcile only once the pieces are whole — a half-ledger never balances.
   const reconciled = merged.map((l) => reconcileLedger(l));
   for (const l of reconciled) {
-    if (failures.length) l.warnings = [...(l.warnings || []), `Some page ranges of ${file.name} could not be read: ${failures.join('; ')}`];
+    if (failures.length) l.warnings = [...(l.warnings || []), `Parts of ${file.name} could not be read: ${failures.join('; ')}`];
   }
   return { ledgers: reconciled, truncated };
 }
