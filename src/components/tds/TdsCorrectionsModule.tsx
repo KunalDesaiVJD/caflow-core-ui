@@ -19,7 +19,7 @@
  * search and change-filters sit above the grid, challans collapse, rows are
  * dense, and clicking a row opens it for edit (no hunting for a pencil).
  */
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -45,7 +45,7 @@ import { cn } from "@/lib/utils";
 import {
   Search, Plus, ArrowLeft, PenTool, Trash2, Pencil, RotateCcw, X, GitCompare,
   CheckCircle2, XCircle, Landmark, ShieldCheck, Lock, ChevronDown, ChevronRight,
-  AlertTriangle, Send,
+  AlertTriangle, Send, Upload,
 } from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { TdsDataEntry, CORRECTION_TDS_SOURCE } from "./TdsDataEntry";
@@ -54,7 +54,8 @@ import {
   isSeniorReviewer, createCorrection, loadCorrectionDetail, submitCorrection,
   signAsPreparer, approveAsSenior, markCorrectionFiled,
   rejectCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
-  undoCorrectionRow,
+  undoCorrectionRow, uploadCorrectionProof, canMarkFiled,
+  SUBMISSION_MODE_META, type SubmissionMode,
   type Correction, type CorrectionStatus, type CorrectionChallan,
   type CorrectionDeductee, type CorrectionAction, type Actor, type FieldDiff,
 } from "@/lib/tdsCorrections";
@@ -1779,6 +1780,21 @@ export function SignatureSection({ correction }: { correction: Correction }) {
               the return has actually been accepted by the department.
             </p>
           )}
+
+          {/* How it was submitted, and the evidence kept for it. */}
+          {filed && correction.submission_mode && (
+            <p className="text-[11px] text-muted-foreground mt-1">
+              {SUBMISSION_MODE_META[correction.submission_mode].label} ·{" "}
+              {correction.proof_file_url ? (
+                <a
+                  href={correction.proof_file_url} target="_blank" rel="noreferrer"
+                  className="underline hover:text-foreground"
+                >
+                  {correction.proof_file_name || SUBMISSION_MODE_META[correction.submission_mode].proofLabel}
+                </a>
+              ) : SUBMISSION_MODE_META[correction.submission_mode].proofLabel}
+            </p>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -1853,28 +1869,60 @@ function SignatureDialog({
 }
 
 /**
- * Mark as Filed — the deliberate, manual step. Signing authorised the
- * correction; this records that it was actually filed with the department, and
- * is what makes it permanently read-only.
+ * Mark as Filed — the deliberate, manual step, in two stages.
+ *
+ *   1. How was it submitted?  offline (ACK) or online (screenshot)
+ *   2. Upload that proof      — the Filed button stays disabled until it lands
+ *
+ * Signing AUTHORISED the correction; this records that it actually reached the
+ * department, and is what makes it permanently read-only. The same requirement
+ * is enforced in the database (20260729220000), so the disabled button is a
+ * courtesy rather than the control.
  */
 function MarkFiledDialog({ open, onOpenChange, correction, actor, onFiled, toast }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   correction: Correction; actor: Actor; onFiled: () => void; toast: any;
 }) {
+  const [mode, setMode] = useState<SubmissionMode | null>(null);
   const [reference, setReference] = useState("");
   const [filedOn, setFiledOn] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Local mirror of what has been attached, so the dialog reflects an upload
+  // immediately without waiting for the parent to re-read.
+  const [proof, setProof] = useState<{ name: string; url: string } | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (!open) { setReference(""); setFiledOn(""); setConfirmed(false); }
-  }, [open]);
+    if (open) {
+      setMode(correction.submission_mode ?? null);
+      setProof(correction.proof_file_url
+        ? { name: correction.proof_file_name || "Attached file", url: correction.proof_file_url }
+        : null);
+      setReference(correction.filing_reference || "");
+      setFiledOn(""); setConfirmed(false);
+    }
+  }, [open, correction.submission_mode, correction.proof_file_url, correction.proof_file_name, correction.filing_reference]);
+
+  const meta = mode ? SUBMISSION_MODE_META[mode] : null;
+
+  const pickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";              // allow re-picking the same file
+    if (!file || !mode) return;
+    setUploading(true);
+    const { error } = await uploadCorrectionProof(correction, mode, file, actor);
+    setUploading(false);
+    if (error) { toast({ title: "Upload failed", description: error, variant: "destructive" }); return; }
+    setProof({ name: file.name, url: "" });
+    toast({ title: `${SUBMISSION_MODE_META[mode].proofLabel} attached` });
+  };
 
   const go = async () => {
     setSaving(true);
     const err = await markCorrectionFiled(correction, actor, {
       reference: reference.trim() || undefined,
-      // A date-only value is stored at local midnight; leaving it blank uses now.
       filedOn: filedOn ? new Date(filedOn).toISOString() : undefined,
     });
     setSaving(false);
@@ -1883,14 +1931,16 @@ function MarkFiledDialog({ open, onOpenChange, correction, actor, onFiled, toast
     onFiled();
   };
 
+  const ready = !!mode && !!proof && confirmed;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2"><CheckCircle2 size={16} /> Mark as Filed</DialogTitle>
           <DialogDescription>
-            Confirm the correction return has actually been filed with the Income Tax Department.
-            This locks it permanently — it cannot be undone.
+            Record how this correction was submitted and attach the proof. Filing locks it
+            permanently — it cannot be undone.
           </DialogDescription>
         </DialogHeader>
 
@@ -1900,28 +1950,100 @@ function MarkFiledDialog({ open, onOpenChange, correction, actor, onFiled, toast
             <p><span className="text-muted-foreground">Approved by:</span> {correction.approved_by_name || "—"} (senior)</p>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label className="text-xs">Filed on</Label>
-              <Input type="date" className="h-9 text-xs" value={filedOn} onChange={e => setFiledOn(e.target.value)} />
-              <p className="text-[10px] text-muted-foreground">Leave blank for now.</p>
-            </div>
-            <div className="space-y-1">
-              <Label className="text-xs">Acknowledgement no.</Label>
-              <Input className="h-9 text-xs" value={reference} onChange={e => setReference(e.target.value)} placeholder="Optional" />
+          {/* Step 1 — how was it submitted */}
+          <div className="space-y-1.5">
+            <Label className="text-xs">How was it submitted?</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {(["offline", "online"] as SubmissionMode[]).map(m => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setMode(m)}
+                  aria-pressed={mode === m}
+                  className={cn(
+                    "rounded-lg border p-2.5 text-left transition-colors",
+                    mode === m ? "border-primary bg-primary/5" : "hover:bg-muted/50",
+                  )}
+                >
+                  <p className="text-xs font-medium">{SUBMISSION_MODE_META[m].label}</p>
+                  <p className="text-[10px] text-muted-foreground mt-0.5">
+                    {SUBMISSION_MODE_META[m].proofLabel}
+                  </p>
+                </button>
+              ))}
             </div>
           </div>
 
-          <label className="flex items-start gap-2 text-xs cursor-pointer">
-            <input type="checkbox" className="mt-0.5" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
-            <span>I confirm this correction return has been filed with the Income Tax Department.</span>
-          </label>
+          {/* Step 2 — the proof for that mode */}
+          {meta && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">{meta.proofLabel}</Label>
+              <p className="text-[10px] text-muted-foreground">{meta.hint}</p>
+
+              <input
+                ref={fileRef} type="file" className="hidden"
+                accept={meta.accept} onChange={pickFile}
+              />
+
+              {proof ? (
+                <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 p-2 text-xs">
+                  <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                  <span className="truncate flex-1">{proof.name}</span>
+                  <Button
+                    size="sm" variant="ghost" className="h-6 text-[11px]"
+                    disabled={uploading} onClick={() => fileRef.current?.click()}
+                  >
+                    Replace
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  size="sm" variant="outline" className="w-full gap-1.5"
+                  disabled={uploading} onClick={() => fileRef.current?.click()}
+                >
+                  <Upload size={13} />
+                  {uploading ? "Uploading…" : `Upload ${meta.proofLabel}`}
+                </Button>
+              )}
+            </div>
+          )}
+
+          {/* Only once there is proof does the rest of the form matter */}
+          {proof && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Filed on</Label>
+                  <Input type="date" className="h-9 text-xs" value={filedOn} onChange={e => setFiledOn(e.target.value)} />
+                  <p className="text-[10px] text-muted-foreground">Leave blank for now.</p>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Acknowledgement no.</Label>
+                  <Input className="h-9 text-xs" value={reference} onChange={e => setReference(e.target.value)} placeholder="Optional" />
+                </div>
+              </div>
+
+              <label className="flex items-start gap-2 text-xs cursor-pointer">
+                <input type="checkbox" className="mt-0.5" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+                <span>I confirm this correction return has been filed with the Income Tax Department.</span>
+              </label>
+            </>
+          )}
         </div>
 
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button size="sm" className="gap-1.5" disabled={!confirmed || saving} onClick={go}>
-            <CheckCircle2 size={14} /> {saving ? "Filing…" : "Confirm Filed"}
+          <Button
+            size="sm" className="gap-1.5"
+            disabled={!ready || saving}
+            title={
+              !mode ? "Choose how the correction was submitted"
+                : !proof ? "Upload the proof of submission first"
+                  : !confirmed ? "Confirm the return has been filed" : undefined
+            }
+            onClick={go}
+          >
+            <CheckCircle2 size={14} /> {saving ? "Filing…" : "Filed"}
           </Button>
         </DialogFooter>
       </DialogContent>

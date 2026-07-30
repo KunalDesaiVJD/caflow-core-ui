@@ -85,6 +85,30 @@ export const isCorrectionEditable = (status: string | null | undefined) =>
 
 export type CorrectionAction = "unchanged" | "add" | "modify" | "delete";
 
+/** How the correction return was submitted, and therefore what proof is kept. */
+export type SubmissionMode = "offline" | "online";
+
+export const SUBMISSION_MODE_META: Record<SubmissionMode, {
+  label: string; proofLabel: string; hint: string; accept: string;
+}> = {
+  offline: {
+    label: "Offline submission",
+    proofLabel: "Acknowledgement (ACK)",
+    hint: "Filed at a TIN-FC / through an agency. Upload the acknowledgement receipt.",
+    accept: ".pdf,.jpg,.jpeg,.png,.txt",
+  },
+  online: {
+    label: "Online submission",
+    proofLabel: "Submission screenshot",
+    hint: "Filed on the e-filing portal. Upload a screenshot of the confirmation.",
+    accept: ".png,.jpg,.jpeg,.pdf",
+  },
+};
+
+/** Filing is only possible once both signatures AND the proof are in place. */
+export const canMarkFiled = (c: Pick<Correction, "prepared_at" | "approved_at" | "submission_mode" | "proof_file_url"> | null) =>
+  !!c?.prepared_at && !!c?.approved_at && !!c?.submission_mode && !!c?.proof_file_url;
+
 export interface Correction {
   id: string;
   firm_id: string;
@@ -119,6 +143,14 @@ export interface Correction {
   filed_by_name: string | null;
   filed_at: string | null;
   filing_reference: string | null;
+
+  // Proof that the correction actually reached the department. The DB refuses
+  // to move a correction to 'filed' without both of these.
+  submission_mode: SubmissionMode | null;
+  proof_file_name: string | null;
+  proof_file_url: string | null;
+  proof_uploaded_at: string | null;
+  proof_uploaded_by: string | null;
 
   rejected_by: string | null;
   rejected_at: string | null;
@@ -560,6 +592,55 @@ export function diffCorrectionRow(row: any): FieldDiff[] {
     });
   }
   return out;
+}
+
+// ─── Proof of submission ────────────────────────────────────────────────────
+
+/**
+ * Upload the acknowledgement (offline) or submission screenshot (online) and
+ * attach it to the correction.
+ *
+ * Stored in the `documents` bucket, the same one TdsFilingsManager already
+ * uses for filing acknowledgements, under a per-correction path so a
+ * re-upload cannot collide with another correction's proof.
+ */
+export async function uploadCorrectionProof(
+  c: Correction, mode: SubmissionMode, file: File, actor: Actor,
+): Promise<{ error: string | null }> {
+  const ext = file.name.includes(".") ? file.name.split(".").pop() : "bin";
+  const path = `tds-corrections/${c.id}/${mode}-${Date.now()}.${ext}`;
+
+  const { error: upErr } = await supabase.storage.from("documents").upload(path, file, { upsert: true });
+  if (upErr) return { error: upErr.message };
+
+  const { data: pub } = supabase.storage.from("documents").getPublicUrl(path);
+  const url = pub?.publicUrl;
+  if (!url) return { error: "Uploaded, but no URL was returned for the file." };
+
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("tds_corrections" as any)
+    .update({
+      submission_mode: mode,
+      proof_file_name: file.name,
+      proof_file_url: url,
+      proof_uploaded_at: now,
+      proof_uploaded_by: actor.id,
+      updated_at: now,
+    })
+    .eq("id", c.id);
+  if (error) {
+    // Do not leave an orphan object behind if the row could not be updated.
+    await supabase.storage.from("documents").remove([path]).catch(() => {});
+    return { error: error.message };
+  }
+
+  await logCorrectionAction({
+    correctionId: c.id, firmId: c.firm_id, clientId: c.client_id,
+    actionType: "FILING_PROOF_UPLOADED",
+    detail: `${SUBMISSION_MODE_META[mode].proofLabel}: ${file.name}`,
+    newValue: mode, actor,
+  });
+  return { error: null };
 }
 
 // ─── Undo ───────────────────────────────────────────────────────────────────
