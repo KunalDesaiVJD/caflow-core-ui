@@ -44,9 +44,17 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// The Claude-side model is resolved by callModel() from the MSME_CLAUDE_MODEL
-// secret, so it is not pinned here. The GPT side is:
-const DEFAULT_GPT_MODEL = "openai/gpt-5.6-sol";
+// The opening/answering side is resolved by callModel() from MSME_CLAUDE_MODEL.
+// The CHALLENGING side is:
+//
+// Kimi K2 — and the lineage matters more here than the price. Two models trained
+// by the same lab share blind spots, and a panel that agrees for that reason is
+// worse than no panel, because it manufactures comfort. DeepSeek opens and
+// answers, Moonshot challenges and closes.
+//
+// Override with OPENROUTER_MODEL. `kimi-k2-thinking` is the reasoning variant at
+// a similar price, if the challenges come back thin.
+const DEFAULT_GPT_MODEL = "moonshotai/kimi-k2";
 
 const CONTEXT =
   'CONTEXT — how this computation is produced, so you review the right thing:\n' +
@@ -151,8 +159,18 @@ async function callGpt(apiKey: string, model: string, system: string, userText: 
     },
     body: JSON.stringify({
       model,
-      max_tokens: 3072,
-      response_format: { type: "json_object" },
+      // 8,000, not 3,072. A reasoning model's internal thinking is charged and
+      // counted as output, so a tight cap can be spent entirely on reasoning and
+      // return an empty message — which would surface as "unparseable output" and
+      // look like a model fault rather than a budget one. Unused tokens are not
+      // billed, so the headroom costs nothing and removes a whole failure mode.
+      max_tokens: 8000,
+      // NO response_format. Kimi K2 rejects it outright — the provider returns
+      // "model moonshotai/kimi-k2-instruct does not support feature:
+      // structured-outputs" and the whole panel fails. Tested both ways: without
+      // it Kimi returns clean, parseable JSON, because the system prompt already
+      // demands JSON only and parseJson() strips any code fence. The Claude side
+      // has never used it either.
       messages: [
         { role: "system", content: system },
         { role: "user", content: userText },
@@ -278,8 +296,9 @@ function json(body: unknown, status = 200): Response {
 // MODELS ARE NOT HARDCODED. Two pinned model IDs in this project went stale and
 // silently broke it (claude-sonnet-4-20250514 and openai/gpt-4o were both
 // withdrawn), so the ID is a secret with a current default:
-//   MSME_CLAUDE_MODEL   e.g. anthropic/claude-sonnet-5   (OpenRouter naming)
-//                       e.g. claude-sonnet-5             (Anthropic naming)
+//   MSME_CLAUDE_MODEL   the text model, e.g. deepseek/deepseek-v3.2
+//   MSME_VISION_MODEL   used only when a page is sent as a picture or a PDF,
+//                       because the text model may not accept one
 // A withdrawn model now produces a message naming the secret to change, rather
 // than a generic failure.
 
@@ -296,8 +315,40 @@ type Part =
   | { kind: "image"; base64: string };
 
 const DEFAULT_MODEL: Record<Provider, string> = {
-  openrouter: "anthropic/claude-sonnet-5",
-  anthropic: "claude-sonnet-5",
+  // DeepSeek v3.2 opens and answers the panel. This side is JUDGEMENT, not
+  // transcription — it argues about the interpretation and never touches a
+  // figure — and DeepSeek is strong at exactly that while costing a fraction of
+  // the alternatives.
+  //
+  // It is deliberately NOT used for reading ledgers: tested against the firm's
+  // own file it inverted debit and credit on every row and mistook the company
+  // letterhead for the vendor. See the note in msme-extract-ledger.
+  openrouter: "deepseek/deepseek-v3.2",
+  anthropic: "claude-haiku-4-5-20251001",
+};
+
+/**
+ * A SEPARATE MODEL FOR PAGES SENT AS PICTURES.
+ *
+ * DeepSeek v3.2 and Kimi K2 are text-only — neither accepts an image or a PDF.
+ * That is fine for the normal route, which sends extracted text, but a SCANNED
+ * ledger has no text and can only be read as page images, and the whole-document
+ * fallback sends a PDF. Pointing those at a text-only model would fail on exactly
+ * the files that are hardest to deal with, and the failure would look like a bad
+ * scan rather than a wrong model.
+ *
+ * So the transport routes on what the request actually contains: text to the
+ * configured model, anything carrying an image or a PDF to here. Qwen3.7-flash
+ * reads images, costs $0.03/$0.13 per M, and carries a 1M context.
+ *
+ * Override with MSME_VISION_MODEL. It only ever has to handle a scan.
+ */
+const DEFAULT_VISION_MODEL: Record<Provider, string> = {
+  // Haiku, not a cheaper vision model. A scan is the LEAST reliable input this
+  // tool takes, so it is the last place to trade accuracy for cost — and Haiku is
+  // the one model verified correct on this firm's actual ledger.
+  openrouter: "anthropic/claude-haiku-4.5",
+  anthropic: "claude-haiku-4-5-20251001",
 };
 
 interface ModelReply {
@@ -308,7 +359,7 @@ interface ModelReply {
   provider: Provider;
 }
 
-function resolveProvider(): { provider: Provider; apiKey: string; model: string } | null {
+function resolveProvider(needsVision = false): { provider: Provider; apiKey: string; model: string } | null {
   const forced = (Deno.env.get("MSME_AI_PROVIDER") ?? "").trim().toLowerCase();
   const orKey = Deno.env.get("OPENROUTER_API_KEY");
   const anthKey = Deno.env.get("ANTHROPIC_API_KEY");
@@ -321,7 +372,9 @@ function resolveProvider(): { provider: Provider; apiKey: string; model: string 
   if (!provider) return null;
 
   const apiKey = (provider === "openrouter" ? orKey : anthKey)!;
-  const model = (Deno.env.get("MSME_CLAUDE_MODEL") ?? "").trim() || DEFAULT_MODEL[provider];
+  const model = needsVision
+    ? (Deno.env.get("MSME_VISION_MODEL") ?? "").trim() || DEFAULT_VISION_MODEL[provider]
+    : (Deno.env.get("MSME_CLAUDE_MODEL") ?? "").trim() || DEFAULT_MODEL[provider];
   return { provider, apiKey, model };
 }
 
@@ -336,7 +389,10 @@ async function callModel(
   parts: Part[],
   maxTokens: number,
 ): Promise<ModelReply | { error: string; status: number }> {
-  const resolved = resolveProvider();
+  // Route on what is actually being sent: a picture or a PDF needs a model that
+  // can see one, whatever the text model happens to be.
+  const needsVision = parts.some((p) => p.kind === "image" || p.kind === "pdf");
+  const resolved = resolveProvider(needsVision);
   if (!resolved) {
     return {
       error: "No AI provider is configured. Set the OPENROUTER_API_KEY secret " +
