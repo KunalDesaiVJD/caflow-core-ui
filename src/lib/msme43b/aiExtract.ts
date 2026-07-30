@@ -10,7 +10,7 @@ import { supabase } from '@/integrations/supabase/client';
 import type { VendorLedger, LedgerTxn } from './types';
 import { reconcileLedger } from './reconcile';
 import { fyFromStart } from './parseUtils';
-import { pdfPageTexts } from './pdfText';
+import { pdfPageTexts, pdfPageImages } from './pdfText';
 
 async function bufferToBase64(buf: ArrayBuffer): Promise<string> {
   const bytes = new Uint8Array(buf);
@@ -173,6 +173,14 @@ const LINES_PER_CHUNK = 80;
  */
 const MIN_LINES_PER_CHUNK = 8;
 
+/**
+ * Pages of a SCANNED ledger per call. Lower than the text budget because a page
+ * image costs far more input than the same page as text, and because 2 pages of
+ * a ledger already carry plenty of rows. A chunk that overflows is halved down to
+ * a single page (see extractByPageImages).
+ */
+const PAGES_PER_IMAGE_CHUNK = 2;
+
 /** One physical line of the PDF, tagged with the page it came from. */
 interface SourceLine { page: number; text: string }
 
@@ -187,11 +195,16 @@ export async function extractLedgersViaAI(
   // failure to read it fell through to `pages = 0` — routing the file to the one
   // path with no splitting and no retry, which is the opposite of what an
   // unknown-size file needs.
+  //
+  // The two ways of having no text are kept APART. Conflating them produced a
+  // message that said "this is a scan" when pdfjs had simply failed, which sent
+  // the reader looking for the wrong problem.
   let pageTexts: string[] = [];
+  let pdfjsError: string | null = null;
   try {
     pageTexts = await pdfPageTexts(buf);
-  } catch {
-    // pdfjs could not read it here. The model still can, as a document.
+  } catch (e) {
+    pdfjsError = (e as Error)?.message || String(e);
   }
 
   const lines: SourceLine[] = [];
@@ -202,25 +215,29 @@ export async function extractLedgersViaAI(
     }
   });
 
-  // No extractable text means a scan, and a scan can ONLY be read as an image.
-  // That is the single case where the whole file must go in one call.
-  if (!lines.length) return extractWholeFile(file, buf, pageTexts.length, onProgress);
+  if (lines.length) return extractByLineChunks(file, lines, pageTexts.length, onProgress);
 
-  return extractByLineChunks(file, lines, pageTexts.length, onProgress);
+  // pdfjs could not open the file at all — it cannot render pages either, so the
+  // document itself is the only thing left to send.
+  if (pdfjsError !== null) return extractWholeFile(file, buf, pdfjsError, onProgress);
+
+  // pdfjs opened it and found no text: a genuine scan. Rendering its pages makes
+  // it splittable on the same terms as a text PDF, instead of all-or-nothing.
+  return extractByPageImages(file, buf, pageTexts.length, onProgress);
 }
 
 /**
- * The scanned-PDF route: send the document itself, because there is no text to
- * split. If it overflows there is nothing this code can do about it — the remedy
- * is a smaller file — so it says exactly that instead of a generic failure.
+ * Last resort: send the document whole, when pdfjs could not read it well enough
+ * even to render its pages. Nothing here can split it, so if it overflows the
+ * message says what will actually help.
  */
 async function extractWholeFile(
   file: File,
   buf: ArrayBuffer,
-  pages: number,
+  pdfjsError: string,
   onProgress?: (note: string) => void,
 ): Promise<AiExtractResult> {
-  onProgress?.(`${file.name}: no text layer — reading ${pages || 'the'} page(s) as images`);
+  onProgress?.(`${file.name}: could not be opened locally — sending the whole document`);
   const { data, error } = await supabase.functions.invoke('msme-extract-ledger', {
     body: { pdf_base64: await bufferToBase64(buf), filename: file.name },
   });
@@ -228,9 +245,9 @@ async function extractWholeFile(
     const described = await describeInvokeError(error, file.name);
     if (described.rangeTooDense) {
       throw new Error(
-        `"${file.name}" is a scan with no text layer${pages ? ` (${pages} pages)` : ''}, so it has to be read ` +
-        'as a whole image and cannot be split automatically — and it holds more rows than one read can return. ' +
-        'Split the PDF into smaller files (one vendor each is safest) and upload those.',
+        `"${file.name}" could not be opened here (${pdfjsError}), so it had to be sent whole and cannot be ` +
+        'split automatically — and it holds more rows than one read can return. Split the PDF into smaller ' +
+        'files (one vendor each is safest) and upload those.',
       );
     }
     throw described;
@@ -239,6 +256,83 @@ async function extractWholeFile(
 
   const rawLedgers: unknown[] = Array.isArray(data?.ledgers) ? data.ledgers : [];
   return { ledgers: rawLedgers.map((raw) => mapLedger(raw, file.name)), truncated: !!data?.truncated };
+}
+
+/**
+ * A SCANNED ledger: no text layer, so each page is rendered to an image and read
+ * as one. Same halving logic as the text route — the unit is pages here because
+ * a page image is the smallest thing that can be rendered, and an image chunk
+ * that overflows is split until a single page is left.
+ */
+async function extractByPageImages(
+  file: File,
+  buf: ArrayBuffer,
+  pages: number,
+  onProgress?: (note: string) => void,
+): Promise<AiExtractResult> {
+  const collected: VendorLedger[] = [];
+  const failures: string[] = [];
+  let truncated = false;
+
+  const readPages = async (nums: number[]): Promise<unknown[]> => {
+    const label = nums.length === 1 ? `page ${nums[0]}` : `pages ${nums[0]}–${nums[nums.length - 1]}`;
+    onProgress?.(`${file.name}: ${label} of ${pages} (scan — rendering to image)`);
+    const images = await pdfPageImages(buf, nums);
+    if (!images.length) {
+      failures.push(`${label}: could not be rendered`);
+      return [];
+    }
+
+    const { data, error } = await supabase.functions.invoke('msme-extract-ledger', {
+      body: { page_images: images, filename: file.name, page_range: label },
+    });
+
+    if (error) {
+      const described = await describeInvokeError(error, file.name);
+      if (!described.rangeTooDense) throw described;
+      if (nums.length === 1) {
+        failures.push(
+          `${label}: one page still would not fit in a single read. It holds too many rows — ` +
+          `split this page's vendor out into its own file. (${described.message})`,
+        );
+        return [];
+      }
+      const mid = Math.ceil(nums.length / 2);
+      onProgress?.(`${file.name}: ${label} too dense, splitting`);
+      return [...await readPages(nums.slice(0, mid)), ...await readPages(nums.slice(mid))];
+    }
+
+    if (data?.error) {
+      failures.push(`${label}: ${data.error}`);
+      return [];
+    }
+    truncated = truncated || !!data?.truncated;
+    return Array.isArray(data?.ledgers) ? data.ledgers : [];
+  };
+
+  for (let p = 1; p <= pages; p += PAGES_PER_IMAGE_CHUNK) {
+    const nums: number[] = [];
+    for (let k = p; k < p + PAGES_PER_IMAGE_CHUNK && k <= pages; k++) nums.push(k);
+    for (const raw of await readPages(nums)) collected.push(mapLedger(raw, file.name, false));
+  }
+
+  if (!collected.length) {
+    throw new Error(
+      `"${file.name}" is a scan (${pages} pages, no text layer) and no ledger could be read from it. ` +
+      (failures.length ? failures.join('; ') : 'The service returned no ledgers.'),
+    );
+  }
+
+  const merged = mergeLedgers(collected);
+  const reconciled = merged.map((l) => reconcileLedger(l));
+  for (const l of reconciled) {
+    l.warnings = [
+      ...(l.warnings || []),
+      `Read from a SCANNED PDF (no text layer) — figures were transcribed from page images, so check them against the printed ledger.`,
+      ...(failures.length ? [`Parts of ${file.name} could not be read: ${failures.join('; ')}`] : []),
+    ];
+  }
+  return { ledgers: reconciled, truncated };
 }
 
 /**

@@ -16,8 +16,10 @@ vi.mock('@/integrations/supabase/client', () => ({
 }));
 
 const pdfPageTexts = vi.fn();
+const pdfPageImages = vi.fn();
 vi.mock('./pdfText', () => ({
   pdfPageTexts: (...a: unknown[]) => pdfPageTexts(...a),
+  pdfPageImages: (...a: unknown[]) => pdfPageImages(...a),
   pdfPageCount: vi.fn(),
 }));
 
@@ -74,6 +76,9 @@ function pages(count: number, perPage: number): string[] {
 beforeEach(() => {
   invoke.mockReset();
   pdfPageTexts.mockReset();
+  pdfPageImages.mockReset();
+  // Render whatever pages are asked for.
+  pdfPageImages.mockImplementation(async (_buf: unknown, nums: number[]) => nums.map((n) => `img${n}`));
 });
 
 describe('a short but DENSE file — the case that kept failing', () => {
@@ -148,26 +153,52 @@ describe('a short but DENSE file — the case that kept failing', () => {
   });
 });
 
-describe('routing', () => {
-  it('sends the whole document ONLY when there is no text layer', async () => {
-    pdfPageTexts.mockResolvedValue(['', '   ', '']); // a scan
+describe('a SCAN — no text layer at all', () => {
+  it('is split by rendering its pages, not sent whole', async () => {
+    // 6 pages, none with text. Previously this went in ONE call as a whole
+    // document and the only advice on failure was "go and split the PDF".
+    pdfPageTexts.mockResolvedValue(['', '  ', '', '', '', '']);
     invoke.mockResolvedValue(ok(1));
 
     await extractLedgersViaAI(pdf('scan.pdf'));
 
-    expect(invoke).toHaveBeenCalledTimes(1);
-    expect(invoke.mock.calls[0][1].body.pdf_base64).toBeTruthy();
+    expect(invoke).toHaveBeenCalledTimes(3); // 6 pages / 2 per call
+    for (const [, opts] of invoke.mock.calls) {
+      expect(opts.body.page_images).toBeInstanceOf(Array);
+      expect(opts.body.pdf_base64).toBeUndefined();
+    }
   });
 
-  it('says what to do when a SCAN is too large, since it cannot be split', async () => {
+  it('halves an image chunk that overflows, down to a single page', async () => {
     pdfPageTexts.mockResolvedValue(['', '']);
-    invoke.mockResolvedValue(overflowError());
+    invoke.mockResolvedValueOnce(overflowError()).mockResolvedValue(ok(1));
+
+    await extractLedgersViaAI(pdf('scan.pdf'));
+
+    // 1 overflow on pages 1–2, then page 1 and page 2 on their own.
+    expect(invoke).toHaveBeenCalledTimes(3);
+    expect(pdfPageImages.mock.calls.at(-1)?.[1]).toEqual([2]);
+  });
+
+  it('names the page when even ONE page will not fit, instead of blaming the file', async () => {
+    pdfPageTexts.mockResolvedValue(['', '']);
+    invoke.mockImplementation(async () => overflowError());
 
     await expect(extractLedgersViaAI(pdf('scan.pdf')))
-      .rejects.toThrow(/scan with no text layer[\s\S]*Split the PDF into smaller files/);
+      .rejects.toThrow(/page 1: one page still would not fit/);
   });
 
-  it('falls back to the whole document when pdfjs cannot read the file at all', async () => {
+  it('warns on every ledger that the figures came from a scan', async () => {
+    pdfPageTexts.mockResolvedValue(['', '']);
+    invoke.mockResolvedValue(ok(1));
+
+    const res = await extractLedgersViaAI(pdf('scan.pdf'));
+    expect(res.ledgers[0].warnings?.some((w) => /SCANNED PDF/.test(w))).toBe(true);
+  });
+});
+
+describe('routing', () => {
+  it('sends the whole document only when pdfjs cannot open the file at all', async () => {
     pdfPageTexts.mockRejectedValue(new Error('bad xref'));
     invoke.mockResolvedValue(ok(1));
 
@@ -175,6 +206,16 @@ describe('routing', () => {
 
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(invoke.mock.calls[0][1].body.pdf_base64).toBeTruthy();
+  });
+
+  it('does not call an unopenable file a scan — it reports the real reason', async () => {
+    // Conflating these two produced a message telling the firm their text PDF was
+    // a scan, which sends them looking for the wrong problem.
+    pdfPageTexts.mockRejectedValue(new Error('bad xref'));
+    invoke.mockResolvedValue(overflowError());
+
+    await expect(extractLedgersViaAI(pdf())).rejects.toThrow(/could not be opened here \(bad xref\)/);
+    await expect(extractLedgersViaAI(pdf())).rejects.not.toThrow(/is a scan/);
   });
 
   it('does not treat a non-overflow failure as something to retry', async () => {

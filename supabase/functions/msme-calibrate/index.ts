@@ -193,10 +193,15 @@ function json(body: unknown, status = 200): Response {
 
 type Provider = "openrouter" | "anthropic";
 
-/** Provider-neutral message content: text, or a PDF to be read as a document. */
+/**
+ * Provider-neutral message content: text, a PDF read as a document, or a page
+ * rendered to an image (the only way to read a SCANNED ledger, and what makes a
+ * scan splittable page by page instead of all-or-nothing).
+ */
 type Part =
   | { kind: "text"; text: string }
-  | { kind: "pdf"; filename: string; base64: string };
+  | { kind: "pdf"; filename: string; base64: string }
+  | { kind: "image"; base64: string };
 
 const DEFAULT_MODEL: Record<Provider, string> = {
   openrouter: "anthropic/claude-sonnet-5",
@@ -265,17 +270,19 @@ async function callModel(
             { role: "system", content: system },
             {
               role: "user",
-              content: parts.map((p) =>
-                p.kind === "text"
-                  ? { type: "text", text: p.text }
-                  : {
-                      type: "file",
-                      file: {
-                        filename: p.filename,
-                        file_data: `data:application/pdf;base64,${p.base64}`,
-                      },
-                    }
-              ),
+              content: parts.map((p) => {
+                if (p.kind === "text") return { type: "text", text: p.text };
+                if (p.kind === "image") {
+                  return { type: "image_url", image_url: { url: `data:image/jpeg;base64,${p.base64}` } };
+                }
+                return {
+                  type: "file",
+                  file: {
+                    filename: p.filename,
+                    file_data: `data:application/pdf;base64,${p.base64}`,
+                  },
+                };
+              }),
             },
           ],
           // engine "native" hands the PDF to the model itself, which is what the
@@ -299,14 +306,19 @@ async function callModel(
           system,
           messages: [{
             role: "user",
-            content: parts.map((p) =>
-              p.kind === "text"
-                ? { type: "text", text: p.text }
-                : {
-                    type: "document",
-                    source: { type: "base64", media_type: "application/pdf", data: p.base64 },
-                  }
-            ),
+            content: parts.map((p) => {
+              if (p.kind === "text") return { type: "text", text: p.text };
+              if (p.kind === "image") {
+                return {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/jpeg", data: p.base64 },
+                };
+              }
+              return {
+                type: "document",
+                source: { type: "base64", media_type: "application/pdf", data: p.base64 },
+              };
+            }),
           }],
         }),
       });

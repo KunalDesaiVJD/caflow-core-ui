@@ -107,17 +107,20 @@ serve(async (req) => {
       return json({ error: "Unauthorized" }, 401);
     }
 
-    // --- Input ---
-    // Either the PDF itself (best fidelity, and the only way to read a scan), or
-    // the TEXT of a page range. A merged export holding every vendor's ledger is
-    // far too large for one reply, so the client splits it by pages and sends the
-    // text of each chunk. See src/lib/msme43b/aiExtract.ts.
-    const { pdf_base64, text_content, filename, page_range } = await req.json();
-    if (!pdf_base64 && !text_content) {
-      return json({ error: "Missing pdf_base64 or text_content" }, 400);
+    // --- Input: three shapes, all produced by src/lib/msme43b/aiExtract.ts ---
+    //   text_content   the text of a line-bounded chunk. The normal route.
+    //   page_images    pages of a SCANNED ledger rendered to JPEG. A scan has no
+    //                  text to chunk, so the client renders it page by page —
+    //                  which is what makes a scan splittable at all.
+    //   pdf_base64     the whole document. Last resort, when pdfjs cannot read
+    //                  the file well enough even to render its pages.
+    const { pdf_base64, text_content, page_images, filename, page_range } = await req.json();
+    const images: string[] = Array.isArray(page_images) ? page_images.filter((s) => typeof s === "string") : [];
+    if (!pdf_base64 && !text_content && !images.length) {
+      return json({ error: "Missing text_content, page_images or pdf_base64" }, 400);
     }
 
-    // --- Model call: PDF document part, or the text of a page range ---
+    // --- Model call ---
     //
     // THE OUTPUT CAP IS A TIME BUDGET, NOT A SIZE BUDGET. This function writes
     // nothing to its response until the model has finished, so Supabase's
@@ -125,33 +128,49 @@ serve(async (req) => {
     // reply takes several minutes to generate and could never arrive in time —
     // it produced a guaranteed 504 on every real file.
     //
-    // 8,000 tokens is what a call can emit and still return. The client sends 3
-    // pages at a time to fit inside it (PAGES_PER_CHUNK in aiExtract.ts), and
-    // retries a range page-by-page if even that was too dense. If a reply is
-    // still cut off, stop_reason is reported as `truncated` and the caller says
-    // so rather than trusting a half-read ledger.
-    const parts: Part[] = pdf_base64
-      ? [
-          { kind: "pdf", filename: filename || "ledger.pdf", base64: pdf_base64 },
-          { kind: "text", text: `Extract the ledger${filename ? ` from "${filename}"` : ""} into the JSON schema. Output JSON only.` },
-        ]
-      : [
-          {
-            kind: "text",
-            text:
-              `Ledger text${filename ? ` from "${filename}"` : ""}` +
-              `${page_range ? `, pages ${page_range}` : ""}:\n\n${String(text_content).slice(0, 600_000)}`,
-          },
-          {
-            kind: "text",
-            text:
-              "Extract it into the JSON schema. This may be one PAGE RANGE of a longer export " +
-              "containing several vendors' ledgers, so: return one entry in \"ledgers\" per vendor " +
-              "appearing in this text; a ledger may start or end mid-range, in which case return the " +
-              "rows you can see and leave openingBalance/closingBalance as 0 unless the range actually " +
-              "shows them. Output JSON only.",
-          },
-        ];
+    // 8,000 tokens is what a call can emit and still return. The client sizes
+    // each chunk to fit inside it (by LINES for text, by PAGES for images — see
+    // aiExtract.ts) and halves a chunk that still overflows. If a reply is cut
+    // off anyway, `code: "truncated"` tells the client to split and retry rather
+    // than trusting a half-read ledger.
+
+    // Shared instruction: a chunk is a slice of a bigger export, so a ledger may
+    // begin or end mid-chunk and the balances must not be invented.
+    const PARTIAL_NOTE =
+      "Extract it into the JSON schema. This may be one PART of a longer export " +
+      "containing several vendors' ledgers, so: return one entry in \"ledgers\" per vendor " +
+      "appearing here; a ledger may start or end mid-way, in which case return the " +
+      "rows you can see and leave openingBalance/closingBalance as 0 unless this part " +
+      "actually shows them. Output JSON only.";
+
+    let parts: Part[];
+    if (images.length) {
+      parts = [
+        {
+          kind: "text",
+          text:
+            `Scanned ledger${filename ? ` from "${filename}"` : ""}` +
+            `${page_range ? `, ${page_range}` : ""} — ${images.length} page image(s) follow, in order.`,
+        },
+        ...images.map((base64) => ({ kind: "image" as const, base64 })),
+        { kind: "text", text: PARTIAL_NOTE },
+      ];
+    } else if (text_content) {
+      parts = [
+        {
+          kind: "text",
+          text:
+            `Ledger text${filename ? ` from "${filename}"` : ""}` +
+            `${page_range ? `, ${page_range}` : ""}:\n\n${String(text_content).slice(0, 600_000)}`,
+        },
+        { kind: "text", text: PARTIAL_NOTE },
+      ];
+    } else {
+      parts = [
+        { kind: "pdf", filename: filename || "ledger.pdf", base64: pdf_base64 },
+        { kind: "text", text: `Extract the ledger${filename ? ` from "${filename}"` : ""} into the JSON schema. Output JSON only.` },
+      ];
+    }
 
     const reply = await callModel(SYSTEM_PROMPT, parts, 8000);
     if (isModelError(reply)) return json({ error: reply.error }, reply.status);
@@ -212,10 +231,15 @@ function json(body: unknown, status = 200): Response {
 
 type Provider = "openrouter" | "anthropic";
 
-/** Provider-neutral message content: text, or a PDF to be read as a document. */
+/**
+ * Provider-neutral message content: text, a PDF read as a document, or a page
+ * rendered to an image (the only way to read a SCANNED ledger, and what makes a
+ * scan splittable page by page instead of all-or-nothing).
+ */
 type Part =
   | { kind: "text"; text: string }
-  | { kind: "pdf"; filename: string; base64: string };
+  | { kind: "pdf"; filename: string; base64: string }
+  | { kind: "image"; base64: string };
 
 const DEFAULT_MODEL: Record<Provider, string> = {
   openrouter: "anthropic/claude-sonnet-5",
@@ -284,17 +308,19 @@ async function callModel(
             { role: "system", content: system },
             {
               role: "user",
-              content: parts.map((p) =>
-                p.kind === "text"
-                  ? { type: "text", text: p.text }
-                  : {
-                      type: "file",
-                      file: {
-                        filename: p.filename,
-                        file_data: `data:application/pdf;base64,${p.base64}`,
-                      },
-                    }
-              ),
+              content: parts.map((p) => {
+                if (p.kind === "text") return { type: "text", text: p.text };
+                if (p.kind === "image") {
+                  return { type: "image_url", image_url: { url: `data:image/jpeg;base64,${p.base64}` } };
+                }
+                return {
+                  type: "file",
+                  file: {
+                    filename: p.filename,
+                    file_data: `data:application/pdf;base64,${p.base64}`,
+                  },
+                };
+              }),
             },
           ],
           // engine "native" hands the PDF to the model itself, which is what the
@@ -318,14 +344,19 @@ async function callModel(
           system,
           messages: [{
             role: "user",
-            content: parts.map((p) =>
-              p.kind === "text"
-                ? { type: "text", text: p.text }
-                : {
-                    type: "document",
-                    source: { type: "base64", media_type: "application/pdf", data: p.base64 },
-                  }
-            ),
+            content: parts.map((p) => {
+              if (p.kind === "text") return { type: "text", text: p.text };
+              if (p.kind === "image") {
+                return {
+                  type: "image",
+                  source: { type: "base64", media_type: "image/jpeg", data: p.base64 },
+                };
+              }
+              return {
+                type: "document",
+                source: { type: "base64", media_type: "application/pdf", data: p.base64 },
+              };
+            }),
           }],
         }),
       });
