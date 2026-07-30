@@ -1851,23 +1851,49 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       {(() => {
                         const vf = vfStatuses.get(f.id);
                         if (!vf) return <span className="text-xs text-muted-foreground">—</span>;
-                        // Deliberately just ONE word — the per-stage (S1/S2/S3/S4/Sign)
-                        // breakdown lives in Stage 4 · Checker Review inside the
-                        // Workspace, not here. Clicking straight through to Stage 1 is
-                        // the actionable next step regardless of which stage is
-                        // actually blocking readiness.
+                        // The tooltip carries the full per-stage breakdown (not just
+                        // ONE word) so a "Not ready" badge is self-explanatory on
+                        // hover, without having to open Stage 4 · Checker Review to
+                        // find out which of Stage 1/2/3 or the signature is actually
+                        // the blocker.
+                        const detailTitle = vf.ready
+                          ? "Ready to file — click to open Stage 1"
+                          : [
+                              `Not ready — click to open Stage 1`,
+                              `Stage 1: ${vf.s1Detail}`,
+                              `Stage 2: ${vf.s2Detail}`,
+                              `Stage 3: ${vf.s3Detail}`,
+                              `Signature: ${vf.signedDetail}`,
+                            ].join("\n");
+                        // ALWAYS-VISIBLE blocker line, not just on hover — naming every
+                        // stage/signature that isn't "done" yet, so "why is this red"
+                        // never again requires opening Stage 4 or a browser console to
+                        // answer. Empty when ready (nothing to explain).
+                        const blockers = vf.ready ? [] : [
+                          vf.s1 !== "done" && "Stage 1",
+                          vf.s2 !== "done" && "Stage 2",
+                          vf.s3 !== "done" && "Stage 3",
+                          !vf.signed && "Signature",
+                        ].filter(Boolean) as string[];
                         return (
-                          <button
-                            type="button"
-                            className={cn("text-xs font-semibold hover:underline underline-offset-2", vf.ready ? "text-emerald-600" : "text-destructive")}
-                            title={vf.ready ? "Ready to file — click to open Stage 1" : "Not ready — click to open Stage 1"}
-                            onClick={() => onNavigateStage1?.({
-                              clientId: f.client_id, financialYear: f.financial_year, quarter: f.quarter,
-                              formType: (f.tds_forms && f.tds_forms[0]) || "26Q",
-                            })}
-                          >
-                            {vf.ready ? "✓" : "✗"} Ready
-                          </button>
+                          <div className="space-y-0.5">
+                            <button
+                              type="button"
+                              className={cn("text-xs font-semibold hover:underline underline-offset-2", vf.ready ? "text-emerald-600" : "text-destructive")}
+                              title={detailTitle}
+                              onClick={() => onNavigateStage1?.({
+                                clientId: f.client_id, financialYear: f.financial_year, quarter: f.quarter,
+                                formType: (f.tds_forms && f.tds_forms[0]) || "26Q",
+                              })}
+                            >
+                              {vf.ready ? "✓" : "✗"} Ready
+                            </button>
+                            {blockers.length > 0 && (
+                              <p className="text-[10px] text-muted-foreground whitespace-nowrap" title={detailTitle}>
+                                {blockers.join(", ")} pending
+                              </p>
+                            )}
+                          </div>
                         );
                       })()}
                     </TableCell>
