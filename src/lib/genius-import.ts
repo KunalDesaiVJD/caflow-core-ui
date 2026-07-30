@@ -684,12 +684,18 @@ export async function ensureRateMasterSections(
     : "2026-27";
   const fyStart = fyParts.length === 2 ? fyParts[0] : "2025";
 
+  // is_active=true only — a DEACTIVATED row (e.g. a mistyped/superseded code
+  // fixed by a data-hygiene migration) must never be treated as "the"
+  // canonical existing entry for a code, or a repeat import would keep
+  // reusing the retired code forever instead of falling through to the seed
+  // table / alias resolution below.
   const { data: existing } = await supabase
     .from("tds_rate_master")
     .select("section_code")
     .eq("firm_id", firmId)
     .eq("assessment_year", ay)
-    .eq("form_type", formType);
+    .eq("form_type", formType)
+    .eq("is_active", true);
   const existingByUpper = new Map<string, string>();
   for (const row of existing || []) {
     const code = String((row as any)?.section_code ?? "");

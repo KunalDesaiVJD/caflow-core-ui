@@ -72,6 +72,7 @@ export const TDS_RATE_SEED_DATA: TdsRateSeedRow[] = [
   // 24Q
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "24Q", section_code: "192", nature_of_payment: "Salary", threshold_individual: 0, threshold_company: 0, rate_individual: 0, rate_company: 0, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: true, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "As per income tax slab rates", section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "24Q", section_code: "192A", nature_of_payment: "PF Withdrawal", threshold_individual: 50000, threshold_company: 0, rate_individual: 10, rate_company: 0, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
+  { assessment_year: "2026-27", financial_year: "2025-26", form_type: "24Q", section_code: "192B", nature_of_payment: "Salary", threshold_individual: 0, threshold_company: 50000, rate_individual: 1, rate_company: 2, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: "As per income tax slab rates", section_description: null },
   // 27EQ
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "27EQ", section_code: "206C(1)", nature_of_payment: "Scrap", threshold_individual: 0, threshold_company: 0, rate_individual: 1, rate_company: 1, rate_no_pan: 5, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "27EQ", section_code: "206C(1C)", nature_of_payment: "Motor Vehicle >10L", threshold_individual: 0, threshold_company: 0, rate_individual: 1, rate_company: 1, rate_no_pan: 5, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
@@ -90,6 +91,21 @@ export const TDS_RATE_SEED_DATA: TdsRateSeedRow[] = [
   { assessment_year: "2026-27", financial_year: "2025-26", form_type: "27Q", section_code: "196D", nature_of_payment: "FII Securities", threshold_individual: 0, threshold_company: 0, rate_individual: 20, rate_company: 20, rate_no_pan: 20, surcharge_applicable: false, cess_applicable: false, is_active: true, effective_from: "2025-04-01", effective_to: null, notes: null, section_description: null },
 ];
 
+/** Raw codes a source file is known to use that don't literally match CAflow's
+ *  own section_code spelling — resolved to the real code before lookup, so an
+ *  import never manufactures an orphan 0%-placeholder row for something that
+ *  actually IS a known section under a different spelling. Confirmed with the
+ *  firm (2026-07-30): a Genius export drops the leading "1" from both 192A
+ *  (premature EPF withdrawal) and 192B (Salary), writing "92A"/"92B" instead
+ *  — 700+ real deductee/challan rows had been auto-created under the bare
+ *  codes before this was caught; see migrations 20260730191500 and
+ *  20260730193000 for the one-time data fixes. This map prevents it
+ *  recurring on the next import of the same source. */
+const RAW_CODE_ALIASES: Record<string, string> = {
+  "92A": "192A",
+  "92B": "192B",
+};
+
 /** Case-insensitive lookup of a standard rate row for a section + form. Genius
  *  and TRACES both write section codes with the app's established casing
  *  (uppercase base, lowercase letter inside parens — "194J(b)", never
@@ -97,6 +113,7 @@ export const TDS_RATE_SEED_DATA: TdsRateSeedRow[] = [
  *  input still resolves to the ONE correct row instead of manufacturing a
  *  duplicate. */
 export function findSeedRate(sectionCode: string, formType: string): TdsRateSeedRow | undefined {
-  const key = sectionCode.trim().toUpperCase();
+  const trimmed = sectionCode.trim();
+  const key = (RAW_CODE_ALIASES[trimmed.toUpperCase()] ?? trimmed).toUpperCase();
   return TDS_RATE_SEED_DATA.find(r => r.form_type === formType && r.section_code.toUpperCase() === key);
 }
