@@ -186,8 +186,14 @@ function json(body: unknown, status = 200): Response {
 // MODELS ARE NOT HARDCODED. Two pinned model IDs in this project went stale and
 // silently broke it (claude-sonnet-4-20250514 and openai/gpt-4o were both
 // withdrawn), so the ID is a secret with a current default:
+<<<<<<< Updated upstream
 //   MSME_CLAUDE_MODEL   e.g. anthropic/claude-sonnet-5   (OpenRouter naming)
 //                       e.g. claude-sonnet-5             (Anthropic naming)
+=======
+//   MSME_CLAUDE_MODEL   the text model, e.g. deepseek/deepseek-v3.2
+//   MSME_VISION_MODEL   used only when a page is sent as a picture or a PDF,
+//                       because the text model may not accept one
+>>>>>>> Stashed changes
 // A withdrawn model now produces a message naming the secret to change, rather
 // than a generic failure.
 
@@ -204,8 +210,42 @@ type Part =
   | { kind: "image"; base64: string };
 
 const DEFAULT_MODEL: Record<Provider, string> = {
+<<<<<<< Updated upstream
   openrouter: "anthropic/claude-sonnet-5",
   anthropic: "claude-sonnet-5",
+=======
+  // DeepSeek v3.2 — the firm's choice, and a sound one for this work: reading a
+  // ledger is TRANSCRIPTION, not judgement, and correctness here does not rest on
+  // the model's reasoning. The reconstructed running balance must agree with the
+  // printed closing balance or the ledger is flagged and not relied on, so a
+  // misread shows up as a failed control rather than a wrong figure. $0.27/$0.40
+  // per M against Haiku's $1/$5 — about a seventh of the cost.
+  openrouter: "deepseek/deepseek-v3.2",
+  // DeepSeek is not served by the Anthropic API, so the direct-transport
+  // fallback stays on Anthropic's own cheapest current model.
+  anthropic: "claude-haiku-4-5-20251001",
+};
+
+/**
+ * A SEPARATE MODEL FOR PAGES SENT AS PICTURES.
+ *
+ * DeepSeek v3.2 and Kimi K2 are text-only — neither accepts an image or a PDF.
+ * That is fine for the normal route, where the client sends extracted text, but
+ * a SCANNED ledger has no text and can only be read as page images, and the
+ * whole-document fallback sends a PDF. Pointing those at a text-only model would
+ * fail on exactly the files that are hardest to deal with, and the failure would
+ * look like a bad scan rather than a wrong model.
+ *
+ * So the transport routes on what the request actually contains: text goes to
+ * the configured model, anything with an image or a PDF goes here. Qwen3.7-flash
+ * reads images, costs $0.03/$0.13 per M, and carries a 1M context.
+ *
+ * Override with MSME_VISION_MODEL. It only ever has to handle a scan.
+ */
+const DEFAULT_VISION_MODEL: Record<Provider, string> = {
+  openrouter: "qwen/qwen3.7-flash",
+  anthropic: "claude-haiku-4-5-20251001",
+>>>>>>> Stashed changes
 };
 
 interface ModelReply {
@@ -216,7 +256,7 @@ interface ModelReply {
   provider: Provider;
 }
 
-function resolveProvider(): { provider: Provider; apiKey: string; model: string } | null {
+function resolveProvider(needsVision = false): { provider: Provider; apiKey: string; model: string } | null {
   const forced = (Deno.env.get("MSME_AI_PROVIDER") ?? "").trim().toLowerCase();
   const orKey = Deno.env.get("OPENROUTER_API_KEY");
   const anthKey = Deno.env.get("ANTHROPIC_API_KEY");
@@ -229,7 +269,9 @@ function resolveProvider(): { provider: Provider; apiKey: string; model: string 
   if (!provider) return null;
 
   const apiKey = (provider === "openrouter" ? orKey : anthKey)!;
-  const model = (Deno.env.get("MSME_CLAUDE_MODEL") ?? "").trim() || DEFAULT_MODEL[provider];
+  const model = needsVision
+    ? (Deno.env.get("MSME_VISION_MODEL") ?? "").trim() || DEFAULT_VISION_MODEL[provider]
+    : (Deno.env.get("MSME_CLAUDE_MODEL") ?? "").trim() || DEFAULT_MODEL[provider];
   return { provider, apiKey, model };
 }
 
@@ -244,7 +286,10 @@ async function callModel(
   parts: Part[],
   maxTokens: number,
 ): Promise<ModelReply | { error: string; status: number }> {
-  const resolved = resolveProvider();
+  // Route on what is actually being sent: a picture or a PDF needs a model that
+  // can see one, whatever the text model happens to be.
+  const needsVision = parts.some((p) => p.kind === "image" || p.kind === "pdf");
+  const resolved = resolveProvider(needsVision);
   if (!resolved) {
     return {
       error: "No AI provider is configured. Set the OPENROUTER_API_KEY secret " +
