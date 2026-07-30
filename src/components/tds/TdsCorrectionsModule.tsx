@@ -1497,9 +1497,12 @@ function ChallanDialog({ challan, correction, actor, onClose, onSaved, toast }: 
  * Every change in this correction, versus the originally filed return —
  * so nobody has to diff two returns by eye.
  *
- * Additions and deletions come from `action`; modifications are shown
- * field-by-field as Original -> Corrected, using the snapshot the database
- * takes the instant before the first edit (20260729200000).
+ * ONE ROW PER CHANGE. A modified entry that touched three fields is three
+ * rows, not a stacked block: the columns line up, so a whole correction can be
+ * scanned down a single Original / Corrected pair instead of read block by
+ * block. Additions and deletions come from `action`; the field-level values
+ * come from the snapshot the database takes the instant before the first edit
+ * (20260729200000), so they are exactly what was filed.
  */
 function ChangesPanel({ challans, deductees }: {
   challans: CorrectionChallan[]; deductees: CorrectionDeductee[];
@@ -1507,29 +1510,48 @@ function ChangesPanel({ challans, deductees }: {
   const rows = useMemo(() => {
     const out: {
       kind: "Challan" | "Entry"; action: CorrectionAction;
-      title: string; diffs: FieldDiff[];
+      title: string; field: string; original: unknown; corrected: unknown;
+      /** first row of a group carries the badge + name; the rest indent under it */
+      lead: boolean;
     }[] = [];
 
-    for (const c of challans) {
-      if (c.action === "unchanged") continue;
-      out.push({
-        kind: "Challan", action: c.action,
-        title: `Challan ${c.challan_serial_no || "—"}`,
-        diffs: diffCorrectionRow(c),
-      });
-    }
-    for (const d of deductees) {
-      if (d.action === "unchanged") continue;
-      out.push({
-        kind: "Entry", action: d.action,
-        title: d.deductee_name || "—",
-        diffs: diffCorrectionRow(d),
-      });
-    }
-    // Modified first — those are the ones needing a value comparison.
+    const push = (kind: "Challan" | "Entry", action: CorrectionAction, title: string, diffs: FieldDiff[]) => {
+      if (action === "modify" && diffs.length > 0) {
+        diffs.forEach((d, i) => out.push({
+          kind, action, title, field: d.label,
+          original: d.original, corrected: d.corrected, lead: i === 0,
+        }));
+      } else {
+        // Added / deleted / modified-without-snapshot: the row IS the change.
+        out.push({ kind, action, title, field: "—", original: null, corrected: null, lead: true });
+      }
+    };
+
+    // Modified first — those are the ones that need a value comparison, and
+    // burying them under alphabetically-earlier additions/deletions is exactly
+    // the manual hunting this panel exists to remove. Challans lead their
+    // entries, and each group's own rows stay in order.
     const rank = { modify: 0, add: 1, delete: 2, unchanged: 3 } as const;
-    return out.sort((a, b) => rank[a.action] - rank[b.action]);
+    const changedChallans = challans
+      .filter(c => c.action !== "unchanged")
+      .sort((a, b) => rank[a.action] - rank[b.action]);
+    const changedEntries = deductees
+      .filter(d => d.action !== "unchanged")
+      .sort((a, b) => rank[a.action] - rank[b.action]);
+
+    for (const c of changedChallans) {
+      push("Challan", c.action, `Challan ${c.challan_serial_no || "—"}`, diffCorrectionRow(c));
+    }
+    for (const d of changedEntries) {
+      push("Entry", d.action, d.deductee_name || "—", diffCorrectionRow(d));
+    }
+    return out;
   }, [challans, deductees]);
+
+  const changeCount = useMemo(
+    () => new Set(rows.map(r => `${r.kind}|${r.title}|${r.action}`)).size,
+    [rows],
+  );
 
   if (rows.length === 0) {
     return (
@@ -1551,54 +1573,65 @@ function ChangesPanel({ challans, deductees }: {
           <GitCompare size={13} className="text-muted-foreground" />
           <span className="text-sm font-semibold">Changes vs the filed return</span>
           <span className="text-[11px] text-muted-foreground">
-            {rows.length} change{rows.length === 1 ? "" : "s"}
+            {changeCount} change{changeCount === 1 ? "" : "s"}
+            {rows.length !== changeCount && ` · ${rows.length} fields`}
           </span>
         </div>
 
-        <div className="divide-y">
-          {rows.map((r, i) => (
-            <div
-              key={i}
-              className={cn("px-3 py-2 border-l-[3px]", ACTION_META[r.action].rail)}
-            >
-              <div className="flex items-center gap-2 flex-wrap">
-                <Badge className={cn("text-[9px]", ACTION_META[r.action].badge)}>
-                  {ACTION_META[r.action].label}
-                </Badge>
-                <span className="text-[10px] uppercase tracking-wide text-muted-foreground">{r.kind}</span>
-                <span className={cn("text-xs font-medium", r.action === "delete" && "line-through")}>
-                  {r.title}
-                </span>
-              </div>
-
-              {r.action === "modify" && r.diffs.length > 0 && (
-                <div className="mt-1.5 overflow-x-auto">
-                  <table className="text-xs">
-                    <tbody>
-                      {r.diffs.map(d => (
-                        <tr key={d.field}>
-                          <td className="pr-3 py-0.5 text-muted-foreground whitespace-nowrap">{d.label}</td>
-                          <td className="pr-2 py-0.5">
-                            <span className="line-through text-red-600 dark:text-red-400">{fmt(d.original)}</span>
-                          </td>
-                          <td className="pr-2 py-0.5 text-muted-foreground">→</td>
-                          <td className="py-0.5">
-                            <span className="font-medium text-emerald-700 dark:text-emerald-400">{fmt(d.corrected)}</span>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {r.action === "modify" && r.diffs.length === 0 && (
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  Marked modified; no field-level snapshot was captured for this row.
-                </p>
-              )}
-            </div>
-          ))}
+        <div className="overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead className="text-xs w-[92px]">Change</TableHead>
+                <TableHead className="text-xs w-[70px]">Type</TableHead>
+                <TableHead className="text-xs">Name</TableHead>
+                <TableHead className="text-xs">Field</TableHead>
+                <TableHead className="text-xs">Original</TableHead>
+                <TableHead className="text-xs">Corrected</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r, i) => (
+                <TableRow
+                  key={i}
+                  className={cn("h-9 border-l-[3px]", ACTION_META[r.action].rail)}
+                >
+                  <TableCell className="py-1">
+                    {/* Only the first row of a multi-field change repeats the
+                        badge and name — the rest read as continuations. */}
+                    {r.lead && (
+                      <Badge className={cn("text-[9px]", ACTION_META[r.action].badge)}>
+                        {ACTION_META[r.action].label}
+                      </Badge>
+                    )}
+                  </TableCell>
+                  <TableCell className="py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    {r.lead ? r.kind : ""}
+                  </TableCell>
+                  <TableCell className={cn(
+                    "py-1 text-xs font-medium",
+                    r.action === "delete" && "line-through",
+                    !r.lead && "text-muted-foreground/50",
+                  )}>
+                    {r.lead ? r.title : "↳"}
+                  </TableCell>
+                  <TableCell className="py-1 text-xs text-muted-foreground whitespace-nowrap">
+                    {r.field}
+                  </TableCell>
+                  <TableCell className="py-1 text-xs">
+                    {r.action === "modify"
+                      ? <span className="line-through text-red-600 dark:text-red-400">{fmt(r.original)}</span>
+                      : <span className="text-muted-foreground">—</span>}
+                  </TableCell>
+                  <TableCell className="py-1 text-xs">
+                    {r.action === "modify"
+                      ? <span className="font-medium text-emerald-700 dark:text-emerald-400">{fmt(r.corrected)}</span>
+                      : <span className="text-muted-foreground">—</span>}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
         </div>
       </CardContent>
     </Card>
