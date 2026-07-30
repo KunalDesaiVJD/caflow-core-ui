@@ -31,6 +31,12 @@ import {
 export interface TallyStageStatus {
   filingId: string | null; loaded: boolean; applicable: boolean; ran: boolean;
   total: number; matched: number; issues: number; overridden: number;
+  /** True only when a user deliberately bypassed Tally verification (client's
+   *  books aren't maintained in Tally) — as opposed to `!applicable` from
+   *  simply never having imported a ledger. Both make `applicable` false, so
+   *  the filing gate doesn't need this; it exists purely so the checklist/UI
+   *  can show "bypassed" instead of the generic "optional" label. */
+  bypassed?: boolean;
   /** This stage's FULL report (rows + reasons) for the parent's Overview. Lazy. */
   getReport?: () => StageReport;
   /** Every Tally exception (unresolved, overridden, or resolved via a saved party
@@ -232,6 +238,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const [officePickOpen, setOfficePickOpen] = useState(false); const [officePickTarget, setOfficePickTarget] = useState<ResultRow | null>(null);
   const [officePickQuery, setOfficePickQuery] = useState("");
 
+  // Bypass Tally Verification — for a client whose books aren't maintained in
+  // Tally at all. Same "latest of a pair of action types wins" persistence as
+  // the Stage-4 digital signature (tds_filing_audit_log, no migration), read
+  // back in loadAll. While bypassed, this stage reports applicable:false to
+  // the parent's onStatusChange — the SAME mechanism that already lets Stage 3
+  // skip canFile/fileBlockReason when no ledger was ever imported (see
+  // TallyStageStatus's own doc) — so no change was needed in the parent's
+  // filing-gate logic at all.
+  const [bypass, setBypass] = useState<{ byName: string; at: string } | null>(null);
+  const [bypassOpen, setBypassOpen] = useState(false);
+  const [bypassConfirmChecked, setBypassConfirmChecked] = useState(false);
+  const [bypassSaving, setBypassSaving] = useState(false);
+
   const filingId = filing?.id ?? null;
   const officeCount = office.length;
   const ledgerRowCount = useMemo(() => batches.reduce((s, b: any) => s + (Number(b.row_count) || 0), 0), [batches]);
@@ -293,7 +312,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
 
   const loadAll = useCallback(async () => {
     const seq = ++loadSeq.current; const stale = () => seq !== loadSeq.current;
-    if (!filingId) { settled.current = null; setBatches([]); setTallyRows([]); setResults(null); setOffice([]); return; }
+    if (!filingId) { settled.current = null; setBatches([]); setTallyRows([]); setResults(null); setOffice([]); setBypass(null); return; }
     const parties = await loadOffice(filingId); if (stale()) return; setOffice(parties);
     const { data: b } = await supabase.from("tds_tally_batches").select("*").eq("filing_id", filingId).order("imported_at", { ascending: false });
     if (stale()) return; setBatches(b || []);
@@ -305,6 +324,20 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     setResults(res && res.length ? (res as ResultRow[]) : null);
     const { data: us } = await supabase.from("users").select("id, name").limit(5000); if (stale()) return;
     setUserMap(Object.fromEntries((us || []).map((u: any) => [u.id, u.name])));
+    // Bypass Tally Verification — the LATEST of the two action types decides
+    // current state (a later undo reverses an earlier bypass), same rule the
+    // Stage-4 digital signature already uses.
+    const { data: byRows } = await supabase.from("tds_filing_audit_log")
+      .select("action_type, new_value, changed_at")
+      .eq("filing_id", filingId)
+      .in("action_type", ["TALLY_VERIFICATION_BYPASSED", "TALLY_VERIFICATION_BYPASS_UNDONE"])
+      .order("changed_at", { ascending: false })
+      .limit(1);
+    if (stale()) return;
+    const latestBy = (byRows || [])[0];
+    setBypass(latestBy && latestBy.action_type === "TALLY_VERIFICATION_BYPASSED" && latestBy.changed_at
+      ? { byName: latestBy.new_value || "—", at: latestBy.changed_at }
+      : null);
   }, [filingId, loadOffice, loadMaps, fetchTallyRows]);
 
   useEffect(() => { loadAll(); }, [loadAll]);

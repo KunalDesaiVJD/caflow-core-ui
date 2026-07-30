@@ -822,52 +822,10 @@ function CorrectionDetail({
         </span>
         <CorrectionStatusBadge status={correction.status} />
 
-        <div className="flex-1" />
-
-        {/* One action per stage — the workflow only ever offers its next step. */}
-        {correction.status === "draft" && (
-          <Button size="sm" className="gap-1.5 h-8" disabled={busy} onClick={doSubmit}>
-            <Send size={13} /> Submit for signature
-          </Button>
-        )}
-
-        {correction.status === "awaiting_employee" && (
-          <Button size="sm" className="gap-1.5 h-8" onClick={() => setSignOpen(true)}>
-            <PenTool size={13} /> Sign as preparer
-          </Button>
-        )}
-
-        {correction.status === "awaiting_senior" && (
-          <>
-            <Button size="sm" variant="outline" className="gap-1.5 h-8" onClick={() => setRejectOpen(true)}>
-              <XCircle size={13} /> Reject
-            </Button>
-            <Button
-              size="sm" className="gap-1.5 h-8"
-              disabled={!canApprove}
-              title={
-                isSamePerson
-                  ? "The senior approval must come from someone other than the preparer"
-                  : undefined
-              }
-              onClick={() => setApproveOpen(true)}
-            >
-              <ShieldCheck size={13} /> Approve as senior
-            </Button>
-          </>
-        )}
-
-        {correction.status === "ready_to_file" && (
-          <Button size="sm" className="gap-1.5 h-8" onClick={() => setFileOpen(true)}>
-            <CheckCircle2 size={13} /> Mark as Filed
-          </Button>
-        )}
-
-        {correction.status === "rejected" && (
-          <Button size="sm" className="gap-1.5 h-8" disabled={busy} onClick={doSubmit}>
-            <Send size={13} /> Re-submit
-          </Button>
-        )}
+        {/* No workflow buttons here. Each stage's action lives inside its own
+            box further down (Employee signature / Senior approval / Filing) so
+            an action sits with the thing it acts on, and nothing is duplicated
+            between the header and the cards. */}
       </div>
 
       {/* Stage tracker — where the correction is, and what is next */}
@@ -953,7 +911,19 @@ function CorrectionDetail({
       />
 
       {/* Signature */}
-      <SignatureSection correction={correction} />
+      <SignatureSection
+        correction={correction}
+        actor={actor}
+        busy={busy}
+        canApprove={canApprove}
+        isSamePerson={isSamePerson}
+        onSubmitForSignature={doSubmit}
+        onSignPreparer={() => setSignOpen(true)}
+        onApproveSenior={() => setApproveOpen(true)}
+        onReject={() => setRejectOpen(true)}
+        onRefresh={loadSilently}
+        toast={toast}
+      />
 
       {/* Dialogs */}
       <EntryDialog
@@ -1702,14 +1672,16 @@ function WorkflowTracker({ correction }: { correction: Correction }) {
 }
 
 /** One signature slot — signed shows the name/role/time, else what is awaited. */
-function SignatureSlot({ title, name, role, at, awaiting, note }: {
+function SignatureSlot({ title, name, role, at, awaiting, note, action }: {
   title: string; name: string | null; role: string | null; at: string | null;
   awaiting: string; note?: string;
+  /** The stage's own action, rendered inside this box rather than in a toolbar. */
+  action?: React.ReactNode;
 }) {
   const signed = !!at;
   return (
     <div className={cn(
-      "rounded-lg border p-3 flex-1 min-w-[220px]",
+      "rounded-lg border p-3 flex-1 min-w-[220px] flex flex-col",
       signed && "border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/10",
     )}>
       <div className="flex items-center gap-1.5 mb-2">
@@ -1717,6 +1689,7 @@ function SignatureSlot({ title, name, role, at, awaiting, note }: {
         <span className="text-xs font-semibold">{title}</span>
         {signed && <CheckCircle2 size={12} className="text-emerald-600" />}
       </div>
+
       {signed ? (
         <>
           <div className="border-b border-foreground/40 pb-1 mb-1">
@@ -1728,20 +1701,50 @@ function SignatureSlot({ title, name, role, at, awaiting, note }: {
           </p>
         </>
       ) : (
-        <p className="text-[11px] text-muted-foreground italic">{awaiting}</p>
+        <>
+          <p className="text-[11px] text-muted-foreground italic">{awaiting}</p>
+          {/* The rule only matters while the slot is still open. Repeating it
+              under a completed signature reads as a warning about it. */}
+          {note && <p className="text-[11px] text-muted-foreground mt-1">{note}</p>}
+        </>
       )}
-      {note && <p className="text-[11px] text-muted-foreground mt-1">{note}</p>}
+
+      {action && <div className="mt-2 pt-2 border-t flex flex-wrap gap-2">{action}</div>}
     </div>
   );
 }
 
 /**
- * Both signatures plus the filing record. Approval and filing are shown as
- * separate things on purpose — signing authorises, filing is the later manual
- * confirmation that the department accepted the return.
+ * The workflow, laid out as the three things it actually is: the employee
+ * signature, the senior approval, and the filing.
+ *
+ * Each box carries its OWN action — submit / sign / approve / reject / choose
+ * a submission mode / upload the proof / mark filed. Nothing is duplicated in
+ * a header toolbar, so an action always sits with the thing it acts on.
+ *
+ * Approval and filing stay visually separate on purpose: signing authorises
+ * the correction, filing is the later manual confirmation that the department
+ * accepted it.
  */
-export function SignatureSection({ correction }: { correction: Correction }) {
+export function SignatureSection({
+  correction, actor, busy, canApprove, isSamePerson,
+  onSubmitForSignature, onSignPreparer, onApproveSenior, onReject, onRefresh, toast,
+}: {
+  correction: Correction;
+  actor: Actor;
+  busy?: boolean;
+  canApprove?: boolean;
+  isSamePerson?: boolean;
+  onSubmitForSignature?: () => void;
+  onSignPreparer?: () => void;
+  onApproveSenior?: () => void;
+  onReject?: () => void;
+  onRefresh?: () => void;
+  toast?: any;
+}) {
   const filed = correction.status === "filed";
+  const status = correction.status;
+
   return (
     <Card>
       <CardContent className="p-3 space-y-3">
@@ -1751,8 +1754,28 @@ export function SignatureSection({ correction }: { correction: Correction }) {
             name={correction.prepared_by_name}
             role={correction.prepared_by_role}
             at={correction.prepared_at}
-            awaiting="Awaiting the preparer's signature."
+            awaiting={
+              status === "draft"
+                ? "Submit the correction to request the preparer's signature."
+                : "Awaiting the preparer's signature."
+            }
+            action={
+              status === "draft" ? (
+                <Button size="sm" className="gap-1.5 h-7 text-xs" disabled={busy} onClick={onSubmitForSignature}>
+                  <Send size={12} /> Submit for signature
+                </Button>
+              ) : status === "awaiting_employee" ? (
+                <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={onSignPreparer}>
+                  <PenTool size={12} /> Sign as preparer
+                </Button>
+              ) : status === "rejected" ? (
+                <Button size="sm" className="gap-1.5 h-7 text-xs" disabled={busy} onClick={onSubmitForSignature}>
+                  <Send size={12} /> Re-submit
+                </Button>
+              ) : undefined
+            }
           />
+
           <SignatureSlot
             title="2 · Senior approval"
             name={correction.approved_by_name || correction.signed_by_name}
@@ -1760,47 +1783,216 @@ export function SignatureSection({ correction }: { correction: Correction }) {
             at={correction.approved_at || correction.signed_at}
             awaiting="Awaiting a senior reviewer's approval."
             note="Must be a different person from the preparer."
+            action={
+              status === "awaiting_senior" ? (
+                <>
+                  <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={onReject}>
+                    <XCircle size={12} /> Reject
+                  </Button>
+                  <Button
+                    size="sm" className="gap-1.5 h-7 text-xs"
+                    disabled={!canApprove}
+                    title={isSamePerson
+                      ? "The senior approval must come from someone other than the preparer"
+                      : undefined}
+                    onClick={onApproveSenior}
+                  >
+                    <ShieldCheck size={12} /> Approve as senior
+                  </Button>
+                </>
+              ) : undefined
+            }
           />
         </div>
 
-        <div className={cn(
-          "rounded-lg border p-3",
-          filed && "border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/10",
-        )}>
-          <div className="flex items-center gap-1.5 mb-1">
-            <ShieldCheck size={12} className={filed ? "text-emerald-600" : "text-muted-foreground"} />
-            <span className="text-xs font-semibold">Filing</span>
-          </div>
-          {filed ? (
-            <p className="text-[11px] text-muted-foreground">
-              Marked filed by <span className="font-medium text-foreground">{correction.filed_by_name || "—"}</span>
-              {correction.filed_at ? ` on ${format(new Date(correction.filed_at), "dd/MM/yyyy HH:mm")}` : ""}
-              {correction.filing_reference ? ` · ref ${correction.filing_reference}` : ""}.
-            </p>
-          ) : (
-            <p className="text-[11px] text-muted-foreground italic">
-              Not filed. Both signatures authorise the correction; filing is confirmed manually once
-              the return has actually been accepted by the department.
-            </p>
-          )}
+        {/* Filing — the whole flow lives here: mode, proof, then Mark as Filed */}
+        <FilingBox
+          correction={correction} actor={actor}
+          onRefresh={onRefresh} toast={toast}
+        />
+      </CardContent>
+    </Card>
+  );
+}
 
-          {/* How it was submitted, and the evidence kept for it. */}
-          {filed && correction.submission_mode && (
+/**
+ * Filing, inline.
+ *
+ *   1. choose how it was submitted — offline (ACK) or online (screenshot)
+ *   2. upload that proof
+ *   3. Mark as Filed, which only becomes available once 1 and 2 are done
+ *
+ * The same requirement is enforced by a DB trigger (20260729220000), so the
+ * disabled button is a courtesy rather than the control.
+ */
+function FilingBox({ correction, actor, onRefresh, toast }: {
+  correction: Correction; actor: Actor; onRefresh?: () => void; toast?: any;
+}) {
+  const filed = correction.status === "filed";
+  const ready = correction.status === "ready_to_file";
+
+  const [mode, setMode] = useState<SubmissionMode | null>(correction.submission_mode ?? null);
+  const [reference, setReference] = useState(correction.filing_reference || "");
+  const [filedOn, setFiledOn] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { setMode(correction.submission_mode ?? null); }, [correction.submission_mode]);
+
+  const proofName = correction.proof_file_url
+    ? (correction.proof_file_name || "Attached file")
+    : null;
+  const meta = mode ? SUBMISSION_MODE_META[mode] : null;
+
+  const pickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file || !mode) return;
+    setUploading(true);
+    const { error } = await uploadCorrectionProof(correction, mode, file, actor);
+    setUploading(false);
+    if (error) { toast?.({ title: "Upload failed", description: error, variant: "destructive" }); return; }
+    toast?.({ title: `${SUBMISSION_MODE_META[mode].proofLabel} attached` });
+    onRefresh?.();
+  };
+
+  const markFiled = async () => {
+    setSaving(true);
+    const err = await markCorrectionFiled(correction, actor, {
+      reference: reference.trim() || undefined,
+      filedOn: filedOn ? new Date(filedOn).toISOString() : undefined,
+    });
+    setSaving(false);
+    if (err) { toast?.({ title: "Could not mark as filed", description: err, variant: "destructive" }); return; }
+    toast?.({ title: "Correction filed", description: "It is now locked and read-only." });
+    onRefresh?.();
+  };
+
+  return (
+    <div className={cn(
+      "rounded-lg border p-3",
+      filed && "border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/10",
+    )}>
+      <div className="flex items-center gap-1.5 mb-2">
+        <ShieldCheck size={12} className={filed ? "text-emerald-600" : "text-muted-foreground"} />
+        <span className="text-xs font-semibold">Filing</span>
+        {filed && <CheckCircle2 size={12} className="text-emerald-600" />}
+      </div>
+
+      {filed ? (
+        <>
+          <p className="text-[11px] text-muted-foreground">
+            Marked filed by <span className="font-medium text-foreground">{correction.filed_by_name || "—"}</span>
+            {correction.filed_at ? ` on ${format(new Date(correction.filed_at), "dd/MM/yyyy HH:mm")}` : ""}
+            {correction.filing_reference ? ` · ref ${correction.filing_reference}` : ""}.
+          </p>
+          {correction.submission_mode && (
             <p className="text-[11px] text-muted-foreground mt-1">
               {SUBMISSION_MODE_META[correction.submission_mode].label} ·{" "}
               {correction.proof_file_url ? (
-                <a
-                  href={correction.proof_file_url} target="_blank" rel="noreferrer"
-                  className="underline hover:text-foreground"
-                >
+                <a href={correction.proof_file_url} target="_blank" rel="noreferrer" className="underline hover:text-foreground">
                   {correction.proof_file_name || SUBMISSION_MODE_META[correction.submission_mode].proofLabel}
                 </a>
               ) : SUBMISSION_MODE_META[correction.submission_mode].proofLabel}
             </p>
           )}
+        </>
+      ) : !ready ? (
+        <p className="text-[11px] text-muted-foreground italic">
+          Not filed. Both signatures authorise the correction; filing is confirmed manually once the
+          return has actually been accepted by the department.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          <p className="text-[11px] text-muted-foreground">
+            Both signatures are complete. Record how the correction was submitted and attach the proof.
+          </p>
+
+          {/* 1 — how was it submitted */}
+          <div className="grid grid-cols-2 gap-2">
+            {(["offline", "online"] as SubmissionMode[]).map(m => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                aria-pressed={mode === m}
+                className={cn(
+                  "rounded-lg border p-2.5 text-left transition-colors",
+                  mode === m ? "border-primary bg-primary/5" : "hover:bg-muted/50",
+                )}
+              >
+                <p className="text-xs font-medium">
+                  {m === "offline" ? "Offline filing" : "Online correction filing"}
+                </p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  {SUBMISSION_MODE_META[m].proofLabel}
+                </p>
+              </button>
+            ))}
+          </div>
+
+          {/* 2 — the proof for that mode */}
+          {meta && (
+            <div className="space-y-1.5">
+              <Label className="text-xs">{meta.proofLabel}</Label>
+              <p className="text-[10px] text-muted-foreground">{meta.hint}</p>
+              <input ref={fileRef} type="file" className="hidden" accept={meta.accept} onChange={pickFile} />
+
+              {proofName ? (
+                <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 p-2 text-xs">
+                  <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                  <span className="truncate flex-1">{proofName}</span>
+                  <Button size="sm" variant="ghost" className="h-6 text-[11px]" disabled={uploading} onClick={() => fileRef.current?.click()}>
+                    Replace
+                  </Button>
+                </div>
+              ) : (
+                <Button size="sm" variant="outline" className="w-full gap-1.5" disabled={uploading} onClick={() => fileRef.current?.click()}>
+                  <Upload size={13} />
+                  {uploading ? "Uploading…" : `Upload ${meta.proofLabel}`}
+                </Button>
+              )}
+            </div>
+          )}
+
+          {/* 3 — confirm and file */}
+          {proofName && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">Filed on</Label>
+                  <Input type="date" className="h-8 text-xs" value={filedOn} onChange={e => setFiledOn(e.target.value)} />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">Acknowledgement no.</Label>
+                  <Input className="h-8 text-xs" value={reference} onChange={e => setReference(e.target.value)} placeholder="Optional" />
+                </div>
+              </div>
+
+              <label className="flex items-start gap-2 text-xs cursor-pointer">
+                <input type="checkbox" className="mt-0.5" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
+                <span>I confirm this correction return has been filed with the Income Tax Department.</span>
+              </label>
+            </>
+          )}
+
+          <Button
+            size="sm" className="gap-1.5 h-8"
+            disabled={!mode || !proofName || !confirmed || saving}
+            title={
+              !mode ? "Choose how the correction was submitted"
+                : !proofName ? "Upload the proof of submission first"
+                  : !confirmed ? "Confirm the return has been filed" : undefined
+            }
+            onClick={markFiled}
+          >
+            <CheckCircle2 size={13} /> {saving ? "Filing…" : "Mark as Filed"}
+          </Button>
         </div>
-      </CardContent>
-    </Card>
+      )}
+    </div>
   );
 }
 
