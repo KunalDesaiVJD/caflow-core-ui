@@ -205,15 +205,22 @@ type Part =
   | { kind: "image"; base64: string };
 
 const DEFAULT_MODEL: Record<Provider, string> = {
-  // DeepSeek v3.2. Reading a ledger is TRANSCRIPTION, not judgement, and
-  // correctness here does not rest on the model's reasoning: the reconstructed
-  // running balance must agree with the printed closing balance or the ledger is
-  // flagged and not relied on. A misread surfaces as a failed control, not as a
-  // wrong figure — which is what makes the cheaper model a sound bet.
-  // $0.27/$0.40 per M, against Sonnet's $2/$10.
-  openrouter: "deepseek/deepseek-v3.2",
-  // DeepSeek is not served by the Anthropic API, so the direct-transport
-  // fallback stays on Anthropic's own cheapest current model.
+  // Haiku 4.5, and this is an EVIDENCE-BASED choice, not a default left alone.
+  //
+  // DeepSeek v3.2 was tried here and failed the firm's own ledger on two
+  // fundamentals, checked against the PDF's own column geometry (the Credit
+  // column starts at x=546; a purchase amount sits at x=533):
+  //
+  //   vendor name   said "ACCU PANELS ENERGY PVT LTD" — the CLIENT's letterhead
+  //                 — where the vendor is "AALAP"
+  //   debit/credit  posted every purchase as a DEBIT. In a creditor ledger a
+  //                 purchase is a CREDIT; it had the sign convention inverted on
+  //                 every row, which turns payables into payments
+  //
+  // It also returned different closing balances on two identical runs. Haiku got
+  // both right and was stable. Reading a ledger is cheap to get wrong and
+  // expensive to notice, so this is the wrong place to economise.
+  openrouter: "anthropic/claude-haiku-4.5",
   anthropic: "claude-haiku-4-5-20251001",
 };
 
@@ -234,7 +241,10 @@ const DEFAULT_MODEL: Record<Provider, string> = {
  * Override with MSME_VISION_MODEL. It only ever has to handle a scan.
  */
 const DEFAULT_VISION_MODEL: Record<Provider, string> = {
-  openrouter: "qwen/qwen3.7-flash",
+  // Haiku, not a cheaper vision model. A scan is the LEAST reliable input this
+  // tool takes, so it is the last place to trade accuracy for cost — and Haiku is
+  // the one model verified correct on this firm's actual ledger.
+  openrouter: "anthropic/claude-haiku-4.5",
   anthropic: "claude-haiku-4-5-20251001",
 };
 

@@ -165,7 +165,12 @@ async function callGpt(apiKey: string, model: string, system: string, userText: 
       // look like a model fault rather than a budget one. Unused tokens are not
       // billed, so the headroom costs nothing and removes a whole failure mode.
       max_tokens: 8000,
-      response_format: { type: "json_object" },
+      // NO response_format. Kimi K2 rejects it outright — the provider returns
+      // "model moonshotai/kimi-k2-instruct does not support feature:
+      // structured-outputs" and the whole panel fails. Tested both ways: without
+      // it Kimi returns clean, parseable JSON, because the system prompt already
+      // demands JSON only and parseJson() strips any code fence. The Claude side
+      // has never used it either.
       messages: [
         { role: "system", content: system },
         { role: "user", content: userText },
@@ -310,15 +315,15 @@ type Part =
   | { kind: "image"; base64: string };
 
 const DEFAULT_MODEL: Record<Provider, string> = {
-  // DeepSeek v3.2. Reading a ledger is TRANSCRIPTION, not judgement, and
-  // correctness here does not rest on the model's reasoning: the reconstructed
-  // running balance must agree with the printed closing balance or the ledger is
-  // flagged and not relied on. A misread surfaces as a failed control, not as a
-  // wrong figure — which is what makes the cheaper model a sound bet.
-  // $0.27/$0.40 per M, against Sonnet's $2/$10.
+  // DeepSeek v3.2 opens and answers the panel. This side is JUDGEMENT, not
+  // transcription — it argues about the interpretation and never touches a
+  // figure — and DeepSeek is strong at exactly that while costing a fraction of
+  // the alternatives.
+  //
+  // It is deliberately NOT used for reading ledgers: tested against the firm's
+  // own file it inverted debit and credit on every row and mistook the company
+  // letterhead for the vendor. See the note in msme-extract-ledger.
   openrouter: "deepseek/deepseek-v3.2",
-  // DeepSeek is not served by the Anthropic API, so the direct-transport
-  // fallback stays on Anthropic's own cheapest current model.
   anthropic: "claude-haiku-4-5-20251001",
 };
 
@@ -339,7 +344,10 @@ const DEFAULT_MODEL: Record<Provider, string> = {
  * Override with MSME_VISION_MODEL. It only ever has to handle a scan.
  */
 const DEFAULT_VISION_MODEL: Record<Provider, string> = {
-  openrouter: "qwen/qwen3.7-flash",
+  // Haiku, not a cheaper vision model. A scan is the LEAST reliable input this
+  // tool takes, so it is the last place to trade accuracy for cost — and Haiku is
+  // the one model verified correct on this firm's actual ledger.
+  openrouter: "anthropic/claude-haiku-4.5",
   anthropic: "claude-haiku-4-5-20251001",
 };
 
