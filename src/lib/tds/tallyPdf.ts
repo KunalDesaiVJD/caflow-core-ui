@@ -195,6 +195,21 @@ function isTaxLine(label: string): boolean {
  * employee's line be identified without relying on how a particular client
  * happens to name it.
  */
+/**
+ * PROFESSIONAL TAX IS NOT TAXABLE INCOME.
+ *
+ * It is a section 16(iii) deduction, so it forms no part of the figure a 24Q
+ * return reports as Taxable Income. A salary voucher's DEBIT total is the
+ * employer's gross cost and therefore includes it, which left the parsed figure
+ * ₹200 above Office Data on a real GROWQ employee — the exact difference of the
+ * Professional Tax credited on that voucher.
+ *
+ * Deliberately narrow: Professional Tax ONLY. PF and ESIC are also credited on
+ * the same vouchers but are Chapter VI-A deductions, not section 16 ones — they
+ * stay inside the taxable figure, and excluding them would understate income.
+ */
+const PROFESSIONAL_TAX_RE = /\bprofession(al)?\s*tax\b|\bp\.?\s*tax\b|\bptax\b/i;
+
 const SALARY_DEDUCTION_HEAD =
   /\bp\.?\s*f\b|provident|\bepf\b|\bvpf\b|\besic?\b|profession(al)?\s*tax|\bp\.?\s*tax\b|labour\s*welfare|\blwf\b|gratuity|\badvance\b|\bloan\b|recovery|canteen|insurance|\bmess\b|\bround(ing)?\s*off\b/i
   ;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, Fragment } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import {
@@ -273,6 +273,93 @@ const buildPrevQuarterLabel = (
 // ═══════════════════════════════════════
 // MAIN COMPONENT
 // ═══════════════════════════════════════
+/**
+ * The filed values of an edited correction entry, rendered in the SAME columns
+ * as the row above so old and new line up and can be read across.
+ *
+ * `original_values` is the snapshot the database takes the instant before the
+ * first edit (migration 20260729200000) — not a re-derivation, so it is exactly
+ * what was filed. Fields that actually changed are highlighted; the rest are
+ * muted, which keeps the eye on the difference.
+ */
+function CorrectionOriginalRow({ original, current, form }: {
+  original: Record<string, any>;
+  current: Record<string, any>;
+  form: string;
+}) {
+  const same = (a: any, b: any) => {
+    const n = (v: any) => {
+      if (v === null || v === undefined || v === "") return null;
+      const num = Number(v);
+      return Number.isFinite(num) && String(v).trim() !== "" ? num : String(v);
+    };
+    return n(a) === n(b);
+  };
+
+  const money = (v: any) =>
+    v === null || v === undefined || v === "" ? "—"
+      : new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(Number(v));
+  const text = (v: any) => (v === null || v === undefined || v === "" ? "—" : String(v));
+  const date = (v: any) => {
+    if (!v) return "—";
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString("en-GB");
+  };
+
+  // Mirror the visible columns for this form, so the old row lines up.
+  const cols: { key: string; render: (v: any) => string }[] =
+    form === "24Q"
+      ? [
+          { key: "deductee_name", render: text },
+          { key: "deductee_pan", render: text },
+          { key: "gross_salary", render: money },
+          { key: "standard_deduction_allowed", render: money },
+          { key: "net_taxable_salary", render: money },
+          { key: "total_tax_deducted", render: money },
+          { key: "__spacer_details", render: () => "" },
+        ]
+      : [
+          { key: "deductee_name", render: text },
+          { key: "deductee_pan", render: text },
+          { key: "deductee_type", render: text },
+          { key: "section_code", render: text },
+          { key: "amount_paid_credited", render: money },
+          { key: "date_of_payment", render: date },
+          { key: "rate_of_tds", render: text },
+          { key: "total_tax_deducted", render: money },
+          { key: "interest_amount", render: money },
+          { key: "reason_for_lower_or_nil_deduction", render: text },
+        ];
+
+  return (
+    <TableRow className="bg-red-50/40 dark:bg-red-950/10 border-b-2">
+      <TableCell />
+      <TableCell className="text-[10px] uppercase tracking-wide text-muted-foreground whitespace-nowrap">
+        Original
+      </TableCell>
+      {cols.map(c => {
+        if (c.key.startsWith("__spacer")) return <TableCell key={c.key} />;
+        const changed = !same(original[c.key], current[c.key]);
+        return (
+          <TableCell
+            key={c.key}
+            className={cn(
+              "text-xs",
+              changed
+                ? "text-red-700 dark:text-red-400 font-medium line-through"
+                : "text-muted-foreground/60",
+            )}
+            title={changed ? `Was: ${c.render(original[c.key])} · Now: ${c.render(current[c.key])}` : undefined}
+          >
+            {c.render(original[c.key])}
+          </TableCell>
+        );
+      })}
+      <TableCell />
+    </TableRow>
+  );
+}
+
 export function TdsDataEntry({
   clients, users, isSuperadmin, resolveFirmId,
   selClient, setSelClient, selFy, setSelFy, selQuarter, setSelQuarter, selForm, setSelForm,
@@ -1127,6 +1214,19 @@ export function TdsDataEntry({
     if (isFilingLocked) return;
     const { error } = await supabase.from(SRC.deductees as any).delete().eq("id", id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+
+    // In a correction the DELETE is intercepted by a trigger: a row that came
+    // from the filed return SURVIVES, marked action='delete', so the correction
+    // still shows what was removed. Dropping it from local state here would
+    // hide it until the next reload and contradict the screen's whole purpose,
+    // so re-read instead. (A row ADDED inside this correction really is gone —
+    // the re-read simply will not return it.)
+    if (isCorrectionMode) {
+      if (selectedChallan) await fetchDeductees(selectedChallan.id);
+      await bumpUnderProcess();
+      return;
+    }
+
     setDeductees(prev => prev.filter(d => d.id !== id));
     // Issue 7I: Instantly update allChallanDeductees for balance recalc
     if (selectedChallan) {
@@ -1195,12 +1295,27 @@ export function TdsDataEntry({
     await bumpUnderProcess();
   };
 
+  // Entries that still COUNT. A correction shows deleted rows struck through
+  // so the removal is visible, but they no longer consume the challan, so every
+  // total and count must ignore them.
+  const liveDeductees = useMemo(
+    () => isCorrectionMode ? deductees.filter(d => (d as any).action !== "delete") : deductees,
+    [deductees, isCorrectionMode],
+  );
+
   // ─── Challan breakdown (Issue 7A: cross-quarter total) ───
   const getChallanBreakdownAll = useCallback((challanId: string) => {
     // Use ALL entries across all quarters for accurate balance (7A)
-    const allForChallan = challanId === selectedChallan?.id
+    const allForChallanRaw = challanId === selectedChallan?.id
       ? [...prevEntries, ...deductees]
       : (allChallanDeductees[challanId] || []);
+    // A correction keeps deleted entries visible (struck through) so the user
+    // can see what was removed — but a removed entry no longer consumes any of
+    // the challan, so it must not count toward Applied / Unconsumed or the
+    // deductee count. Without this the balances describe the OLD return.
+    const allForChallan = isCorrectionMode
+      ? allForChallanRaw.filter(d => (d as any).action !== "delete")
+      : allForChallanRaw;
     const challanObj = challans.find(c => c.id === challanId)
       || (selectedChallan?.id === challanId ? selectedChallan : null)
       || carryForwardChallans.find(cf => cf.challan.id === challanId)?.challan || null;
@@ -1208,7 +1323,7 @@ export function TdsDataEntry({
     const lateFees = (challanObj as Challan | null)?.late_fees_234e || 0;
     // Issue 4: Late fees are a separate govt levy — exclude from allocatable TDS amount
     return { tds, interest, surcharge, lateFees, applied, count: allForChallan.length };
-  }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans]);
+  }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, isCorrectionMode]);
 
   // Keep getChallanBreakdown as alias for backward compat
   const getChallanBreakdown = getChallanBreakdownAll;
@@ -1904,7 +2019,7 @@ export function TdsDataEntry({
                               <span className="text-muted-foreground">Allocatable: ₹{allocatable.toLocaleString("en-IN")}</span>
                             )}
                             <span className="text-border">|</span>
-                            <span className="text-muted-foreground">Deductees: <strong>{deductees.length + prevEntries.length}</strong></span>
+                            <span className="text-muted-foreground">Deductees: <strong>{liveDeductees.length + prevEntries.length}</strong></span>
                             <span className={cn("font-semibold",
                               matchOk ? "text-emerald-600"
                                 : challanDeducteeTds < allocatable ? "text-amber-600"
@@ -1964,6 +2079,9 @@ export function TdsDataEntry({
                           <TableHeader>
                             <TableRow>
                               <TableHead className="w-8 text-xs">#</TableHead>
+                              {isCorrectionMode && (
+                                <TableHead className="w-[92px] text-xs">Change</TableHead>
+                              )}
                               {selForm === "24Q" ? (
                                 <>
                                   <TableHead className="text-xs" style={{ width: nameColWidth, minWidth: nameColWidth }}>Employee Name</TableHead>
@@ -2075,14 +2193,13 @@ export function TdsDataEntry({
 
                             {/* Current quarter entries (Issue 1: locked when filing=Filed) */}
                             {deductees.map((d, idx) => {
-                              const locked = isFilingLocked;
-                              // Correction mode only: tint the row by what
-                              // changed versus the filed return, so a change is
-                              // visible while editing, not just in the summary.
+                              // A row already marked deleted in this correction is history —
+                              // it is shown struck through, not offered for further editing.
                               const act = isCorrectionMode ? (d as any).action : undefined;
+                              const locked = isFilingLocked || act === "delete";
                               return (
+                                <Fragment key={d.id}>
                                 <TableRow
-                                  key={d.id}
                                   className={cn(
                                     locked && "bg-muted/20",
                                     act === "add" && "bg-emerald-50/70 dark:bg-emerald-950/20",
@@ -2095,14 +2212,15 @@ export function TdsDataEntry({
                                       : undefined
                                   }
                                 >
-                                  <TableCell className="text-xs text-muted-foreground">
-                                    <span className="flex items-center gap-1">
-                                      {idx + 1}
-                                      {act === "add" && <span className="text-emerald-600 font-bold" title="Added">+</span>}
-                                      {act === "modify" && <span className="text-amber-600 font-bold" title="Modified">±</span>}
-                                      {act === "delete" && <span className="text-red-600 font-bold" title="Deleted">−</span>}
-                                    </span>
-                                  </TableCell>
+                                  <TableCell className="text-xs text-muted-foreground">{idx + 1}</TableCell>
+                                  {isCorrectionMode && (
+                                    <TableCell className="text-xs">
+                                      {act === "add" && <Badge className="text-[9px] bg-emerald-100 text-emerald-700">Added</Badge>}
+                                      {act === "modify" && <Badge className="text-[9px] bg-amber-100 text-amber-700">Modified</Badge>}
+                                      {act === "delete" && <Badge className="text-[9px] bg-red-100 text-red-700">Deleted</Badge>}
+                                      {(!act || act === "unchanged") && <span className="text-muted-foreground">—</span>}
+                                    </TableCell>
+                                  )}
                                   {selForm === "24Q" ? (
                                     <>
                                       <TableCell>
@@ -2371,6 +2489,14 @@ export function TdsDataEntry({
                                     </Button>
                                   </TableCell>
                                 </TableRow>
+                                {isCorrectionMode && act === "modify" && (d as any).original_values && (
+                                  <CorrectionOriginalRow
+                                    original={(d as any).original_values}
+                                    current={d}
+                                    form={selForm}
+                                  />
+                                )}
+                              </Fragment>
                               );
                             })}
 
