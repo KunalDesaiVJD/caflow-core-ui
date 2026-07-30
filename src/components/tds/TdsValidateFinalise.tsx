@@ -96,16 +96,6 @@ const fmtVal = (v: unknown): string => {
 /** All 7 compared fields, in fixed order. */
 const DIFF_FIELDS = ["name", "pan", "date", "amount", "tds", "interest", "section"] as const;
 
-/** Digital-signature text validation. The signature is an attestation typed by
- *  an authorized role (Firm Admin / Super Admin), never a password — it's
- *  accepted against a fixed allow-list rather than matched to the logged-in
- *  account's own name, so either a generic role signature or a named signer
- *  is valid. Comparison ignores case and collapses internal whitespace so
- *  "KUNAL DESAI", "kunal   desai" and "Kunal Desai" are all the same value. */
-const AUTHORIZED_SIGNATURES = ["firm admin", "super admin", "kunal desai", "mukesh baldha"];
-const normalizeSignatureText = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
-const isAuthorizedSignature = (s: string) => AUTHORIZED_SIGNATURES.includes(normalizeSignatureText(s));
-
 /** Downloads a same-origin static template asset via a synthesized <a> click
  * rather than a plain JSX anchor, so this works the same way from inside a
  * DropdownMenuItem's onClick as it would from a standalone button — avoids
@@ -310,7 +300,6 @@ export function TdsValidateFinalise({
   // Digital signature — persisted as a tds_filing_audit_log entry (no schema
   // change needed), so it survives a refresh and carries its own audit trail.
   const [signature, setSignature] = useState<{ signedByName: string; signedAt: string } | null>(null);
-  const [signerNameInput, setSignerNameInput] = useState("");
   const [attestChecked, setAttestChecked] = useState(false);
   const [signing, setSigning] = useState(false);
   const [runSignal, setRunSignal] = useState(0);
@@ -735,32 +724,30 @@ export function TdsValidateFinalise({
     setResults(prev => prev ? prev.map(x => x.id === r.id ? { ...x, overridden: false, override_note: null } : x) : prev);
   };
 
-  /** Digital signature — the signer types an authorized attestation value
-   *  (never a password: see isAuthorizedSignature) plus a review checkbox.
-   *  Persisted as a tds_filing_audit_log entry rather than a new column, so it
-   *  needs no migration and already carries WHO/WHEN via that table's own
-   *  changed_by_name/changed_at (the acting user's OWN account — `userId`/
-   *  `userName` below — not the typed signature text, so the audit trail always
-   *  shows who actually clicked Sign & Confirm even when they typed a role
-   *  name like "Firm Admin"). Only a Firm Admin/Super Admin role (canSign) may
-   *  call this. Signing is only offered once canFile is true — there is
-   *  nothing to attest to while Stage 1-3 still have open issues. */
+  /** Digital signature — one-click, same pattern as Correction Signature's
+   *  signAsPreparer/approveAsSenior (tdsCorrections.ts): the signed-by name is
+   *  pulled straight from the authenticated account (userMap[user.id], the
+   *  same source this file already uses for "who acted" everywhere else — see
+   *  actingName below) rather than typed and checked against an allow-list.
+   *  There is nothing left to validate the text of, so only the review
+   *  checkbox gates the click. Persisted as a tds_filing_audit_log entry
+   *  rather than a new column, so it needs no migration. Only a Firm
+   *  Admin/Super Admin role (canSign) may call this. Signing is only offered
+   *  once canFile is true — there is nothing to attest to while Stage 1-3
+   *  still have open issues. */
   const handleSign = async () => {
     if (!filing || !user?.id) return;
     if (!canSign) { toast({ title: "Not authorized", description: "Only the Firm Admin or Super Admin is authorized to digitally sign and approve this return for filing.", variant: "destructive" }); return; }
-    if (!isAuthorizedSignature(signerNameInput)) {
-      toast({ title: "Signature not recognized", description: "Type an authorized signature — Firm Admin, Super Admin, or an authorized signer's name.", variant: "destructive" });
-      return;
-    }
     if (!attestChecked) { toast({ title: "Confirmation required", description: "Confirm you have reviewed every exception before signing.", variant: "destructive" }); return; }
     if (!canFile) { toast({ title: "Not ready to sign", description: "Resolve every Stage 1-3 issue above before signing.", variant: "destructive" }); return; }
     setSigning(true);
+    const signedByName = userMap[user.id] || user.email || "Unknown";
     await logReconAudit({
-      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: userMap[user.id],
-      actionType: "CHECKER_SIGNATURE", newValue: signerNameInput.trim(),
+      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: signedByName,
+      actionType: "CHECKER_SIGNATURE", newValue: signedByName,
       remark: "Digitally signed — confirms review of every Stage 1-3 exception, override and mapping.",
     });
-    setSignature({ signedByName: signerNameInput.trim(), signedAt: new Date().toISOString() });
+    setSignature({ signedByName, signedAt: new Date().toISOString() });
     setSigning(false);
     toast({ title: "Digitally signed", description: "You can now mark this return as ready to file." });
   };
@@ -773,7 +760,7 @@ export function TdsValidateFinalise({
       actionType: "CHECKER_SIGNATURE_REVOKED", oldValue: signature.signedByName,
       remark: "Signature revoked before filing.",
     });
-    setSignature(null); setSignerNameInput(""); setAttestChecked(false);
+    setSignature(null); setAttestChecked(false);
     setSigning(false);
   };
 
@@ -1681,7 +1668,7 @@ export function TdsValidateFinalise({
                   ) : (
                     <div className="space-y-2">
                       <p className="text-xs text-muted-foreground">
-                        Type your name to digitally sign this return, confirming you have reviewed every mismatch, override and mapping listed above.
+                        Signing as <b>{userMap[user?.id ?? ""] || user?.email || "—"}</b>. Confirm below to digitally sign this return, attesting you have reviewed every mismatch, override and mapping listed above.
                       </p>
                       <div className="flex items-start gap-2">
                         <Checkbox id="checker-attest" checked={attestChecked} onCheckedChange={(v) => setAttestChecked(!!v)} className="mt-0.5" />
@@ -1689,12 +1676,9 @@ export function TdsValidateFinalise({
                           I have reviewed all exceptions, overrides and mappings across Stage 1, 2 and 3, and I confirm this return is ready for filing.
                         </Label>
                       </div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Input value={signerNameInput} onChange={(e) => setSignerNameInput(e.target.value)} placeholder="Type your full name" className="h-8 text-xs w-56" />
-                        <Button size="sm" className="h-8 gap-1 text-xs" disabled={signing || !signerNameInput.trim() || !attestChecked} onClick={handleSign}>
-                          {signing ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} Sign &amp; Confirm
-                        </Button>
-                      </div>
+                      <Button size="sm" className="h-8 gap-1 text-xs" disabled={signing || !attestChecked} onClick={handleSign}>
+                        {signing ? <Loader2 size={13} className="animate-spin" /> : <ShieldCheck size={13} />} Sign &amp; Confirm
+                      </Button>
                     </div>
                   )}
                 </CardContent>

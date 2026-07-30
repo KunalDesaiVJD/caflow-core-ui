@@ -63,7 +63,12 @@ export const CORRECTION_STATUS_META: Record<CorrectionStatus, {
   },
 };
 
-/** Roles allowed to give the SECOND (senior) signature. */
+/**
+ * Roles nominally regarded as senior.
+ *
+ * NOT a gate. The firm asked for the second signature to be open to every
+ * user, so this list is descriptive only — never use it to block an approval.
+ */
 export const SENIOR_ROLES = ["manager", "partner_ca", "firm_admin", "superadmin"];
 
 export const isSeniorReviewer = (role: string | null | undefined) =>
@@ -449,9 +454,6 @@ export async function approveAsSenior(c: Correction, actor: Actor) {
   if (!actor.id) return "You must be signed in to approve a correction.";
   if (c.prepared_by && c.prepared_by === actor.id) {
     return "The senior approval must be given by someone other than the preparer.";
-  }
-  if (!isSeniorReviewer(actor.role)) {
-    return "Only a senior reviewer (manager, partner, firm admin) can give the second signature.";
   }
   const now = new Date().toISOString();
   const { error } = await supabase.from("tds_corrections" as any)

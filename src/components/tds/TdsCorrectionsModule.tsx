@@ -668,7 +668,10 @@ function CorrectionDetail({
   // too; `editable` only keeps the UI from offering a rejected action.
   const editable = isCorrectionEditable(correction?.status);
   const isSamePerson = !!correction?.prepared_by && correction.prepared_by === actor.id;
-  const canApprove = isSeniorReviewer(actor.role) && !isSamePerson;
+  // No role gate — the second signature is open to every user by request.
+  // The only remaining rule is maker-checker: the approver cannot be the
+  // preparer, which the database enforces too.
+  const canApprove = !isSamePerson;
 
   // The correction presented to the Data Entry engine as if it were a filing.
   // 20260729190000 made the correction tables column-identical to the live
@@ -843,11 +846,9 @@ function CorrectionDetail({
               size="sm" className="gap-1.5 h-8"
               disabled={!canApprove}
               title={
-                !isSeniorReviewer(actor.role)
-                  ? "Only a manager, partner or firm admin can give the senior approval"
-                  : isSamePerson
-                    ? "The senior approval must come from someone other than the preparer"
-                    : undefined
+                isSamePerson
+                  ? "The senior approval must come from someone other than the preparer"
+                  : undefined
               }
               onClick={() => setApproveOpen(true)}
             >
