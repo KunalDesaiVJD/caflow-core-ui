@@ -112,7 +112,24 @@ const TdsFilings = () => {
     };
     run();
     return () => { cancelled = true; };
-  }, [ctxClient, ctxFy, ctxQuarter, ctxForm, dashRefreshKey]);
+    // activeSection: filing a correction happens on the Corrections tab, which
+    // changes none of the values below — without this the Workspace would not
+    // show the new Correction tab until something else happened to move the
+    // context. Re-running when the Workspace is opened closes that gap.
+  }, [ctxClient, ctxFy, ctxQuarter, ctxForm, dashRefreshKey, activeSection]);
+
+  // ...and live, so a correction filed in another tab (or by a colleague)
+  // surfaces here without navigating away and back. RLS scopes the stream.
+  useEffect(() => {
+    if (!ctxClient) return;
+    const ch = supabase
+      .channel(`tds-workspace-corrections-${ctxClient}`)
+      .on("postgres_changes",
+        { event: "*", schema: "public", table: "tds_corrections", filter: `client_id=eq.${ctxClient}` },
+        () => setDashRefreshKey(k => k + 1))
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [ctxClient]);
 
   const [clients, setClients] = useState<ClientOption[]>([]);
   const [users, setUsers] = useState<UserOption[]>([]);

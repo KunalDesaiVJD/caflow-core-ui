@@ -66,6 +66,12 @@ describe("editing a correction entry", () => {
     await waitFor(() => {
       expect(screen.getAllByText("Modified").length).toBeGreaterThan(0);
     }, { timeout: 3000 });
+
+    // ...and the grid must NOT have been rebuilt to show it. If the refresh
+    // went through the loading branch, the detail unmounts behind a skeleton
+    // and this exact node would be detached — which is what made the screen
+    // flash and lose the user's place on every edit.
+    expect(amount.isConnected).toBe(true);
     // and the summary stops claiming nothing changed
     await waitFor(() => expect(document.body.textContent).not.toContain("No changes yet"));
   });

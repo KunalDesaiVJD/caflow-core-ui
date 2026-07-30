@@ -612,8 +612,13 @@ function CorrectionDetail({
   const [changeFilter, setChangeFilter] = useState<ChangeFilter>("all");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  // `silent` refreshes the data WITHOUT flipping `loading`. The loading branch
+  // returns a skeleton, which unmounts the entire detail — including the Data
+  // Entry grid — so calling this after every field edit rebuilt the screen and
+  // threw the user out of the row they were typing in. A silent refresh just
+  // updates state in place and lets React reconcile.
+  const load = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) setLoading(true);
     const { data } = await supabase.from("tds_corrections" as any)
       .select("*").eq("id", correctionId).maybeSingle();
     const head = (data as unknown as Correction) || null;
@@ -634,6 +639,10 @@ function CorrectionDetail({
   }, [correctionId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Stable identity, so passing it to the grid never re-triggers the grid's
+  // own effects. Used after every edit — see the comment on `load`.
+  const loadSilently = useCallback(() => { void load({ silent: true }); }, [load]);
 
   const locked = isCorrectionLocked(correction?.status);
   // Entries freeze at the FIRST signature, not at filing — what the senior
@@ -913,7 +922,7 @@ function CorrectionDetail({
         // action / original_values are written by DB triggers, so the change
         // summary and the Original-vs-Corrected panel above this grid only
         // reflect an edit if we re-read after it.
-        onCorrectionChanged={load}
+        onCorrectionChanged={loadSilently}
       />
 
       {/* Signature */}
