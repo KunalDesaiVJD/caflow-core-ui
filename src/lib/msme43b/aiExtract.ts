@@ -59,52 +59,79 @@ interface AiExtractResult {
  * So the body is read out and shown. Without this the user sees the same nine
  * words whether the API key is missing, the PDF was rejected, or the model
  * errored — which is how eight sessions went by without knowing which it was.
+ *
+ * The error also carries the one distinction the caller ACTS on: whether the
+ * page range was too much for a single call (retrying it smaller will work) or
+ * whether something is wrong regardless of size (retrying is pointless and the
+ * error belongs on screen).
  */
+class LedgerReadError extends Error {
+  constructor(message: string, readonly rangeTooDense: boolean) {
+    super(message);
+    this.name = 'LedgerReadError';
+  }
+}
+
 async function describeInvokeError(
   error: { name?: string; message?: string; context?: unknown },
   fileName: string,
-): Promise<Error> {
+): Promise<LedgerReadError> {
   const msg = error.message || '';
 
   if (/Failed to send a request|Failed to fetch|NetworkError|FunctionsFetchError/i.test(msg) || error.name === 'FunctionsFetchError') {
-    return new Error(
+    return new LedgerReadError(
       'Could not reach the ledger-reading service (msme-extract-ledger). It is most likely not deployed yet — ' +
       'run "npx supabase functions deploy msme-extract-ledger". ' +
       'If it is deployed, check your network connection and try again.',
+      false,
     );
   }
   if (/timeout|timed out/i.test(msg)) {
-    return new Error(`Reading "${fileName}" timed out. Very large ledgers can exceed the limit — try splitting the PDF.`);
+    // The platform's idle timeout. Fewer pages per call is the remedy.
+    return new LedgerReadError(`Reading "${fileName}" timed out — the page range was too dense for one call.`, true);
   }
 
   // A non-2xx: the function ran and reported something. Get it out of the body.
-  const detail = await readErrorBody(error.context);
-  if (detail) {
-    const status = (error.context as Response | undefined)?.status;
-    return new Error(`The ledger-reading service failed${status ? ` (HTTP ${status})` : ''}: ${detail}`);
+  const body = await readErrorBody(error.context);
+  const status = (error.context as Response | undefined)?.status;
+  if (body?.detail) {
+    return new LedgerReadError(
+      `The ledger-reading service failed${status ? ` (HTTP ${status})` : ''}: ${body.detail}`,
+      body.rangeTooDense,
+    );
   }
-  return new Error(msg || 'The ledger-reading service failed.');
+  return new LedgerReadError(msg || 'The ledger-reading service failed.', false);
 }
 
 /**
  * supabase-js puts the raw Response on error.context for an HTTP error. Reading
  * it is best-effort: the body may already be consumed, may not be JSON, or may
  * be empty, and none of those should replace the original error with a new one.
+ *
+ * `code` is read rather than pattern-matching the prose, so the retry decision
+ * does not silently stop working when a message is reworded.
  */
-async function readErrorBody(context: unknown): Promise<string | null> {
+async function readErrorBody(
+  context: unknown,
+): Promise<{ detail: string | null; rangeTooDense: boolean } | null> {
   const res = context as Response | undefined;
   if (!res || typeof res.text !== 'function') return null;
   try {
     const text = (await res.text()).trim();
     if (!text) return null;
     try {
-      const parsed = JSON.parse(text) as { error?: string; message?: string };
+      const parsed = JSON.parse(text) as {
+        error?: string; message?: string; code?: string; truncated?: boolean;
+      };
       const picked = parsed.error || parsed.message;
-      if (picked) return String(picked).slice(0, 500);
+      return {
+        detail: picked ? String(picked).slice(0, 500) : text.slice(0, 500),
+        rangeTooDense: parsed.code === 'truncated' || parsed.truncated === true,
+      };
     } catch {
       // Not JSON — the raw text is still the most useful thing available.
+      return { detail: text.slice(0, 500), rangeTooDense: false };
     }
-    return text.slice(0, 500);
   } catch {
     return null;
   }
@@ -134,10 +161,6 @@ const PAGES_PER_CHUNK = 3;
  */
 const CHUNK_THRESHOLD_PAGES = 4;
 
-/** A 504/timeout from the platform rather than a refusal by the model. */
-function isTimeout(message: string): boolean {
-  return /idle timeout|504|timed out|timeout/i.test(message);
-}
 
 /** Extract vendor ledgers from a PDF of any format via Claude. */
 export async function extractLedgersViaAI(
@@ -210,9 +233,10 @@ async function extractByChunks(
     });
     if (error) {
       const described = await describeInvokeError(error, file.name);
-      // A timeout is about THIS range being too dense, not about the file, so it
-      // is retried smaller below rather than abandoning the other ranges.
-      if (isTimeout(described.message)) return null;
+      // Too dense is about THIS range, not the file — whether it ran out of time
+      // or ran out of output tokens. Either way it is retried smaller below,
+      // rather than abandoning the other ranges.
+      if (described.rangeTooDense) return null;
       throw described;
     }
     if (data?.error) {
@@ -315,10 +339,36 @@ function mergeLedgers(parts: VendorLedger[]): VendorLedger[] {
   return out;
 }
 
-function mapLedger(raw: unknown, sourceFile: string, reconcile = true): VendorLedger {
+/** The fixed element order of a compact row. Must match the prompt exactly. */
+const ROW = {
+  date: 0, particulars: 1, vchType: 2, vchNo: 3,
+  debit: 4, credit: 5, taxableValue: 6, gstAmount: 7, gstRate: 8,
+} as const;
+
+/**
+ * Accept a transaction as either a positional array (the compact form the prompt
+ * asks for, which fits ~2.5x more rows in one reply) or an object with named
+ * fields.
+ *
+ * Both are accepted on purpose. The named form is what the model produced before
+ * the prompt changed, and a model occasionally ignores a format instruction — a
+ * silently dropped ledger would be far worse than a slightly larger reply, and
+ * the reconciliation oracle catches nothing here because a ledger read as ZERO
+ * rows with a zero balance can look internally consistent.
+ */
+export function rowFields(t: unknown): Record<string, unknown> {
+  if (!Array.isArray(t)) return (t ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [name, idx] of Object.entries(ROW)) out[name] = t[idx];
+  return out;
+}
+
+export function mapLedger(raw: unknown, sourceFile: string, reconcile = true): VendorLedger {
   const r = (raw ?? {}) as Record<string, unknown>;
-  const txns: LedgerTxn[] = (Array.isArray(r.txns) ? r.txns : []).map((t) => {
-    const tt = (t ?? {}) as Record<string, unknown>;
+  // "rows" is the compact form; "txns" is the older named form.
+  const rawRows = Array.isArray(r.rows) ? r.rows : Array.isArray(r.txns) ? r.txns : [];
+  const txns: LedgerTxn[] = rawRows.map((t) => {
+    const tt = rowFields(t);
     const credit = num(tt.credit);
     let taxableValue = optNum(tt.taxableValue);
     let gstAmount = optNum(tt.gstAmount);
