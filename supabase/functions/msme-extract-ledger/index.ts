@@ -33,6 +33,11 @@ const SYSTEM_PROMPT =
   '(Tally, Busy, Marg, Expert, Zoho, or any other). Extract it into strict JSON. ' +
   'This is a CREDITOR (accounts-payable) ledger: a CREDIT to the party increases ' +
   'what we owe (a purchase/bill); a DEBIT reduces it (a payment/settlement).\n\n' +
+  // ROWS ARE POSITIONAL ARRAYS, NOT OBJECTS. Repeating nine field names on every
+  // row spent roughly 60% of the output budget on punctuation, and the output
+  // budget is a hard time limit here (see the max_tokens note below). The same
+  // information as an array costs about 2.5x less, so 2.5x as many rows fit in a
+  // call that returns in time. The order is fixed and validated client-side.
   'Return ONLY this JSON object (no markdown, no commentary):\n' +
   '{"ledgers":[{' +
   '"vendorName":string,' +
@@ -41,17 +46,21 @@ const SYSTEM_PROMPT =
   '"periodTo":string,               // ISO yyyy-mm-dd if shown, else ""\n' +
   '"openingBalance":number,         // signed: +ve = credit/payable, -ve = debit balance\n' +
   '"closingBalance":number,         // signed the same way, exactly as printed\n' +
-  '"txns":[{' +
-  '"date":string,                   // ISO yyyy-mm-dd\n' +
-  '"particulars":string,            // narration / contra ledger name as printed\n' +
-  '"vchType":string,                // Purchase/Payment/Journal/Credit Note/etc, or ""\n' +
-  '"vchNo":string,                  // voucher/bill no, or ""\n' +
-  '"debit":number,                  // amount debited to the party (0 if none)\n' +
-  '"credit":number,                 // amount credited to the party (0 if none)\n' +
-  '"taxableValue":number|null,      // invoice value EXCLUDING GST, only if the document shows it\n' +
-  '"gstAmount":number|null,         // total GST on the invoice (CGST+SGST+IGST+cess), only if shown\n' +
-  '"gstRate":number|null            // GST rate as a percentage, e.g. 18, only if shown\n' +
-  '}]}]}\n\n' +
+  '"rows":[ [date, particulars, vchType, vchNo, debit, credit, taxableValue, gstAmount, gstRate] ]\n' +
+  '}]}\n\n' +
+  'EACH ROW IS AN ARRAY OF EXACTLY 9 ELEMENTS, ALWAYS IN THIS ORDER:\n' +
+  '  [0] date         string  ISO yyyy-mm-dd\n' +
+  '  [1] particulars  string  narration / contra ledger name as printed\n' +
+  '  [2] vchType      string  Purchase/Payment/Journal/Credit Note/etc, or ""\n' +
+  '  [3] vchNo        string  voucher/bill no, or ""\n' +
+  '  [4] debit        number  amount debited to the party (0 if none)\n' +
+  '  [5] credit       number  amount credited to the party (0 if none)\n' +
+  '  [6] taxableValue number or null — invoice value EXCLUDING GST, only if shown\n' +
+  '  [7] gstAmount    number or null — total GST (CGST+SGST+IGST+cess), only if shown\n' +
+  '  [8] gstRate      number or null — GST rate as a percentage, e.g. 18, only if shown\n' +
+  'Never omit or reorder an element. Use null for the last three when not shown, ' +
+  'and "" or 0 for the others. Example row:\n' +
+  '["2026-03-20","Purchase A/c","Purchase","INV-441",0,118000,100000,18000,18]\n\n' +
   'RULES:\n' +
   '- Extract EVERY transaction line, top to bottom, in order. Do not summarise, ' +
   'sample, or skip rows.\n' +
@@ -153,11 +162,14 @@ serve(async (req) => {
     } catch (_e) {
       // Truncation is the usual cause and has a specific remedy, so say which it
       // is rather than reporting a generic parse failure.
+      // `code` is what the client keys its retry on — it re-sends this page range
+      // one page at a time rather than losing the file. The prose is for the
+      // human who sees it if even a single page will not fit.
       return json({
         error: reply.truncated
-          ? "The ledger was too large to read in one pass — the reply was cut off. " +
-            "Split the PDF into smaller files (one vendor, or a few pages each) and try again."
+          ? "This page range holds more rows than one reply can carry. Retrying it a page at a time."
           : "The ledger-reading service returned output that could not be parsed.",
+        code: reply.truncated ? "truncated" : "unparseable",
         truncated: reply.truncated,
         raw: reply.text.slice(0, 2000),
       }, 502);
