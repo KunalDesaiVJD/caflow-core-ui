@@ -47,11 +47,25 @@ interface AiExtractResult {
 
 /**
  * Turn supabase-js's opaque transport errors into something a CA firm can act
- * on. "Failed to send a request to the Edge Function" is what you get when the
- * function is not deployed at all, and on its own it tells the user nothing.
+ * on. Two of its messages say nothing on their own:
+ *
+ *   "Failed to send a request to the Edge Function"  → not deployed at all
+ *   "Edge Function returned a non-2xx status code"   → deployed, but it failed,
+ *                                                      and the REASON is in the
+ *                                                      response body, which
+ *                                                      supabase-js hides in
+ *                                                      error.context
+ *
+ * So the body is read out and shown. Without this the user sees the same nine
+ * words whether the API key is missing, the PDF was rejected, or the model
+ * errored — which is how eight sessions went by without knowing which it was.
  */
-function describeInvokeError(error: { name?: string; message?: string }, fileName: string): Error {
+async function describeInvokeError(
+  error: { name?: string; message?: string; context?: unknown },
+  fileName: string,
+): Promise<Error> {
   const msg = error.message || '';
+
   if (/Failed to send a request|Failed to fetch|NetworkError|FunctionsFetchError/i.test(msg) || error.name === 'FunctionsFetchError') {
     return new Error(
       'Could not reach the ledger-reading service (msme-extract-ledger). It is most likely not deployed yet — ' +
@@ -62,7 +76,38 @@ function describeInvokeError(error: { name?: string; message?: string }, fileNam
   if (/timeout|timed out/i.test(msg)) {
     return new Error(`Reading "${fileName}" timed out. Very large ledgers can exceed the limit — try splitting the PDF.`);
   }
+
+  // A non-2xx: the function ran and reported something. Get it out of the body.
+  const detail = await readErrorBody(error.context);
+  if (detail) {
+    const status = (error.context as Response | undefined)?.status;
+    return new Error(`The ledger-reading service failed${status ? ` (HTTP ${status})` : ''}: ${detail}`);
+  }
   return new Error(msg || 'The ledger-reading service failed.');
+}
+
+/**
+ * supabase-js puts the raw Response on error.context for an HTTP error. Reading
+ * it is best-effort: the body may already be consumed, may not be JSON, or may
+ * be empty, and none of those should replace the original error with a new one.
+ */
+async function readErrorBody(context: unknown): Promise<string | null> {
+  const res = context as Response | undefined;
+  if (!res || typeof res.text !== 'function') return null;
+  try {
+    const text = (await res.text()).trim();
+    if (!text) return null;
+    try {
+      const parsed = JSON.parse(text) as { error?: string; message?: string };
+      const picked = parsed.error || parsed.message;
+      if (picked) return String(picked).slice(0, 500);
+    } catch {
+      // Not JSON — the raw text is still the most useful thing available.
+    }
+    return text.slice(0, 500);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -101,7 +146,7 @@ export async function extractLedgersViaAI(
   const { data, error } = await supabase.functions.invoke('msme-extract-ledger', {
     body: { pdf_base64: await bufferToBase64(buf), filename: file.name },
   });
-  if (error) throw describeInvokeError(error, file.name);
+  if (error) throw await describeInvokeError(error, file.name);
   if (data?.error) throw new Error(data.error);
 
   const rawLedgers: unknown[] = Array.isArray(data?.ledgers) ? data.ledgers : [];
@@ -148,7 +193,7 @@ async function extractByChunks(
     const { data, error } = await supabase.functions.invoke('msme-extract-ledger', {
       body: { text_content: c.text, filename: file.name, page_range: `${c.from}-${c.to}` },
     });
-    if (error) throw describeInvokeError(error, file.name);
+    if (error) throw await describeInvokeError(error, file.name);
     if (data?.error) {
       // One bad range should not lose the other fifteen.
       failures.push(`pages ${c.from}–${c.to}: ${data.error}`);

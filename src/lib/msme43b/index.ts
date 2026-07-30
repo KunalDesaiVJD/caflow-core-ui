@@ -7,7 +7,10 @@ export {
 export { pdfToLines } from './pdfText';
 export { parseLedgerPages } from './parseLedger';
 export { detectFormat } from './detectFormat';
-export { analyzeVendor, buildReport, normVendor, daysBetween, type BuildReportOptions } from './engine';
+export {
+  analyzeVendor, buildReport, normVendor, daysBetween, deriveBlockers,
+  type BuildReportOptions, type ReportBlockers,
+} from './engine';
 export { classifyTxn } from './classify';
 export {
   buildWorkpaperWorkbook, downloadWorkpaper, workpaperBlob, workpaperFileName,
@@ -24,6 +27,10 @@ export { reconcileLedger } from './reconcile';
 export { extractLedgersViaAI } from './aiExtract';
 export { crossCheckVendor, type CrossResult } from './crosscheck';
 export { verifyVendor, type VerifyOutcome } from './verify';
+export {
+  classificationSensitivity, sensitivityWarnings,
+  type SensitivityResult, type SensitivityComponent, type NarrationDependentEntry,
+} from './sensitivity';
 
 // ── calibration loop: learn the firm's interpretation from their own working ──
 export {

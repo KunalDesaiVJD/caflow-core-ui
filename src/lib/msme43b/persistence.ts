@@ -7,6 +7,7 @@
 // than crashing the page.
 
 import { supabase } from '@/integrations/supabase/client';
+import { deriveBlockers } from './engine';
 import type { Msme43bReport } from './types';
 
 const TABLE = 'msme_43b_runs';
@@ -81,10 +82,22 @@ export async function listRuns(clientId: string): Promise<PersistResult<Msme43bR
   return { data: (data ?? []) as Msme43bRunSummary[], error: null, unavailable: false };
 }
 
+/**
+ * Runs saved before the sign-off blockers existed have no blocksSignOff /
+ * blockingReasons in their stored JSON. Defaulting those to "false / none"
+ * would silently present an old, unreconciled run as clean, so they are
+ * recomputed from the stored vendor results using the same engine function.
+ */
+export function hydrateReport(raw: Msme43bReport): Msme43bReport {
+  if (Array.isArray(raw.blockingReasons)) return raw;
+  return { ...raw, ...deriveBlockers(raw.vendors ?? []) };
+}
+
 export async function loadRun(id: string): Promise<PersistResult<Msme43bReport>> {
   const { data, error } = await db().select('report').eq('id', id).single();
   if (error) return { data: null, error: error.message, unavailable: isMissingTable(error) };
-  return { data: (data.report as Msme43bReport) ?? null, error: null, unavailable: false };
+  const raw = (data.report as Msme43bReport) ?? null;
+  return { data: raw ? hydrateReport(raw) : null, error: null, unavailable: false };
 }
 
 export async function renameRun(id: string, label: string): Promise<PersistResult<true>> {

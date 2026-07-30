@@ -27,9 +27,13 @@
 // alter the working paper — those remain deterministic and human-gated.
 //
 // AUTH: Supabase JWT, as with the other msme-* functions.
-// KEYS: ANTHROPIC_API_KEY (existing) + OPENROUTER_API_KEY (new).
-//       Set with: npx supabase secrets set OPENROUTER_API_KEY=...
-//       Optional: OPENROUTER_MODEL to pin a different GPT model.
+// KEYS: OPENROUTER_API_KEY reaches BOTH panellists — Claude and GPT — so one
+//       funded account runs the whole panel. ANTHROPIC_API_KEY still works for
+//       the Claude side if set and preferred (see callModel below).
+//       Optional: OPENROUTER_MODEL for the GPT side, MSME_CLAUDE_MODEL for the
+//       Claude side. Both default to a current model and neither is pinned in
+//       code, because two hardcoded IDs in this project were withdrawn and
+//       silently broke it.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
@@ -40,8 +44,9 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const CLAUDE_MODEL = "claude-sonnet-4-20250514";
-const DEFAULT_GPT_MODEL = "openai/gpt-4o";
+// The Claude-side model is resolved by callModel() from the MSME_CLAUDE_MODEL
+// secret, so it is not pinned here. The GPT side is:
+const DEFAULT_GPT_MODEL = "openai/gpt-5.6-sol";
 
 const CONTEXT =
   'CONTEXT — how this computation is produced, so you review the right thing:\n' +
@@ -117,32 +122,21 @@ function parseJson(content: string) {
   return JSON.parse(cleaned);
 }
 
-async function callClaude(apiKey: string, system: string, userText: string): Promise<unknown> {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": apiKey,
-      "anthropic-version": "2023-06-01",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: CLAUDE_MODEL,
-      max_tokens: 3072,
-      system,
-      messages: [{ role: "user", content: [{ type: "text", text: userText }] }],
-    }),
-  });
-  if (!res.ok) {
-    const t = await res.text();
-    console.error("Anthropic error:", res.status, t);
-    throw new Error(
-      res.status === 401 || res.status === 403
-        ? "Claude authentication failed — check ANTHROPIC_API_KEY."
-        : `Claude call failed (${res.status}).`,
-    );
-  }
-  const body = await res.json();
-  return parseJson(body.content?.[0]?.text || "");
+/**
+ * The Claude side of the panel. Goes through whichever transport is configured
+ * (OpenRouter by default), so one funded account can serve both panellists.
+ *
+ * The independence that matters here is between the two MODELS, not the two
+ * transports: a Claude-family and a GPT-family model still reason differently
+ * whether or not the bytes travel through the same gateway. What a shared
+ * transport does cost is fault isolation — an OpenRouter outage now stops the
+ * whole panel rather than half of it — which is the trade the firm chose in
+ * exchange for funding one account.
+ */
+async function callClaude(system: string, userText: string): Promise<unknown> {
+  const reply = await callModel(system, [{ kind: "text", text: userText }], 3072);
+  if (isModelError(reply)) throw new Error(reply.error);
+  return parseJson(reply.text);
 }
 
 async function callGpt(apiKey: string, model: string, system: string, userText: string): Promise<unknown> {
@@ -202,21 +196,23 @@ serve(async (req) => {
     const { evidence } = await req.json();
     if (!evidence) return json({ error: "Missing evidence" }, 400);
 
-    const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
+    // The Claude side picks its own transport (see callModel). The GPT side is
+    // OpenRouter by definition — it is the only way this project reaches a
+    // non-Anthropic model — so its key is required either way.
     const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
-    if (!ANTHROPIC_API_KEY) return json({ error: "Claude is not configured (no ANTHROPIC_API_KEY)." }, 503);
     if (!OPENROUTER_API_KEY) {
       return json({
         error: "The GPT reviewer is not configured. Set it with: npx supabase secrets set OPENROUTER_API_KEY=sk-or-v1-...",
       }, 503);
     }
     const gptModel = Deno.env.get("OPENROUTER_MODEL") || DEFAULT_GPT_MODEL;
+    const claudeModel = resolveProvider()?.model ?? "unavailable";
 
     const pack = JSON.stringify(evidence).slice(0, 100_000);
 
     // ── Turn 1: Claude opens ──
     const claudeOpinion = await callClaude(
-      ANTHROPIC_API_KEY, CLAUDE_OPEN_SYSTEM,
+      CLAUDE_OPEN_SYSTEM,
       `Here is the computation and the interpretation applied.\n\n${pack}`,
     );
 
@@ -229,7 +225,7 @@ serve(async (req) => {
 
     // ── Turn 3: Claude answers ──
     const claudeResponse = await callClaude(
-      ANTHROPIC_API_KEY, CLAUDE_RESPOND_SYSTEM,
+      CLAUDE_RESPOND_SYSTEM,
       `The computation:\n\n${pack}\n\n` +
       `Your opinion:\n\n${JSON.stringify(claudeOpinion)}\n\n` +
       `The reviewer's challenge:\n\n${JSON.stringify(gptCritique)}`,
@@ -249,7 +245,9 @@ serve(async (req) => {
       gptCritique,
       claudeResponse,
       gptFinal,
-      models: { claude: CLAUDE_MODEL, gpt: gptModel },
+      // The panel names its own members: which two models actually argued is
+      // part of the working paper, not an implementation detail.
+      models: { claude: claudeModel, gpt: gptModel },
     });
   } catch (e) {
     console.error("msme-panel-review error:", e);
@@ -262,4 +260,234 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  AI transport — OpenRouter (default) or the Anthropic API direct
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// WHY BOTH: one OpenRouter key reaches Claude, GPT and everything else, so the
+// firm funds a single account instead of one per provider. The direct Anthropic
+// path is kept because it is one less intermediary for the calls that matter,
+// and because it is what this function used before — losing it would mean a
+// provider outage has no fallback.
+//
+// WHICH ONE RUNS: OPENROUTER_API_KEY if present, otherwise ANTHROPIC_API_KEY.
+// Set MSME_AI_PROVIDER to "anthropic" or "openrouter" to force one.
+//
+// MODELS ARE NOT HARDCODED. Two pinned model IDs in this project went stale and
+// silently broke it (claude-sonnet-4-20250514 and openai/gpt-4o were both
+// withdrawn), so the ID is a secret with a current default:
+//   MSME_CLAUDE_MODEL   e.g. anthropic/claude-sonnet-5   (OpenRouter naming)
+//                       e.g. claude-sonnet-5             (Anthropic naming)
+// A withdrawn model now produces a message naming the secret to change, rather
+// than a generic failure.
+
+type Provider = "openrouter" | "anthropic";
+
+/** Provider-neutral message content: text, or a PDF to be read as a document. */
+type Part =
+  | { kind: "text"; text: string }
+  | { kind: "pdf"; filename: string; base64: string };
+
+const DEFAULT_MODEL: Record<Provider, string> = {
+  openrouter: "anthropic/claude-sonnet-5",
+  anthropic: "claude-sonnet-5",
+};
+
+interface ModelReply {
+  text: string;
+  /** the reply hit the output cap — the caller must not treat it as complete */
+  truncated: boolean;
+  model: string;
+  provider: Provider;
+}
+
+function resolveProvider(): { provider: Provider; apiKey: string; model: string } | null {
+  const forced = (Deno.env.get("MSME_AI_PROVIDER") ?? "").trim().toLowerCase();
+  const orKey = Deno.env.get("OPENROUTER_API_KEY");
+  const anthKey = Deno.env.get("ANTHROPIC_API_KEY");
+
+  let provider: Provider | null = null;
+  if (forced === "anthropic" && anthKey) provider = "anthropic";
+  else if (forced === "openrouter" && orKey) provider = "openrouter";
+  else if (orKey) provider = "openrouter";
+  else if (anthKey) provider = "anthropic";
+  if (!provider) return null;
+
+  const apiKey = (provider === "openrouter" ? orKey : anthKey)!;
+  const model = (Deno.env.get("MSME_CLAUDE_MODEL") ?? "").trim() || DEFAULT_MODEL[provider];
+  return { provider, apiKey, model };
+}
+
+/**
+ * One call, either transport. The two APIs differ in three ways that matter —
+ * how the system prompt is passed, how a PDF is attached, and where the reply
+ * and the truncation flag live — so each is built explicitly rather than
+ * pretending one shape fits both.
+ */
+async function callModel(
+  system: string,
+  parts: Part[],
+  maxTokens: number,
+): Promise<ModelReply | { error: string; status: number }> {
+  const resolved = resolveProvider();
+  if (!resolved) {
+    return {
+      error: "No AI provider is configured. Set the OPENROUTER_API_KEY secret " +
+        "(one key covers Claude and every other model) or ANTHROPIC_API_KEY.",
+      status: 503,
+    };
+  }
+  const { provider, apiKey, model } = resolved;
+
+  const res = provider === "openrouter"
+    ? await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://caflow-core-ui.vercel.app",
+          "X-Title": "CAFlow MSME 43B(h)",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          messages: [
+            { role: "system", content: system },
+            {
+              role: "user",
+              content: parts.map((p) =>
+                p.kind === "text"
+                  ? { type: "text", text: p.text }
+                  : {
+                      type: "file",
+                      file: {
+                        filename: p.filename,
+                        file_data: `data:application/pdf;base64,${p.base64}`,
+                      },
+                    }
+              ),
+            },
+          ],
+          // engine "native" hands the PDF to the model itself, which is what the
+          // direct Anthropic path did — same fidelity, and no per-page OCR fee.
+          // Switch to "mistral-ocr" only if a scanned ledger reads badly.
+          ...(parts.some((p) => p.kind === "pdf")
+            ? { plugins: [{ id: "file-parser", pdf: { engine: "native" } }] }
+            : {}),
+        }),
+      })
+    : await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: maxTokens,
+          system,
+          messages: [{
+            role: "user",
+            content: parts.map((p) =>
+              p.kind === "text"
+                ? { type: "text", text: p.text }
+                : {
+                    type: "document",
+                    source: { type: "base64", media_type: "application/pdf", data: p.base64 },
+                  }
+            ),
+          }],
+        }),
+      });
+
+  if (!res.ok) {
+    const body = await res.text();
+    console.error(`${provider} error:`, res.status, body);
+    return describeProviderError(res.status, body, model, provider);
+  }
+
+  // deno-lint-ignore no-explicit-any
+  const body: any = await res.json();
+  if (provider === "openrouter") {
+    const choice = body.choices?.[0];
+    return {
+      text: choice?.message?.content ?? "",
+      truncated: choice?.finish_reason === "length",
+      model,
+      provider,
+    };
+  }
+  return {
+    text: body.content?.[0]?.text ?? "",
+    truncated: body.stop_reason === "max_tokens",
+    model,
+    provider,
+  };
+}
+
+/**
+ * Turn an HTTP failure from either provider into something the firm can act on.
+ *
+ * Each cause has a different remedy: a spent balance needs a payment, a
+ * withdrawn model needs a secret changed, a rate limit needs a wait. Collapsing
+ * them into "AI extraction failed" is what sent a plain billing problem to the
+ * server logs instead of to the person who could fix it in two minutes.
+ */
+function describeProviderError(
+  status: number,
+  body: string,
+  model: string,
+  provider: Provider,
+): { error: string; status: number } {
+  let providerMsg = "";
+  try {
+    providerMsg = String((JSON.parse(body) as { error?: { message?: string } })?.error?.message ?? "");
+  } catch {
+    // Not JSON — fall through to the status-based cases.
+  }
+
+  // Billing. Anthropic returns this as a 400, so it used to land in the
+  // generic bucket; OpenRouter uses 402.
+  if (status === 402 || /credit balance is too low|insufficient.*credit|purchase credits|billing|quota/i.test(providerMsg)) {
+    const where = provider === "openrouter"
+      ? "openrouter.ai/credits"
+      : "console.anthropic.com under Plans & Billing";
+    return {
+      error: `The ${provider} account has no credits left, so no ledger can be read. Add credits at ${where}. ` +
+        "This affects every AI feature that uses the same key, not only this one.",
+      status: 402,
+    };
+  }
+  if (status === 401 || status === 403) {
+    const secret = provider === "openrouter" ? "OPENROUTER_API_KEY" : "ANTHROPIC_API_KEY";
+    return { error: `The ${provider} key was rejected. Update the ${secret} secret.`, status: 401 };
+  }
+  if (status === 429) {
+    return {
+      error: `${provider} is rate-limiting this account. Wait a minute and try again, or upload fewer files at once.`,
+      status: 429,
+    };
+  }
+  if (status === 404 || /model/i.test(providerMsg)) {
+    return {
+      error: `${provider} will not serve the model "${model}": ${providerMsg || "model not found"}. ` +
+        "Models get withdrawn — set the MSME_CLAUDE_MODEL secret to a current one " +
+        "(list them at openrouter.ai/models) and try again. No redeploy is needed.",
+      status: 502,
+    };
+  }
+  // Anything else: say what the provider said rather than inventing a summary.
+  return {
+    error: providerMsg
+      ? `${provider} error (HTTP ${status}): ${providerMsg}`
+      : `${provider} call failed (HTTP ${status}).`,
+    status: status >= 500 ? 502 : status,
+  };
+}
+
+function isModelError(r: unknown): r is { error: string; status: number } {
+  return typeof (r as { error?: unknown })?.error === "string";
 }
