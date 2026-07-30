@@ -701,7 +701,7 @@ export async function uploadCorrectionProof(
     .eq("id", c.id);
   if (error) {
     // Do not leave an orphan object behind if the row could not be updated.
-    await supabase.storage.from("documents").remove([path]).catch(() => {});
+    await supabase.storage.from(PROOF_BUCKET).remove([path]).catch(() => {});
     return { error: error.message };
   }
 
