@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, cleanup } from "@testing-library/react";
 import { describe, it, vi, expect } from "vitest";
 const { state } = vi.hoisted(() => ({ state: { status: "ready_to_file" as string } }));
 vi.mock("@/integrations/supabase/client", () => {
@@ -67,6 +67,22 @@ describe("workflow actions live in their own boxes", () => {
     expect(screen.getByRole("button", { name: /Reject/i })).toBeInTheDocument();
     // the Filing box offers nothing yet
     expect(screen.queryByRole("button", { name: /Mark as Filed/i })).toBeNull();
+  });
+
+  it("never calls a correction 'Filed' before it has been", async () => {
+    // The grid locks entries from the first signature onward, and used to say
+    // "This filing is Filed" whenever locked — untrue at awaiting_senior and
+    // at ready_to_file, and it told the user to unlock it from the Filings
+    // list, which has nothing to do with a correction.
+    for (const st of ["awaiting_senior", "ready_to_file"]) {
+      state.status = st;
+      await open();
+      const t = document.body.textContent!;
+      expect(t).not.toContain("This filing is Filed");
+      expect(t).not.toContain("Change status in Filings list");
+      expect(t).toContain("Entries are locked");
+      cleanup();
+    }
   });
 
   it("drops the 'different person' note once the senior HAS signed", async () => {

@@ -492,6 +492,8 @@ const TdsFilings = () => {
                       tan: null,
                     } as any}
                     forceReadOnly
+                    lockBadgeLabel="Filed"
+                    lockNotice="This is the filed correction for this return — read-only. The Data Entry and Validate & Finalise tabs show the original filing."
                   />
                 </div>
               )}

@@ -902,6 +902,18 @@ function CorrectionDetail({
         source={CORRECTION_TDS_SOURCE}
         filingOverride={correctionAsFiling}
         forceReadOnly={!editable}
+        lockBadgeLabel={locked ? "Filed" : "Locked"}
+        lockNotice={
+          locked
+            ? "This correction has been filed. All data is read-only."
+            : correction.status === "awaiting_senior"
+              ? "Signed by the preparer and awaiting senior approval. Entries are locked so what is approved is exactly what was signed."
+              : correction.status === "ready_to_file"
+                ? "Both signatures are complete. Entries are locked — record the filing in the Filing box below."
+                : correction.status === "rejected"
+                  ? "This correction was rejected. Re-submit it from the Employee signature box to edit again."
+                  : undefined
+        }
         // action / original_values are written by DB triggers, so the change
         // summary and the Original-vs-Corrected panel above this grid only
         // reflect an edit if we re-read after it.
