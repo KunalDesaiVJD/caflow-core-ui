@@ -231,6 +231,39 @@ const UNASSIGNED_PREPARER = "";
 const VF_READY = "ready";
 const VF_NOT_READY = "not-ready";
 
+// Safe batch size for a Supabase `.in("col", ids)` filter. A firm can easily
+// have 100+ filings loaded on one Dashboard view (1,003 total filings seen in
+// production for a single firm) — a single unbatched `.in()` over all of them
+// risks a URL-length or row-limit failure that PostgREST/Supabase-js does NOT
+// surface as a thrown exception; it comes back as `{ data: null, error }` (or
+// in some proxy/timeout cases just an empty array), which a caller that only
+// reads `.data` silently treats as "zero rows exist" — turning a transient
+// infra hiccup into a permanent, wrong "nothing is done yet" verdict for
+// every filing on the page.
+const IN_QUERY_CHUNK_SIZE = 50;
+
+/** Run a `.in(col, ids)`-style Supabase query in safe-sized batches and merge
+ *  the results. Errors are collected (never thrown, never silently dropped)
+ *  so the caller can decide how to surface a partial failure — see
+ *  fetchVfStatuses's own use of this for why silence here is the actual bug
+ *  class this exists to close off. */
+async function fetchInChunks<T>(
+  build: (idsChunk: string[]) => PromiseLike<{ data: T[] | null; error: unknown }>,
+  ids: string[],
+  chunkSize = IN_QUERY_CHUNK_SIZE,
+): Promise<{ data: T[]; errors: unknown[] }> {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += chunkSize) chunks.push(ids.slice(i, i + chunkSize));
+  const results = await Promise.all(chunks.map((c) => build(c)));
+  const data: T[] = [];
+  const errors: unknown[] = [];
+  for (const r of results) {
+    if (r.error) errors.push(r.error);
+    if (r.data) data.push(...r.data);
+  }
+  return { data, errors };
+}
+
 /** The Client column's own filter: a free-text search rather than a checkbox
  *  list, because a firm has hundreds of clients and typing a few letters beats
  *  scrolling. Same header-as-trigger behaviour as MultiSelectFilter's inHeader
@@ -801,23 +834,42 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const fetchVfStatuses = async (filingIds: string[]) => {
     if (filingIds.length === 0) { setVfStatuses(new Map()); return; }
     const [s1Res, panBatchRes, panResRes, tallyBatchRes, tallyResRes, sigRes, tallyBypassRes] = await Promise.all([
-      supabase.from("tds_recon_results").select("filing_id, match_status, overridden").in("filing_id", filingIds),
-      supabase.from("tds_pan_verification_batches").select("filing_id").in("filing_id", filingIds),
-      supabase.from("tds_pan_verification_results").select("filing_id, validation_result, overridden").in("filing_id", filingIds),
-      supabase.from("tds_tally_batches").select("filing_id").in("filing_id", filingIds),
-      supabase.from("tds_tally_results").select("filing_id, result, overridden").in("filing_id", filingIds),
-      supabase.from("tds_filing_audit_log").select("filing_id, action_type, new_value, changed_at")
-        .in("filing_id", filingIds).in("action_type", ["CHECKER_SIGNATURE", "CHECKER_SIGNATURE_REVOKED"])
-        .order("changed_at", { ascending: true }),
+      fetchInChunks((c) => supabase.from("tds_recon_results").select("filing_id, match_status, overridden").in("filing_id", c), filingIds),
+      fetchInChunks((c) => supabase.from("tds_pan_verification_batches").select("filing_id").in("filing_id", c), filingIds),
+      fetchInChunks((c) => supabase.from("tds_pan_verification_results").select("filing_id, validation_result, overridden").in("filing_id", c), filingIds),
+      fetchInChunks((c) => supabase.from("tds_tally_batches").select("filing_id").in("filing_id", c), filingIds),
+      fetchInChunks((c) => supabase.from("tds_tally_results").select("filing_id, result, overridden").in("filing_id", c), filingIds),
+      fetchInChunks((c) => supabase.from("tds_filing_audit_log").select("filing_id, action_type, new_value, changed_at")
+        .in("filing_id", c).in("action_type", ["CHECKER_SIGNATURE", "CHECKER_SIGNATURE_REVOKED"])
+        .order("changed_at", { ascending: true }), filingIds),
       // Bypass Tally Verification (TdsTallyRecon.tsx) — a client whose books
       // aren't maintained in Tally at all. Without this, a bypassed filing's
       // Dashboard badge would stay stuck on Stage 3 forever, since it would
       // otherwise treat "no tds_tally_batches row" as Stage 3 still pending
       // rather than deliberately skipped.
-      supabase.from("tds_filing_audit_log").select("filing_id, action_type, changed_at")
-        .in("filing_id", filingIds).in("action_type", ["TALLY_VERIFICATION_BYPASSED", "TALLY_VERIFICATION_BYPASS_UNDONE"])
-        .order("changed_at", { ascending: true }),
+      fetchInChunks((c) => supabase.from("tds_filing_audit_log").select("filing_id, action_type, changed_at")
+        .in("filing_id", c).in("action_type", ["TALLY_VERIFICATION_BYPASSED", "TALLY_VERIFICATION_BYPASS_UNDONE"])
+        .order("changed_at", { ascending: true }), filingIds),
     ]);
+
+    // A silent failure here (timeout, a URL/row-limit on a large `.in()` list,
+    // a transient network blip) used to look EXACTLY like "every stage is
+    // pending" — groupByFiling() below can't tell "this filing genuinely has
+    // no rows yet" apart from "the query that would have found its rows
+    // failed and returned nothing". With 125+ filings routinely loaded in one
+    // Dashboard view (one client firm here has 1,003 total filings), that is
+    // not a hypothetical: it is the most likely explanation for a "Ready"
+    // filing that a hard refresh never fixes. Surface it loudly instead of
+    // quietly rendering every filing on the page as not-ready.
+    const allErrors = [s1Res, panBatchRes, panResRes, tallyBatchRes, tallyResRes, sigRes, tallyBypassRes].flatMap((r) => r.errors);
+    if (allErrors.length > 0) {
+      console.error("fetchVfStatuses: one or more chunked queries failed", allErrors);
+      toast({
+        title: "Dashboard status may be incomplete",
+        description: "Some filing data failed to load — the Ready/Not-ready column below may be wrong until this is retried. Try refreshing.",
+        variant: "destructive",
+      });
+    }
 
     // filing_id -> { total, issues } — issues excludes any row already overridden.
     const groupByFiling = (rows: any[] | null | undefined, isIssue: (r: any) => boolean) => {
