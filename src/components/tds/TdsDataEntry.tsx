@@ -38,6 +38,7 @@ import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2, Undo2,
   CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
 } from "lucide-react";
+import { undoCorrectionRow } from "@/lib/tdsCorrections";
 import { generateGeniusExport } from "@/lib/genius-export";
 import { importGeniusXls, repairFilingSectionCodes } from "@/lib/genius-import";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
@@ -129,11 +130,14 @@ interface Props {
    * trigger-set columns, so the parent has to re-read after every edit.
    */
   onCorrectionChanged?: () => void;
-  /** Revert one correction row to its filed state. */
-  onUndoCorrectionRow?: (
-    table: "tds_correction_challans" | "tds_correction_deductees",
-    row: any,
-  ) => void | Promise<void>;
+  /**
+   * Called AFTER a row has been reverted to its filed state. The undo itself
+   * happens in here, not in the parent: the grid renders from THIS component's
+   * state, so a parent-side undo updated the database and the parent's own copy
+   * while the visible row stayed exactly as it was — which read as "Undo does
+   * nothing". This hook is only for logging / parent refresh.
+   */
+  onCorrectionRowUndone?: (row: any) => void;
 }
 
 /** The table pair this engine reads and writes. */
@@ -323,6 +327,7 @@ function CorrectionOriginalRow({ original, current, form }: {
       ? [
           { key: "deductee_name", render: text },
           { key: "deductee_pan", render: text },
+          { key: "date_of_payment", render: date },
           { key: "gross_salary", render: money },
           { key: "standard_deduction_allowed", render: money },
           { key: "net_taxable_salary", render: money },
@@ -374,7 +379,7 @@ function CorrectionOriginalRow({ original, current, form }: {
 export function TdsDataEntry({
   clients, users, isSuperadmin, resolveFirmId,
   selClient, setSelClient, selFy, setSelFy, selQuarter, setSelQuarter, selForm, setSelForm,
-  source, filingOverride, forceReadOnly, onCorrectionChanged, onUndoCorrectionRow,
+  source, filingOverride, forceReadOnly, onCorrectionChanged, onCorrectionRowUndone,
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -1275,6 +1280,33 @@ export function TdsDataEntry({
     onCorrectionChanged?.();
   };
 
+  // ─── Correction undo ──────────────────────────────────────────────────────
+  // Reverting has to happen HERE because the grid renders from this
+  // component's own `deductees` / `challans` state. Doing the update in the
+  // parent left the visible row untouched until a reload, which is exactly
+  // what "the Undo button is not working" looked like.
+  const undoCorrectionEntry = async (d: Deductee) => {
+    if (!isCorrectionMode || isFilingLocked) return;
+    const err = await undoCorrectionRow(SRC.deductees as any, d as any);
+    if (err) { toast({ title: "Could not undo", description: err, variant: "destructive" }); return; }
+    // Re-read this challan's rows so the row's badge, values and the Original
+    // comparison line all reflect the restored state immediately.
+    if (selectedChallan) await fetchDeductees(selectedChallan.id);
+    onCorrectionRowUndone?.(d);
+    onCorrectionChanged?.();
+    toast({ title: "Change undone", description: "The entry is back to its filed values." });
+  };
+
+  const undoCorrectionChallanRow = async (c: Challan) => {
+    if (!isCorrectionMode || isFilingLocked || !filing) return;
+    const err = await undoCorrectionRow(SRC.challans as any, c as any);
+    if (err) { toast({ title: "Could not undo", description: err, variant: "destructive" }); return; }
+    await fetchChallans(filing.id);
+    onCorrectionRowUndone?.(c);
+    onCorrectionChanged?.();
+    toast({ title: "Change undone", description: "The challan is back to its filed values." });
+  };
+
   // ─── 24Q Salary ───
   const openSalaryDrawer = (d: Deductee) => {
     setSalaryDeductee(d);
@@ -1957,6 +1989,15 @@ export function TdsDataEntry({
                                     {isCorrectionMode && (c as any).action === "delete" && (
                                       <Badge className="text-[9px] px-1 bg-red-100 text-red-700">Deleted</Badge>
                                     )}
+                                    {isCorrectionMode && (c as any).action && (c as any).action !== "unchanged" && !isFilingLocked && (
+                                      <Button
+                                        variant="ghost" size="icon" className="h-5 w-5"
+                                        title="Undo this challan change — restore the filed values"
+                                        onClick={e => { e.stopPropagation(); void undoCorrectionChallanRow(c); }}
+                                      >
+                                        <Undo2 size={10} />
+                                      </Button>
+                                    )}
                                   </div>
                                   {/* Issue 2: Hide Edit/Delete when filed */}
                                   {!isFilingLocked && (
@@ -2137,6 +2178,7 @@ export function TdsDataEntry({
                                 <>
                                   <TableHead className="text-xs" style={{ width: nameColWidth, minWidth: nameColWidth }}>Employee Name</TableHead>
                                   <TableHead className="text-xs" style={{ width: panColWidth, minWidth: panColWidth }}>PAN</TableHead>
+                                  <TableHead className="text-xs" style={{ width: 110, minWidth: 110 }}>Date</TableHead>
                                   <TableHead className="text-xs text-right" style={{ width: 110, minWidth: 110 }}>Gross</TableHead>
                                   <TableHead className="text-xs text-right" style={{ width: 90, minWidth: 90 }}>Std Ded</TableHead>
                                   <TableHead className="text-xs text-right" style={{ width: 90, minWidth: 90 }}>Taxable</TableHead>
@@ -2177,7 +2219,7 @@ export function TdsDataEntry({
                             {/* Issue 5: Previous quarter entries section (read-only, Issue 7E: distinct styling) */}
                             {prevEntries.length > 0 && (
                               <TableRow className="bg-slate-100 border-l-4 border-l-slate-400">
-                                <TableCell colSpan={selForm === "24Q" ? 9 : 12} className="py-1 px-2">
+                                <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="py-1 px-2">
                                   {/* Dynamic label: single prev-quarter uses selQuarter/selFy helper;
                                       multi-quarter carry-forward lists all unique quarters from data */}
                                   <span className="text-[10px] font-semibold text-slate-600">
@@ -2187,7 +2229,7 @@ export function TdsDataEntry({
                               </TableRow>
                             )}
                             {prevEntries.map((d, idx) => {
-                              const colSpanVal = selForm === "24Q" ? 9 : 12;
+                              const colSpanVal = selForm === "24Q" ? 10 : 12;
                               // Per-row quarter badge — shows exactly which quarter/FY this
                               // read-only entry belongs to (resolves ambiguity when a
                               // challan has utilisation spanning multiple quarters).
@@ -2208,6 +2250,7 @@ export function TdsDataEntry({
                                     <>
                                       <TableCell><Input className="h-7 text-xs bg-muted cursor-not-allowed" disabled title={d.deductee_name} defaultValue={d.deductee_name} /></TableCell>
                                       <TableCell><Input className="h-7 text-xs font-mono bg-muted cursor-not-allowed" disabled title={d.deductee_pan || ""} defaultValue={d.deductee_pan || ""} /></TableCell>
+                                      <TableCell className="text-xs">{d.date_of_payment || "—"}</TableCell>
                                       <TableCell className="text-right text-xs">{(d.gross_salary || 0).toLocaleString("en-IN")}</TableCell>
                                       <TableCell className="text-right text-xs">{(d.standard_deduction_allowed || 0).toLocaleString("en-IN")}</TableCell>
                                       <TableCell className="text-right text-xs font-medium">{d.net_taxable_salary?.toLocaleString("en-IN") || "—"}</TableCell>
@@ -2236,7 +2279,7 @@ export function TdsDataEntry({
                             {/* Issue 5: Current quarter section header */}
                             {prevEntries.length > 0 && (
                               <TableRow className="bg-green-50">
-                                <TableCell colSpan={selForm === "24Q" ? 9 : 12} className="py-1 px-2">
+                                <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="py-1 px-2">
                                   <span className="text-[10px] font-semibold text-green-700">✅ Current Quarter Entries</span>
                                 </TableCell>
                               </TableRow>
@@ -2270,11 +2313,11 @@ export function TdsDataEntry({
                                       {act === "modify" && <Badge className="text-[9px] bg-amber-100 text-amber-700">Modified</Badge>}
                                       {act === "delete" && <Badge className="text-[9px] bg-red-100 text-red-700">Deleted</Badge>}
                                       {(!act || act === "unchanged") && <span className="text-muted-foreground">—</span>}
-                                      {act && act !== "unchanged" && !isFilingLocked && onUndoCorrectionRow && (
+                                      {act && act !== "unchanged" && !isFilingLocked && (
                                         <Button
                                           variant="ghost" size="icon" className="h-5 w-5 ml-1"
                                           title="Undo this change — restore the filed values"
-                                          onClick={e => { e.stopPropagation(); onUndoCorrectionRow(SRC.deductees as any, d); }}
+                                          onClick={e => { e.stopPropagation(); void undoCorrectionEntry(d); }}
                                         >
                                           <Undo2 size={11} />
                                         </Button>
@@ -2305,6 +2348,11 @@ export function TdsDataEntry({
                                             {d.pan_not_available && <TooltipContent>No PAN — higher TDS rate u/s 206AA applies</TooltipContent>}
                                           </Tooltip>
                                         </TooltipProvider>
+                                      </TableCell>
+                                      <TableCell>
+                                        <Input type="date" className={cn("h-7 text-xs w-28", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked}
+                                          defaultValue={d.date_of_payment || ""}
+                                          onBlur={e => { if (!locked) updateDeducteeField(d.id, "date_of_payment", e.target.value || null); }} />
                                       </TableCell>
                                       <TableCell className="text-right"><Input type="number" className={cn("h-7 text-xs w-24 text-right", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked} defaultValue={d.gross_salary || ""} onBlur={e => { if (!locked) updateDeducteeField(d.id, "gross_salary", parseFloat(e.target.value) || null); }} /></TableCell>
                                       <TableCell className="text-right"><Input type="number" className={cn("h-7 text-xs w-20 text-right", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked} defaultValue={d.standard_deduction_allowed || ""} onBlur={e => { if (!locked) updateDeducteeField(d.id, "standard_deduction_allowed", parseFloat(e.target.value) || null); }} /></TableCell>
@@ -2562,7 +2610,7 @@ export function TdsDataEntry({
 
                             {/* Issue 7F: Add Row - disabled when balance=0 or locked */}
                             <TableRow className="bg-muted/20">
-                              <TableCell colSpan={selForm === "24Q" ? 9 : 12} className="text-center py-2">
+                              <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="text-center py-2">
                                 {isFilingLocked ? (
                                   <span className="text-xs text-muted-foreground flex items-center justify-center gap-1"><Lock size={10} /> Data entry locked</span>
                                 ) : selectedChallanBalance <= 0 ? (

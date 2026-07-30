@@ -648,19 +648,18 @@ function CorrectionDetail({
   // Undo one change back to the filed state. Silent refresh afterwards for the
   // same reason every other edit uses one: never rebuild the screen under the
   // user.
-  const handleUndoRow = useCallback(async (table: any, row: any) => {
+  // The grid performs the undo (it owns the rows); this only records it.
+  const handleRowUndone = useCallback(async (row: any) => {
     if (!correction) return;
-    const err = await undoCorrectionRow(table, row);
-    if (err) { toast({ title: "Could not undo", description: err, variant: "destructive" }); return; }
     await logCorrectionAction({
       correctionId: correction.id, firmId: correction.firm_id, clientId: correction.client_id,
       actionType: "CHANGE_UNDONE",
       detail: `Reverted ${row?.deductee_name || row?.challan_serial_no || "row"} to its filed values`,
       oldValue: row?.action ?? null, newValue: "unchanged", actor,
     });
-    toast({ title: "Change undone", description: "The entry is back to its filed values." });
-    void load({ silent: true });
-  }, [correction, actor, toast, load]);
+    // No toast or refresh here — the grid already showed both. This hook exists
+    // only so the undo reaches the correction audit log.
+  }, [correction, actor]);
 
   const locked = isCorrectionLocked(correction?.status);
   // Entries freeze at the FIRST signature, not at filing — what the senior
@@ -948,7 +947,7 @@ function CorrectionDetail({
         // summary and the Original-vs-Corrected panel above this grid only
         // reflect an edit if we re-read after it.
         onCorrectionChanged={loadSilently}
-        onUndoCorrectionRow={handleUndoRow}
+        onCorrectionRowUndone={handleRowUndone}
       />
 
       {/* Signature */}
