@@ -107,38 +107,15 @@ export function useTdsPartyMappings(
         return methods.includes("name_similarity");
       });
 
-      // ── Issue 2 (dedupe by deductee) ──────────────────────────────────────
-      // When two TB ledgers map to the same TDS deductee + section pair, only
-      // surface the best fit — preventing two parties showing the SAME gross
-      // (e.g. "Sruthy Ramanan" and "Sruthy Ramanan - HR" both pointing at the
-      // same SRUTHY RAMANAN deductee).  Existing duplicates from before the
-      // mapper added its own dedupe step are cleaned up at read time.
-      // Ranking: manually confirmed > auto confirmed > pending; creditor
-      // parent group preferred; higher match_confidence wins.
-      const byDeductee = new Map<string, TbPartyMapping[]>();
-      for (const m of nameMatched) {
-        const k = `${(m.tds_deductee_name || "").toLowerCase().trim()}|${m.tds_section_code || ""}`;
-        if (!byDeductee.has(k)) byDeductee.set(k, []);
-        byDeductee.get(k)!.push(m);
-      }
-      const deduped: TbPartyMapping[] = [];
-      for (const rows of byDeductee.values()) {
-        if (rows.length === 1) { deduped.push(rows[0]); continue; }
-        rows.sort((a, b) => {
-          const aManual   = a.mapped_by === "auditor"        ? 1 : 0;
-          const bManual   = b.mapped_by === "auditor"        ? 1 : 0;
-          if (aManual !== bManual)   return bManual   - aManual;
-          const aConfirm  = a.mapping_status === "confirmed" ? 1 : 0;
-          const bConfirm  = b.mapping_status === "confirmed" ? 1 : 0;
-          if (aConfirm !== bConfirm) return bConfirm  - aConfirm;
-          const aCred     = (a.tb_parent_group || "").toLowerCase().includes("creditor") ? 1 : 0;
-          const bCred     = (b.tb_parent_group || "").toLowerCase().includes("creditor") ? 1 : 0;
-          if (aCred !== bCred)       return bCred     - aCred;
-          return (b.match_confidence || 0) - (a.match_confidence || 0);
-        });
-        deduped.push(rows[0]);
-      }
-      setMappings(deduped);
+      // 2026-07-24 — Root cause of Issues 9 & 12: this read-time dedupe was
+      // collapsing every extra ledger that pointed at the same deductee
+      // (case for Issue 9 — one deductee, several Tally ledgers) AND every
+      // extra section for the same deductee (case for Issue 12 — one
+      // deductee, both 194C and 194J). The DB uniqueness key already
+      // covers (client, fy, tb_ledger, deductee) so surfacing every
+      // persisted row is safe. Removed the collapse; every mapping row
+      // now reaches the panel, and the recon engine sees them all.
+      setMappings(nameMatched);
     }
     setLoading(false);
   }, [clientId, financialYear]);
@@ -170,16 +147,24 @@ export function useTdsPartyMappings(
 
   const updateMapping = useCallback(async (
     id: string,
-    patch: Partial<Pick<TbPartyMapping, "tds_deductee_name" | "tds_section_code" | "notes">>,
+    patch: Partial<Pick<TbPartyMapping, "tds_deductee_name" | "tds_section_code" | "notes" | "mapping_status">>,
   ) => {
+    // 2026-07-24 — Root cause of Issue 2 ("Edit / Override Mapping cannot
+    // change status from Confirmed → Pending"): the earlier implementation
+    // OVERWROTE `mapping_status` with "confirmed" on every edit call. Now
+    // we honour whatever the caller included in `patch` (including a
+    // status change), and only default to "confirmed" when the caller
+    // didn't specify one at all.
+    const mapping_status = patch.mapping_status ?? "confirmed";
+    const persist = { ...patch, mapped_by: "auditor", mapping_status };
     const { error: err } = await (supabase as any)
       .from("tds_tb_party_mappings")
-      .update({ ...patch, mapped_by: "auditor", mapping_status: "confirmed" })
+      .update(persist)
       .eq("id", id);
     if (err) throw new Error(err.message);
     setMappings(prev =>
       prev.map(m => m.id === id
-        ? { ...m, ...patch, mapped_by: "auditor", mapping_status: "confirmed" }
+        ? { ...m, ...persist }
         : m),
     );
   }, []);

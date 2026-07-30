@@ -9,7 +9,8 @@
  *   • Per-row actions: Confirm ✓ / Reject ✗ / Edit (inline override)
  *   • Inline edit: change deductee name, section, add note → saved to DB
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Badge }  from "@/components/ui/badge";
 import { Input }  from "@/components/ui/input";
@@ -130,18 +131,24 @@ function EditForm({
   mapping, onSave, onCancel, saving,
 }: {
   mapping: TbPartyMapping;
-  onSave: (patch: { tds_deductee_name: string; tds_section_code: string | null; notes: string }) => void;
+  onSave: (patch: { tds_deductee_name: string; tds_section_code: string | null; notes: string; mapping_status: MappingStatus }) => void;
   onCancel: () => void;
   saving: boolean;
 }) {
   const [name,    setName]    = useState(mapping.tds_deductee_name);
   const [section, setSection] = useState(mapping.tds_section_code ?? "");
   const [note,    setNote]    = useState(mapping.notes ?? "");
+  // 2026-07-24 — Root cause of Issue 2: the form previously had no status
+  // control so `updateMapping` always forced "confirmed". Now the auditor
+  // can flip Confirmed → Pending → Needs Review → Rejected in-place and
+  // the change is persisted via the `mapping_status` field the hook now
+  // honours (see useTdsPartyMappings.updateMapping).
+  const [status, setStatus] = useState<MappingStatus>(mapping.mapping_status ?? "confirmed");
 
   return (
     <div className="p-3 bg-blue-50/60 border border-blue-100 rounded-lg space-y-2">
       <p className="text-[11px] font-semibold text-blue-700">Override Mapping</p>
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
         <div className="space-y-1">
           <label className="text-[10px] text-muted-foreground">TDS Deductee Name</label>
           <Input
@@ -164,6 +171,20 @@ function EditForm({
             </SelectContent>
           </Select>
         </div>
+        <div className="space-y-1">
+          <label className="text-[10px] text-muted-foreground">Status</label>
+          <Select value={status} onValueChange={v => setStatus(v as MappingStatus)}>
+            <SelectTrigger className="h-7 text-xs">
+              <SelectValue placeholder="Status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="confirmed">Confirmed</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="needs_review">Needs Review</SelectItem>
+              <SelectItem value="rejected">Rejected</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div className="space-y-1">
         <label className="text-[10px] text-muted-foreground">Note (optional)</label>
@@ -179,11 +200,11 @@ function EditForm({
         </Button>
         <Button
           size="sm" variant="default" className="h-6 text-xs bg-blue-600 hover:bg-blue-700"
-          onClick={() => onSave({ tds_deductee_name: name.trim(), tds_section_code: section || null, notes: note })}
+          onClick={() => onSave({ tds_deductee_name: name.trim(), tds_section_code: section || null, notes: note, mapping_status: status })}
           disabled={!name.trim() || saving}
         >
           {saving ? <Loader2 size={11} className="animate-spin mr-1" /> : <Save size={11} className="mr-1" />}
-          Save &amp; Confirm
+          Save
         </Button>
       </div>
     </div>
@@ -204,6 +225,33 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
     mappings, loading, error, counts, firmId,
     refresh, updateStatus, updateMapping,
   } = useTdsPartyMappings(clientId, financialYear);
+
+  // 2026-07-24 — Root cause of Issue 1 ("Tally sync not set up" on View
+  // Ledger even though sync is done): the panel emitted the /audit/tally-
+  // sync/ledger/… link WITHOUT the engagement id, so LedgerVouchersView
+  // fell back to `useAuditContext.selectedEngagement` — which, for the
+  // TDS Analytics module, is often the audit engagement (not the tally
+  // engagement) and lands with `engId=null`. Resolve the tally engagement
+  // id here (same logic as LedgerVouchersView) and append ?eng=<id> to
+  // every View-Ledger link so the page can navigate straight to the
+  // ledger under the correct FY.
+  const [tallyEngId, setTallyEngId] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function resolve() {
+      if (!clientId || !financialYear) { setTallyEngId(null); return; }
+      const { data } = await (supabase as any)
+        .from("tally_groups")
+        .select("engagement_id")
+        .eq("client_id", clientId)
+        .eq("financial_year", financialYear)
+        .limit(1)
+        .maybeSingle();
+      if (!cancelled) setTallyEngId((data as any)?.engagement_id ?? null);
+    }
+    resolve();
+    return () => { cancelled = true; };
+  }, [clientId, financialYear]);
 
   // Issue 3 (root-cause fix): walk tally_vouchers to find which expense
   // ledgers were booked against each party. Shown as sub-lines under the
@@ -321,12 +369,13 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
   };
   const handleSaveEdit = async (id: string, patch: {
     tds_deductee_name: string; tds_section_code: string | null; notes: string;
+    mapping_status: MappingStatus;
   }) => {
     setSavingId(id);
     try {
       await updateMapping(id, patch);
       setEditId(null);
-      toast.success("Mapping updated and confirmed");
+      toast.success(`Mapping updated (${patch.mapping_status})`);
     } catch (e: unknown) {
       toast.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
     } finally { setSavingId(null); }
@@ -498,7 +547,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                           (404). Real route is registered at line 217:
                           /audit/tally-sync/ledger/:ledgerName → LedgerVouchersView. */}
                       <Link
-                        to={`/audit/tally-sync/ledger/${encodeURIComponent(m.tb_ledger_name)}`}
+                        to={`/audit/tally-sync/ledger/${encodeURIComponent(m.tb_ledger_name)}${tallyEngId ? `?eng=${tallyEngId}` : ""}`}
                         className="inline-flex items-center gap-1 text-[10px] text-blue-600 hover:underline mt-0.5"
                       >
                         <ExternalLink size={9} /> View ledger

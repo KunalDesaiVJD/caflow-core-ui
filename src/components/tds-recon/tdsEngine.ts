@@ -80,7 +80,11 @@ const SECTION_TDS_RATE: Record<string, [number, number] | "slab"> = {
   "194EE": [10, 10],
   "194F":  [20, 20],
   "194G":  [5, 5],
-  "194H":  [5, 5],      // Commission / brokerage
+  // 2026-07-24 — 194H reduced from 5% to 2% w.e.f. 1-Oct-2024 (Finance
+  // (No.2) Act 2024). Auditor reported the module was still validating
+  // at 5%, so every FY 2025-26 194H filing showed a spurious 60% under-
+  // deduction gap. Range [2,2] enforces the new statutory rate.
+  "194H":  [2, 2],      // Commission / brokerage (FY 2025-26)
   "194I":  [10, 10],    // Rent — land/building
   "194IB": [5, 5],      // Rent by individual/HUF
   "194IC": [10, 10],
@@ -431,29 +435,17 @@ export async function runAiMapper(params: {
     });
   }
 
-  // Issue 2: Dedupe rows that map the same deductee from multiple TB ledgers —
-  // prefer the row whose parent group looks like a "creditor / sundry creditor"
-  // (party ledger), so the same expense doesn't appear twice.
-  const byDeductee = new Map<string, any[]>();
-  for (const r of upsertRows) {
-    const k = `${r.tds_deductee_name}|${r.tds_section_code ?? ""}`;
-    if (!byDeductee.has(k)) byDeductee.set(k, []);
-    byDeductee.get(k)!.push(r);
-  }
-  const finalRows: any[] = [];
-  for (const rows of byDeductee.values()) {
-    if (rows.length === 1) { finalRows.push(rows[0]); continue; }
-    const isCreditor = (pg: string | null) => (pg || "").toLowerCase().includes("creditor");
-    const creditorRows = rows.filter(r => isCreditor(r.tb_parent_group));
-    if (creditorRows.length > 0) {
-      // pick highest-confidence creditor row
-      creditorRows.sort((a, b) => b.match_confidence - a.match_confidence);
-      finalRows.push(creditorRows[0]);
-    } else {
-      rows.sort((a, b) => b.match_confidence - a.match_confidence);
-      finalRows.push(rows[0]);
-    }
-  }
+  // 2026-07-24 — root cause of Issues 9 & 12:
+  //   • Auditor needed multiple Tally ledgers → same deductee (parties whose
+  //     transactions are recorded under different names in Tally).
+  //   • Auditor needed multiple sections → same deductee (a party billed
+  //     under both 194C and 194J in the same FY).
+  // The earlier "byDeductee|section" dedupe collapsed both cases. Since
+  // the DB uniqueness key already covers (client, fy, tb_ledger, deductee)
+  // — allowing N ledgers per deductee — we can safely upsert every row
+  // the mapper produced. Deduplication now happens only within a single
+  // (tb_ledger, deductee) pair (which the unique index handles).
+  const finalRows = upsertRows;
 
   if (finalRows.length > 0) {
     // Try upsert with tds_tds_amount (requires migration 20260501000002 applied).
@@ -502,7 +494,8 @@ const FALLBACK_RATE_TABLE: Record<string, { nature: string; threshold_individual
   "194":   { nature: "Dividend",                       threshold_individual:   5000, threshold_company:   5000, rate_individual: 10,  rate_company: 10  },
   "194A":  { nature: "Interest (non-bank)",            threshold_individual:  50000, threshold_company:  50000, rate_individual: 10,  rate_company: 10  },
   "194C":  { nature: "Contractors",                    threshold_individual: 100000, threshold_company: 100000, rate_individual: 1,   rate_company: 2   },
-  "194H":  { nature: "Commission / Brokerage",         threshold_individual:  15000, threshold_company:  15000, rate_individual: 5,   rate_company: 5   },
+  // 194H reduced to 2% w.e.f. 1-Oct-2024 (Finance (No.2) Act 2024).
+  "194H":  { nature: "Commission / Brokerage",         threshold_individual:  15000, threshold_company:  15000, rate_individual: 2,   rate_company: 2   },
   "194I":  { nature: "Rent",                           threshold_individual: 240000, threshold_company: 240000, rate_individual: 10,  rate_company: 10  },
   "194IB": { nature: "Rent by Ind / HUF",              threshold_individual:  50000, threshold_company:  50000, rate_individual: 5,   rate_company: 5   },
   "194J":  { nature: "Professional / Technical Fees",  threshold_individual:  30000, threshold_company:  30000, rate_individual: 10,  rate_company: 10  },
@@ -535,8 +528,27 @@ function aggregateDeducteesForRecon(rows: any[]): Map<string, { deductee_name: s
 function isCompany(t: string | null): boolean {
   if (!t) return false;
   const lower = t.toLowerCase();
+  // 2026-07-24 — treat an explicit "individual"/"huf" tag as the source of
+  // truth so 194C picks the 1% rate. The earlier version defaulted every
+  // unrecognised deductee_type to non-company (1%), but Tally frequently
+  // ingests "Company" for every filing → every party got 2% and the
+  // reconciliation showed a spurious short-deduction gap. Now we ONLY treat
+  // as company when the tag positively matches company-like keywords.
+  if (lower.includes("individual") || lower.includes("huf") ||
+      lower.includes("prop") /* proprietor */ ||
+      lower.includes("aop") || lower.includes("boi")) return false;
   return lower.includes("company") || lower.includes("co.") || lower.includes("pvt") ||
          lower.includes("limited") || lower.includes("firm") || lower.includes("llp");
+}
+
+// 2026-07-24 — 194J splits into "professional" (10%) and "technical / call-
+// centre / software" (2%). Section code alone is ambiguous; use the
+// mapping/deductee nature_of_payment / narrative to pick the sub-rate.
+// Any other section falls through to the caller's rate.
+const J_TECHNICAL_HINTS = /\b(technical|technical\s+service|call[\s-]?centre|call[\s-]?center|it\s+support|software\s+development|software\s+devt|helpdesk|helpline|maintenance|amc)\b/i;
+function refined194JRate(natureOfPayment: string | null | undefined, deducteeName?: string | null, tbLedgerName?: string | null): number {
+  const bag = `${natureOfPayment ?? ""} ${deducteeName ?? ""} ${tbLedgerName ?? ""}`;
+  return J_TECHNICAL_HINTS.test(bag) ? 2 : 10;
 }
 
 function varianceConfidence(pct: number): number {
@@ -555,13 +567,16 @@ export async function runReconEngine(params: {
   const { client_id, financial_year, firm_id, goals = [1, 2] } = params;
   const goalNumbers = goals.filter(g => g === 1 || g === 2);
 
-  // 1. Confirmed mappings
+  // 1. Mappings — 2026-07-24: recon now considers BOTH "confirmed" and
+  // "pending" mappings (auditors were creating manual "pending" mappings
+  // and expecting them to reconcile — the old status filter silently
+  // excluded them). "rejected" and "needs_review" still short-circuit.
   const { data: mappingRows, error: mapErr } = await (supabase as any)
     .from("tds_tb_party_mappings")
     .select("*")
     .eq("client_id", client_id)
     .eq("financial_year", financial_year)
-    .eq("mapping_status", "confirmed");
+    .in("mapping_status", ["confirmed", "pending"]);
   if (mapErr) throw new Error(`Mapping fetch: ${mapErr.message}`);
 
   const mappings = (mappingRows ?? []) as any[];
@@ -598,12 +613,59 @@ export async function runReconEngine(params: {
     .eq("client_id", client_id).eq("financial_year", financial_year)
     .eq("flag_status", "pending").in("goal_number", goalNumbers);
 
-  // 5. Count preserved
+  // 5. Count preserved AND load their (mapping_id, flag_type, section, ded)
+  // fingerprints so we can skip inserting a fresh pending twin for anything
+  // the auditor has already disregarded / accepted / raised as a query.
+  // 2026-07-24 — this was the root cause of "disregarded queries reappear
+  // on every re-run": the delete above stripped only pending rows, and the
+  // insert loop never checked for non-pending duplicates.
   const { count: preserved } = await (supabase as any)
     .from("tds_recon_flags")
     .select("id", { count: "exact", head: true })
     .eq("client_id", client_id).eq("financial_year", financial_year)
     .in("goal_number", goalNumbers).neq("flag_status", "pending");
+  const { data: closedFlags } = await (supabase as any)
+    .from("tds_recon_flags")
+    .select("mapping_id, flag_type, section_code, tds_deductee_name")
+    .eq("client_id", client_id).eq("financial_year", financial_year)
+    .in("goal_number", goalNumbers).neq("flag_status", "pending");
+  const closedFingerprints = new Set<string>();
+  for (const f of (closedFlags ?? []) as any[]) {
+    closedFingerprints.add(`${f.mapping_id ?? ""}|${f.flag_type ?? ""}|${f.section_code ?? ""}|${(f.tds_deductee_name ?? "").toLowerCase()}`);
+  }
+
+  // 6. Freshen the tb_total_debit snapshot for every confirmed / pending
+  // mapping from the LATEST tally_trial_balance before running any goal.
+  // Root cause of "Re-Tally-Sync doesn't refresh TDS Analytics": the
+  // mapper wrote tb_total_debit once at match time and every subsequent
+  // recon read that stale value; a later Tally re-sync updated
+  // tally_trial_balance but the mapping snapshot was never re-hydrated,
+  // so books-vs-TDS comparisons kept pointing at the old TB numbers.
+  {
+    const ledgerNames = Array.from(new Set(mappings.map(m => m.tb_ledger_name).filter(Boolean)));
+    if (ledgerNames.length > 0) {
+      const { data: freshTb } = await (supabase as any)
+        .from("tally_trial_balance")
+        .select("ledger_name,debit_amount,credit_amount")
+        .eq("client_id", client_id).eq("financial_year", financial_year)
+        .in("ledger_name", ledgerNames);
+      const freshMap = new Map<string, number>();
+      for (const r of (freshTb ?? []) as any[]) {
+        const activity = Math.max(Number(r.debit_amount ?? 0), Number(r.credit_amount ?? 0));
+        freshMap.set(r.ledger_name, activity);
+      }
+      for (const m of mappings) {
+        const activity = freshMap.get(m.tb_ledger_name);
+        if (activity != null && Math.abs((m.tb_total_debit ?? 0) - activity) > 0.5) {
+          m.tb_total_debit = activity; // update in-memory
+          // Best-effort persist so subsequent visits show the fresh number.
+          void (supabase as any).from("tds_tb_party_mappings")
+            .update({ tb_total_debit: activity })
+            .eq("id", m.id);
+        }
+      }
+    }
+  }
 
   // 6. Build flags
   const newFlags: any[] = [];
@@ -623,6 +685,8 @@ export async function runReconEngine(params: {
         const larger = Math.max(bookAmt, tdsAmt, 1); const pctDiff = absDiff / larger;
         if (absDiff >= G1_VARIANCE_AMOUNT_MIN && pctDiff >= G1_VARIANCE_PCT_MIN) {
           const flag_type = diff > 0 ? "entry_in_books_not_in_tds" : "entry_in_tds_not_in_books";
+          const fp = `${mapping.id ?? ""}|${flag_type}|${mapping.tds_section_code ?? ""}|${(mapping.tds_deductee_name ?? "").toLowerCase()}`;
+          if (closedFingerprints.has(fp)) { /* auditor already actioned this — skip */ } else
           newFlags.push({
             client_id, firm_id, financial_year, flag_type, goal_number: 1,
             tb_ledger_name: mapping.tb_ledger_name, tds_deductee_name: mapping.tds_deductee_name,
@@ -649,8 +713,19 @@ export async function runReconEngine(params: {
       const actualTds = ded?.total_tds ?? 0;
       if (amtPaid <= 0) continue;
       const isComp = isCompany(ded?.primary_deductee_type ?? null);
-      const rate   = isComp ? rateEntry.rate_company : rateEntry.rate_individual;
+      let rate     = isComp ? rateEntry.rate_company : rateEntry.rate_individual;
       const thresh = isComp ? rateEntry.threshold_company : rateEntry.threshold_individual;
+      // 2026-07-24 — 194J splits into professional (10%) and technical (2%).
+      // Section code alone is ambiguous; consult the deductee's nature/name
+      // and the TB ledger name for technical/software/call-centre hints so
+      // "Professional Fees" isn't wrongly benchmarked at 2% and vice versa.
+      if (mapping.tds_section_code === "194J") {
+        rate = refined194JRate(
+          (mapping as any).nature_of_payment ?? null,
+          mapping.tds_deductee_name,
+          mapping.tb_ledger_name,
+        );
+      }
       if (amtPaid <= thresh) continue;
       const expectedTds = amtPaid * rate / 100;
       if (expectedTds <= 0) continue;
@@ -658,6 +733,8 @@ export async function runReconEngine(params: {
       const actualRate = amtPaid > 0 ? (actualTds / amtPaid) * 100 : 0;
       if (absVar >= G2_TDS_VARIANCE_AMOUNT_MIN && varPct >= G2_TDS_VARIANCE_PCT_MIN) {
         const flag_type = variance > 0 ? "short_deduction" : "over_deduction";
+        const fp = `${mapping.id ?? ""}|${flag_type}|${mapping.tds_section_code ?? ""}|${(mapping.tds_deductee_name ?? "").toLowerCase()}`;
+        if (closedFingerprints.has(fp)) { /* auditor already actioned this — skip */ } else
         newFlags.push({
           client_id, firm_id, financial_year, flag_type, goal_number: 2,
           tb_ledger_name: mapping.tb_ledger_name, tds_deductee_name: mapping.tds_deductee_name,
@@ -673,6 +750,39 @@ export async function runReconEngine(params: {
           ai_confidence: varianceConfidence(varPct),
           sample_narrations: [], flag_status: "pending",
         });
+      }
+
+      // 2026-07-24 — Goal 2.b: books-vs-module TDS-ledger comparison.
+      // When the TDS-payable line for this section in Tally (approximated
+      // from the mapping's tds_tds_amount snapshot the AI mapper stashed
+      // at match time) exceeds the actual TDS filed for the deductee by
+      // more than the standard tolerance, raise a "books_tds_gt_module"
+      // flag. Auditor's word-doc note #11: without this, extra TDS booked
+      // in Tally against a deductee (but not filed) is silently swallowed.
+      const booksTds = Number((mapping as any).tds_tds_amount ?? 0);
+      if (booksTds > 0 && actualTds >= 0) {
+        const gap = booksTds - actualTds;
+        const gapAbs = Math.abs(gap);
+        const gapPct = booksTds > 0 ? gapAbs / booksTds : 0;
+        if (gap > 0 && gapAbs >= G2_TDS_VARIANCE_AMOUNT_MIN && gapPct >= G2_TDS_VARIANCE_PCT_MIN) {
+          const flag_type = "books_tds_gt_module";
+          const fp = `${mapping.id ?? ""}|${flag_type}|${mapping.tds_section_code ?? ""}|${(mapping.tds_deductee_name ?? "").toLowerCase()}`;
+          if (!closedFingerprints.has(fp)) {
+            newFlags.push({
+              client_id, firm_id, financial_year, flag_type, goal_number: 2,
+              tb_ledger_name: mapping.tb_ledger_name, tds_deductee_name: mapping.tds_deductee_name,
+              section_code: mapping.tds_section_code, nature_of_payment: rateEntry.nature,
+              book_amount: booksTds || null, tds_amount: actualTds || null,
+              expected_tds: booksTds, actual_tds: actualTds || null,
+              variance_amount: gap, expected_rate: null, actual_rate: null,
+              threshold_amount: null, voucher_ids: [], deductee_ids: ded?.deductee_ids ?? [],
+              mapping_id: mapping.id,
+              ai_reasoning: `Section ${mapping.tds_section_code} (${rateEntry.nature}): TDS booked in Tally for "${mapping.tds_deductee_name}" = ₹${booksTds.toLocaleString("en-IN",{maximumFractionDigits:0})}, but TDS filed in the return = ₹${actualTds.toLocaleString("en-IN",{maximumFractionDigits:0})}. Extra ₹${gapAbs.toLocaleString("en-IN",{maximumFractionDigits:0})} deducted in books but not remitted / not reflected in the return.`,
+              ai_confidence: varianceConfidence(gapPct),
+              sample_narrations: [], flag_status: "pending",
+            });
+          }
+        }
       }
     }
   }
@@ -720,8 +830,8 @@ const SECTION_HEURISTICS: Record<string, HeuristicEntry> = {
   "software":      { section:"194J", nature:"Software Development / IT",  rate:2,    threshold:30000  },
   "royalty":       { section:"194J", nature:"Royalty",                    rate:10,   threshold:30000  },
   "outsourc":      { section:"194J", nature:"Outsourcing",                rate:10,   threshold:30000  },
-  "commission":    { section:"194H", nature:"Commission / Brokerage",     rate:5,    threshold:15000  },
-  "brokerage":     { section:"194H", nature:"Brokerage",                  rate:5,    threshold:15000  },
+  "commission":    { section:"194H", nature:"Commission / Brokerage",     rate:2,    threshold:15000  },
+  "brokerage":     { section:"194H", nature:"Brokerage",                  rate:2,    threshold:15000  },
   "rent":          { section:"194I", nature:"Rent",                       rate:10,   threshold:240000 },
   "lease":         { section:"194I", nature:"Lease Rent",                 rate:10,   threshold:240000 },
   "interest":      { section:"194A", nature:"Interest (non-bank)",        rate:10,   threshold:50000  },

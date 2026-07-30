@@ -298,7 +298,7 @@ export default function LedgerVouchersView() {
           ) : vouchers.length === 0 ? (
             <div className="p-6 text-sm text-muted-foreground">
               No vouchers found for this ledger.
-              {!engId && " (Tally sync not set up — run node auto-setup.js first.)"}
+              {!engId && " (Engagement not resolved — try opening this ledger via Tally Sync or from a client with an active Tally engagement for this FY.)"}
             </div>
           ) : (
             <>
