@@ -264,6 +264,18 @@ disposals_during_year:'0', disposal_date:'', narration:'',
 // never leaves the Add Asset flow, so already-saved assets in the DB
 // keep whatever residual_value they were saved with (no back-fill).
 const [residualDirty, setResidualDirty] = useState(false);
+// 2026-07-24 — Bulk-Add mirror of the Add-Asset flag. Tracks which rows
+// have had their Residual cell manually edited; only the untouched rows
+// keep auto-filling at 5% of (Gross Block Opening + Additions During
+// Year). Reset every time the dialog opens fresh so the 5% auto-fill
+// re-arms; also reset when the row list is regenerated (Cancel).
+const [bulkResidualDirty, setBulkResidualDirty] = useState<Set<number>>(new Set());
+const bulkAutoResidual = (gb: string | number, add: string | number): string => {
+  const g = parseFloat(String(gb)) || 0;
+  const a = parseFloat(String(add)) || 0;
+  const auto = Math.round((g + a) * 0.05 * 100) / 100;
+  return auto > 0 ? String(auto) : '';
+};
 useEffect(() => {
   if (!showAdd || residualDirty) return;
   const gb = parseFloat(na.gross_block_opening) || 0;
@@ -1036,9 +1048,11 @@ refetchCats();
 };
 
 const handleBulkSave = async () => {
-const validRows = bulkRows.filter(r => r.asset_name.trim() && r.category_id);
+// 2026-07-24 — Residual Value is now mandatory (mirroring Add Asset).
+// A row without a Residual entry is treated as invalid and skipped.
+const validRows = bulkRows.filter(r => r.asset_name.trim() && r.category_id && r.residual_value !== '' && r.residual_value != null);
 if (validRows.length === 0) {
-  toast.error('No valid rows to save. Asset Name and Category are required.');
+  toast.error('No valid rows to save. Asset Name, Category, and Residual Value are required.');
   return;
 }
 const errors: string[] = [];
@@ -2703,7 +2717,13 @@ return (
 </Dialog>
 
 {/* ═══ BULK ADD DIALOG ═══ */}
-<Dialog open={showBulkAdd} onOpenChange={setShowBulkAdd}>
+<Dialog open={showBulkAdd} onOpenChange={(open) => {
+  setShowBulkAdd(open);
+  // 2026-07-24 — re-arm the per-row 5% auto-fill on every open/close so
+  // the next opening of Bulk Add starts fresh, mirroring the Add-Asset
+  // dialog behaviour.
+  if (open !== showBulkAdd) setBulkResidualDirty(new Set());
+}}>
   <DialogContent className='max-w-[95vw] max-h-[90vh] overflow-hidden flex flex-col'>
     <DialogHeader>
       <DialogTitle>Bulk Add Assets — {fy}</DialogTitle>
@@ -2722,7 +2742,7 @@ return (
             <TableHead className='min-w-[100px]'>Location</TableHead>
             <TableHead className='min-w-[110px]'>Gross Blk Open</TableHead>
             <TableHead className='min-w-[110px]'>Acc Dep Open</TableHead>
-            <TableHead className='min-w-[100px]'>Residual (₹)</TableHead>
+            <TableHead className='min-w-[100px]'>Residual (₹) *</TableHead>
             <TableHead className='min-w-[100px]'>Additions</TableHead>
             <TableHead className='min-w-[120px]'>Addition Date</TableHead>
             <TableHead className='min-w-[120px]'>Narration</TableHead>
@@ -2759,8 +2779,18 @@ return (
                 </TableCell>
                 <TableCell>
                   <Input className='h-8 text-xs' type='number' value={row.gross_block_opening}
-                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
-                      i===idx ? {...r, gross_block_opening: e.target.value} : r))} />
+                    onChange={e => setBulkRows(rows => rows.map((r,i) => {
+                      if (i !== idx) return r;
+                      const next = { ...r, gross_block_opening: e.target.value };
+                      // 2026-07-24 — auto-fill Residual = 5% of (Gross Block
+                      // Opening + Additions) while the row hasn't been
+                      // manually touched. Persists the auditor's manual
+                      // entry as soon as they type in the Residual cell.
+                      if (!bulkResidualDirty.has(idx)) {
+                        next.residual_value = bulkAutoResidual(e.target.value, r.additions_during_year);
+                      }
+                      return next;
+                    }))} />
                 </TableCell>
                 <TableCell>
                   <Input className='h-8 text-xs' type='number' value={row.accumulated_dep_opening}
@@ -2769,14 +2799,26 @@ return (
                 </TableCell>
                 <TableCell>
                   <Input className='h-8 text-xs' type='number' value={row.residual_value}
-                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
-                      i===idx ? {...r, residual_value: e.target.value} : r))}
+                    onChange={e => {
+                      setBulkResidualDirty(prev => {
+                        if (prev.has(idx)) return prev;
+                        const next = new Set(prev); next.add(idx); return next;
+                      });
+                      setBulkRows(rows => rows.map((r,i) =>
+                        i===idx ? {...r, residual_value: e.target.value} : r));
+                    }}
                     placeholder='0' />
                 </TableCell>
                 <TableCell>
                   <Input className='h-8 text-xs' type='number' value={row.additions_during_year}
-                    onChange={e => setBulkRows(rows => rows.map((r,i) =>
-                      i===idx ? {...r, additions_during_year: e.target.value} : r))} />
+                    onChange={e => setBulkRows(rows => rows.map((r,i) => {
+                      if (i !== idx) return r;
+                      const next = { ...r, additions_during_year: e.target.value };
+                      if (!bulkResidualDirty.has(idx)) {
+                        next.residual_value = bulkAutoResidual(r.gross_block_opening, e.target.value);
+                      }
+                      return next;
+                    }))} />
                 </TableCell>
                 <TableCell>
                   <Input className='h-8 text-xs' type='date' value={row.addition_date}
@@ -2790,7 +2832,13 @@ return (
                     placeholder='Optional' />
                 </TableCell>
                 <TableCell>
-                  <Button variant='ghost' size='icon' className='h-7 w-7 text-destructive' onClick={() => setBulkRows(rows => rows.filter((_,i)=>i!==idx))}>
+                  <Button variant='ghost' size='icon' className='h-7 w-7 text-destructive' onClick={() => {
+                    setBulkRows(rows => rows.filter((_,i)=>i!==idx));
+                    // Row indices shift after deletion — reset the dirty
+                    // set so the 5% auto-fill re-arms for any row whose
+                    // manual override was in the deleted slot.
+                    setBulkResidualDirty(new Set());
+                  }}>
                     <X size={13}/>
                   </Button>
                 </TableCell>
@@ -2805,14 +2853,14 @@ return (
         + Add 5 More Rows
       </Button>
       <span className='text-xs text-muted-foreground'>
-        {bulkRows.filter(r=>r.asset_name.trim()&&r.category_id).length} valid rows to save
+        {bulkRows.filter(r=>r.asset_name.trim()&&r.category_id&&r.residual_value!==''&&r.residual_value!=null).length} valid rows to save
       </span>
     </div>
     <DialogFooter>
       <Button variant='outline' onClick={() => setShowBulkAdd(false)}>Cancel</Button>
-      <Button onClick={handleBulkSave} disabled={bulkSaving || bulkRows.filter(r=>r.asset_name.trim()&&r.category_id).length===0}>
+      <Button onClick={handleBulkSave} disabled={bulkSaving || bulkRows.filter(r=>r.asset_name.trim()&&r.category_id&&r.residual_value!==''&&r.residual_value!=null).length===0}>
         {bulkSaving && <Loader2 size={14} className='mr-1 animate-spin'/>}
-        Save {bulkRows.filter(r=>r.asset_name.trim()&&r.category_id).length} Assets
+        Save {bulkRows.filter(r=>r.asset_name.trim()&&r.category_id&&r.residual_value!==''&&r.residual_value!=null).length} Assets
       </Button>
     </DialogFooter>
   </DialogContent>
