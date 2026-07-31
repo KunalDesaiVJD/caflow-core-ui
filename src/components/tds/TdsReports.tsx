@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { calcAutoInterest } from "@/lib/tds/rateEngine";
+import { calcAutoInterest, withKasarVatav } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -237,8 +237,11 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
           s + (d.total_tax_deducted || d.tds_amount || 0)
           + calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest
           + (d.surcharge_amount || 0), 0);
+      // Kasar-Vatav write-off (see rateEngine's withKasarVatav) — included for
+      // consistency with every other "applied" computation in the TDS module.
+      const effectiveApplied = withKasarVatav(applied, c.kasar_vatav_amount);
       const challanTotal = c.total_challan_amount || 0;
-      return Math.round(applied * 100) > Math.round(challanTotal * 100); // strictly greater
+      return Math.round(effectiveApplied * 100) > Math.round(challanTotal * 100); // strictly greater
     });
     if (overApplied.length > 0) {
       toast({
@@ -675,15 +678,20 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
           s + (d.total_tax_deducted || d.tds_amount || 0)
           + calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest
           + (d.surcharge_amount || 0), 0);
+      // Kasar-Vatav write-off counts toward utilisation status here too (see
+      // rateEngine's withKasarVatav) — otherwise a challan closed out
+      // specifically to read as Fully Utilized would still show as Unconsumed
+      // in this report.
+      const effectiveApplied = withKasarVatav(applied, c.kasar_vatav_amount);
       const challanTotal = c.total_challan_amount || 0;
-      const appliedRounded  = Math.round(applied * 100);
+      const appliedRounded  = Math.round(effectiveApplied * 100);
       const challanRounded  = Math.round(challanTotal * 100);
       let status: ChallanStatus;
       if (appliedRounded > challanRounded)    status = "over-applied";
       else if (appliedRounded === 0)          status = "unconsumed";
       else if (appliedRounded === challanRounded) status = "fully-utilized";
       else                                    status = "partial";
-      return { challan: c, applied, challanTotal, status };
+      return { challan: c, applied: effectiveApplied, challanTotal, status };
     });
 
     // Block Generate button when ANY challan is over-applied

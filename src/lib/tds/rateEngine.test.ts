@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calcAutoInterest, computeApplied, isChallanFullyUtilised, computeAllocatable } from "./rateEngine";
+import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav } from "./rateEngine";
 
 /**
  * Regression: TdsDataEntry.tsx's "Unconsumed Amount" (and the underlying
@@ -117,5 +117,49 @@ describe("computeApplied — second real case (₹2,46,636 challan, two large de
     // uses to decide whether a fully-utilised prior-quarter challan still
     // qualifies as a Carry-Forward candidate.
     expect(allocatable - applied).toBeLessThanOrEqual(0.5);
+  });
+});
+
+/**
+ * Kasar-Vatav (round-off/write-off): a small residual balance — ₹5, ₹10, a
+ * stray ₹250 — left on a challan after every real deductee entry, with no
+ * deductee to attach it to. withKasarVatav folds it into the "applied" figure
+ * fed to isChallanFullyUtilised/isChallanOverApplied so the challan can close
+ * out as Fully Utilised, WITHOUT inventing a fake deductee row and WITHOUT
+ * inflating computeApplied's own tds/interest/surcharge breakdown (that must
+ * keep reporting only what was actually deducted from deductees).
+ */
+describe("withKasarVatav", () => {
+  it("adds the write-off on top of the real deductee-rows applied total", () => {
+    expect(withKasarVatav(1120, 34)).toBe(1154);
+  });
+
+  it("treats a missing/zero amount as a no-op", () => {
+    expect(withKasarVatav(1120, 0)).toBe(1120);
+    expect(withKasarVatav(1120, null)).toBe(1120);
+    expect(withKasarVatav(1120, undefined)).toBe(1120);
+  });
+
+  it("closes a ₹250-short challan to exactly Fully Utilised", () => {
+    const rows = [{ tds_amount: 50000, total_tax_deducted: 50000 }];
+    const { applied } = computeApplied(rows);
+    const allocatable = computeAllocatable(50250, 0);
+    // Before the write-off: genuinely short by ₹250, correctly Unconsumed.
+    expect(isChallanFullyUtilised(applied, allocatable)).toBe(false);
+    expect(allocatable - applied).toBe(250);
+    // After recording a ₹250 Kasar-Vatav adjustment: reads as closed.
+    const effectiveApplied = withKasarVatav(applied, 250);
+    expect(isChallanFullyUtilised(effectiveApplied, allocatable)).toBe(true);
+    expect(isChallanOverApplied(effectiveApplied, allocatable)).toBe(false);
+  });
+
+  it("a write-off capped exactly at the gap never reads as over-applied", () => {
+    const rows = [{ tds_amount: 1000, total_tax_deducted: 1000 }];
+    const { applied } = computeApplied(rows);
+    const allocatable = computeAllocatable(1005, 0);
+    const rawUnconsumed = allocatable - applied; // 5 — the max a caller should ever pass
+    const effectiveApplied = withKasarVatav(applied, rawUnconsumed);
+    expect(isChallanFullyUtilised(effectiveApplied, allocatable)).toBe(true);
+    expect(isChallanOverApplied(effectiveApplied, allocatable)).toBe(false);
   });
 });

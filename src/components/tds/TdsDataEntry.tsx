@@ -4,7 +4,7 @@ import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import {
   PAN_4TH_CHAR_MAP, isValidPan, isIndividualRateType, getRateForSection as getRateForSectionPure,
   calcAutoInterest, isChallanOverApplied, isChallanFullyUtilised, computeApplied, balanceColorClass,
-  sectionDropdownLabel,
+  sectionDropdownLabel, withKasarVatav,
   type RateEntry,
 } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
@@ -76,6 +76,8 @@ interface Challan {
   late_fees_used: number; fully_utilized: boolean;
   origin_quarter: string | null; origin_fy: string | null;
   is_archived?: boolean; archived_at?: string | null; archived_by?: string | null;
+  kasar_vatav_amount?: number | null; kasar_vatav_note?: string | null;
+  kasar_vatav_by?: string | null; kasar_vatav_at?: string | null;
 }
 
 interface Deductee {
@@ -459,6 +461,15 @@ export function TdsDataEntry({
       String(ac.total_challan_amount || "").includes(q)
     );
   }, [archivedChallans, archivedSearch]);
+  // Kasar-Vatav: records a small, genuinely-unattachable residual balance
+  // (₹5, ₹10, a stray ₹250 — no deductee left to put it against) as a
+  // deliberate, attributed write-off so the challan can close out as Fully
+  // Utilised. See rateEngine's withKasarVatav for how it folds into the
+  // Applied/Unconsumed/Carry-Forward maths everywhere else in this file.
+  const [kasarVatavDialogChallan, setKasarVatavDialogChallan] = useState<Challan | null>(null);
+  const [kasarVatavAmountInput, setKasarVatavAmountInput] = useState("");
+  const [kasarVatavNoteInput, setKasarVatavNoteInput] = useState("");
+  const [kasarVatavSaving, setKasarVatavSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
@@ -771,7 +782,10 @@ export function TdsDataEntry({
     const carried: { challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[] = [];
     priorChallans.forEach((c: any) => {
       const applied = appliedMap.get(c.id) || 0;
-      const unconsumed = (c.total_challan_amount || 0) - applied - (c.late_fees_234e || 0);
+      // Kasar-Vatav write-off counts as "spoken for" here too (see
+      // withKasarVatav) — otherwise a challan closed out specifically to
+      // stop cluttering this list would immediately re-qualify for it.
+      const unconsumed = (c.total_challan_amount || 0) - withKasarVatav(applied, c.kasar_vatav_amount) - (c.late_fees_234e || 0);
       const hasCurrentQEntries = currentQUsage.has(c.id);
       // Show this prior challan in the Carry-Forward list if it either:
       //   (a) has remaining unused balance (the classic "still has cash left"
@@ -875,6 +889,84 @@ export function TdsDataEntry({
     if (filing?.id) await fetchChallans(filing.id);
     if (selClient) await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
     setArchivingId(null);
+  };
+
+  /** Opens the Kasar-Vatav dialog for a challan, defaulting the amount to the
+   *  full raw unconsumed gap (allocatable minus real deductee applied — NOT
+   *  minus any existing write-off) so one click closes the challan
+   *  completely. Editing an existing adjustment re-opens with its current
+   *  total rather than the delta, since the field IS the total. */
+  const openKasarVatavDialog = (c: Challan) => {
+    const bd = getChallanBreakdownAll(c.id);
+    const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
+    const rawUnconsumed = Math.max(0, allocatable - bd.applied);
+    const existing = c.kasar_vatav_amount || 0;
+    setKasarVatavDialogChallan(c);
+    setKasarVatavAmountInput(String(existing > 0 ? existing : rawUnconsumed));
+    setKasarVatavNoteInput(c.kasar_vatav_note || "");
+  };
+
+  const closeKasarVatavDialog = () => {
+    setKasarVatavDialogChallan(null);
+    setKasarVatavAmountInput("");
+    setKasarVatavNoteInput("");
+  };
+
+  const submitKasarVatav = async () => {
+    const c = kasarVatavDialogChallan;
+    if (!c || !user?.id) return;
+    const bd = getChallanBreakdownAll(c.id);
+    const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
+    const rawUnconsumed = Math.max(0, allocatable - bd.applied);
+    const amt = parseFloat(kasarVatavAmountInput);
+    if (isNaN(amt) || amt < 0) {
+      toast({ title: "Enter a valid amount", variant: "destructive" });
+      return;
+    }
+    // Paise-tolerant cap — a write-off can't exceed what's actually missing,
+    // that would retroactively make the challan look over-applied.
+    if (Math.round(amt * 100) > Math.round(rawUnconsumed * 100) + 1) {
+      toast({ title: "Amount too high", description: `Kasar-Vatav can't exceed the unconsumed balance of ₹${rawUnconsumed.toLocaleString("en-IN")}.`, variant: "destructive" });
+      return;
+    }
+    if (amt > 0 && !kasarVatavNoteInput.trim()) {
+      toast({ title: "Reason required", description: "Add a short remark for the adjustment — it's recorded in the audit log.", variant: "destructive" });
+      return;
+    }
+    const prevAmount = c.kasar_vatav_amount || 0;
+    setKasarVatavSaving(true);
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("tds_challans")
+      .update({
+        kasar_vatav_amount: amt,
+        kasar_vatav_note: amt > 0 ? kasarVatavNoteInput.trim() : null,
+        kasar_vatav_by: amt > 0 ? user.id : null,
+        kasar_vatav_at: amt > 0 ? now : null,
+      } as any)
+      .eq("id", c.id);
+    if (error) {
+      toast({ title: "Adjustment failed", description: error.message, variant: "destructive" });
+      setKasarVatavSaving(false);
+      return;
+    }
+    await logReconAudit({
+      filingId: c.filing_id, firmId: c.firm_id, userId: user.id, userName: currentUserName || user.email || "Unknown",
+      actionType: amt > 0 ? "CHALLAN_KASAR_VATAV_ADJUSTED" : "CHALLAN_KASAR_VATAV_REMOVED",
+      oldValue: prevAmount > 0 ? `₹${prevAmount.toLocaleString("en-IN")}` : "none",
+      newValue: amt > 0 ? `₹${amt.toLocaleString("en-IN")}` : "none",
+      remark: amt > 0
+        ? `Kasar-Vatav adjustment of ₹${amt.toLocaleString("en-IN")} on challan ${c.bsr_code || "—"} / ${c.challan_serial_no || "—"}: ${kasarVatavNoteInput.trim()}`
+        : `Removed Kasar-Vatav adjustment (was ₹${prevAmount.toLocaleString("en-IN")}) on challan ${c.bsr_code || "—"} / ${c.challan_serial_no || "—"}.`,
+    });
+    const patch = { kasar_vatav_amount: amt, kasar_vatav_note: amt > 0 ? kasarVatavNoteInput.trim() : null, kasar_vatav_by: amt > 0 ? user.id : null, kasar_vatav_at: amt > 0 ? now : null };
+    setChallans(prev => prev.map(x => x.id === c.id ? { ...x, ...patch } : x));
+    setCarryForwardChallans(prev => prev.map(x => x.challan.id === c.id ? { ...x, challan: { ...x.challan, ...patch } } : x));
+    setSelectedChallan(prev => prev && prev.id === c.id ? { ...prev, ...patch } : prev);
+    toast({ title: amt > 0 ? "Kasar-Vatav adjustment saved" : "Adjustment removed", description: amt > 0 ? "The challan's remaining balance has been written off." : undefined });
+    if (filing?.id) await fetchChallans(filing.id);
+    if (selClient) await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
+    setKasarVatavSaving(false);
+    closeKasarVatavDialog();
   };
 
   const fetchChallans = async (filingId: string) => {
@@ -1585,8 +1677,14 @@ export function TdsDataEntry({
     }));
     const { tds, interest, surcharge, applied } = computeApplied(liveInterestRows);
     const lateFees = (challanObj as Challan | null)?.late_fees_234e || 0;
-    // Issue 4: Late fees are a separate govt levy — exclude from allocatable TDS amount
-    return { tds, interest, surcharge, lateFees, applied, count: allForChallan.length };
+    const kasarVatav = (challanObj as Challan | null)?.kasar_vatav_amount || 0;
+    // Issue 4: Late fees are a separate govt levy — exclude from allocatable TDS amount.
+    // effectiveApplied additionally folds in any Kasar-Vatav write-off (see
+    // rateEngine's withKasarVatav) for Fully-Utilised/Unconsumed/Carry-Forward
+    // purposes — kept SEPARATE from `applied` itself so the tds/interest/
+    // surcharge breakdown shown in tooltips still sums to `applied`, not a
+    // number that silently includes a write-off with nothing to point to.
+    return { tds, interest, surcharge, lateFees, applied, kasarVatav, effectiveApplied: withKasarVatav(applied, kasarVatav), count: allForChallan.length };
   }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, isCorrectionMode]);
 
   // Keep getChallanBreakdown as alias for backward compat
@@ -1594,7 +1692,11 @@ export function TdsDataEntry({
 
   const challanDeducteeTds = useMemo(() => {
     if (!selectedChallan) return 0;
-    return getChallanBreakdownAll(selectedChallan.id).applied;
+    // effectiveApplied (TDS+interest+surcharge, PLUS any Kasar-Vatav
+    // write-off) — this drives the Applied/Unconsumed/Fully-Utilised status
+    // shown on the detail bar below, so a challan closed via Kasar-Vatav
+    // reads as Fully Utilised without a matching deductee entry.
+    return getChallanBreakdownAll(selectedChallan.id).effectiveApplied;
   }, [deductees, prevEntries, selectedChallan, allChallanDeductees, getChallanBreakdownAll]);
 
   const summaryStats = useMemo(() => {
@@ -1719,7 +1821,7 @@ export function TdsDataEntry({
 
   const getBalanceColor = (challan: Challan) => {
     const bd = getChallanBreakdownAll(challan.id);
-    return balanceColorClass(bd.applied, challan.total_challan_amount || 0);
+    return balanceColorClass(bd.effectiveApplied, challan.total_challan_amount || 0);
   };
 
   const client = clients.find(c => c.id === selClient);
@@ -2229,7 +2331,7 @@ export function TdsDataEntry({
                   <div className="flex gap-2 overflow-x-auto pb-1">
                     {carryForwardChallans.map(cf => {
                       const bd = getChallanBreakdownAll(cf.challan.id);
-                      const avail = Math.max(0, (cf.challan.total_challan_amount || 0) - bd.applied);
+                      const avail = Math.max(0, (cf.challan.total_challan_amount || 0) - bd.effectiveApplied);
                       const isFullyUtilized = avail <= 0.5;
                       // Has any deductee from the currently-viewed quarter been
                       // attached to this carry-forward challan?
@@ -2314,6 +2416,9 @@ export function TdsDataEntry({
                               {" · "}Used (all quarters): ₹{bd.applied.toLocaleString("en-IN")}
                               {(cf.challan.late_fees_234e || 0) > 0 && (
                                 <> · Late Fees 234E: ₹{(cf.challan.late_fees_234e || 0).toLocaleString("en-IN")} (Used ₹{(cf.challan.late_fees_used || 0).toLocaleString("en-IN")})</>
+                              )}
+                              {bd.kasarVatav > 0 && (
+                                <> · Kasar-Vatav adjustment: ₹{bd.kasarVatav.toLocaleString("en-IN")}</>
                               )}
                             </TooltipContent>
                           </Tooltip>
@@ -2433,13 +2538,13 @@ export function TdsDataEntry({
                                   {c.challan_serial_no && ` • No: ${c.challan_serial_no}`}
                                 </p>
                                 <div className={cn("flex items-center justify-between text-[10px] font-semibold",
-                                  isChallanOverApplied(bd.applied, allocatable) ? "text-destructive" : isChallanFullyUtilised(bd.applied, allocatable) ? "text-emerald-600" : "text-amber-600")}>
-                                  <span>{isChallanOverApplied(bd.applied, allocatable) ? "Over-applied" : isChallanFullyUtilised(bd.applied, allocatable) ? "Fully Utilised" : "Unconsumed"}</span>
-                                  <span>₹{bd.applied.toLocaleString("en-IN")}/₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</span>
+                                  isChallanOverApplied(bd.effectiveApplied, allocatable) ? "text-destructive" : isChallanFullyUtilised(bd.effectiveApplied, allocatable) ? "text-emerald-600" : "text-amber-600")}>
+                                  <span>{isChallanOverApplied(bd.effectiveApplied, allocatable) ? "Over-applied" : isChallanFullyUtilised(bd.effectiveApplied, allocatable) ? "Fully Utilised" : "Unconsumed"}</span>
+                                  <span>₹{bd.effectiveApplied.toLocaleString("en-IN")}/₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</span>
                                 </div>
                                 <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden">
                                   <div className={cn("h-full rounded-full transition-all", getBalanceColor(c))}
-                                    style={{ width: c.total_challan_amount > 0 ? `${Math.min(100, (bd.applied / c.total_challan_amount) * 100)}%` : "0%" }} />
+                                    style={{ width: c.total_challan_amount > 0 ? `${Math.min(100, (bd.effectiveApplied / c.total_challan_amount) * 100)}%` : "0%" }} />
                                 </div>
                                 {isFilingLocked && (
                                   <Badge variant="secondary" className="text-[9px] gap-1"><Lock size={8} /> {lockBadgeLabel ?? "Filed"}</Badge>
@@ -2466,6 +2571,12 @@ export function TdsDataEntry({
                                     )}
                                   </div>
                                 )}
+                                {bd.kasarVatav > 0 && (
+                                  <div className="flex items-center justify-between gap-1 text-[9px] pt-1 border-t border-border/30">
+                                    <span className="text-muted-foreground">Kasar-Vatav adjusted</span>
+                                    <span className="font-medium">₹{bd.kasarVatav.toLocaleString("en-IN")}</span>
+                                  </div>
+                                )}
                               </CardContent>
                             </Card>
                           </TooltipTrigger>
@@ -2474,7 +2585,9 @@ export function TdsDataEntry({
                             {bd.interest > 0 && <div>Interest: ₹{bd.interest.toLocaleString("en-IN")}</div>}
                             {bd.surcharge > 0 && <div>Surcharge: ₹{bd.surcharge.toLocaleString("en-IN")}</div>}
                             {bd.lateFees > 0 && <div>Late Fees 234E: ₹{bd.lateFees.toLocaleString("en-IN")} (Balance ₹{lateFeeBalance.toLocaleString("en-IN")})</div>}
-                            <div>Applied Total: ₹{bd.applied.toLocaleString("en-IN")}</div>
+                            <div>Applied Total (deductees): ₹{bd.applied.toLocaleString("en-IN")}</div>
+                            {bd.kasarVatav > 0 && <div>Kasar-Vatav adjustment: ₹{bd.kasarVatav.toLocaleString("en-IN")}</div>}
+                            <div>Effective Applied: ₹{bd.effectiveApplied.toLocaleString("en-IN")}</div>
                             <div>Challan Total: ₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</div>
                           </TooltipContent>
                         </Tooltip>
@@ -2547,10 +2660,28 @@ export function TdsDataEntry({
                             <span className={cn("font-semibold", unconsumed > 0 ? "text-amber-600" : "text-muted-foreground")}>
                               Unconsumed Amount: ₹{unconsumed.toLocaleString("en-IN")}
                             </span>
+                            {(selectedChallan.kasar_vatav_amount || 0) > 0 && (
+                              <Badge variant="outline" className="text-[9px] gap-1 border-violet-300 text-violet-700 dark:text-violet-300">
+                                Kasar-Vatav: ₹{(selectedChallan.kasar_vatav_amount || 0).toLocaleString("en-IN")}
+                              </Badge>
+                            )}
                             {overApplied ? (
                               <Badge className="text-[9px] bg-red-100 text-red-700">Over-applied</Badge>
                             ) : matchOk && (
                               <Badge className="text-[9px] bg-emerald-100 text-emerald-700">Fully Utilised</Badge>
+                            )}
+                            {/* Kasar-Vatav: close out a small, genuinely unattachable residual
+                                balance so the challan can read as Fully Utilised without a
+                                fake deductee row. Not offered on archived challans (already
+                                put away) or while the filing is locked (same convention as
+                                Late Fees Used / Edit / Delete on challan-level monetary fields). */}
+                            {!isFilingLocked && !isCorrectionMode && !selectedChallan.is_archived && (unconsumed > 0 || (selectedChallan.kasar_vatav_amount || 0) > 0) && (
+                              <Button
+                                size="sm" variant="outline" className="h-6 gap-1 text-[10px] px-2 border-violet-300 text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950"
+                                onClick={() => openKasarVatavDialog(selectedChallan)}
+                              >
+                                {(selectedChallan.kasar_vatav_amount || 0) > 0 ? "Edit Kasar-Vatav" : "Adjust (Kasar-Vatav)"}
+                              </Button>
                             )}
                             <div className="flex-1" />
                             {isFilingLocked && (
@@ -3209,6 +3340,81 @@ export function TdsDataEntry({
           <DialogFooter>
             <Button variant="outline" onClick={() => setChallanDialogOpen(false)}>Cancel</Button>
             <Button onClick={saveChallan}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Kasar-Vatav — close out a small unattachable residual balance as a
+          deliberate, attributed write-off instead of leaving the challan
+          "Unconsumed" forever. */}
+      <Dialog open={!!kasarVatavDialogChallan} onOpenChange={open => { if (!open) closeKasarVatavDialog(); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Kasar-Vatav Adjustment</DialogTitle>
+          </DialogHeader>
+          {kasarVatavDialogChallan && (() => {
+            const c = kasarVatavDialogChallan;
+            const bd = getChallanBreakdownAll(c.id);
+            const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
+            const rawUnconsumed = Math.max(0, allocatable - bd.applied);
+            const existing = c.kasar_vatav_amount || 0;
+            return (
+              <div className="space-y-3">
+                <div className="rounded-md bg-muted/40 p-2.5 text-xs space-y-1">
+                  <div className="flex justify-between"><span className="text-muted-foreground">Challan</span><span className="font-mono">{c.bsr_code || "—"} / {c.challan_serial_no || "—"}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Allocatable</span><span>₹{allocatable.toLocaleString("en-IN")}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Applied (deductees)</span><span>₹{bd.applied.toLocaleString("en-IN")}</span></div>
+                  <div className="flex justify-between font-semibold"><span>Unconsumed balance</span><span className="text-amber-600">₹{rawUnconsumed.toLocaleString("en-IN")}</span></div>
+                  {existing > 0 && (
+                    <div className="pt-1 mt-1 border-t border-border/50 text-[11px] text-muted-foreground">
+                      Current adjustment: ₹{existing.toLocaleString("en-IN")}
+                      {c.kasar_vatav_note ? ` — "${c.kasar_vatav_note}"` : ""}
+                      {c.kasar_vatav_at ? ` · ${format(new Date(c.kasar_vatav_at), "dd MMM yyyy")}` : ""}
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-xs">Adjustment Amount (₹)</Label>
+                    <button
+                      type="button"
+                      className="text-[10px] text-primary hover:underline"
+                      onClick={() => setKasarVatavAmountInput(String(rawUnconsumed))}
+                    >
+                      Use full balance (₹{rawUnconsumed.toLocaleString("en-IN")})
+                    </button>
+                  </div>
+                  <Input
+                    type="number" step="0.01" min={0} max={rawUnconsumed}
+                    value={kasarVatavAmountInput}
+                    onChange={e => setKasarVatavAmountInput(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label className="text-xs">Reason / Remarks</Label>
+                  <Textarea
+                    value={kasarVatavNoteInput}
+                    onChange={e => setKasarVatavNoteInput(e.target.value)}
+                    placeholder="e.g. Residual round-off, not recoverable — write off to close the challan."
+                    rows={2}
+                  />
+                </div>
+
+                <p className="text-[10px] text-muted-foreground">
+                  Recorded separately from actual TDS/interest/surcharge, and logged to the Audit Log.
+                  Set the amount to 0 to remove an existing adjustment.
+                </p>
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={closeKasarVatavDialog} disabled={kasarVatavSaving}>Cancel</Button>
+            <Button onClick={submitKasarVatav} disabled={kasarVatavSaving}>
+              {kasarVatavSaving ? <Loader2 size={14} className="animate-spin mr-1" /> : null}
+              Save Adjustment
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

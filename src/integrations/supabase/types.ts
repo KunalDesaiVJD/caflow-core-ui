@@ -9261,6 +9261,10 @@ export type Database = {
           interest_deposited: number | null
           is_archived: boolean
           is_book_entry: boolean | null
+          kasar_vatav_amount: number
+          kasar_vatav_at: string | null
+          kasar_vatav_by: string | null
+          kasar_vatav_note: string | null
           minor_head_of_challan: string | null
           others_deposited: number | null
           quarter: string
@@ -9291,6 +9295,10 @@ export type Database = {
           interest_deposited?: number | null
           is_archived?: boolean
           is_book_entry?: boolean | null
+          kasar_vatav_amount?: number
+          kasar_vatav_at?: string | null
+          kasar_vatav_by?: string | null
+          kasar_vatav_note?: string | null
           minor_head_of_challan?: string | null
           others_deposited?: number | null
           quarter: string
@@ -9321,6 +9329,10 @@ export type Database = {
           interest_deposited?: number | null
           is_archived?: boolean
           is_book_entry?: boolean | null
+          kasar_vatav_amount?: number
+          kasar_vatav_at?: string | null
+          kasar_vatav_by?: string | null
+          kasar_vatav_note?: string | null
           minor_head_of_challan?: string | null
           others_deposited?: number | null
           quarter?: string

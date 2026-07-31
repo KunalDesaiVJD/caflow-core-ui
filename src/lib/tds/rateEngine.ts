@@ -130,6 +130,24 @@ export function computeApplied(rows: ApplicableRow[]) {
 export const computeAllocatable = (totalChallanAmount: number, lateFees234E: number) =>
   (totalChallanAmount || 0) - (lateFees234E || 0);
 
+/**
+ * Kasar-Vatav (round-off/write-off): a small residual balance — ₹5, ₹10, a
+ * stray ₹250 — that's left on a challan after every real deductee entry has
+ * been made, with no deductee left to attach it to. Recording it lets a
+ * challan close out as Fully Utilised without inventing a fake deductee row.
+ *
+ * It counts toward how much of the challan is "spoken for" for Fully
+ * Utilised / Unconsumed / Over-applied / Carry-Forward-eligibility purposes,
+ * so every caller that currently feeds computeApplied()'s `applied` into
+ * isChallanFullyUtilised/isChallanOverApplied (or a hand-rolled unconsumed =
+ * allocatable - applied) must add it in via this function first. It must
+ * NEVER be folded into computeApplied's own tds/interest/surcharge — those
+ * report what was actually deducted from deductees, and Kasar-Vatav
+ * deliberately isn't that.
+ */
+export const withKasarVatav = (rowsApplied: number, kasarVatavAmount: number | null | undefined) =>
+  (rowsApplied || 0) + (kasarVatavAmount || 0);
+
 export function challanStatus(applied: number, allocatable: number): "Over-applied" | "Fully Utilised" | "Unconsumed" {
   if (isChallanOverApplied(applied, allocatable)) return "Over-applied";
   if (isChallanFullyUtilised(applied, allocatable)) return "Fully Utilised";
