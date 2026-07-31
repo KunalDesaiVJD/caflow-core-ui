@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { uploadTdsImportFile } from "@/lib/tds/uploadImportFile";
+import { downloadStorageFile, removePublicDocumentByUrl } from "@/lib/openStorageFile";
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
 import { READY_TO_FILE_STATUS } from "@/components/tds/TdsFilingsManager";
@@ -38,7 +40,7 @@ import { cn } from "@/lib/utils";
 import {
   ShieldCheck, AlertTriangle, CheckCircle2, Upload, Play, FileSpreadsheet,
   RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye, BookOpen, ClipboardCheck,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, Lock,
 } from "lucide-react";
 import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
@@ -303,6 +305,16 @@ export function TdsValidateFinalise({
   const [signature, setSignature] = useState<{ signedByName: string; signedAt: string } | null>(null);
   const [attestChecked, setAttestChecked] = useState(false);
   const [signing, setSigning] = useState(false);
+  // Edit-access request/approval — the ONLY way to change a "Ready to File"
+  // return, other than a Firm Admin/Super Admin using Revoke Signature
+  // themselves. Only the LATEST request per filing is tracked; a resolved
+  // (approved/rejected) one is replaced the next time someone requests again.
+  const [editRequest, setEditRequest] = useState<any>(null);
+  const [editRequestReason, setEditRequestReason] = useState("");
+  const [requestingEdit, setRequestingEdit] = useState(false);
+  const [reviewingRequest, setReviewingRequest] = useState(false);
+  const [rejectNote, setRejectNote] = useState("");
+  const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [runSignal, setRunSignal] = useState(0);
   // Which stage tab is showing. The stages are a SEQUENCE (data -> PAN -> ledger),
   // so they get their own tabs instead of one long scroll, and the Finalise
@@ -423,6 +435,14 @@ export function TdsValidateFinalise({
     setSignature(latestSig && latestSig.action_type === "CHECKER_SIGNATURE" && latestSig.changed_at
       ? { signedByName: latestSig.new_value || "—", signedAt: latestSig.changed_at }
       : null);
+
+    // The latest edit-access request for this filing — a resolved one still
+    // shows (its outcome), but a new request replaces it as "the latest" the
+    // next time someone submits one.
+    const { data: reqRows } = await supabase.from("tds_edit_requests" as any)
+      .select("*").eq("filing_id", match.id).order("created_at", { ascending: false }).limit(1);
+    if (stale()) return;
+    setEditRequest((reqRows || [])[0] ?? null);
     setResolving(false);
   }, [selClient, selFy, selQuarter, selForm, complianceError]);
 
@@ -527,6 +547,11 @@ export function TdsValidateFinalise({
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 180_000);
     try {
+      // Kicked off in parallel with parsing/import below, not awaited here — a
+      // storage hiccup must never block or fail the import itself (the parsed
+      // rows are the primary value; downloading the original file back is a
+      // secondary convenience). Resolved once we have the batch id it belongs to.
+      const uploadPromise = uploadTdsImportFile(file, filing.id, "recon");
       const parsed = await readFile(file, (p) => { const { label, pct } = progressLabel(p); setImportStage(label); setImportPct(pct); });
       setImportStage("Normalising & saving…"); setImportPct(88);
       const data = await Promise.race([
@@ -536,12 +561,19 @@ export function TdsValidateFinalise({
         new Promise((_, rej) => ctrl.signal.addEventListener("abort", () => rej(new Error("aborted-timeout")))),
       ]) as any;
       setImportPct(100);
+      // Best-effort: attach the uploaded file's URL to its batch row once both
+      // are known. Never surfaced as an error — see uploadTdsImportFile's doc.
+      uploadPromise.then((url) => {
+        if (url) supabase.from("tds_import_batches").update({ file_url: url }).eq("id", data.batch_id).then(() => loadAll());
+      });
       // "Replace this file" with a DIFFERENTLY-named file: drop the old batch so
       // the new one takes its place. (A same-named file is already replaced by the
       // importer's own file-name de-dupe, so this becomes a harmless no-op then.)
       if (replaceBatchId && replaceBatchId !== data.batch_id) {
+        const { data: oldBatch } = await supabase.from("tds_import_batches").select("file_url").eq("id", replaceBatchId).maybeSingle();
         await supabase.from("tds_imported_rows").delete().eq("batch_id", replaceBatchId);
         const { error: delErr } = await supabase.from("tds_import_batches").delete().eq("id", replaceBatchId);
+        if (!delErr) removePublicDocumentByUrl(supabase, oldBatch?.file_url);
         // Non-atomic: the new file is already in. If dropping the old one fails,
         // both would remain and double-count, so surface it (the file list shows
         // the leftover and the user can delete it manually).
@@ -569,6 +601,16 @@ export function TdsValidateFinalise({
         title: `Imported ${data.row_count} client record(s)${rec?.distinct_pans ? ` · ${rec.distinct_pans} PANs` : ""}`,
         description: `${replacedNote}${data.warning ? data.warning + " " : ""}${mapLine}${dupNote}${mapNotes}${mapIssues}${reconWarn}`.trim() || file.name,
         ...(hasMapWarning ? { variant: "default" as const } : {}),
+      });
+      const actingName = userMap[user?.id ?? ""];
+      // An explicit per-row "Replace this file" click gets its own action type
+      // so the audit trail distinguishes "swapped out an existing file" from a
+      // same-name re-import or an ordinary new-file add.
+      await logReconAudit({
+        filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: actingName,
+        actionType: replaceBatchId ? "RECON_FILE_REPLACED" : "RECON_FILE_IMPORTED",
+        newValue: `"${file.name}" — ${data.row_count} row(s)`,
+        remark: replaceBatchId ? `Replaced imported file with "${file.name}".` : `Imported "${file.name}"${replacedNote ? " — replaced the earlier same-named file." : "."}`,
       });
       await loadAll();
       await bumpUnderProcess();
@@ -629,7 +671,15 @@ export function TdsValidateFinalise({
     if (!filing || !batch) return;
     setComparing(true);
     try {
-      validationToast(await runCompare(filing.id));
+      const data = await runCompare(filing.id);
+      validationToast(data);
+      const s = data?.summary || {};
+      await logReconAudit({
+        filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+        actionType: "RECON_RUN",
+        newValue: `${s.matched ?? 0} matched / ${(s.matched ?? 0) + (s.mismatched ?? 0)}`,
+        remark: `Stage 1 data validation run — ${s.matched ?? 0} matched, ${s.mismatched ?? 0} mismatched.`,
+      });
       await bumpUnderProcess();
     } catch (e: any) {
       toast({ title: "Validation failed", description: e.message, variant: "destructive" });
@@ -645,14 +695,22 @@ export function TdsValidateFinalise({
     setDeleting(true);
     try {
       const hadResults = !!results;
+      const { data: doomed } = await supabase.from("tds_import_batches").select("file_name, file_url").in("id", ids);
       // Remove the rows, then the batch (tds_recon_results referencing it cascade),
       // then wipe any surviving comparison for the filing — it counted these rows.
       await supabase.from("tds_imported_rows").delete().in("batch_id", ids);
       await supabase.from("tds_import_batches").delete().in("id", ids);
       await supabase.from("tds_recon_results").delete().eq("filing_id", filing.id);
+      for (const b of doomed || []) removePublicDocumentByUrl(supabase, b.file_url);
       setResults(null);
       setSelBatchIds(new Set());
       toast({ title: ids.length === 1 ? "File removed" : `${ids.length} files removed`, description: "Imported dataset updated." });
+      await logReconAudit({
+        filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+        actionType: "RECON_FILE_DELETED",
+        oldValue: (doomed || []).map((b: any) => b.file_name).filter(Boolean).join(", ") || null,
+        remark: ids.length === 1 ? `Removed "${doomed?.[0]?.file_name || "file"}".` : `Removed ${ids.length} files.`,
+      });
       await loadAll();
       // Auto-rebuild validation if files remain and a run had already been done —
       // the user should never have to manually re-validate after managing files.
@@ -673,6 +731,14 @@ export function TdsValidateFinalise({
   };
 
   const handleReplaceClick = (batchId: string) => { setReplaceTargetId(batchId); fileInputRef.current?.click(); };
+
+  const handleDownloadFile = (b: any) => {
+    downloadStorageFile(b.file_url, b.file_name || "file");
+    logReconAudit({
+      filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+      actionType: "RECON_FILE_DOWNLOADED", newValue: b.file_name || null, remark: `Downloaded "${b.file_name || "file"}".`,
+    });
+  };
 
   const openDetails = async (b: any) => {
     setDetailsBatch(b); setDetailsRows(null); setDetailsLoading(true);
@@ -762,8 +828,13 @@ export function TdsValidateFinalise({
     toast({ title: "Digitally signed", description: "You can now mark this return as ready to file." });
   };
 
-  const handleRevokeSignature = async () => {
-    if (!filing || !user?.id || !signature || !canSign) return;
+  /** Returns whether the return was actually reverted out of Ready to File —
+   *  approveEditRequest below needs this to know whether it's safe to mark a
+   *  request "approved": the closure's own `filing`/`signature` snapshot
+   *  doesn't update just because setFiling ran inside this call, so a bare
+   *  await here can't be trusted to mean "it worked" on its own. */
+  const handleRevokeSignature = async (): Promise<boolean> => {
+    if (!filing || !user?.id || !signature || !canSign) return false;
     setSigning(true);
     await logReconAudit({
       filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: userMap[user.id],
@@ -815,6 +886,91 @@ export function TdsValidateFinalise({
     }
     setSignature(null); setAttestChecked(false);
     setSigning(false);
+    return reverted;
+  };
+
+  /** Staff request to edit a return that's locked at "Ready to File" — the
+   *  only path open to anyone who is NOT a Firm Admin/Super Admin (who could
+   *  just click Revoke Signature themselves). Purely a request/response
+   *  record; nothing unlocks until a reviewer approves it. */
+  const submitEditRequest = async () => {
+    if (!filing || !user?.id) return;
+    const reason = editRequestReason.trim();
+    if (!reason) { toast({ title: "Reason is required", description: "Describe what needs to change and why.", variant: "destructive" }); return; }
+    setRequestingEdit(true);
+    const requesterName = userMap[user.id] || user.email || "Unknown";
+    const { data, error } = await supabase.from("tds_edit_requests" as any).insert({
+      filing_id: filing.id, firm_id: filing.firm_id, requested_by: user.id, requested_by_name: requesterName,
+      reason, status: "pending",
+    }).select("*").single();
+    if (error) { toast({ title: "Could not submit request", description: error.message, variant: "destructive" }); setRequestingEdit(false); return; }
+    await logReconAudit({
+      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: requesterName,
+      actionType: "EDIT_ACCESS_REQUESTED", newValue: reason,
+      remark: "Requested permission to edit a Ready-to-File return.",
+    });
+    setEditRequest(data);
+    setEditRequestReason("");
+    setRequestingEdit(false);
+    toast({ title: "Request submitted", description: "A Firm Admin or Super Admin can approve it from this same tab." });
+  };
+
+  /** Approve = the SAME effect as Revoke Signature (status reverts to
+   *  Reviewed, signature cleared) — this table only wraps that existing,
+   *  already-CAS-guarded action with a request/response record around it, so
+   *  the actual unlock logic is never duplicated. */
+  const approveEditRequest = async () => {
+    if (!filing || !user?.id || !editRequest || editRequest.status !== "pending" || !canSign) return;
+    setReviewingRequest(true);
+    const reviewerName = userMap[user.id] || user.email || "Unknown";
+    const reverted = await handleRevokeSignature();
+    // Only mark the request "approved" once the revert actually happened — a
+    // request must never be shown as resolved (or the DB row's status left
+    // "pending" forever) while the return is still, in fact, locked.
+    if (!reverted) {
+      toast({ title: "Could not approve", description: "The signature revoke didn't go through, so the return is still locked — the request stays pending. Try again.", variant: "destructive" });
+      setReviewingRequest(false);
+      return;
+    }
+    const { data, error } = await supabase.from("tds_edit_requests" as any)
+      .update({ status: "approved", reviewed_by: user.id, reviewed_by_name: reviewerName, reviewed_at: new Date().toISOString() })
+      .eq("id", editRequest.id).eq("status", "pending").select("*").single();
+    if (!error && data) {
+      setEditRequest(data);
+      await logReconAudit({
+        filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: reviewerName,
+        actionType: "EDIT_ACCESS_APPROVED", oldValue: editRequest.reason,
+        remark: `Approved ${editRequest.requested_by_name || "the requester"}'s edit request — return reverted to Under Review.`,
+      });
+      toast({ title: "Request approved", description: "The return is back in Under Review and unlocked for editing." });
+    } else if (error) {
+      // The revert DID happen (return is genuinely unlocked) — only the
+      // request row's own bookkeeping failed. Surface it rather than
+      // swallowing it, since a future reviewer would otherwise see a
+      // pending request for a return that's already back in Under Review.
+      toast({ title: "Return unlocked, but the request record couldn't be updated", description: error.message, variant: "destructive" });
+    }
+    setReviewingRequest(false);
+  };
+
+  const rejectEditRequest = async () => {
+    if (!filing || !user?.id || !editRequest || editRequest.status !== "pending" || !canSign) return;
+    setReviewingRequest(true);
+    const reviewerName = userMap[user.id] || user.email || "Unknown";
+    const { data, error } = await supabase.from("tds_edit_requests" as any)
+      .update({ status: "rejected", reviewed_by: user.id, reviewed_by_name: reviewerName, reviewed_at: new Date().toISOString(), review_note: rejectNote.trim() || null })
+      .eq("id", editRequest.id).eq("status", "pending").select("*").single();
+    if (error) { toast({ title: "Could not reject request", description: error.message, variant: "destructive" }); setReviewingRequest(false); return; }
+    await logReconAudit({
+      filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: reviewerName,
+      actionType: "EDIT_ACCESS_REJECTED", oldValue: editRequest.reason, newValue: rejectNote.trim() || null,
+      remark: `Rejected ${editRequest.requested_by_name || "the requester"}'s edit request.`,
+    });
+    setEditRequest(data);
+    setRejectNote("");
+    setRejectDialogOpen(false);
+    setReviewingRequest(false);
+    toast({ title: "Request rejected" });
   };
 
   const handleFinalise = async () => {
@@ -1449,6 +1605,14 @@ export function TdsValidateFinalise({
                           </span>
                           <div className="flex items-center shrink-0">
                             <Button size="icon" variant="ghost" className="h-5 w-5" title="View details" onClick={() => openDetails(b)}><Eye size={12} /></Button>
+                            {/* Only files imported after the file_url column was added
+                                (this feature) have the original bytes to download — an
+                                older batch simply omits this button rather than showing
+                                one that 404s. */}
+                            {b.file_url && (
+                              <Button size="icon" variant="ghost" className="h-5 w-5" title={`Download: ${b.file_name || "file"}`}
+                                onClick={() => handleDownloadFile(b)}><Download size={12} /></Button>
+                            )}
                             <Button size="icon" variant="ghost" className="h-5 w-5" title="Replace this file" disabled={importing || deleting || isLocked} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={12} /></Button>
                             <Button size="icon" variant="ghost" className="h-5 w-5 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || isLocked}
                               onClick={() => setDeleteConfirm({ ids: [b.id], label: b.file_name || "this file" })}><Trash2 size={12} /></Button>
@@ -1774,15 +1938,73 @@ export function TdsValidateFinalise({
                       </p>
                     </div>
                   ) : isMarkedReadyToFile ? (
-                    <div className="p-4 rounded-lg bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800">
-                      <p className="text-sm font-semibold text-sky-700 dark:text-sky-300">
-                        ✓ Return marked as Ready to File.
-                      </p>
-                      <p className="text-xs text-sky-700/80 dark:text-sky-300/80 mt-1">
-                        All validations are complete and the checker has signed. This return is
-                        <b> not filed yet</b> — file it on the income-tax portal, then attach the
-                        acknowledgement (ACK) in the Client Filing Summary to move it to Filed.
-                      </p>
+                    <div className="space-y-3">
+                      <div className="p-4 rounded-lg bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800">
+                        <p className="text-sm font-semibold text-sky-700 dark:text-sky-300">
+                          ✓ Return marked as Ready to File.
+                        </p>
+                        <p className="text-xs text-sky-700/80 dark:text-sky-300/80 mt-1">
+                          All validations are complete and the checker has signed. This return is
+                          <b> not filed yet</b> — file it on the income-tax portal, then attach the
+                          acknowledgement (ACK) in the Client Filing Summary to move it to Filed.
+                        </p>
+                      </div>
+
+                      {/* Data Entry, Validate & Finalise and attached documents are all
+                          frozen at this status (isLocked). The ONLY way back to an
+                          editable state is Revoke Signature above (Firm Admin/Super
+                          Admin only) or — for everyone else — a request approved here. */}
+                      <div className="p-3 rounded-lg border bg-muted/30 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Lock size={13} className="text-muted-foreground shrink-0" />
+                          <p className="text-xs font-semibold">Data Entry, validation and attached documents are locked</p>
+                        </div>
+                        {editRequest?.status === "pending" ? (
+                          canSign ? (
+                            <div className="space-y-2">
+                              <p className="text-xs text-muted-foreground">
+                                <b>{editRequest.requested_by_name || "A staff member"}</b> requested edit access
+                                {editRequest.created_at ? ` on ${new Date(editRequest.created_at).toLocaleString("en-IN")}` : ""}:
+                              </p>
+                              <p className="text-xs italic border-l-2 pl-2">{editRequest.reason}</p>
+                              <div className="flex items-center gap-2">
+                                <Button size="sm" className="h-7 gap-1 text-xs" disabled={reviewingRequest} onClick={approveEditRequest}>
+                                  {reviewingRequest ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Approve
+                                </Button>
+                                <Button size="sm" variant="outline" className="h-7 gap-1 text-xs text-destructive" disabled={reviewingRequest} onClick={() => setRejectDialogOpen(true)}>
+                                  <X size={12} /> Reject
+                                </Button>
+                              </div>
+                              <p className="text-[11px] text-muted-foreground">Approving has the same effect as Revoke Signature above — the return moves back to Under Review, unlocked, and must be re-signed before it can be Ready to File again.</p>
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">
+                              Your request is pending review by a Firm Admin or Super Admin: <span className="italic">"{editRequest.reason}"</span>
+                            </p>
+                          )
+                        ) : canSign ? (
+                          <p className="text-xs text-muted-foreground">
+                            You can unlock this return yourself via <b>Revoke Signature</b> above, or wait for a staff member to request access here.
+                          </p>
+                        ) : (
+                          <div className="space-y-2">
+                            {editRequest?.status === "rejected" && (
+                              <p className="text-xs text-destructive">
+                                Your last request was rejected by {editRequest.reviewed_by_name || "a reviewer"}{editRequest.review_note ? `: "${editRequest.review_note}"` : "."}
+                              </p>
+                            )}
+                            {editRequest?.status === "approved" && (
+                              <p className="text-xs text-emerald-600">Your last request was approved — this is a fresh request.</p>
+                            )}
+                            <p className="text-xs text-muted-foreground">If a change is needed now, request permission from a Firm Admin or Super Admin.</p>
+                            <Textarea value={editRequestReason} onChange={(e) => setEditRequestReason(e.target.value)} rows={2}
+                              placeholder="What needs to change, and why?" className="text-xs" disabled={requestingEdit} />
+                            <Button size="sm" className="h-7 gap-1 text-xs" disabled={requestingEdit || !editRequestReason.trim()} onClick={submitEditRequest}>
+                              {requestingEdit ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />} Request permission to edit
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <>
@@ -1905,6 +2127,30 @@ export function TdsValidateFinalise({
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
             <Button onClick={handleFinalise} disabled={finalising}>
               {finalising ? "Finalising…" : "Confirm & Mark Ready to File"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject edit-access request */}
+      <Dialog open={rejectDialogOpen} onOpenChange={(o) => { if (!o) { setRejectDialogOpen(false); setRejectNote(""); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Reject edit request?</DialogTitle></DialogHeader>
+          <div className="space-y-3 py-2">
+            {editRequest && (
+              <p className="text-sm text-muted-foreground">
+                <b>{editRequest.requested_by_name || "The requester"}</b> asked: <span className="italic">"{editRequest.reason}"</span>
+              </p>
+            )}
+            <div className="space-y-1">
+              <Label className="text-xs">Note to the requester (optional)</Label>
+              <Textarea value={rejectNote} onChange={(e) => setRejectNote(e.target.value)} rows={2} placeholder="e.g. Not needed — the figure is correct as filed." />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setRejectDialogOpen(false); setRejectNote(""); }}>Cancel</Button>
+            <Button variant="destructive" onClick={rejectEditRequest} disabled={reviewingRequest}>
+              {reviewingRequest ? "Rejecting…" : "Reject Request"}
             </Button>
           </DialogFooter>
         </DialogContent>

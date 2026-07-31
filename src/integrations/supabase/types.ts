@@ -5888,11 +5888,14 @@ export type Database = {
           created_by: string | null
           created_by_name: string | null
           cy_label: string
+          cy_ledgers: Json | null
           firm_id: string | null
           fy_label: string | null
+          fy_ledgers: Json | null
           id: string
           label: string | null
           note: string | null
+          panel_review: Json | null
           report: Json
           total_allowed_fy: number
           total_disallowed_cy: number
@@ -5908,11 +5911,14 @@ export type Database = {
           created_by?: string | null
           created_by_name?: string | null
           cy_label: string
+          cy_ledgers?: Json | null
           firm_id?: string | null
           fy_label?: string | null
+          fy_ledgers?: Json | null
           id?: string
           label?: string | null
           note?: string | null
+          panel_review?: Json | null
           report: Json
           total_allowed_fy?: number
           total_disallowed_cy?: number
@@ -5928,11 +5934,14 @@ export type Database = {
           created_by?: string | null
           created_by_name?: string | null
           cy_label?: string
+          cy_ledgers?: Json | null
           firm_id?: string | null
           fy_label?: string | null
+          fy_ledgers?: Json | null
           id?: string
           label?: string | null
           note?: string | null
+          panel_review?: Json | null
           report?: Json
           total_allowed_fy?: number
           total_disallowed_cy?: number
@@ -10150,6 +10159,59 @@ export type Database = {
           },
         ]
       }
+      tds_edit_requests: {
+        Row: {
+          created_at: string | null
+          filing_id: string
+          firm_id: string | null
+          id: string
+          reason: string
+          requested_by: string | null
+          requested_by_name: string | null
+          review_note: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          reviewed_by_name: string | null
+          status: string
+        }
+        Insert: {
+          created_at?: string | null
+          filing_id: string
+          firm_id?: string | null
+          id?: string
+          reason: string
+          requested_by?: string | null
+          requested_by_name?: string | null
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+        }
+        Update: {
+          created_at?: string | null
+          filing_id?: string
+          firm_id?: string | null
+          id?: string
+          reason?: string
+          requested_by?: string | null
+          requested_by_name?: string | null
+          review_note?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          reviewed_by_name?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tds_edit_requests_filing_id_fkey"
+            columns: ["filing_id"]
+            isOneToOne: false
+            referencedRelation: "tds_filings"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tds_entries: {
         Row: {
           amount: number | null
@@ -10517,6 +10579,7 @@ export type Database = {
           created_at: string | null
           file_name: string | null
           file_type: string | null
+          file_url: string | null
           filing_id: string
           financial_year: string
           firm_id: string
@@ -10534,6 +10597,7 @@ export type Database = {
           created_at?: string | null
           file_name?: string | null
           file_type?: string | null
+          file_url?: string | null
           filing_id: string
           financial_year: string
           firm_id: string
@@ -10551,6 +10615,7 @@ export type Database = {
           created_at?: string | null
           file_name?: string | null
           file_type?: string | null
+          file_url?: string | null
           filing_id?: string
           financial_year?: string
           firm_id?: string
@@ -10663,6 +10728,7 @@ export type Database = {
           client_id: string
           created_at: string | null
           file_name: string | null
+          file_url: string | null
           filing_id: string
           financial_year: string
           firm_id: string
@@ -10679,6 +10745,7 @@ export type Database = {
           client_id: string
           created_at?: string | null
           file_name?: string | null
+          file_url?: string | null
           filing_id: string
           financial_year: string
           firm_id: string
@@ -10695,6 +10762,7 @@ export type Database = {
           client_id?: string
           created_at?: string | null
           file_name?: string | null
+          file_url?: string | null
           filing_id?: string
           financial_year?: string
           firm_id?: string
@@ -11267,6 +11335,7 @@ export type Database = {
           client_id: string
           created_at: string | null
           file_name: string | null
+          file_url: string | null
           filing_id: string
           financial_year: string
           firm_id: string
@@ -11284,6 +11353,7 @@ export type Database = {
           client_id: string
           created_at?: string | null
           file_name?: string | null
+          file_url?: string | null
           filing_id: string
           financial_year: string
           firm_id: string
@@ -11301,6 +11371,7 @@ export type Database = {
           client_id?: string
           created_at?: string | null
           file_name?: string | null
+          file_url?: string | null
           filing_id?: string
           financial_year?: string
           firm_id?: string

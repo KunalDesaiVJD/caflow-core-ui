@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { uploadTdsImportFile } from "@/lib/tds/uploadImportFile";
+import { downloadStorageFile, removePublicDocumentByUrl } from "@/lib/openStorageFile";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -23,7 +25,7 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { cn } from "@/lib/utils";
 import {
-  ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Trash2, Eye, MinusCircle, AlertTriangle,
+  ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Trash2, Eye, MinusCircle, AlertTriangle, Download,
 } from "lucide-react";
 import { readSheetGrids, readDelimitedGrid } from "@/lib/tdsWorkbook";
 import { TdsExportMenu } from "./TdsExportMenu";
@@ -387,21 +389,26 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
       const { rows, mapping } = await parseTracesFile(file);
       if (rows.length === 0) throw new Error("No PAN rows found. Expected a TRACES Bulk PAN file (Excel/CSV) with a PAN column.");
       const firmId = await resolveFirmId();
+      // Best-effort, non-blocking — see uploadTdsImportFile's doc. A storage
+      // hiccup must never fail the import itself.
+      const uploadPromise = uploadTdsImportFile(file, filing.id, "pan-verification");
 
       // Same-name replace: drop any prior batch (+its rows) with this file name so
       // re-importing the SAME file REPLACES it; a DIFFERENT name ACCUMULATES (the
       // audit unions every file). Mirrors Stage-1's importer de-dupe.
-      const { data: dup } = await supabase.from("tds_pan_verification_batches").select("id").eq("filing_id", filing.id).eq("file_name", file.name);
+      const { data: dup } = await supabase.from("tds_pan_verification_batches").select("id, file_url").eq("filing_id", filing.id).eq("file_name", file.name);
       const dupIds = (dup || []).map((b: any) => b.id);
       if (dupIds.length) {
         await supabase.from("tds_pan_verification_rows").delete().in("batch_id", dupIds);
         await supabase.from("tds_pan_verification_batches").delete().in("id", dupIds);
+        for (const d of dup || []) removePublicDocumentByUrl(supabase, d.file_url);
       }
 
+      const fileUrl = await uploadPromise;
       const { data: batchRow, error: bErr } = await supabase.from("tds_pan_verification_batches").insert({
         filing_id: filing.id, client_id: selClient, firm_id: firmId,
         financial_year: selFy, quarter: selQuarter, form_type: selForm,
-        file_name: file.name, row_count: rows.length, status: "imported", imported_by: user?.id,
+        file_name: file.name, row_count: rows.length, status: "imported", imported_by: user?.id, file_url: fileUrl,
       }).select("id").single();
       if (bErr || !batchRow) throw new Error(bErr?.message || "Batch insert failed");
 
@@ -418,8 +425,10 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
 
       // "Replace this file" with a DIFFERENTLY-named file → drop the old batch.
       if (replaceBatchId && replaceBatchId !== batchRow.id && !dupIds.includes(replaceBatchId)) {
+        const { data: oldBatch } = await supabase.from("tds_pan_verification_batches").select("file_url").eq("id", replaceBatchId).maybeSingle();
         await supabase.from("tds_pan_verification_rows").delete().eq("batch_id", replaceBatchId);
         await supabase.from("tds_pan_verification_batches").delete().eq("id", replaceBatchId);
+        removePublicDocumentByUrl(supabase, oldBatch?.file_url);
       }
 
       // Clear the shown results (the audit is stale until re-run) but DO NOT delete
@@ -438,6 +447,15 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
       toast({
         title: `Imported ${rows.length} PAN record(s)`,
         description: `${file.name}${mapLine ? " · " + mapLine : ""}${warnLine} — ${hadResults ? "re-running audit…" : "click Run Validation to audit."}`,
+      });
+      // An explicit per-row "Replace this file" click gets its own action type
+      // so the audit trail distinguishes "swapped out an existing file" from a
+      // same-name re-import or an ordinary new-file add (mirrors Stage 1).
+      await logReconAudit({
+        filingId: filing.id, firmId, userId: user?.id, userName: userMap[user?.id ?? ""],
+        actionType: replaceBatchId ? "PAN_FILE_REPLACED" : "PAN_FILE_IMPORTED",
+        newValue: `"${file.name}" — ${rows.length} row(s)`,
+        remark: replaceBatchId ? `Replaced imported TRACES file with "${file.name}".` : `Imported TRACES file "${file.name}"${dupIds.length ? " — replaced the earlier same-named file." : "."}`,
       });
       await loadAll();
       // Auto re-run the audit if one had already been done (parity with Stage-1).
@@ -476,11 +494,19 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     setDeleting(true);
     try {
       const hadResults = !!results;
+      const { data: doomed } = await supabase.from("tds_pan_verification_batches").select("file_name, file_url").in("id", ids);
       await supabase.from("tds_pan_verification_rows").delete().in("batch_id", ids);
       await supabase.from("tds_pan_verification_batches").delete().in("id", ids);
+      for (const b of doomed || []) removePublicDocumentByUrl(supabase, b.file_url);
       setResults(null);
       setSelBatchIds(new Set());
       toast({ title: ids.length === 1 ? "TRACES file removed" : `${ids.length} files removed`, description: "PAN dataset updated." });
+      await logReconAudit({
+        filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+        actionType: "PAN_FILE_DELETED",
+        oldValue: (doomed || []).map((b: any) => b.file_name).filter(Boolean).join(", ") || null,
+        remark: ids.length === 1 ? `Removed TRACES file "${doomed?.[0]?.file_name || "file"}".` : `Removed ${ids.length} TRACES files.`,
+      });
       await loadAll();
       const { data: remain } = await supabase.from("tds_pan_verification_batches").select("id").eq("filing_id", filing.id).limit(1);
       if (remain && remain.length && hadResults) {
@@ -503,6 +529,14 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   };
 
   const handleReplaceClick = (batchId: string) => { setReplaceTargetId(batchId); fileInputRef.current?.click(); };
+
+  const handleDownloadFile = (b: any) => {
+    downloadStorageFile(b.file_url, b.file_name || "file");
+    logReconAudit({
+      filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+      actionType: "PAN_FILE_DOWNLOADED", newValue: b.file_name || null, remark: `Downloaded "${b.file_name || "file"}".`,
+    });
+  };
 
   const openDetails = async (b: any) => {
     setDetailsBatch(b); setDetailsRows(null); setDetailsLoading(true);
@@ -845,6 +879,15 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
                     </div>
                     <div className="flex items-center shrink-0">
                       <Button size="icon" variant="ghost" className="h-6 w-6" title="View details" onClick={() => openDetails(b)}><Eye size={13} /></Button>
+                      {/* Only a batch imported after the file_url column was added has
+                          the original bytes to download — an older batch omits this
+                          button rather than showing one that 404s. Never gated by
+                          `disabled`: downloading is read-only, so it stays available
+                          even once the filing is locked (e.g. Ready to File). */}
+                      {b.file_url && (
+                        <Button size="icon" variant="ghost" className="h-6 w-6" title={`Download: ${b.file_name || "file"}`}
+                          onClick={() => handleDownloadFile(b)}><Download size={13} /></Button>
+                      )}
                       <Button size="icon" variant="ghost" className="h-6 w-6" title="Replace this file" disabled={importing || deleting || disabled} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={13} /></Button>
                       <Button size="icon" variant="ghost" className="h-6 w-6 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || disabled}
                         onClick={() => setDeleteConfirm({ ids: [b.id], label: b.file_name || "this file" })}><Trash2 size={13} /></Button>

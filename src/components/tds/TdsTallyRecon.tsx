@@ -1,5 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { uploadTdsImportFile } from "@/lib/tds/uploadImportFile";
+import { viewStorageFile, downloadStorageFile, removePublicDocumentByUrl } from "@/lib/openStorageFile";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -13,7 +15,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2, Unlink, Search, Pencil } from "lucide-react";
+import { ShieldCheck, CheckCircle2, XCircle, Upload, FileSpreadsheet, Loader2, RotateCcw, X, Play, Users, Link2, Unlink, Search, Pencil, Eye, Download } from "lucide-react";
 import { pdfToTextPages } from "@/lib/tds/pdfText";
 import { parseTallyPdfPages } from "@/lib/tds/tallyPdf";
 import { parseExpertPdfPages } from "@/lib/tds/expertPdf";
@@ -239,6 +241,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   // sentence) is unfindable — there's no card titled with it to scan for.
   const [recordSearch, setRecordSearch] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // Mirrors Stage 1/2's own replaceTargetId + shared file input: set right
+  // before a synthetic click on fileRef, read (and cleared) in its onChange.
+  const [replaceTargetId, setReplaceTargetId] = useState<string | null>(null);
   const loadSeq = useRef(0);
   const settled = useRef<string | null>(null);
 
@@ -386,20 +391,39 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     if (ok > 1) toast({ title: `Imported ${ok} of ${files.length} ledger(s)`, description: "All ledgers reconcile together — click Run Validation." });
   };
 
-  const handleImport = async (file: File) => {
+  const handleImport = async (file: File, replaceBatchId?: string) => {
     if (!filing) return; setImporting(true);
     try {
+      // Best-effort, non-blocking — see uploadTdsImportFile's doc. A storage
+      // hiccup must never fail the import itself.
+      const uploadPromise = uploadTdsImportFile(file, filing.id, "tally");
       const parsed = await parseLedgerFile(file);
       const firmId = await resolveFirmId();
-      const { data: dup } = await supabase.from("tds_tally_batches").select("id, row_count, section").eq("filing_id", filing.id).eq("file_name", file.name);
+      const { data: dup } = await supabase.from("tds_tally_batches").select("id, row_count, section, file_url").eq("filing_id", filing.id).eq("file_name", file.name);
       const dupIds = (dup || []).map((b: any) => b.id);
       const replaced = dupIds.length > 0;
       const priorRowCount = dup?.[0]?.row_count ?? null;
       const priorSection = dup?.[0]?.section ?? null;
-      if (dupIds.length) { await supabase.from("tds_tally_rows").delete().in("batch_id", dupIds); await supabase.from("tds_tally_batches").delete().in("id", dupIds); }
+      if (dupIds.length) {
+        await supabase.from("tds_tally_rows").delete().in("batch_id", dupIds);
+        await supabase.from("tds_tally_batches").delete().in("id", dupIds);
+        for (const d of dup || []) removePublicDocumentByUrl(supabase, d.file_url);
+      }
+      // "Replace this file" (per-row button) targets a SPECIFIC batch id, which
+      // may carry a DIFFERENT file name than the one just picked — the same-name
+      // de-dupe above can't catch that case, so it's handled separately here.
+      let replaceTargetOldInfo: { row_count: number | null; section: string | null; file_name: string | null } | null = null;
+      if (replaceBatchId && !dupIds.includes(replaceBatchId)) {
+        const { data: oldBatch } = await supabase.from("tds_tally_batches").select("row_count, section, file_name, file_url").eq("id", replaceBatchId).maybeSingle();
+        replaceTargetOldInfo = oldBatch ? { row_count: oldBatch.row_count, section: oldBatch.section, file_name: oldBatch.file_name } : null;
+        await supabase.from("tds_tally_rows").delete().eq("batch_id", replaceBatchId);
+        await supabase.from("tds_tally_batches").delete().eq("id", replaceBatchId);
+        removePublicDocumentByUrl(supabase, oldBatch?.file_url);
+      }
+      const fileUrl = await uploadPromise;
       const { data: bRow, error: bErr } = await supabase.from("tds_tally_batches").insert({
         filing_id: filing.id, client_id: selClient, firm_id: firmId, financial_year: selFy, quarter: selQuarter, form_type: selForm,
-        file_name: file.name, section: parsed.section, row_count: parsed.rows.length, status: "imported", imported_by: user?.id,
+        file_name: file.name, section: parsed.section, row_count: parsed.rows.length, status: "imported", imported_by: user?.id, file_url: fileUrl,
       }).select("id").single();
       if (bErr || !bRow) throw new Error(bErr?.message || "Batch insert failed");
       const recs = parsed.rows.map((r) => ({
@@ -430,14 +454,27 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       });
       // Audit the import itself (distinct from TALLY_RECON_RUN, which logs the
       // reconciliation outcome) — a new action_type since this is a new event,
-      // not an overload of an existing one.
-      await logReconAudit({
-        filingId: filing.id, firmId, userId: user?.id, userName: userMap[user?.id ?? ""],
-        actionType: "TALLY_LEDGER_IMPORTED",
-        oldValue: replaced ? `${priorRowCount ?? "?"} row(s) · ${priorSection || "no section"}` : null,
-        newValue: `${parsed.rows.length} row(s) · ${parsed.section || "no section"}`,
-        remark: `Imported "${file.name}" (${parsed.source} ledger)${replaced ? " — replaced previous import of the same file." : "."}`,
-      });
+      // not an overload of an existing one. An explicit per-row "Replace this
+      // file" click gets its OWN action type (TALLY_LEDGER_REPLACED) so the
+      // audit trail distinguishes "swapped out an existing ledger" from a
+      // same-name re-import or an ordinary new-ledger add.
+      if (replaceTargetOldInfo) {
+        await logReconAudit({
+          filingId: filing.id, firmId, userId: user?.id, userName: userMap[user?.id ?? ""],
+          actionType: "TALLY_LEDGER_REPLACED",
+          oldValue: `"${replaceTargetOldInfo.file_name || "—"}" — ${replaceTargetOldInfo.row_count ?? "?"} row(s) · ${replaceTargetOldInfo.section || "no section"}`,
+          newValue: `"${file.name}" — ${parsed.rows.length} row(s) · ${parsed.section || "no section"}`,
+          remark: `Replaced ledger file (${parsed.source} ledger).`,
+        });
+      } else {
+        await logReconAudit({
+          filingId: filing.id, firmId, userId: user?.id, userName: userMap[user?.id ?? ""],
+          actionType: "TALLY_LEDGER_IMPORTED",
+          oldValue: replaced ? `${priorRowCount ?? "?"} row(s) · ${priorSection || "no section"}` : null,
+          newValue: `${parsed.rows.length} row(s) · ${parsed.section || "no section"}`,
+          remark: `Imported "${file.name}" (${parsed.source} ledger)${replaced ? " — replaced previous import of the same file." : "."}`,
+        });
+      }
       await loadAll();
     } catch (e: any) { toast({ title: "Tally import failed", description: e.message, variant: "destructive" }); }
     setImporting(false);
@@ -449,15 +486,34 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     if (!filing) return;
     setImporting(true);
     try {
+      const { data: doomed } = await supabase.from("tds_tally_batches").select("file_name, row_count, section, file_url").eq("id", id).maybeSingle();
       await supabase.from("tds_tally_rows").delete().eq("batch_id", id);
       const { error } = await supabase.from("tds_tally_batches").delete().eq("id", id);
       if (error) throw new Error(error.message);
       await supabase.from("tds_tally_results").delete().eq("filing_id", filing.id);
+      removePublicDocumentByUrl(supabase, doomed?.file_url);
       setResults(null);
       toast({ title: "Ledger removed", description: "Run Validation again to reconcile against the remaining ledgers." });
+      await logReconAudit({
+        filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+        actionType: "TALLY_LEDGER_DELETED",
+        oldValue: `"${doomed?.file_name || "—"}" — ${doomed?.row_count ?? "?"} row(s) · ${doomed?.section || "no section"}`,
+        newValue: null,
+        remark: `Removed ledger "${doomed?.file_name || "—"}".`,
+      });
       await loadAll();
     } catch (e: any) { toast({ title: "Could not remove the ledger", description: e.message, variant: "destructive" }); }
     setImporting(false);
+  };
+
+  const handleReplaceClick = (batchId: string) => { setReplaceTargetId(batchId); fileRef.current?.click(); };
+
+  const handleDownloadFile = (b: any) => {
+    downloadStorageFile(b.file_url, b.file_name || "file");
+    logReconAudit({
+      filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
+      actionType: "TALLY_LEDGER_DOWNLOADED", newValue: b.file_name || null, remark: `Downloaded "${b.file_name || "file"}".`,
+    });
   };
 
   const startEditingSection = (b: any) => { setEditingSectionBatchId(b.id); setEditingSectionValue(b.section || ""); };
@@ -1488,8 +1544,15 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
             {validating && <span className="text-[10px] text-amber-600 flex items-center gap-1 shrink-0"><Loader2 size={10} className="animate-spin" /> reconciling…</span>}
             <div className="flex-1" />
             <input ref={fileRef} type="file" multiple accept=".pdf,application/pdf" className="hidden"
-              onChange={(e) => { const picked = Array.from(e.target.files ?? []); if (picked.length) handleImportMany(picked); e.currentTarget.value = ""; }} />
-            <Button size="sm" variant={batches.length ? "outline" : "default"} className="gap-1 h-6 px-2 text-[11px] shrink-0" disabled={importing || disabled} onClick={() => fileRef.current?.click()}>
+              onChange={(e) => {
+                const picked = Array.from(e.target.files ?? []);
+                const tgt = replaceTargetId; setReplaceTargetId(null);
+                // "Replace this file" targets ONE batch, so it takes the first pick;
+                // a plain Add/re-import imports everything selected in one go.
+                if (picked.length) { if (tgt) handleImport(picked[0], tgt); else handleImportMany(picked); }
+                e.currentTarget.value = "";
+              }} />
+            <Button size="sm" variant={batches.length ? "outline" : "default"} className="gap-1 h-6 px-2 text-[11px] shrink-0" disabled={importing || disabled} onClick={() => { setReplaceTargetId(null); fileRef.current?.click(); }}>
               {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}{batches.length ? "Add / re-import" : "Import ledger PDF"}
             </Button>
           </div>
@@ -1517,6 +1580,22 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
                           disabled={disabled || importing} onClick={() => startEditingSection(b)}><Pencil size={11} /></button>
                       </>
                     )}
+                    {/* Only a batch imported after the file_url column was added has
+                        the original PDF to view/download — an older batch simply
+                        omits these two rather than showing buttons that 404. Never
+                        gated by `disabled`: both are read-only, so they stay
+                        available even once the filing is locked (e.g. Ready to
+                        File) — unlike Replace/Delete just below, which mutate. */}
+                    {b.file_url && (
+                      <>
+                        <button className="text-muted-foreground hover:text-foreground shrink-0" title={`View: ${b.file_name}`}
+                          onClick={() => viewStorageFile(b.file_url)}><Eye size={11} /></button>
+                        <button className="text-muted-foreground hover:text-foreground shrink-0" title={`Download: ${b.file_name}`}
+                          onClick={() => handleDownloadFile(b)}><Download size={11} /></button>
+                      </>
+                    )}
+                    <button className="text-muted-foreground hover:text-foreground shrink-0" title="Replace this file"
+                      disabled={disabled || importing} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={11} /></button>
                     <button className="text-muted-foreground hover:text-destructive shrink-0" title="Remove this ledger"
                       disabled={disabled || importing} onClick={() => deleteBatch(b.id)}><X size={11} /></button>
                   </div>
