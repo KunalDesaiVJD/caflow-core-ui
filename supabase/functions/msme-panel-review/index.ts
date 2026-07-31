@@ -44,22 +44,25 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// The opening/answering side is resolved by callModel() from MSME_CLAUDE_MODEL.
-// The CHALLENGING side is:
+// BOTH SIDES OF THE PANEL NOW RUN CLAUDE HAIKU 4.5, by standing instruction:
+// everything routed through the firm's OpenRouter key uses Haiku.
 //
-// Kimi K2.6, and the lineage matters more here than the price: two models trained
-// by the same lab share blind spots, and a panel that agrees for that reason is
-// worse than no panel because it manufactures comfort. DeepSeek opens and
-// answers, Moonshot challenges and closes.
+// What that costs, recorded plainly because it is not obvious from the code.
+// This panel was built to be adversarial across LABS — DeepSeek opened and
+// answered, Moonshot's Kimi challenged and closed — on the reasoning that two
+// models from the same lab share blind spots, so a panel that agrees for that
+// reason manufactures comfort rather than assurance. With one model on both
+// sides the disagreement is now only prompt-deep: the challenger sees a
+// different instruction, not a different mind.
 //
-// .6 rather than plain k2 for a measured reason. `moonshotai/kimi-k2` is served
-// by exactly ONE provider (Novita) and it does not implement structured outputs,
-// so asking for guaranteed JSON fails the request outright. k2.6 is served by 22
-// providers, 21 of which do — so with require_parameters below, routing lands on
-// one that enforces it. Measured: 56s, valid JSON, clean stop.
+// The panel still catches unsupported claims, arithmetic that does not follow
+// and missing caveats. It no longer catches the class of error a model makes
+// consistently because of how it was trained, because the reviewer shares it.
 //
-// Override with OPENROUTER_MODEL.
-const DEFAULT_GPT_MODEL = "moonshotai/kimi-k2.6";
+// Restoring the cross-lab panel needs no code change — set OPENROUTER_MODEL to
+// a challenger (moonshotai/kimi-k2.6 was measured at 56s with clean structured
+// JSON) and MSME_CLAUDE_MODEL to the opener.
+const DEFAULT_GPT_MODEL = "anthropic/claude-haiku-4.5";
 
 const CONTEXT =
   'CONTEXT — how this computation is produced, so you review the right thing:\n' +
@@ -345,15 +348,10 @@ type Part =
   | { kind: "image"; base64: string };
 
 const DEFAULT_MODEL: Record<Provider, string> = {
-  // DeepSeek v3.2 opens and answers the panel. This side is JUDGEMENT, not
-  // transcription — it argues about the interpretation and never touches a
-  // figure — and DeepSeek is strong at exactly that while costing a fraction of
-  // the alternatives.
-  //
-  // It is deliberately NOT used for reading ledgers: tested against the firm's
-  // own file it inverted debit and credit on every row and mistook the company
-  // letterhead for the vendor. See the note in msme-extract-ledger.
-  openrouter: "deepseek/deepseek-v3.2",
+  // Haiku 4.5 on both transports, per the standing OpenRouter instruction.
+  // This side opens and answers the panel — judgement rather than
+  // transcription, arguing about interpretation and never touching a figure.
+  openrouter: "anthropic/claude-haiku-4.5",
   anthropic: "claude-haiku-4-5-20251001",
 };
 

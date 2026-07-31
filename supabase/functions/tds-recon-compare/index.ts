@@ -43,6 +43,11 @@ import {
 } from "../_shared/match.ts";
 import { assign, type AsgOffice, type AsgLedger } from "../_shared/assignment.ts";
 
+// Everything the firm routes through OpenRouter runs on Claude Haiku, by
+// standing instruction. One model across every function keeps the spend
+// predictable and the behaviour comparable between them.
+const OPENROUTER_DEFAULT_MODEL = "anthropic/claude-haiku-4.5";
+
 // Reflect the browser's requested headers on the preflight (supabase-js v2.98+
 // attaches x-supabase-client-* headers; a static allow-list that omits them fails
 // the CORS preflight → "Failed to send a request to the Edge Function").
@@ -501,7 +506,7 @@ async function callAI(system: string, userText: string, maxTokens: number): Prom
     } catch (e) { console.error("section AI anthropic error", String(e).slice(0, 120)); return null; }
   };
   const OR = Deno.env.get("OPENROUTER_API_KEY"), LV = Deno.env.get("LOVABLE_API_KEY"), AN = Deno.env.get("ANTHROPIC_API_KEY");
-  if (OR) { const r = await openAICompat("https://openrouter.ai/api/v1/chat/completions", OR, Deno.env.get("OPENROUTER_MODEL") || "google/gemini-2.5-flash", { "HTTP-Referer": "https://caflow.app", "X-Title": "CAFlow TDS Recon" }); if (r) return r; }
+  if (OR) { const r = await openAICompat("https://openrouter.ai/api/v1/chat/completions", OR, Deno.env.get("OPENROUTER_MODEL") || OPENROUTER_DEFAULT_MODEL, { "HTTP-Referer": "https://caflow.app", "X-Title": "CAFlow TDS Recon" }); if (r) return r; }
   if (LV) { const r = await openAICompat("https://ai.gateway.lovable.dev/v1/chat/completions", LV, Deno.env.get("LOVABLE_MODEL") || "google/gemini-2.5-flash", {}); if (r) return r; }
   if (AN) { const r = await anthropic(AN); if (r) return r; }
   return null;
