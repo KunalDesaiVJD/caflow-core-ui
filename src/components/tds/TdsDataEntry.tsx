@@ -1339,11 +1339,28 @@ export function TdsDataEntry({
     onCorrectionChanged?.();
   };
 
-  const deleteChallan = async (id: string) => {
+  /** Deleting a challan CASCADE-deletes every deductee attached to it — including
+   *  ones from a DIFFERENT form/filing sharing this same challan via the
+   *  combined-payment reuse feature (tds_deductees.challan_id is ON DELETE
+   *  CASCADE). That blast radius must be visible in the audit log, not just
+   *  "a challan was deleted" — a deletion with no attribution and no record of
+   *  what it took with it is exactly how real Data Entry data disappears
+   *  without a trace. */
+  const deleteChallan = async (c: Challan) => {
     if (isFilingLocked) return;
-    const { error } = await supabase.from(SRC.challans as any).delete().eq("id", id);
+    const { count } = await supabase.from(SRC.deductees as any)
+      .select("id", { count: "exact", head: true }).eq("challan_id", c.id);
+    const { error } = await supabase.from(SRC.challans as any).delete().eq("id", c.id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     toast({ title: "Challan deleted" });
+    await logReconAudit({
+      filingId: c.filing_id, firmId: c.firm_id, userId: user?.id, userName: currentUserName || user?.email || "Unknown",
+      actionType: "CHALLAN_DELETED",
+      oldValue: `${c.bsr_code || "—"} / ${c.challan_serial_no || "—"} — ₹${(c.total_challan_amount || 0).toLocaleString("en-IN")}`,
+      newValue: "deleted",
+      remark: `Deleted challan ${c.bsr_code || "—"} / ${c.challan_serial_no || "—"} (${c.form_type} ${c.quarter} FY ${c.financial_year})`
+        + ((count ?? 0) > 0 ? ` — cascade-deleted ${count} deductee(s) attached to it (including any from a different form/filing sharing this challan).` : "."),
+    });
     if (filing) await refreshChallansAndCF(filing.id);
     await bumpUnderProcess();
     onCorrectionChanged?.();
@@ -1520,8 +1537,21 @@ export function TdsDataEntry({
   // Issue 7I: Delete + instant recalculation
   const deleteDeductee = async (id: string) => {
     if (isFilingLocked) return;
+    // Snapshot before deleting — this is the only record of what a hard
+    // DELETE removed. A silent, unattributed deletion of real Data Entry is
+    // exactly the failure mode this closes off.
+    const target = deductees.find(d => d.id === id) || prevEntries.find(d => d.id === id) || null;
     const { error } = await supabase.from(SRC.deductees as any).delete().eq("id", id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+    if (target && filing) {
+      await logReconAudit({
+        filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: currentUserName || user?.email || "Unknown",
+        actionType: "DEDUCTEE_DELETED",
+        oldValue: `${target.deductee_name || "—"} · ${target.deductee_pan || "no PAN"} · ₹${(target.total_tax_deducted || target.tds_amount || 0).toLocaleString("en-IN")} TDS`,
+        newValue: "deleted",
+        remark: `Deleted deductee "${target.deductee_name || "—"}" (${target.section_code || "—"}, ₹${(target.amount_paid_credited || 0).toLocaleString("en-IN")} paid) from ${target.form_type} ${target.quarter} FY ${target.financial_year}${isCorrectionMode ? " — correction draft" : ""}.`,
+      });
+    }
 
     // In a correction the DELETE is intercepted by a trigger: a row that came
     // from the filed return SURVIVES, marked action='delete', so the correction
@@ -2644,7 +2674,7 @@ export function TdsDataEntry({
                                       </Button>
                                     )}
                                     {!isFilingLocked && (
-                                      <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); deleteChallan(c.id); }}>
+                                      <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); void deleteChallan(c); }}>
                                         <Trash2 size={10} className="text-destructive" />
                                       </Button>
                                     )}
