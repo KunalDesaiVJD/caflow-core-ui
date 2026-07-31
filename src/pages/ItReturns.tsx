@@ -512,16 +512,24 @@ const ItReturns = () => {
       // 1. Client has an audit engagement for this FY              → "Audit"
       // 2. FY-aware util resolves to "Audit"                       → "Audit"
       // 3. FY-aware util resolves to "Partner in Audited Firm"     → that
-      // 4. Legacy classMap fallback (handles wizard-stored currentFY rows)
-      // 5. Everything else (ITR-service clients)                   → Non-Audited
+      // 4. FY-aware util resolves to any other non-empty value     → that
+      //    (covers "Non-Audit", "Non-Audit (BP)", and any future
+      //    classification variant — previously this fell through to
+      //    "" and every non-Audit/non-Partner client silently landed
+      //    in the Non-Audited tab regardless of what was actually saved)
+      // 5. Legacy classMap fallback (handles wizard-stored currentFY rows)
+      // 6. Everything else (ITR-service clients)                   → Non-Audited
       const resolveClassification = (clientId: string): string => {
         if (auditSet.has(clientId)) return "Audit";
-        const fyAware = (fyAwareClsMap.get(clientId) || "").toLowerCase();
+        const fyAwareRaw = fyAwareClsMap.get(clientId) || "";
+        const fyAware = fyAwareRaw.toLowerCase();
         if (fyAware === "audit") return "Audit";
-        if (fyAware.includes("partner")) return fyAwareClsMap.get(clientId)!;
+        if (fyAware.includes("partner")) return fyAwareRaw;
+        if (fyAwareRaw) return fyAwareRaw;
         const cls = classMap.get(clientId) || "";
         if (cls.toLowerCase() === "audit") return "Audit";
         if (cls.toLowerCase().includes("partner")) return cls;
+        if (cls) return cls;
         return "";
       };
 
