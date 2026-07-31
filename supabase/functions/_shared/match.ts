@@ -486,7 +486,31 @@ export function canonicalSection(v: string | null | undefined): string | null {
     return fvu ? `192${fvu[1] ?? ""}` : byKeyword();
   }
   const [, base, sub] = m;
-  if (sub) return base + sub;
+  if (sub) {
+    // "194IA" (no space/hyphen before the letters) is genuinely ambiguous:
+    // it is both the real, distinct statutory section 194-IA (TDS on
+    // transfer of certain immovable property) AND how some clients' own
+    // Tally books informally spell "194-I(a)" (rent of plant & machinery,
+    // 2%) — dropping the parenthesis around the "(a)" sub-clause collapses
+    // it onto the exact same digits as the unrelated section. Confirmed
+    // real: a genuine client ledger literally titled "TDS on Machinery Rent
+    // 2% (194IA) - 1008" parsed as 194-IA, so Office Data's own "194I(a)"
+    // (which canonicalises to bare "194I", same as below) could never match
+    // it — reported "No Ledger for Section 194I" for a ledger the CA had
+    // already imported, just informally labelled. "RENT" is a safe, narrow
+    // signal here: 194-IA's own definition (a property TRANSFER) never
+    // describes itself as rent, so this can't misfire on a genuine
+    // immovable-property ledger. 194-IB is deliberately NOT given the same
+    // treatment: unlike 194-IA, real statutory 194-IB (rent paid by an
+    // individual/HUF not liable to tax audit) IS ITSELF a rent section, so
+    // a "rent" keyword cannot tell it apart from an informal "194-I(b)"
+    // reading the way it safely can for "IA".
+    //
+    // This file has a byte-identical Deno-runtime copy for edge functions
+    // (see sharedSync.test.ts) — a change here must land in both.
+    if (base === "194" && sub === "IA" && /RENT/.test(s)) return "194I";
+    return base + sub;
+  }
   // Bare base: accept a keyword's refinement only when it agrees on the base, so a
   // keyword can add the letter the title omitted but can never override the digits.
   const kw = byKeyword();
