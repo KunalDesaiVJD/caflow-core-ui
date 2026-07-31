@@ -183,6 +183,34 @@ function staffName(users: { id: string; name?: string | null }[], id: string | n
   return (u?.name && u.name.trim()) || "—";
 }
 
+/** Display label for each filing sub-tab — shared between the tab headers
+ *  and the Excel export sheet names so the two stay in lockstep. */
+const SUB_TAB_LABEL: Record<FilingSubTab, string> = {
+  audited:                  "Audited",
+  non_audited:              "Non-Audited",
+  non_audit_bp:             "Non-Audit (BP)",
+  partner_in_audited_firm:  "Partner in Audited Firm",
+  non_itr:                  "Non-ITR",
+};
+
+/** Statutory ITR due date for a given classification + assessment year,
+ *  e.g. AY "2026-27" → the filing year is 2026. Audit / Partner-in-Audited
+ *  -Firm clients follow the tax-audit due date (31 Oct); plain Non-Audit
+ *  is 31 Jul; the Business & Profession bucket is 31 Aug; Non-ITR clients
+ *  have no ITR due date at all. */
+function statutoryDueDate(subTab: FilingSubTab, ay: string): string {
+  const filingYear = Number((ay || "").split("-")[0]);
+  if (!filingYear) return "";
+  switch (subTab) {
+    case "audited":
+    case "partner_in_audited_firm": return `31/10/${filingYear}`;
+    case "non_audit_bp":            return `31/08/${filingYear}`;
+    case "non_audited":             return `31/07/${filingYear}`;
+    case "non_itr":                 return "";
+    default:                        return "";
+  }
+}
+
 function formatFiledDate(iso: string | null | undefined): string {
   if (!iso) return "—";
   try {
@@ -915,25 +943,99 @@ const ItReturns = () => {
     }
   };
 
-  // ─── Export ───
+  // ─── Export ───────────────────────────────────────────────────────────────
+  // `filtered` already respects every active filter (search, status, form,
+  // staff, work group, etc.) — so "export only what's currently filtered"
+  // falls out for free. What was missing: the export ignored classification
+  // entirely and dumped everything into one flat sheet, so Audited /
+  // Non-Audited / Non-Audit (BP) / Partner in Audited Firm / Non-ITR rows
+  // were all mixed together with no way to tell them apart.
+  //
+  // Now: bucket `filtered` by the SAME getClientSubTab() router the on-screen
+  // tabs use, and write one sheet per bucket (skipping empty ones) plus a
+  // Summary sheet up front with per-category totals. Column widths are set
+  // so the sheet is readable without manual resizing, and Due Date is
+  // populated from the statutory deadline for that bucket instead of being
+  // permanently blank.
   const handleExport = () => {
     import("xlsx").then(XLSX => {
-      const rows = filtered.map(p => ({
+      const buildRow = (p: ItrProfile, subTab: FilingSubTab) => ({
         "Client Name": p.client_name,
-        "PAN": p.client_pan,
+        "PAN":         p.client_pan,
         "Constitution": p.entity_type,
-        "Work Group": p.work_group_name || p.group_name,
-        "ITR Form": p.itr_form || "",
-        "Status": p.filing_status || "Data Pending",
-        "Due Date": "",
-        "Filed Date": formatDateDDMMYYYY(p.date_filed),
-        "Ack No": p.acknowledgment_no || "",
+        "Work Group":  p.work_group_name || p.group_name,
+        "ITR Form":    p.itr_form || "",
+        "Status":      p.filing_status || "Data Pending",
+        "Due Date":    statutoryDueDate(subTab, selectedAY),
+        "Filed Date":  formatDateDDMMYYYY(p.date_filed),
+        "Ack No":      p.acknowledgment_no || "",
         "Assigned To": p.assigned_name || "",
-      }));
-      const ws = XLSX.utils.json_to_sheet(rows);
+      });
+
+      const COL_WIDTHS = [
+        { wch: 28 }, // Client Name
+        { wch: 12 }, // PAN
+        { wch: 14 }, // Constitution
+        { wch: 20 }, // Work Group
+        { wch: 9 },  // ITR Form
+        { wch: 22 }, // Status
+        { wch: 11 }, // Due Date
+        { wch: 11 }, // Filed Date
+        { wch: 16 }, // Ack No
+        { wch: 18 }, // Assigned To
+      ];
+
+      const SUB_TAB_ORDER: FilingSubTab[] = [
+        "audited", "non_audited", "non_audit_bp", "partner_in_audited_firm", "non_itr",
+      ];
+
+      // Bucket the currently-filtered rows by classification sub-tab
+      const buckets = new Map<FilingSubTab, ItrProfile[]>();
+      for (const tab of SUB_TAB_ORDER) buckets.set(tab, []);
+      for (const p of filtered) {
+        const tab = getClientSubTab(p.client_classification);
+        buckets.get(tab)!.push(p);
+      }
+
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "ITR Filings");
-      XLSX.writeFile(wb, `ITR_Filings_${selectedAY}_${format(new Date(), "yyyy-MM-dd")}.xlsx`);
+
+      // Summary sheet first — quick at-a-glance bifurcation counts
+      const filedIn = (list: ItrProfile[]) => list.filter(p => (p.filing_status || "") === "Filed").length;
+      const summaryRows = SUB_TAB_ORDER
+        .map(tab => ({
+          "Category":   SUB_TAB_LABEL[tab],
+          "Due Date":   statutoryDueDate(tab, selectedAY) || "—",
+          "Total":      buckets.get(tab)!.length,
+          "Filed":      filedIn(buckets.get(tab)!),
+          "Not Filed":  buckets.get(tab)!.length - filedIn(buckets.get(tab)!),
+        }))
+        .filter(r => r.Total > 0);
+      if (summaryRows.length > 0) {
+        const summaryWs = XLSX.utils.json_to_sheet(summaryRows);
+        summaryWs["!cols"] = [{ wch: 26 }, { wch: 11 }, { wch: 8 }, { wch: 8 }, { wch: 10 }];
+        XLSX.utils.book_append_sheet(wb, summaryWs, "Summary");
+      }
+
+      // One sheet per non-empty category, in the same order as the on-screen tabs
+      for (const tab of SUB_TAB_ORDER) {
+        const list = buckets.get(tab)!;
+        if (list.length === 0) continue;
+        const rows = list.map(p => buildRow(p, tab));
+        const ws = XLSX.utils.json_to_sheet(rows);
+        ws["!cols"] = COL_WIDTHS;
+        // Excel sheet names cap at 31 chars and reject : \ / ? * [ ] — every
+        // SUB_TAB_LABEL value is already safe, but stay defensive.
+        const sheetName = SUB_TAB_LABEL[tab].slice(0, 31);
+        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+      }
+
+      if (wb.SheetNames.length === 0) {
+        toast({ title: "Nothing to export", description: "No clients match the current filters.", variant: "destructive" });
+        return;
+      }
+
+      const statusSuffix = filterStatus ? `_${filterStatus.replace(/[^a-zA-Z0-9]+/g, "_")}` : "";
+      XLSX.writeFile(wb, `ITR_Filings_${selectedAY}${statusSuffix}_${format(new Date(), "yyyy-MM-dd")}.xlsx`);
     });
   };
 
