@@ -86,7 +86,22 @@ const RESULT_BADGE: Record<string, string> = {
   "TDS Missing from Office Data": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
   "TDS Amount Mismatch": "bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300",
 };
-const inr = (n: number | null | undefined) => (n == null ? "—" : `₹${Math.round(Number(n)).toLocaleString("en-IN")}`);
+// Kept in sync with tallyRecon.ts's own inr(): the reason text built there
+// and the Office/Ledger comparison table built here must show the SAME
+// number for the SAME figure. Money verdicts flag any gap of ₹0.005+
+// (EXACT_EPS, see tallyRecon.ts), tighter than whole-rupee rounding — a
+// sub-rupee gap (routine: Tally often carries paise, office TDS is entered
+// rounded to the whole rupee) must stay visible here too, or a flagged
+// "Credit Amount Mismatch" row shows identical Office/Ledger numbers with no
+// visible difference, reading as a false positive when it isn't one.
+const inr = (n: number | null | undefined) => {
+  if (n == null) return "—";
+  const v = Number(n);
+  const hasPaise = Math.abs(v - Math.round(v)) >= 0.005;
+  return hasPaise
+    ? `₹${v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `₹${Math.round(v).toLocaleString("en-IN")}`;
+};
 type Filter = null | "total" | "matched" | "issues" | "mapped" | "overridden";
 
 function AnimatedNumber({ value }: { value: number }) {
@@ -283,11 +298,13 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   }, [office, batches, ledgerSections]);
 
   const loadOffice = useCallback(async (fId: string): Promise<OfficeTxn[]> => {
-    const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", fId);
-    const chIds = (ch || []).map((c: any) => c.id);
-    if (!chIds.length) return [];
+    // Scoped by filing_id, not by "attached to one of this filing's challans"
+    // — a challan is routinely reused across a client's 24Q and 26Q filings
+    // (one combined bank deposit, allocated across both returns), so a
+    // challan_id-only join over-collects a DIFFERENT filing's deductees. Same
+    // fix as Stage 1 (tds-recon-compare) and Stage 2 (TdsPanVerification).
     const { data: ded } = await supabase.from("tds_deductees")
-      .select("id, deductee_name, deductee_pan, date_of_payment, amount_paid_credited, tds_amount, total_tax_deducted, section_code, nature_of_payment").in("challan_id", chIds);
+      .select("id, deductee_name, deductee_pan, date_of_payment, amount_paid_credited, tds_amount, total_tax_deducted, section_code, nature_of_payment").eq("filing_id", fId);
     const dates = (ded || []).map((d: any) => d.date_of_payment);
     const toIso = makeDateNormaliser(dates);
     return (ded || []).map((d: any) => ({
