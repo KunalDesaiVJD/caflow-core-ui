@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2, Undo2,
   CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
-  Archive, ArchiveRestore,
+  Archive, ArchiveRestore, ChevronDown, ChevronRight,
 } from "lucide-react";
 import { undoCorrectionRow, diffCorrectionRow, effectiveCorrectionAction, getEffectiveClientLedger } from "@/lib/tdsCorrections";
 import { generateGeniusExport } from "@/lib/genius-export";
@@ -820,7 +820,7 @@ export function TdsDataEntry({
       return;
     }
     await logReconAudit({
-      filingId: c.filing_id, firmId: c.firm_id, userId: user.id, userName: userMap[user.id] || user.email || "Unknown",
+      filingId: c.filing_id, firmId: c.firm_id, userId: user.id, userName: currentUserName || user.email || "Unknown",
       actionType: "CHALLAN_ARCHIVED",
       oldValue: `${c.bsr_code || "—"} / ${c.challan_serial_no || "—"} — active`,
       newValue: "archived",
@@ -849,7 +849,7 @@ export function TdsDataEntry({
       return;
     }
     await logReconAudit({
-      filingId: c.filing_id, firmId: c.firm_id, userId: user.id, userName: userMap[user.id] || user.email || "Unknown",
+      filingId: c.filing_id, firmId: c.firm_id, userId: user.id, userName: currentUserName || user.email || "Unknown",
       actionType: "CHALLAN_UNARCHIVED",
       oldValue: "archived",
       newValue: `${c.bsr_code || "—"} / ${c.challan_serial_no || "—"} — active`,
@@ -2062,29 +2062,48 @@ export function TdsDataEntry({
             {/* Challan strip — horizontal, single row (was a 30%-width vertical sidebar) */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-foreground">Challans</h3>
-                <div className="flex items-center gap-2">
-                  <Button size="sm" variant="ghost" className="gap-1 h-7 text-xs text-muted-foreground"
-                    onClick={() => {
-                      const next = !showArchivedChallans;
-                      setShowArchivedChallans(next);
-                      if (next && selClient) void fetchArchivedChallans(selClient);
-                    }}>
-                    <Archive size={12} /> {showArchivedChallans ? "Hide" : "Show"} Archived Challans
-                    {archivedChallans.length > 0 && !showArchivedChallans && (
-                      <Badge variant="secondary" className="text-[9px] px-1 ml-0.5">{archivedChallans.length}</Badge>
+                {isCorrectionMode ? (
+                  <button
+                    type="button"
+                    onClick={() => setChallansExpanded(v => !v)}
+                    aria-expanded={challansExpanded}
+                    className="flex items-center gap-1.5 text-left"
+                  >
+                    {challansExpanded ? <ChevronDown size={14} className="text-muted-foreground" /> : <ChevronRight size={14} className="text-muted-foreground" />}
+                    <h3 className="text-sm font-semibold text-foreground">Challans</h3>
+                    {!challansExpanded && (
+                      <span className="text-xs text-muted-foreground">
+                        {challans.length} challan{challans.length === 1 ? "" : "s"}
+                      </span>
                     )}
-                  </Button>
-                  {/* Issue 2: Hide Add Challan when filed */}
-                  {!isFilingLocked && (
-                    <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={openAddChallan}>
-                      <Plus size={12} /> Add Challan
+                  </button>
+                ) : (
+                  <h3 className="text-sm font-semibold text-foreground">Challans</h3>
+                )}
+                {challansExpanded && (
+                  <div className="flex items-center gap-2">
+                    <Button size="sm" variant="ghost" className="gap-1 h-7 text-xs text-muted-foreground"
+                      onClick={() => {
+                        const next = !showArchivedChallans;
+                        setShowArchivedChallans(next);
+                        if (next && selClient) void fetchArchivedChallans(selClient);
+                      }}>
+                      <Archive size={12} /> {showArchivedChallans ? "Hide" : "Show"} Archived Challans
+                      {archivedChallans.length > 0 && !showArchivedChallans && (
+                        <Badge variant="secondary" className="text-[9px] px-1 ml-0.5">{archivedChallans.length}</Badge>
+                      )}
                     </Button>
-                  )}
-                </div>
+                    {/* Issue 2: Hide Add Challan when filed */}
+                    {!isFilingLocked && (
+                      <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={openAddChallan}>
+                        <Plus size={12} /> Add Challan
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {showArchivedChallans && (
+              {challansExpanded && showArchivedChallans && (
                 <div className="space-y-1">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Archived Challans (this client, any period)</p>
                   {archivedChallans.length === 0 ? (
@@ -2126,7 +2145,7 @@ export function TdsDataEntry({
               )}
 
               {/* Carry-forward challans (Issue 7H: show origin quarter/FY) */}
-              {carryForwardChallans.length > 0 && (
+              {challansExpanded && carryForwardChallans.length > 0 && (
                 <div className="space-y-1">
                   <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Carried Forward</p>
                   <div className="flex gap-2 overflow-x-auto pb-1">
@@ -2212,7 +2231,7 @@ export function TdsDataEntry({
                 </div>
               )}
 
-              {challans.length === 0 && carryForwardChallans.length === 0 ? (
+              {!challansExpanded ? null : challans.length === 0 && carryForwardChallans.length === 0 ? (
                 <Card className="border-dashed">
                   <CardContent className="py-6 text-center text-muted-foreground text-sm">
                     {isFilingLocked ? "Filed — no challans can be added." : "No challans yet. Add your first challan."}
@@ -2364,6 +2383,7 @@ export function TdsDataEntry({
             </div>
 
             {/* Challan detail + Deductee Table — now full width, no longer squeezed by the left sidebar */}
+            {challansExpanded && (
             <div className="space-y-3">
               {selectedChallan ? (
                 <>
@@ -2948,6 +2968,7 @@ export function TdsDataEntry({
                 </CardContent></Card>
               )}
             </div>
+            )}
           </div>
 
           {/* Summary Bar */}

@@ -57,6 +57,9 @@ describe("editing a correction entry", () => {
 
     expect(document.body.textContent).toContain("No changes yet");
 
+    // Challans is collapsed by default in the Correction tab — expand it first.
+    fireEvent.click(screen.getByText("Challans").closest("button")!);
+
     // Edit the amount, exactly as the grid does (blur commits).
     const amount = document.querySelector('input[value="50900"]') as HTMLInputElement;
     expect(amount).toBeTruthy();
