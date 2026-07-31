@@ -423,6 +423,11 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
   const stage3Ready = !tallyApplicable || (tallyRan && summary3.issues === 0);
   const canFile = stage1Ready && stage2Ready && stage3Ready;
   const isFiled = filing.work_status === "Filed";
+  // Signed off and cleared for the portal, but not filed yet — a distinct
+  // state from both "Filed" and "still being worked on". Kept as a literal
+  // rather than importing READY_TO_FILE_STATUS so this stays a dependency-free
+  // data module with no React component import.
+  const isMarkedReadyToFile = filing.work_status === "Ready to File";
   // Mirrors TdsValidateFinalise.tsx's fileBlockReason, minus the transient
   // "Finishing validation status checks…" branch — that exists only for a
   // live component mid-async-load, which does not apply to a one-shot fetch.
@@ -459,7 +464,7 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
       notes: [
         `Ready to file: ${canFile ? "Yes" : "No"}${!canFile && fileBlockReason ? ` — ${fileBlockReason}` : ""}`,
         `Digital signature: ${signature ? `Signed by ${signature.signedByName} on ${new Date(signature.signedAt).toLocaleString("en-IN")}` : "Not signed"}`,
-        `Filing status: ${isFiled ? "Filed" : "Not filed"}`,
+        `Filing status: ${isFiled ? "Filed" : isMarkedReadyToFile ? "Ready to File — signed off, not yet filed" : "Not filed"}`,
       ],
     };
   }
@@ -480,6 +485,8 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
   // green there exactly like a genuinely "Complete" single stage does.
   const finalStatus = isFiled
     ? "Filed (validation complete)"
+    : isMarkedReadyToFile
+    ? "Ready to File — validation complete and signed, not yet filed"
     : canFile
     ? "All validations complete — ready to mark as Ready to File"
     : (() => {
@@ -600,8 +607,18 @@ export function mergeQuarterlyReports(perQuarter: QuarterReportInput[]): { meta:
   });
 
   const stages: OverviewStage[] = perQuarter.map((p) => p.quarterStage);
-  const filedCount = stages.filter((s) => s.status.startsWith("Filed")).length;
-  const readyCount = stages.filter((s) => s.status.startsWith("All validations complete")).length;
+  // These buckets classify by matching the finalStatus PREFIXES produced
+  // above — so every prefix that means "done" must be listed here or that
+  // quarter silently falls into Not Ready. "Ready to File — …" is one of
+  // them: it is the signed-off, validated state, so it belongs in the column
+  // literally labelled "Ready to File" (it previously landed under Not Ready
+  // and dragged `allReady` false, painting the report's headline banner amber
+  // for a return that was fully validated and signed).
+  const READY_PREFIXES = ["All validations complete", "Ready to File"];
+  const isFiledStatus = (s: OverviewStage) => s.status.startsWith("Filed");
+  const isReadyStatus = (s: OverviewStage) => READY_PREFIXES.some((p) => s.status.startsWith(p));
+  const filedCount = stages.filter(isFiledStatus).length;
+  const readyCount = stages.filter(isReadyStatus).length;
   const notReadyCount = stages.length - filedCount - readyCount;
   const overall: { label: string; value: string | number }[] = [
     { label: "Quarters", value: quarters.join(", ") },
@@ -609,7 +626,7 @@ export function mergeQuarterlyReports(perQuarter: QuarterReportInput[]): { meta:
     { label: "Ready to File", value: readyCount },
     { label: "Not Ready", value: notReadyCount },
   ];
-  const allReady = stages.every((s) => s.status.startsWith("Filed") || s.status.startsWith("All validations complete"));
+  const allReady = stages.every((s) => isFiledStatus(s) || isReadyStatus(s));
   const finalStatus = stages.length === 1
     ? stages[0].status
     : stages.map((s) => `${s.title} — ${s.status}`).join(" | ");

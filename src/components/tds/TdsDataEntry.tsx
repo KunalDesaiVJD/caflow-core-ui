@@ -1549,7 +1549,18 @@ export function TdsDataEntry({
   // A filed return is read-only; so is a correction the caller marks locked
   // (filed corrections are immutable in the DB too, so offering an edit here
   // would only produce an error the user cannot act on).
-  const isFilingLocked = forceReadOnly || filing?.work_status === "Filed";
+  //
+  // "Ready to File" locks too, and must: the checker has digitally signed
+  // THIS office data, and Validate & Finalise is frozen at that status — so
+  // leaving the challan/deductee grid editable here would let the numbers
+  // Stage 1 reconciled drift out from under a signature that still attests to
+  // them, with no way to re-run validation. (Before "Ready to File" existed,
+  // finalising wrote "Filed", so this lock is what used to engage.) Nothing
+  // invalidates tds_recon_results on an edit, so the freeze is the control.
+  // "Processed" is included for the same reason — it is strictly past Filed.
+  // Escape hatch: Revoke Signature sends the return back to Reviewed.
+  const LOCKED_WORK_STATUSES = ["Filed", "Processed", "Ready to File"];
+  const isFilingLocked = forceReadOnly || LOCKED_WORK_STATUSES.includes(filing?.work_status ?? "");
 
   // Issue 1: Row-level read-only check
   const isRowReadOnly = (d: Deductee) => isFilingLocked || (filing ? d.filing_id !== filing.id : false);
@@ -1807,11 +1818,20 @@ export function TdsDataEntry({
                 "bg-muted text-muted-foreground": filing.work_status === "Not Started",
                 "bg-blue-100 text-blue-700": filing.work_status === "Data Received",
                 "bg-indigo-100 text-indigo-700": filing.work_status === "Under Process",
+                "bg-violet-100 text-violet-700": filing.work_status === "Reviewed",
+                "bg-teal-100 text-teal-700": filing.work_status === "NIL",
+                // Sky, never emerald — "Ready to File" must not read as filed.
+                "bg-sky-100 text-sky-700": filing.work_status === "Ready to File",
                 "bg-emerald-100 text-emerald-700": filing.work_status === "Filed",
+                "bg-emerald-200 text-emerald-800": filing.work_status === "Processed",
               })}>{filing.work_status}</Badge>
               {isFilingLocked && (
                 <Badge className="text-xs bg-amber-100 text-amber-800 border border-amber-300 gap-1">
-                  <Lock size={10} /> Data Entry Locked — Filed
+                  {/* Name the ACTUAL reason — the lock now also engages at
+                      Ready to File / Processed, so a hardcoded "Filed" would
+                      tell the user something the status badge beside it
+                      contradicts. */}
+                  <Lock size={10} /> Data Entry Locked — {lockBadgeLabel ?? filing.work_status}
                 </Badge>
               )}
               {/* Import Genius Excel — parses a Genius-format .xls and pre-fills challans + deductees */}

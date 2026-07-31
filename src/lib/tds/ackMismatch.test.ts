@@ -120,6 +120,85 @@ describe("evaluateAckMismatch — regression: new IT-portal 'Form 140' receipt f
   });
 });
 
+describe("evaluateAckMismatch — regression: new IT-portal 'Form 138' receipt for a genuine 24Q return", () => {
+  // Real extracted fields from a genuine e-filing receipt (Form
+  // 138_ARN_770000409347374.pdf) for ORVIX TECHNOLOGIES, Tax Year 2026-27,
+  // Q1 — the 24Q counterpart of the Form 140 case above, and the same class
+  // of false rejection. Ground truth that this genuinely IS a 24Q return:
+  // the receipt lists its own attachment as "24QRQ1.zip" and its Form
+  // Description as "...deduction of tax...in respect of salary paid to
+  // employee under section 392, or income of specified senior citizen under
+  // section 393(1)" — 24Q's own defining (salary) description. Before this
+  // fix, this real, correct receipt was REJECTED with
+  // "Form Type (138 vs 24Q)" and the attach was hard-blocked.
+  const REAL_FORM_138_FIELDS: AckFields = {
+    ackNumber: "856489980310726",
+    name: "Orvix Technologies Private Limited",
+    financialYear: "2026-27", // receipt prints "Financial Year : -", real year under Tax Year
+    quarter: "Q1",
+    formNo: "138",
+    tan: "AHMO03206A",
+  };
+  const orvixFiling = baseFiling({
+    financial_year: "2026-27", quarter: "Q1", tan: "AHMO03206A", tds_forms: ["24Q"],
+  });
+  const orvixClient = { name: "ORVIX TECHNOLOGIES PRIVATE LIMITED", tan_number: "AHMO03206A" };
+
+  it("does NOT reject — Form 138 is recognised as the portal's own code for 24Q", () => {
+    const result = evaluateAckMismatch(REAL_FORM_138_FIELDS, orvixFiling, orvixClient);
+    expect(result.rejectReasons).toEqual([]);
+    expect(result.warnReasons).toEqual([]);
+  });
+
+  it("still rejects a genuine Form 138 receipt attached to an actually-different filing (26Q)", () => {
+    const wrongFiling = baseFiling({
+      financial_year: "2026-27", quarter: "Q1", tan: "AHMO03206A", tds_forms: ["26Q"],
+    });
+    const result = evaluateAckMismatch(REAL_FORM_138_FIELDS, wrongFiling, orvixClient);
+    expect(result.rejectReasons).toEqual(["Form Type (138 vs 26Q)"]);
+  });
+});
+
+describe("evaluateAckMismatch — an UNMAPPED numeric portal code warns, never blocks", () => {
+  // 27Q's and 27EQ's portal codes are still unknown (only 140→26Q and
+  // 138→24Q have been confirmed against real receipts). An unrecognised code
+  // means "cannot verify", NOT "verified wrong" — blocking on it is exactly
+  // how both the 140 and 138 receipts came to be falsely rejected. So an
+  // unmapped code must degrade to a warning and let the attach proceed.
+  const unknownCodeFields: AckFields = {
+    ackNumber: "900000000000001",
+    name: "SOME DEDUCTOR PRIVATE LIMITED",
+    financialYear: "2026-27",
+    quarter: "Q2",
+    formNo: "141", // never seen before — deliberately not in FORM_NO_PORTAL_ALIASES
+    tan: "AHMS12345Z",
+  };
+  const filing = baseFiling({
+    financial_year: "2026-27", quarter: "Q2", tan: "AHMS12345Z", tds_forms: ["27Q"],
+  });
+  const client = { name: "SOME DEDUCTOR PRIVATE LIMITED", tan_number: "AHMS12345Z" };
+
+  it("does not block the attach", () => {
+    const result = evaluateAckMismatch(unknownCodeFields, filing, client);
+    expect(result.rejectReasons).toEqual([]);
+  });
+
+  it("still surfaces it as a warning naming the unmapped code and the expected form", () => {
+    const result = evaluateAckMismatch(unknownCodeFields, filing, client);
+    expect(result.warnReasons).toHaveLength(1);
+    expect(result.warnReasons[0]).toContain("Form 141");
+    expect(result.warnReasons[0]).toContain("27Q");
+  });
+
+  it("a real, spelled-out form label that genuinely differs is still a hard reject", () => {
+    // Guards the carve-out from over-reaching: only BARE NUMERIC codes are
+    // treated as unverifiable. "26Q" on a 27Q filing is still a real error.
+    const spelledOut: AckFields = { ...unknownCodeFields, formNo: "26Q" };
+    const result = evaluateAckMismatch(spelledOut, filing, client);
+    expect(result.rejectReasons).toEqual(["Form Type (26Q vs 27Q)"]);
+  });
+});
+
 describe("evaluateAckMismatch — regression: proprietorship receipt printing the proprietor's own name, TAN confirms identity", () => {
   // Real extracted fields from a genuine e-filing receipt (Form
   // 140_ARN_770000408961162.pdf) for NEW FORTUNE TYRE, a proprietorship
