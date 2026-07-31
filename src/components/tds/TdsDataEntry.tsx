@@ -704,8 +704,24 @@ export function TdsDataEntry({
     const currentQUsage = new Set<string>();
     const appliedMap = new Map<string, number>();
     const cfGrouped: Record<string, Deductee[]> = {};
+    const challanById = new Map(priorChallans.map((c: any) => [c.id, c]));
     (allDeds || []).forEach((d: any) => {
-      const applied = (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0);
+      // Same fix as getChallanBreakdownAll, and for the same reason: a row's
+      // persisted interest_amount is only ever written by the grid's own
+      // per-cell edit handler, so a row that arrived via bulk import and was
+      // never hand-edited afterward can sit at 0 forever while the challan
+      // itself (and the grid's own read-only Interest cell) show the real,
+      // non-zero figure. This is a SEPARATE, independent reimplementation of
+      // the same "applied" concept from getChallanBreakdownAll's — not the
+      // shared computeApplied() — so it carried the identical bug: a fully-
+      // utilised prior-quarter challan (confirmed for real: TDS ₹2,39,452 +
+      // interest ₹7,184 = the challan's own ₹2,46,636 total, but both
+      // deductees' stored interest_amount was 0) computed a large fake
+      // "unconsumed" balance and kept re-qualifying for the Carry-Forward
+      // list quarter after quarter even though nothing was actually left.
+      const depDate = challanById.get(d.challan_id)?.deposit_date || null;
+      const liveInterest = calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, depDate).interest;
+      const applied = (d.total_tax_deducted || d.tds_amount || 0) + liveInterest + (d.surcharge_amount || 0);
       appliedMap.set(d.challan_id, (appliedMap.get(d.challan_id) || 0) + applied);
       if (!cfGrouped[d.challan_id]) cfGrouped[d.challan_id] = [];
       cfGrouped[d.challan_id].push(d as Deductee);
@@ -1458,7 +1474,14 @@ export function TdsDataEntry({
     const totalDeductees = allCurrentDeds.length;
     const totalPayment = allCurrentDeds.reduce((s, d) => s + (d.amount_paid_credited || 0), 0);
     const totalTds = allCurrentDeds.reduce((s, d) => s + Math.round(d.total_tax_deducted || d.tds_amount || 0), 0);
-    const totalInterest = allCurrentDeds.reduce((s, d) => s + (d.interest_amount || 0), 0);
+    // Interest recomputed live — same fix, same rationale, as
+    // getChallanBreakdownAll/fetchCarryForwardChallans/autoMatchChallans
+    // above: a row's stored interest_amount can be stale-zero (bulk import,
+    // never hand-edited) while the grid's own read-only Interest cell
+    // already shows the real figure for that same row.
+    const depDateByChallan = new Map(challans.map(c => [c.id, c.deposit_date]));
+    const totalInterest = allCurrentDeds.reduce((s, d) =>
+      s + calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, depDateByChallan.get(d.challan_id) ?? null).interest, 0);
     const totalLateFees = allCurrentDeds.reduce((s, d) => s + (d.late_fees_amount || 0), 0);
     return { totalChallans, totalDeductees, totalPayment, totalTds, totalInterest, totalLateFees };
   }, [challans, deductees]);
@@ -1507,8 +1530,17 @@ export function TdsDataEntry({
   const autoMatchChallans = () => {
     if (isFilingLocked) return;
     const challanTotMap = new Map<string, number>();
+    const challanForMatch = new Map(challans.map(c => [c.id, c]));
     deductees.forEach(d => {
-      const rowTotal = Math.round(d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.late_fees_amount || 0) + (d.surcharge_amount || 0);
+      // Interest recomputed live — same fix, same rationale, as
+      // getChallanBreakdownAll/fetchCarryForwardChallans above: a row's
+      // stored interest_amount can be stale-zero (bulk import, never
+      // hand-edited) while the real figure is what the grid's own Interest
+      // cell already shows. Trusting the stale value here reported a
+      // correctly-matched challan as "unmatched" in the Auto-match toast.
+      const depDate = challanForMatch.get(d.challan_id)?.deposit_date || null;
+      const liveInterest = calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, depDate).interest;
+      const rowTotal = Math.round(d.total_tax_deducted || d.tds_amount || 0) + liveInterest + (d.late_fees_amount || 0) + (d.surcharge_amount || 0);
       challanTotMap.set(d.challan_id, (challanTotMap.get(d.challan_id) || 0) + rowTotal);
     });
     const matched: string[] = [], unmatched: string[] = [];

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { calcAutoInterest } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -218,11 +219,24 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     // Block export ONLY when applied total STRICTLY exceeds challan total (over-applied).
     // Fully-utilized (applied === challan) and partial/unconsumed (applied < challan) are ALLOWED.
     // Use Math.round(*100) to avoid floating-point false positives (e.g. 0.1+0.2 = 0.30000...4).
+    //
+    // Interest is recomputed live (calcAutoInterest) rather than trusted from
+    // each row's stored interest_amount — that column is only ever written by
+    // TdsDataEntry.tsx's per-cell edit handler, so a bulk-imported row never
+    // hand-edited afterward sits at 0 forever even though the grid's own
+    // read-only Interest cell (and the challan's own declared interest total)
+    // show the real figure. Trusting the stale 0 here under-counts `applied`,
+    // which can only ever make this check MISS a genuine over-application,
+    // never falsely block a valid export — but it's still wrong, so it's
+    // fixed the same way as TdsDataEntry.tsx's getChallanBreakdownAll /
+    // fetchCarryForwardChallans (same underlying bug, independently found).
     const overApplied = filingChallans.filter((c: any) => {
       const applied = filingDeductees
         .filter((d: any) => d.challan_id === c.id)
         .reduce((s: number, d: any) =>
-          s + (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0), 0);
+          s + (d.total_tax_deducted || d.tds_amount || 0)
+          + calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest
+          + (d.surcharge_amount || 0), 0);
       const challanTotal = c.total_challan_amount || 0;
       return Math.round(applied * 100) > Math.round(challanTotal * 100); // strictly greater
     });
@@ -650,12 +664,17 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     // ── Per-challan utilisation status ─────────────────────────────────────
     // Applied = sum of (TDS + interest + surcharge) across all deductees for that challan.
     // Status rules (strictly-greater = over-applied; equal = full; less = partial; zero = unconsumed).
+    //
+    // Interest recomputed live — see the identical fix (and its full
+    // rationale) a few lines up in runOverApplied's own applied calculation.
     type ChallanStatus = "over-applied" | "fully-utilized" | "partial" | "unconsumed";
     const challanStatus = fChallans.map((c: any) => {
       const applied = fDeductees
         .filter((d: any) => d.challan_id === c.id)
         .reduce((s: number, d: any) =>
-          s + (d.total_tax_deducted || d.tds_amount || 0) + (d.interest_amount || 0) + (d.surcharge_amount || 0), 0);
+          s + (d.total_tax_deducted || d.tds_amount || 0)
+          + calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest
+          + (d.surcharge_amount || 0), 0);
       const challanTotal = c.total_challan_amount || 0;
       const appliedRounded  = Math.round(applied * 100);
       const challanRounded  = Math.round(challanTotal * 100);
