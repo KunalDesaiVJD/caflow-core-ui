@@ -807,61 +807,37 @@ function CorrectionDetail({
 
   return (
     <div className="space-y-3">
-      {/* ── Header: back + identity + status + primary action, all one row ── */}
-      <div className="flex items-center gap-2 flex-wrap">
-        <Button variant="ghost" size="sm" className="gap-1.5 -ml-2 h-8" onClick={onBack}>
-          <ArrowLeft size={14} /> All corrections
-        </Button>
-        <h2 className="text-lg font-bold text-foreground">{clientName}</h2>
-        <span className="text-sm text-muted-foreground">
-          {correction.form_type} · {correction.quarter} {correction.financial_year}
-        </span>
-        <CorrectionStatusBadge status={correction.status} />
-
-        {/* No workflow buttons here. Each stage's action lives inside its own
-            box further down (Employee signature / Senior approval / Filing) so
-            an action sits with the thing it acts on, and nothing is duplicated
-            between the header and the cards. */}
-      </div>
-
-      {/* Stage tracker — where the correction is, and what is next */}
-      <WorkflowTracker correction={correction} />
-
-      {correction.reason && (
-        <p className="text-xs text-muted-foreground -mt-1">
-          <span className="font-medium text-foreground">Reason:</span> {correction.reason}
-        </p>
-      )}
-
-      {/* ── Main content (left) + Signature/Filing (right) ──────────────────
-          Signature and Filing sit at the top of the right column, not after
-          the whole Data Entry grid, so the actions that move a correction
-          forward stay in view without scrolling past every challan first. On
-          narrow screens the columns stack and this simply comes first. */}
+      {/* ── Top block: identity/status/summary (left) + Signature & Filing
+          (right), side by side. Signature & Filing sits here — above Changes
+          vs the filed return, aligned with the header — rather than after
+          the whole Data Entry grid, so it is visible without scrolling. Below
+          this block, everything else runs full width as before. */}
       <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-3 items-start">
-        <div className="space-y-3 min-w-0 order-2 lg:order-1">
-          {/* ── Filed / rejected banners ── */}
-          {locked && (
-            <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2 flex items-start gap-2.5">
-              <ShieldCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
-              <div className="min-w-0 text-xs">
-                <p className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-                  Correction Filed <Lock size={11} />
-                </p>
-                <p className="text-emerald-700 dark:text-emerald-400">
-                  Signed by {correction.signed_by_name || "—"}
-                  {correction.signed_by_role ? ` (${correction.signed_by_role})` : ""}
-                  {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}. Read-only.
-                </p>
-              </div>
-            </div>
-          )}
+        <div className="space-y-2 min-w-0 order-2 lg:order-1">
+          {/* ── Header: back + identity + status, all one row ── */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="ghost" size="sm" className="gap-1.5 -ml-2 h-8" onClick={onBack}>
+              <ArrowLeft size={14} /> All corrections
+            </Button>
+            <h2 className="text-lg font-bold text-foreground">{clientName}</h2>
+            <span className="text-sm text-muted-foreground">
+              {correction.form_type} · {correction.quarter} {correction.financial_year}
+            </span>
+            <CorrectionStatusBadge status={correction.status} />
 
-          {correction.status === "rejected" && correction.rejection_reason && (
-            <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 px-3 py-2 text-xs">
-              <p className="font-semibold text-red-800 dark:text-red-300">Rejected</p>
-              <p className="text-red-700 dark:text-red-400">{correction.rejection_reason}</p>
-            </div>
+            {/* No workflow buttons here. Each stage's action lives inside its own
+                box in the Signature & Filing column so an action sits with the
+                thing it acts on, and nothing is duplicated between the header
+                and the cards. */}
+          </div>
+
+          {/* Stage tracker — where the correction is, and what is next */}
+          <WorkflowTracker correction={correction} />
+
+          {correction.reason && (
+            <p className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">Reason:</span> {correction.reason}
+            </p>
           )}
 
           {/* ── Change summary strip (Data Entry's info-strip language) ── */}
@@ -883,51 +859,10 @@ function CorrectionDetail({
               <span className="text-muted-foreground italic">No changes yet — edit an entry to start.</span>
             )}
           </div>
-
-          {/* Every change vs the filed return, with Original -> Corrected values */}
-          <ChangesPanel challans={challans} deductees={deductees} />
-
-          {/* ── The Data Entry module itself ──────────────────────────────────
-              Not a look-alike: this IS TdsDataEntry, pointed at the correction's
-              tables. Challan cards, utilised/unutilised balances, validations,
-              calculations, dropdowns, Genius import/export — all identical,
-              because it is the same component. Users edit as if it were the
-              original return; every write lands in the correction version, and
-              the DB tracks add/modify/delete on the way in. */}
-          <TdsDataEntry
-            clients={clients as any}
-            users={[]}
-            isSuperadmin={false}
-            resolveFirmId={async () => correction.firm_id}
-            selClient={correction.client_id} setSelClient={() => {}}
-            selFy={correction.financial_year} setSelFy={() => {}}
-            selQuarter={correction.quarter} setSelQuarter={() => {}}
-            selForm={correction.form_type} setSelForm={() => {}}
-            source={CORRECTION_TDS_SOURCE}
-            filingOverride={correctionAsFiling}
-            forceReadOnly={!editable}
-            lockBadgeLabel={locked ? "Filed" : "Locked"}
-            lockNotice={
-              locked
-                ? "This correction has been filed. All data is read-only."
-                : correction.status === "awaiting_senior"
-                  ? "Signed by the preparer and awaiting senior approval. Entries are locked so what is approved is exactly what was signed."
-                  : correction.status === "ready_to_file"
-                    ? "Both signatures are complete. Entries are locked — record the filing in the Filing box above."
-                    : correction.status === "rejected"
-                      ? "This correction was rejected. Re-submit it from the Employee signature box to edit again."
-                      : undefined
-            }
-            // action / original_values are written by DB triggers, so the change
-            // summary and the Original-vs-Corrected panel above this grid only
-            // reflect an edit if we re-read after it.
-            onCorrectionChanged={loadSilently}
-            onCorrectionRowUndone={handleRowUndone}
-          />
         </div>
 
         {/* Signature + Filing — top-right, sticky so it stays reachable while
-            scrolling a long challan/entry grid on the left. */}
+            scrolling the Changes panel / Data Entry grid below. */}
         <div className="order-1 lg:order-2 lg:sticky lg:top-3">
           <SignatureSection
             correction={correction}
@@ -944,6 +879,71 @@ function CorrectionDetail({
           />
         </div>
       </div>
+
+      {/* ── Filed / rejected banners ── */}
+      {locked && (
+        <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2 flex items-start gap-2.5">
+          <ShieldCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+          <div className="min-w-0 text-xs">
+            <p className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+              Correction Filed <Lock size={11} />
+            </p>
+            <p className="text-emerald-700 dark:text-emerald-400">
+              Signed by {correction.signed_by_name || "—"}
+              {correction.signed_by_role ? ` (${correction.signed_by_role})` : ""}
+              {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}. Read-only.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {correction.status === "rejected" && correction.rejection_reason && (
+        <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 px-3 py-2 text-xs">
+          <p className="font-semibold text-red-800 dark:text-red-300">Rejected</p>
+          <p className="text-red-700 dark:text-red-400">{correction.rejection_reason}</p>
+        </div>
+      )}
+
+      {/* Every change vs the filed return, with Original -> Corrected values */}
+      <ChangesPanel challans={challans} deductees={deductees} />
+
+      {/* ── The Data Entry module itself ──────────────────────────────────
+          Not a look-alike: this IS TdsDataEntry, pointed at the correction's
+          tables. Challan cards, utilised/unutilised balances, validations,
+          calculations, dropdowns, Genius import/export — all identical,
+          because it is the same component. Users edit as if it were the
+          original return; every write lands in the correction version, and
+          the DB tracks add/modify/delete on the way in. */}
+      <TdsDataEntry
+        clients={clients as any}
+        users={[]}
+        isSuperadmin={false}
+        resolveFirmId={async () => correction.firm_id}
+        selClient={correction.client_id} setSelClient={() => {}}
+        selFy={correction.financial_year} setSelFy={() => {}}
+        selQuarter={correction.quarter} setSelQuarter={() => {}}
+        selForm={correction.form_type} setSelForm={() => {}}
+        source={CORRECTION_TDS_SOURCE}
+        filingOverride={correctionAsFiling}
+        forceReadOnly={!editable}
+        lockBadgeLabel={locked ? "Filed" : "Locked"}
+        lockNotice={
+          locked
+            ? "This correction has been filed. All data is read-only."
+            : correction.status === "awaiting_senior"
+              ? "Signed by the preparer and awaiting senior approval. Entries are locked so what is approved is exactly what was signed."
+              : correction.status === "ready_to_file"
+                ? "Both signatures are complete. Entries are locked — record the filing in the Filing box above."
+                : correction.status === "rejected"
+                  ? "This correction was rejected. Re-submit it from the Employee signature box to edit again."
+                  : undefined
+        }
+        // action / original_values are written by DB triggers, so the change
+        // summary and the Original-vs-Corrected panel above this grid only
+        // reflect an edit if we re-read after it.
+        onCorrectionChanged={loadSilently}
+        onCorrectionRowUndone={handleRowUndone}
+      />
 
       {/* Dialogs */}
       {/* Signature 1 — the preparer */}
