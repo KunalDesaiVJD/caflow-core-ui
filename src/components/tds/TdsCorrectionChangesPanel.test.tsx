@@ -57,4 +57,23 @@ describe("changes panel", () => {
     expect(body[1].slice(3)).toEqual(["Total tax deducted", "40", "30"]);
     expect(body.map(r => r[0])).toEqual(["Modified", "", "", "Added", "Deleted"]);
   });
+
+  it("collapses and re-expands via its header button", async () => {
+    render(<TdsCorrectionsModule clients={[{id:"c1",name:"Amber"}] as any} users={[]} isSuperadmin={false} resolveFirmId={async()=>"firm1"} />);
+    await waitFor(() => expect(screen.getAllByTitle("Open correction").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getAllByTitle("Open correction")[0]);
+    await new Promise(r => setTimeout(r, 700));
+
+    const toggle = screen.getByText("Changes vs the filed return").closest("button")!;
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Corrected")).toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Corrected")).not.toBeInTheDocument();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Corrected")).toBeInTheDocument();
+  });
 });

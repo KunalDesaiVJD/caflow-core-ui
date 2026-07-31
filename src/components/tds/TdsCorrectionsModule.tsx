@@ -833,105 +833,117 @@ function CorrectionDetail({
         </p>
       )}
 
-      {/* ── Filed / rejected banners ── */}
-      {locked && (
-        <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2 flex items-start gap-2.5">
-          <ShieldCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
-          <div className="min-w-0 text-xs">
-            <p className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-              Correction Filed <Lock size={11} />
-            </p>
-            <p className="text-emerald-700 dark:text-emerald-400">
-              Signed by {correction.signed_by_name || "—"}
-              {correction.signed_by_role ? ` (${correction.signed_by_role})` : ""}
-              {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}. Read-only.
-            </p>
+      {/* ── Main content (left) + Signature/Filing (right) ──────────────────
+          Signature and Filing sit at the top of the right column, not after
+          the whole Data Entry grid, so the actions that move a correction
+          forward stay in view without scrolling past every challan first. On
+          narrow screens the columns stack and this simply comes first. */}
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_360px] gap-3 items-start">
+        <div className="space-y-3 min-w-0 order-2 lg:order-1">
+          {/* ── Filed / rejected banners ── */}
+          {locked && (
+            <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2 flex items-start gap-2.5">
+              <ShieldCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+              <div className="min-w-0 text-xs">
+                <p className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                  Correction Filed <Lock size={11} />
+                </p>
+                <p className="text-emerald-700 dark:text-emerald-400">
+                  Signed by {correction.signed_by_name || "—"}
+                  {correction.signed_by_role ? ` (${correction.signed_by_role})` : ""}
+                  {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}. Read-only.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {correction.status === "rejected" && correction.rejection_reason && (
+            <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 px-3 py-2 text-xs">
+              <p className="font-semibold text-red-800 dark:text-red-300">Rejected</p>
+              <p className="text-red-700 dark:text-red-400">{correction.rejection_reason}</p>
+            </div>
+          )}
+
+          {/* ── Change summary strip (Data Entry's info-strip language) ── */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs px-0.5">
+            <span className="text-muted-foreground">Challans: <strong className="text-foreground">{challans.length}</strong></span>
+            <span className="text-border">|</span>
+            <span className="text-muted-foreground">Entries: <strong className="text-foreground">{deductees.filter(d => d.action !== "delete").length}</strong></span>
+            <span className="text-border">|</span>
+            <span className="text-muted-foreground">TDS: <strong className="text-foreground">₹{money(totalTds)}</strong></span>
+            <span className="text-border">|</span>
+            {hasChanges ? (
+              <>
+                {delta.added > 0 && <Badge className={cn("text-[9px]", ACTION_META.add.badge)}>{delta.added} added</Badge>}
+                {delta.modified > 0 && <Badge className={cn("text-[9px]", ACTION_META.modify.badge)}>{delta.modified} modified</Badge>}
+                {delta.deleted > 0 && <Badge className={cn("text-[9px]", ACTION_META.delete.badge)}>{delta.deleted} deleted</Badge>}
+                {delta.challansTouched > 0 && <Badge variant="outline" className="text-[9px]">{delta.challansTouched} challan{delta.challansTouched === 1 ? "" : "s"} changed</Badge>}
+              </>
+            ) : (
+              <span className="text-muted-foreground italic">No changes yet — edit an entry to start.</span>
+            )}
           </div>
-        </div>
-      )}
 
-      {correction.status === "rejected" && correction.rejection_reason && (
-        <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 px-3 py-2 text-xs">
-          <p className="font-semibold text-red-800 dark:text-red-300">Rejected</p>
-          <p className="text-red-700 dark:text-red-400">{correction.rejection_reason}</p>
-        </div>
-      )}
+          {/* Every change vs the filed return, with Original -> Corrected values */}
+          <ChangesPanel challans={challans} deductees={deductees} />
 
-      {/* ── Change summary strip (Data Entry's info-strip language) ── */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs px-0.5">
-        <span className="text-muted-foreground">Challans: <strong className="text-foreground">{challans.length}</strong></span>
-        <span className="text-border">|</span>
-        <span className="text-muted-foreground">Entries: <strong className="text-foreground">{deductees.filter(d => d.action !== "delete").length}</strong></span>
-        <span className="text-border">|</span>
-        <span className="text-muted-foreground">TDS: <strong className="text-foreground">₹{money(totalTds)}</strong></span>
-        <span className="text-border">|</span>
-        {hasChanges ? (
-          <>
-            {delta.added > 0 && <Badge className={cn("text-[9px]", ACTION_META.add.badge)}>{delta.added} added</Badge>}
-            {delta.modified > 0 && <Badge className={cn("text-[9px]", ACTION_META.modify.badge)}>{delta.modified} modified</Badge>}
-            {delta.deleted > 0 && <Badge className={cn("text-[9px]", ACTION_META.delete.badge)}>{delta.deleted} deleted</Badge>}
-            {delta.challansTouched > 0 && <Badge variant="outline" className="text-[9px]">{delta.challansTouched} challan{delta.challansTouched === 1 ? "" : "s"} changed</Badge>}
-          </>
-        ) : (
-          <span className="text-muted-foreground italic">No changes yet — edit an entry to start.</span>
-        )}
+          {/* ── The Data Entry module itself ──────────────────────────────────
+              Not a look-alike: this IS TdsDataEntry, pointed at the correction's
+              tables. Challan cards, utilised/unutilised balances, validations,
+              calculations, dropdowns, Genius import/export — all identical,
+              because it is the same component. Users edit as if it were the
+              original return; every write lands in the correction version, and
+              the DB tracks add/modify/delete on the way in. */}
+          <TdsDataEntry
+            clients={clients as any}
+            users={[]}
+            isSuperadmin={false}
+            resolveFirmId={async () => correction.firm_id}
+            selClient={correction.client_id} setSelClient={() => {}}
+            selFy={correction.financial_year} setSelFy={() => {}}
+            selQuarter={correction.quarter} setSelQuarter={() => {}}
+            selForm={correction.form_type} setSelForm={() => {}}
+            source={CORRECTION_TDS_SOURCE}
+            filingOverride={correctionAsFiling}
+            forceReadOnly={!editable}
+            lockBadgeLabel={locked ? "Filed" : "Locked"}
+            lockNotice={
+              locked
+                ? "This correction has been filed. All data is read-only."
+                : correction.status === "awaiting_senior"
+                  ? "Signed by the preparer and awaiting senior approval. Entries are locked so what is approved is exactly what was signed."
+                  : correction.status === "ready_to_file"
+                    ? "Both signatures are complete. Entries are locked — record the filing in the Filing box above."
+                    : correction.status === "rejected"
+                      ? "This correction was rejected. Re-submit it from the Employee signature box to edit again."
+                      : undefined
+            }
+            // action / original_values are written by DB triggers, so the change
+            // summary and the Original-vs-Corrected panel above this grid only
+            // reflect an edit if we re-read after it.
+            onCorrectionChanged={loadSilently}
+            onCorrectionRowUndone={handleRowUndone}
+          />
+        </div>
+
+        {/* Signature + Filing — top-right, sticky so it stays reachable while
+            scrolling a long challan/entry grid on the left. */}
+        <div className="order-1 lg:order-2 lg:sticky lg:top-3">
+          <SignatureSection
+            correction={correction}
+            actor={actor}
+            busy={busy}
+            canApprove={canApprove}
+            isSamePerson={isSamePerson}
+            onSubmitForSignature={doSubmit}
+            onSignPreparer={() => setSignOpen(true)}
+            onApproveSenior={() => setApproveOpen(true)}
+            onReject={() => setRejectOpen(true)}
+            onRefresh={loadSilently}
+            toast={toast}
+          />
+        </div>
       </div>
-
-      {/* Every change vs the filed return, with Original -> Corrected values */}
-      <ChangesPanel challans={challans} deductees={deductees} />
-
-      {/* ── The Data Entry module itself ──────────────────────────────────
-          Not a look-alike: this IS TdsDataEntry, pointed at the correction's
-          tables. Challan cards, utilised/unutilised balances, validations,
-          calculations, dropdowns, Genius import/export — all identical,
-          because it is the same component. Users edit as if it were the
-          original return; every write lands in the correction version, and
-          the DB tracks add/modify/delete on the way in. */}
-      <TdsDataEntry
-        clients={clients as any}
-        users={[]}
-        isSuperadmin={false}
-        resolveFirmId={async () => correction.firm_id}
-        selClient={correction.client_id} setSelClient={() => {}}
-        selFy={correction.financial_year} setSelFy={() => {}}
-        selQuarter={correction.quarter} setSelQuarter={() => {}}
-        selForm={correction.form_type} setSelForm={() => {}}
-        source={CORRECTION_TDS_SOURCE}
-        filingOverride={correctionAsFiling}
-        forceReadOnly={!editable}
-        lockBadgeLabel={locked ? "Filed" : "Locked"}
-        lockNotice={
-          locked
-            ? "This correction has been filed. All data is read-only."
-            : correction.status === "awaiting_senior"
-              ? "Signed by the preparer and awaiting senior approval. Entries are locked so what is approved is exactly what was signed."
-              : correction.status === "ready_to_file"
-                ? "Both signatures are complete. Entries are locked — record the filing in the Filing box below."
-                : correction.status === "rejected"
-                  ? "This correction was rejected. Re-submit it from the Employee signature box to edit again."
-                  : undefined
-        }
-        // action / original_values are written by DB triggers, so the change
-        // summary and the Original-vs-Corrected panel above this grid only
-        // reflect an edit if we re-read after it.
-        onCorrectionChanged={loadSilently}
-        onCorrectionRowUndone={handleRowUndone}
-      />
-
-      {/* Signature */}
-      <SignatureSection
-        correction={correction}
-        actor={actor}
-        busy={busy}
-        canApprove={canApprove}
-        isSamePerson={isSamePerson}
-        onSubmitForSignature={doSubmit}
-        onSignPreparer={() => setSignOpen(true)}
-        onApproveSenior={() => setApproveOpen(true)}
-        onReject={() => setRejectOpen(true)}
-        onRefresh={loadSilently}
-        toast={toast}
-      />
 
       {/* Dialogs */}
       {/* Signature 1 — the preparer */}
@@ -1051,6 +1063,8 @@ function ChangesPanel({ challans, deductees }: {
     [rows],
   );
 
+  const [expanded, setExpanded] = useState(true);
+
   if (rows.length === 0) {
     return (
       <Card>
@@ -1067,70 +1081,78 @@ function ChangesPanel({ challans, deductees }: {
   return (
     <Card>
       <CardContent className="p-0">
-        <div className="px-3 py-2 border-b flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setExpanded(v => !v)}
+          aria-expanded={expanded}
+          className="w-full px-3 py-2 border-b flex items-center gap-2 text-left hover:bg-muted/40"
+        >
+          {expanded ? <ChevronDown size={13} className="text-muted-foreground" /> : <ChevronRight size={13} className="text-muted-foreground" />}
           <GitCompare size={13} className="text-muted-foreground" />
           <span className="text-sm font-semibold">Changes vs the filed return</span>
           <span className="text-[11px] text-muted-foreground">
             {changeCount} change{changeCount === 1 ? "" : "s"}
             {rows.length !== changeCount && ` · ${rows.length} fields`}
           </span>
-        </div>
+        </button>
 
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="text-xs w-[92px]">Change</TableHead>
-                <TableHead className="text-xs w-[70px]">Type</TableHead>
-                <TableHead className="text-xs">Name</TableHead>
-                <TableHead className="text-xs">Field</TableHead>
-                <TableHead className="text-xs">Original</TableHead>
-                <TableHead className="text-xs">Corrected</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r, i) => (
-                <TableRow
-                  key={i}
-                  className={cn("h-9 border-l-[3px]", ACTION_META[r.action].rail)}
-                >
-                  <TableCell className="py-1">
-                    {/* Only the first row of a multi-field change repeats the
-                        badge and name — the rest read as continuations. */}
-                    {r.lead && (
-                      <Badge className={cn("text-[9px]", ACTION_META[r.action].badge)}>
-                        {ACTION_META[r.action].label}
-                      </Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
-                    {r.lead ? r.kind : ""}
-                  </TableCell>
-                  <TableCell className={cn(
-                    "py-1 text-xs font-medium",
-                    r.action === "delete" && "line-through",
-                    !r.lead && "text-muted-foreground/50",
-                  )}>
-                    {r.lead ? r.title : "↳"}
-                  </TableCell>
-                  <TableCell className="py-1 text-xs text-muted-foreground whitespace-nowrap">
-                    {r.field}
-                  </TableCell>
-                  <TableCell className="py-1 text-xs">
-                    {r.action === "modify"
-                      ? <span className="line-through text-red-600 dark:text-red-400">{fmt(r.original)}</span>
-                      : <span className="text-muted-foreground">—</span>}
-                  </TableCell>
-                  <TableCell className="py-1 text-xs">
-                    {r.action === "modify"
-                      ? <span className="font-medium text-emerald-700 dark:text-emerald-400">{fmt(r.corrected)}</span>
-                      : <span className="text-muted-foreground">—</span>}
-                  </TableCell>
+        {expanded && (
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow className="hover:bg-transparent">
+                  <TableHead className="text-xs w-[92px]">Change</TableHead>
+                  <TableHead className="text-xs w-[70px]">Type</TableHead>
+                  <TableHead className="text-xs">Name</TableHead>
+                  <TableHead className="text-xs">Field</TableHead>
+                  <TableHead className="text-xs">Original</TableHead>
+                  <TableHead className="text-xs">Corrected</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r, i) => (
+                  <TableRow
+                    key={i}
+                    className={cn("h-9 border-l-[3px]", ACTION_META[r.action].rail)}
+                  >
+                    <TableCell className="py-1">
+                      {/* Only the first row of a multi-field change repeats the
+                          badge and name — the rest read as continuations. */}
+                      {r.lead && (
+                        <Badge className={cn("text-[9px]", ACTION_META[r.action].badge)}>
+                          {ACTION_META[r.action].label}
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                      {r.lead ? r.kind : ""}
+                    </TableCell>
+                    <TableCell className={cn(
+                      "py-1 text-xs font-medium",
+                      r.action === "delete" && "line-through",
+                      !r.lead && "text-muted-foreground/50",
+                    )}>
+                      {r.lead ? r.title : "↳"}
+                    </TableCell>
+                    <TableCell className="py-1 text-xs text-muted-foreground whitespace-nowrap">
+                      {r.field}
+                    </TableCell>
+                    <TableCell className="py-1 text-xs">
+                      {r.action === "modify"
+                        ? <span className="line-through text-red-600 dark:text-red-400">{fmt(r.original)}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="py-1 text-xs">
+                      {r.action === "modify"
+                        ? <span className="font-medium text-emerald-700 dark:text-emerald-400">{fmt(r.corrected)}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
