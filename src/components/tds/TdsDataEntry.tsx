@@ -1418,7 +1418,27 @@ export function TdsDataEntry({
     const challanObj = challans.find(c => c.id === challanId)
       || (selectedChallan?.id === challanId ? selectedChallan : null)
       || carryForwardChallans.find(cf => cf.challan.id === challanId)?.challan || null;
-    const { tds, interest, surcharge, applied } = computeApplied(allForChallan);
+    // Each row's own interest_amount is only ever WRITTEN by the grid's
+    // per-cell edit handler (see the "amount_paid_credited"/"date_of_payment"
+    // branch above) — a row that arrived via Genius Excel import (or any path
+    // that never touched that cell) can sit at interest_amount 0 forever,
+    // while the grid's OWN Interest column (a read-only, always-live
+    // calcAutoInterest tooltip, never sourced from this field — see its own
+    // "read-only, auto-calculated" comment) shows the real, non-zero
+    // statutory figure right next to it. Applied/Unconsumed must agree with
+    // what the user is actually looking at, not with a column that can be
+    // stale by design — so recompute interest the SAME way here instead of
+    // trusting the persisted value. Confirmed against a real challan: two
+    // Genius-imported deductees showed Interest ₹17 each on screen (₹34
+    // total, matching the challan's own declared interest) while their
+    // stored interest_amount was 0, so this challan reported "Unconsumed
+    // Amount: ₹34" on money that was already fully accounted for.
+    const depDate = (challanObj as Challan | null)?.deposit_date || null;
+    const liveInterestRows = allForChallan.map((d: any) => ({
+      ...d,
+      interest_amount: calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, depDate).interest,
+    }));
+    const { tds, interest, surcharge, applied } = computeApplied(liveInterestRows);
     const lateFees = (challanObj as Challan | null)?.late_fees_234e || 0;
     // Issue 4: Late fees are a separate govt levy — exclude from allocatable TDS amount
     return { tds, interest, surcharge, lateFees, applied, count: allForChallan.length };
