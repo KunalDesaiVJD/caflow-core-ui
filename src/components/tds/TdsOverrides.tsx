@@ -159,6 +159,16 @@ export function TdsOverrides({ clients, users, isSuperadmin, resolveFirmId }: Pr
   const distinctClients = useMemo(() => new Set(filtered.map((r) => r.clientId)).size, [filtered]);
   const recurringPatterns = patterns.filter((p) => p.items.length > 1).length;
 
+  // Client filter should only list clients who actually have an override
+  // somewhere in this view — not the firm's entire client roster, most of
+  // whom have never had one (based on all fetched records, not `filtered`,
+  // so switching the Stage/date filters doesn't make the Client dropdown
+  // itself keep shrinking and forget the current selection).
+  const clientsWithOverrides = useMemo(() => {
+    const ids = new Set(records.map((r) => r.clientId));
+    return clients.filter((c) => ids.has(c.id));
+  }, [records, clients]);
+
   return (
     <div className="space-y-4">
       {/* Title lives on the parent's "Audit & Overrides" tab header — this
@@ -202,7 +212,7 @@ export function TdsOverrides({ clients, users, isSuperadmin, resolveFirmId }: Pr
             <SelectTrigger className="w-[180px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Clients</SelectItem>
-              {clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              {clientsWithOverrides.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
