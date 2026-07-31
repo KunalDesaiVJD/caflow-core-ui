@@ -61,3 +61,61 @@ describe("computeApplied on rows with a live-recomputed interest_amount — the 
     expect(Math.max(0, allocatable - applied)).toBe(0); // Unconsumed Amount is correctly ₹0
   });
 });
+
+/**
+ * Second, independent regression: the SAME desync bug also lived in
+ * TdsDataEntry.tsx's fetchCarryForwardChallans (the "Carried Forward"
+ * candidate list on the Select Filing screen), autoMatchChallans (the
+ * Auto-match toast), summaryStats (the page-level summary bar), and
+ * TdsReports.tsx (the Genius export's over-applied guard + the Challan
+ * Register's utilisation status) — each a SEPARATE hand-rolled
+ * reimplementation of "applied", not the shared computeApplied(), so fixing
+ * getChallanBreakdownAll alone didn't fix any of these.
+ *
+ * Pinned against a second real challan (BSR 6390009, Challan 18387, client
+ * with TAN reflected in the report): two deductees, ₹2,28,233 and ₹11,219
+ * TDS, both deducted in June 2024, challan deposited 2024-07-22 (2 late
+ * months on the July 7 due date) — both rows' stored interest_amount was
+ * confirmed 0 in the database, while the challan's own declared interest
+ * total is ₹7,184. Before the fix, fetchCarryForwardChallans computed
+ * unconsumed = 246,636 − 239,452 = 7,184 (over its 0.5 threshold), so this
+ * FULLY UTILISED, zero-current-quarter-activity challan kept re-qualifying
+ * as a Carry-Forward candidate every subsequent quarter — "why does this
+ * show up, it was fully used last quarter and nothing changed this quarter".
+ */
+describe("computeApplied — second real case (₹2,46,636 challan, two large deductees)", () => {
+  const DEDUCTEE_1 = { tds_amount: 228233, total_tax_deducted: 228233, date_of_payment: "2024-06-15" };
+  const DEDUCTEE_2 = { tds_amount: 11219, total_tax_deducted: 11219, date_of_payment: "2024-06-30" };
+  const CHALLAN_DEPOSIT_DATE = "2024-07-22"; // 2 late months on the 2024-07-07 due date
+  const CHALLAN_TOTAL = 246636; // = 239452 TDS + 7184 interest, per the challan's own figures
+
+  it("live interest for each row sums to the challan's own declared ₹7,184", () => {
+    const i1 = calcAutoInterest(DEDUCTEE_1.tds_amount, DEDUCTEE_1.date_of_payment, CHALLAN_DEPOSIT_DATE).interest;
+    const i2 = calcAutoInterest(DEDUCTEE_2.tds_amount, DEDUCTEE_2.date_of_payment, CHALLAN_DEPOSIT_DATE).interest;
+    expect(i1).toBe(6847);
+    expect(i2).toBe(337);
+    expect(i1 + i2).toBe(7184);
+  });
+
+  it("naively trusting stored interest_amount (0, unsynced) reports a large false 'still available' balance", () => {
+    const rows = [{ ...DEDUCTEE_1, interest_amount: 0 }, { ...DEDUCTEE_2, interest_amount: 0 }];
+    const { applied } = computeApplied(rows);
+    expect(applied).toBe(239452);
+    expect(CHALLAN_TOTAL - applied).toBe(7184); // the exact false carry-forward balance reported
+  });
+
+  it("live-recomputed interest correctly reports the challan as fully consumed — nothing to carry forward", () => {
+    const rows = [DEDUCTEE_1, DEDUCTEE_2].map((d) => ({
+      ...d,
+      interest_amount: calcAutoInterest(d.tds_amount, d.date_of_payment, CHALLAN_DEPOSIT_DATE).interest,
+    }));
+    const { applied } = computeApplied(rows);
+    const allocatable = computeAllocatable(CHALLAN_TOTAL, 0);
+    expect(applied).toBe(CHALLAN_TOTAL);
+    expect(isChallanFullyUtilised(applied, allocatable)).toBe(true);
+    // This is the exact "unconsumed > 0.5" gate fetchCarryForwardChallans
+    // uses to decide whether a fully-utilised prior-quarter challan still
+    // qualifies as a Carry-Forward candidate.
+    expect(allocatable - applied).toBeLessThanOrEqual(0.5);
+  });
+});
