@@ -818,7 +818,24 @@ export function TdsDataEntry({
     const { data } = await supabase.from(SRC.challans as any)
       .select("*").eq("client_id", clientId).eq("is_archived", true)
       .order("archived_at", { ascending: false });
-    setArchivedChallans((data as unknown as Challan[]) || []);
+    const archived = (data as unknown as Challan[]) || [];
+    setArchivedChallans(archived);
+    // An archived challan's own deductees are never fetched by anything
+    // else — fetchChallans/fetchCarryForwardChallans both exclude
+    // is_archived rows entirely — so without this getChallanBreakdownAll
+    // has nothing to look up and every archived card would show ₹0 applied
+    // regardless of what it actually holds. Fetched live-table only (Archive
+    // is a live-filing-only feature, same as Kasar-Vatav).
+    if (archived.length) {
+      const { data: deds } = await supabase.from("tds_deductees")
+        .select("*").in("challan_id", archived.map(c => c.id));
+      const grouped: Record<string, Deductee[]> = {};
+      (deds || []).forEach((d: any) => {
+        if (!grouped[d.challan_id]) grouped[d.challan_id] = [];
+        grouped[d.challan_id].push(d as Deductee);
+      });
+      setAllChallanDeductees(prev => ({ ...prev, ...grouped }));
+    }
   };
 
   /** Archive: a soft, reversible way to put away a challan that's no longer
@@ -1662,7 +1679,8 @@ export function TdsDataEntry({
       : allForChallanRaw;
     const challanObj = challans.find(c => c.id === challanId)
       || (selectedChallan?.id === challanId ? selectedChallan : null)
-      || carryForwardChallans.find(cf => cf.challan.id === challanId)?.challan || null;
+      || carryForwardChallans.find(cf => cf.challan.id === challanId)?.challan
+      || archivedChallans.find(ac => ac.id === challanId) || null;
     // Each row's own interest_amount is only ever WRITTEN by the grid's
     // per-cell edit handler (see the "amount_paid_credited"/"date_of_payment"
     // branch above) — a row that arrived via Genius Excel import (or any path
@@ -1693,7 +1711,7 @@ export function TdsDataEntry({
     // surcharge breakdown shown in tooltips still sums to `applied`, not a
     // number that silently includes a write-off with nothing to point to.
     return { tds, interest, surcharge, lateFees, applied, kasarVatav, effectiveApplied: withKasarVatav(applied, kasarVatav), count: allForChallan.length };
-  }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, isCorrectionMode]);
+  }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, archivedChallans, isCorrectionMode]);
 
   // Keep getChallanBreakdown as alias for backward compat
   const getChallanBreakdown = getChallanBreakdownAll;
@@ -2284,13 +2302,27 @@ export function TdsDataEntry({
                     </p>
                   ) : (
                     <div className="flex gap-2 overflow-x-auto pb-1">
-                      {filteredArchivedChallans.map(ac => (
+                      {filteredArchivedChallans.map(ac => {
+                        // Full status breakdown — same engine, same fields as
+                        // the active/carry-forward cards, so an archived
+                        // challan's history and balance are just as reviewable
+                        // as before it was put away.
+                        const bd = getChallanBreakdownAll(ac.id);
+                        const allocatable = (ac.total_challan_amount || 0) - (ac.late_fees_234e || 0);
+                        const pendingBalance = Math.max(0, allocatable - bd.effectiveApplied);
+                        const overApplied = isChallanOverApplied(bd.effectiveApplied, allocatable);
+                        const fullyUtilised = isChallanFullyUtilised(bd.effectiveApplied, allocatable);
+                        const statusLabel = overApplied ? "Over-applied" : fullyUtilised ? "Fully Utilised" : bd.effectiveApplied > 0 ? "Partially Utilised" : "Unutilised";
+                        const statusClass = overApplied ? "bg-red-100 text-red-700" : fullyUtilised ? "bg-emerald-100 text-emerald-700"
+                          : bd.effectiveApplied > 0 ? "bg-amber-100 text-amber-700" : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
+                        const lateFeeBalance = (ac.late_fees_234e || 0) - (ac.late_fees_used || 0);
+                        return (
                         <TooltipProvider key={ac.id}>
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Card
                                 className={cn(
-                                  "cursor-pointer transition-all hover:shadow-sm hover:border-muted-foreground/50 flex-shrink-0 w-60 bg-background/60 border-dashed",
+                                  "cursor-pointer transition-all hover:shadow-sm hover:border-muted-foreground/50 flex-shrink-0 w-64 bg-background/60 border-dashed",
                                   selectedChallan?.id === ac.id ? "border-primary ring-1 ring-primary/30" : "",
                                 )}
                                 onClick={() => selectChallan(ac)}>
@@ -2312,12 +2344,42 @@ export function TdsDataEntry({
                                     {ac.challan_serial_no && ` • No: ${ac.challan_serial_no}`}
                                   </p>
                                   <p className="text-[10px] text-muted-foreground truncate">{ac.form_type} {ac.quarter} FY {ac.financial_year}</p>
-                                  <div className="flex items-center justify-between text-[10px] pt-1 border-t border-border/50">
-                                    <span className="text-muted-foreground">Total</span>
-                                    <span className="font-semibold text-muted-foreground">₹{(ac.total_challan_amount || 0).toLocaleString("en-IN")}</span>
+
+                                  {/* Status + progress — identical language/visuals to the active cards */}
+                                  <div className={cn("flex items-center justify-between text-[10px] font-semibold pt-1 border-t border-border/50",
+                                    overApplied ? "text-destructive" : fullyUtilised ? "text-emerald-600" : bd.effectiveApplied > 0 ? "text-amber-600" : "text-muted-foreground")}>
+                                    <span>{statusLabel}</span>
+                                    <span>₹{bd.effectiveApplied.toLocaleString("en-IN")}/₹{(ac.total_challan_amount || 0).toLocaleString("en-IN")}</span>
                                   </div>
+                                  <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden">
+                                    <div className={cn("h-full rounded-full transition-all", balanceColorClass(bd.effectiveApplied, ac.total_challan_amount || 0))}
+                                      style={{ width: ac.total_challan_amount > 0 ? `${Math.min(100, (bd.effectiveApplied / ac.total_challan_amount) * 100)}%` : "0%" }} />
+                                  </div>
+
+                                  {/* Tax / Interest utilised split */}
+                                  <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px] text-muted-foreground">
+                                    <span>Tax Utilised</span><span className="text-right font-medium text-foreground">₹{bd.tds.toLocaleString("en-IN")}</span>
+                                    {bd.interest > 0 && (<><span>Interest Utilised</span><span className="text-right font-medium text-foreground">₹{bd.interest.toLocaleString("en-IN")}</span></>)}
+                                    {bd.surcharge > 0 && (<><span>Surcharge</span><span className="text-right font-medium text-foreground">₹{bd.surcharge.toLocaleString("en-IN")}</span></>)}
+                                    <span>Unutilised / Pending</span><span className="text-right font-medium text-foreground">₹{pendingBalance.toLocaleString("en-IN")}</span>
+                                    <span>Carry Forward Amount</span><span className="text-right font-medium text-foreground">₹{pendingBalance.toLocaleString("en-IN")}</span>
+                                  </div>
+
+                                  {(ac.late_fees_234e || 0) > 0 && (
+                                    <div className="flex items-center justify-between gap-1 text-[9px] pt-1 border-t border-border/30 text-muted-foreground">
+                                      <span>LF ₹{(ac.late_fees_234e || 0).toLocaleString("en-IN")} used</span>
+                                      <span>₹{(ac.late_fees_used || 0).toLocaleString("en-IN")} (bal ₹{lateFeeBalance.toLocaleString("en-IN")})</span>
+                                    </div>
+                                  )}
+                                  {bd.kasarVatav > 0 && (
+                                    <div className="flex items-center justify-between gap-1 text-[9px] pt-1 border-t border-border/30">
+                                      <span className="text-muted-foreground">Kasar-Vatav adjusted</span>
+                                      <span className="font-medium">₹{bd.kasarVatav.toLocaleString("en-IN")}</span>
+                                    </div>
+                                  )}
+
                                   <div className="flex items-center justify-between gap-1 pt-0.5">
-                                    <Badge variant="secondary" className="text-[9px] gap-1 bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                    <Badge variant="secondary" className={cn("text-[9px] gap-1", statusClass)}>
                                       <Archive size={8} /> Archived
                                     </Badge>
                                     {ac.archived_at && (
@@ -2328,13 +2390,23 @@ export function TdsDataEntry({
                               </Card>
                             </TooltipTrigger>
                             <TooltipContent>
-                              <div>Click to view this challan's entries.</div>
+                              <div>Tax (TDS): ₹{bd.tds.toLocaleString("en-IN")}</div>
+                              {bd.interest > 0 && <div>Interest: ₹{bd.interest.toLocaleString("en-IN")}</div>}
+                              {bd.surcharge > 0 && <div>Surcharge: ₹{bd.surcharge.toLocaleString("en-IN")}</div>}
+                              {bd.lateFees > 0 && <div>Late Fees 234E: ₹{bd.lateFees.toLocaleString("en-IN")} (Balance ₹{lateFeeBalance.toLocaleString("en-IN")})</div>}
+                              <div>Applied Total (deductees): ₹{bd.applied.toLocaleString("en-IN")}</div>
+                              {bd.kasarVatav > 0 && <div>Kasar-Vatav adjustment: ₹{bd.kasarVatav.toLocaleString("en-IN")}</div>}
+                              <div>Effective Applied: ₹{bd.effectiveApplied.toLocaleString("en-IN")}</div>
+                              <div>Challan Total: ₹{(ac.total_challan_amount || 0).toLocaleString("en-IN")}</div>
+                              <div>Pending Balance: ₹{pendingBalance.toLocaleString("en-IN")}</div>
+                              <div className="pt-1 border-t border-border/30 mt-1">Click to view this challan's entries.</div>
                               <div>Use the restore icon to bring it back to the active list.</div>
                               {ac.archived_at && <div>Archived {format(new Date(ac.archived_at), "dd MMM yyyy 'at' HH:mm")}</div>}
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
