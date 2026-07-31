@@ -1461,12 +1461,12 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
             <>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <Label className="text-xs">Filed on</Label>
-                  <Input type="date" className="h-8 text-xs" value={filedOn} onChange={e => setFiledOn(e.target.value)} />
+                  <Label className="text-xs">Filed on <span className="text-destructive">*</span></Label>
+                  <Input type="date" className="h-8 text-xs" value={filedOn} onChange={e => setFiledOn(e.target.value)} required />
                 </div>
                 <div className="space-y-1">
-                  <Label className="text-xs">Acknowledgement no.</Label>
-                  <Input className="h-8 text-xs" value={reference} onChange={e => setReference(e.target.value)} placeholder="Optional" />
+                  <Label className="text-xs">Acknowledgement no. <span className="text-destructive">*</span></Label>
+                  <Input className="h-8 text-xs" value={reference} onChange={e => setReference(e.target.value)} placeholder="Required" required />
                 </div>
               </div>
 
@@ -1479,11 +1479,13 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
 
           <Button
             size="sm" className="gap-1.5 h-8"
-            disabled={!mode || !proofName || !confirmed || saving}
+            disabled={!mode || !proofName || !filedOn || !reference.trim() || !confirmed || saving}
             title={
               !mode ? "Choose how the correction was submitted"
                 : !proofName ? "Upload the proof of submission first"
-                  : !confirmed ? "Confirm the return has been filed" : undefined
+                  : !filedOn ? "Enter the date the correction was filed"
+                    : !reference.trim() ? "Enter the acknowledgement number"
+                      : !confirmed ? "Confirm the return has been filed" : undefined
             }
             onClick={markFiled}
           >
