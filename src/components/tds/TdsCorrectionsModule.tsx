@@ -859,10 +859,39 @@ function CorrectionDetail({
               <span className="text-muted-foreground italic">No changes yet — edit an entry to start.</span>
             )}
           </div>
+
+          {/* ── Filed / rejected banners ── */}
+          {locked && (
+            <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2 flex items-start gap-2.5">
+              <ShieldCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+              <div className="min-w-0 text-xs">
+                <p className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
+                  Correction Filed <Lock size={11} />
+                </p>
+                <p className="text-emerald-700 dark:text-emerald-400">
+                  Signed by {correction.signed_by_name || "—"}
+                  {correction.signed_by_role ? ` (${correction.signed_by_role})` : ""}
+                  {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}. Read-only.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {correction.status === "rejected" && correction.rejection_reason && (
+            <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 px-3 py-2 text-xs">
+              <p className="font-semibold text-red-800 dark:text-red-300">Rejected</p>
+              <p className="text-red-700 dark:text-red-400">{correction.rejection_reason}</p>
+            </div>
+          )}
+
+          {/* Every change vs the filed return, with Original -> Corrected values.
+              Kept in this column (not full width) so its height fills the space
+              beside Signature & Filing instead of leaving it blank. */}
+          <ChangesPanel challans={challans} deductees={deductees} />
         </div>
 
         {/* Signature + Filing — top-right, sticky so it stays reachable while
-            scrolling the Changes panel / Data Entry grid below. */}
+            scrolling the Data Entry grid below. */}
         <div className="order-1 lg:order-2 lg:sticky lg:top-3">
           <SignatureSection
             correction={correction}
@@ -879,33 +908,6 @@ function CorrectionDetail({
           />
         </div>
       </div>
-
-      {/* ── Filed / rejected banners ── */}
-      {locked && (
-        <div className="rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2 flex items-start gap-2.5">
-          <ShieldCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
-          <div className="min-w-0 text-xs">
-            <p className="font-semibold text-emerald-800 dark:text-emerald-300 flex items-center gap-1.5">
-              Correction Filed <Lock size={11} />
-            </p>
-            <p className="text-emerald-700 dark:text-emerald-400">
-              Signed by {correction.signed_by_name || "—"}
-              {correction.signed_by_role ? ` (${correction.signed_by_role})` : ""}
-              {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}. Read-only.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {correction.status === "rejected" && correction.rejection_reason && (
-        <div className="rounded-lg border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-950/20 px-3 py-2 text-xs">
-          <p className="font-semibold text-red-800 dark:text-red-300">Rejected</p>
-          <p className="text-red-700 dark:text-red-400">{correction.rejection_reason}</p>
-        </div>
-      )}
-
-      {/* Every change vs the filed return, with Original -> Corrected values */}
-      <ChangesPanel challans={challans} deductees={deductees} />
 
       {/* ── The Data Entry module itself ──────────────────────────────────
           Not a look-alike: this IS TdsDataEntry, pointed at the correction's
@@ -1202,35 +1204,30 @@ function SignatureSlot({ title, name, role, at, awaiting, note, action }: {
   const signed = !!at;
   return (
     <div className={cn(
-      "rounded-lg border p-3 flex-1 min-w-[220px] flex flex-col",
+      "rounded-md border px-2 py-1.5 flex-1 min-w-[150px]",
       signed && "border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/10",
     )}>
-      <div className="flex items-center gap-1.5 mb-2">
-        <PenTool size={12} className={signed ? "text-emerald-600" : "text-muted-foreground"} />
-        <span className="text-xs font-semibold">{title}</span>
-        {signed && <CheckCircle2 size={12} className="text-emerald-600" />}
+      <div className="flex items-center gap-1 min-w-0">
+        <PenTool size={10} className={cn("shrink-0", signed ? "text-emerald-600" : "text-muted-foreground")} />
+        <span className="text-[10px] font-semibold text-muted-foreground truncate">{title}</span>
+        {signed && <CheckCircle2 size={10} className="text-emerald-600 shrink-0" />}
       </div>
 
       {signed ? (
-        <>
-          <div className="border-b border-foreground/40 pb-1 mb-1">
-            <p className="font-semibold text-sm">{name || "—"}</p>
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            {role || "Authorised signatory"}
-            {at ? ` · ${format(new Date(at), "dd/MM/yyyy HH:mm")}` : ""}
-          </p>
-        </>
+        <p className="text-xs leading-tight truncate" title={`${name || "—"} · ${role || "Authorised signatory"}`}>
+          <span className="font-semibold">{name || "—"}</span>
+          <span className="text-muted-foreground"> · {at ? format(new Date(at), "dd/MM/yy HH:mm") : role || "—"}</span>
+        </p>
       ) : (
-        <>
-          <p className="text-[11px] text-muted-foreground italic">{awaiting}</p>
+        <p className="text-[10px] text-muted-foreground italic leading-tight">
+          {awaiting}
           {/* The rule only matters while the slot is still open. Repeating it
               under a completed signature reads as a warning about it. */}
-          {note && <p className="text-[11px] text-muted-foreground mt-1">{note}</p>}
-        </>
+          {note && ` ${note}`}
+        </p>
       )}
 
-      {action && <div className="mt-2 pt-2 border-t flex flex-wrap gap-2">{action}</div>}
+      {action && <div className="mt-1 flex flex-wrap gap-1">{action}</div>}
     </div>
   );
 }
@@ -1268,8 +1265,8 @@ export function SignatureSection({
 
   return (
     <Card>
-      <CardContent className="p-3 space-y-3">
-        <div className="flex flex-wrap gap-2">
+      <CardContent className="p-2 space-y-1.5">
+        <div className="flex flex-wrap gap-1.5">
           <SignatureSlot
             title="1 · Employee signature"
             name={correction.prepared_by_name}
@@ -1282,16 +1279,16 @@ export function SignatureSection({
             }
             action={
               status === "draft" ? (
-                <Button size="sm" className="gap-1.5 h-7 text-xs" disabled={busy} onClick={onSubmitForSignature}>
-                  <Send size={12} /> Submit for signature
+                <Button size="sm" className="gap-1 h-6 text-[11px] px-2" disabled={busy} onClick={onSubmitForSignature}>
+                  <Send size={11} /> Submit for signature
                 </Button>
               ) : status === "awaiting_employee" ? (
-                <Button size="sm" className="gap-1.5 h-7 text-xs" onClick={onSignPreparer}>
-                  <PenTool size={12} /> Sign as preparer
+                <Button size="sm" className="gap-1 h-6 text-[11px] px-2" onClick={onSignPreparer}>
+                  <PenTool size={11} /> Sign as preparer
                 </Button>
               ) : status === "rejected" ? (
-                <Button size="sm" className="gap-1.5 h-7 text-xs" disabled={busy} onClick={onSubmitForSignature}>
-                  <Send size={12} /> Re-submit
+                <Button size="sm" className="gap-1 h-6 text-[11px] px-2" disabled={busy} onClick={onSubmitForSignature}>
+                  <Send size={11} /> Re-submit
                 </Button>
               ) : undefined
             }
@@ -1307,18 +1304,18 @@ export function SignatureSection({
             action={
               status === "awaiting_senior" ? (
                 <>
-                  <Button size="sm" variant="outline" className="gap-1.5 h-7 text-xs" onClick={onReject}>
-                    <XCircle size={12} /> Reject
+                  <Button size="sm" variant="outline" className="gap-1 h-6 text-[11px] px-2" onClick={onReject}>
+                    <XCircle size={11} /> Reject
                   </Button>
                   <Button
-                    size="sm" className="gap-1.5 h-7 text-xs"
+                    size="sm" className="gap-1 h-6 text-[11px] px-2"
                     disabled={!canApprove}
                     title={isSamePerson
                       ? "The senior approval must come from someone other than the preparer"
                       : undefined}
                     onClick={onApproveSenior}
                   >
-                    <ShieldCheck size={12} /> Approve as senior
+                    <ShieldCheck size={11} /> Approve as senior
                   </Button>
                 </>
               ) : undefined
@@ -1393,24 +1390,24 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
 
   return (
     <div className={cn(
-      "rounded-lg border p-3",
+      "rounded-md border p-2",
       filed && "border-emerald-200 dark:border-emerald-900 bg-emerald-50/40 dark:bg-emerald-950/10",
     )}>
-      <div className="flex items-center gap-1.5 mb-2">
-        <ShieldCheck size={12} className={filed ? "text-emerald-600" : "text-muted-foreground"} />
-        <span className="text-xs font-semibold">Filing</span>
-        {filed && <CheckCircle2 size={12} className="text-emerald-600" />}
+      <div className="flex items-center gap-1.5 mb-1">
+        <ShieldCheck size={11} className={filed ? "text-emerald-600" : "text-muted-foreground"} />
+        <span className="text-[11px] font-semibold">Filing</span>
+        {filed && <CheckCircle2 size={11} className="text-emerald-600" />}
       </div>
 
       {filed ? (
         <>
-          <p className="text-[11px] text-muted-foreground">
-            Marked filed by <span className="font-medium text-foreground">{correction.filed_by_name || "—"}</span>
-            {correction.filed_at ? ` on ${format(new Date(correction.filed_at), "dd/MM/yyyy HH:mm")}` : ""}
-            {correction.filing_reference ? ` · ref ${correction.filing_reference}` : ""}.
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            Filed by <span className="font-medium text-foreground">{correction.filed_by_name || "—"}</span>
+            {correction.filed_at ? ` · ${format(new Date(correction.filed_at), "dd/MM/yy HH:mm")}` : ""}
+            {correction.filing_reference ? ` · ref ${correction.filing_reference}` : ""}
           </p>
           {correction.submission_mode && (
-            <p className="text-[11px] text-muted-foreground mt-1">
+            <p className="text-[11px] text-muted-foreground leading-snug">
               {SUBMISSION_MODE_META[correction.submission_mode].label} ·{" "}
               {correction.proof_file_url ? (
                 <a href={correction.proof_file_url} target="_blank" rel="noreferrer" className="underline hover:text-foreground">
@@ -1421,18 +1418,13 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
           )}
         </>
       ) : !ready ? (
-        <p className="text-[11px] text-muted-foreground italic">
-          Not filed. Both signatures authorise the correction; filing is confirmed manually once the
-          return has actually been accepted by the department.
+        <p className="text-[11px] text-muted-foreground italic leading-snug">
+          Not filed — confirmed manually once the department has accepted the return.
         </p>
       ) : (
-        <div className="space-y-3">
-          <p className="text-[11px] text-muted-foreground">
-            Both signatures are complete. Record how the correction was submitted and attach the proof.
-          </p>
-
+        <div className="space-y-1.5">
           {/* 1 — how was it submitted */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-1.5">
             {(["offline", "online"] as SubmissionMode[]).map(m => (
               <button
                 key={m}
@@ -1440,14 +1432,14 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
                 onClick={() => setMode(m)}
                 aria-pressed={mode === m}
                 className={cn(
-                  "rounded-lg border p-2.5 text-left transition-colors",
+                  "rounded-md border px-1.5 py-1 text-left transition-colors leading-tight",
                   mode === m ? "border-primary bg-primary/5" : "hover:bg-muted/50",
                 )}
               >
-                <p className="text-xs font-medium">
-                  {m === "offline" ? "Offline filing" : "Online correction filing"}
+                <p className="text-[11px] font-medium">
+                  {m === "offline" ? "Offline" : "Online"}
                 </p>
-                <p className="text-[10px] text-muted-foreground mt-0.5">
+                <p className="text-[10px] text-muted-foreground">
                   {SUBMISSION_MODE_META[m].proofLabel}
                 </p>
               </button>
@@ -1456,24 +1448,25 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
 
           {/* 2 — the proof for that mode */}
           {meta && (
-            <div className="space-y-1.5">
-              <Label className="text-xs">{meta.proofLabel}</Label>
-              <p className="text-[10px] text-muted-foreground">{meta.hint}</p>
+            <div className="space-y-1">
               <input ref={fileRef} type="file" className="hidden" accept={meta.accept} onChange={pickFile} />
 
               {proofName ? (
-                <div className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 p-2 text-xs">
-                  <CheckCircle2 size={13} className="text-emerald-600 shrink-0" />
+                <div className="flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 px-1.5 py-1 text-[11px]">
+                  <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
                   <span className="truncate flex-1">{proofName}</span>
-                  <Button size="sm" variant="ghost" className="h-6 text-[11px]" disabled={uploading} onClick={() => fileRef.current?.click()}>
+                  <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5" disabled={uploading} onClick={() => fileRef.current?.click()}>
                     Replace
                   </Button>
                 </div>
               ) : (
-                <Button size="sm" variant="outline" className="w-full gap-1.5" disabled={uploading} onClick={() => fileRef.current?.click()}>
-                  <Upload size={13} />
-                  {uploading ? "Uploading…" : `Upload ${meta.proofLabel}`}
-                </Button>
+                <>
+                  <p className="text-[10px] text-muted-foreground leading-snug">{meta.hint}</p>
+                  <Button size="sm" variant="outline" className="w-full gap-1.5 h-7 text-[11px]" disabled={uploading} onClick={() => fileRef.current?.click()}>
+                    <Upload size={12} />
+                    {uploading ? "Uploading…" : `Upload ${meta.proofLabel}`}
+                  </Button>
+                </>
               )}
             </div>
           )}
@@ -1481,18 +1474,18 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
           {/* 3 — confirm and file */}
           {proofName && (
             <>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Filed on <span className="text-destructive">*</span></Label>
-                  <Input type="date" className="h-8 text-xs" value={filedOn} onChange={e => setFiledOn(e.target.value)} required />
+              <div className="grid grid-cols-2 gap-1.5">
+                <div>
+                  <Label className="text-[10px]">Filed on <span className="text-destructive">*</span></Label>
+                  <Input type="date" className="h-7 text-[11px] px-1.5" value={filedOn} onChange={e => setFiledOn(e.target.value)} required />
                 </div>
-                <div className="space-y-1">
-                  <Label className="text-xs">Acknowledgement no. <span className="text-destructive">*</span></Label>
-                  <Input className="h-8 text-xs" value={reference} onChange={e => setReference(e.target.value)} placeholder="Required" required />
+                <div>
+                  <Label className="text-[10px]">Ack. no. <span className="text-destructive">*</span></Label>
+                  <Input className="h-7 text-[11px] px-1.5" value={reference} onChange={e => setReference(e.target.value)} placeholder="Required" required />
                 </div>
               </div>
 
-              <label className="flex items-start gap-2 text-xs cursor-pointer">
+              <label className="flex items-start gap-1.5 text-[11px] leading-snug cursor-pointer">
                 <input type="checkbox" className="mt-0.5" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} />
                 <span>I confirm this correction return has been filed with the Income Tax Department.</span>
               </label>
@@ -1500,7 +1493,7 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
           )}
 
           <Button
-            size="sm" className="gap-1.5 h-8"
+            size="sm" className="gap-1.5 h-7 text-[11px] w-full"
             disabled={!mode || !proofName || !filedOn || !reference.trim() || !confirmed || saving}
             title={
               !mode ? "Choose how the correction was submitted"
@@ -1511,7 +1504,7 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
             }
             onClick={markFiled}
           >
-            <CheckCircle2 size={13} /> {saving ? "Filing…" : "Mark as Filed"}
+            <CheckCircle2 size={12} /> {saving ? "Filing…" : "Mark as Filed"}
           </Button>
         </div>
       )}

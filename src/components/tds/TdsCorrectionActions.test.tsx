@@ -50,9 +50,9 @@ describe("workflow actions live in their own boxes", () => {
 
     // both submission options and the action all sit AFTER the Filing heading
     const filingBox = t.slice(filingIdx);
-    expect(filingBox).toContain("Offline filing");
+    expect(filingBox).toContain("Offline");
     expect(filingBox).toContain("Acknowledgement (ACK)");
-    expect(filingBox).toContain("Online correction filing");
+    expect(filingBox).toContain("Online");
     expect(filingBox).toContain("Submission screenshot");
     expect(filingBox).toContain("Mark as Filed");
 

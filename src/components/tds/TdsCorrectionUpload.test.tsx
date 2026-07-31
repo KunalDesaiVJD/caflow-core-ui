@@ -92,7 +92,7 @@ describe("filing proof upload", () => {
     // gated before any attachment
     expect(screen.getByRole("button", { name: /Mark as Filed/i })).toBeDisabled();
 
-    await attach(/Offline filing/i, "ack.pdf");
+    await attach(/^Offline/i, "ack.pdf");
     expect(db.uploaded[0].name).toBe("ack.pdf");
     // saved AND linked to this correction
     expect(db.correction.submission_mode).toBe("offline");
@@ -112,7 +112,7 @@ describe("filing proof upload", () => {
 
   it("Online correction filing uploads the screenshot and then enables Filed", async () => {
     await open();
-    await attach(/Online correction filing/i, "submission.png");
+    await attach(/^Online/i, "submission.png");
     expect(db.correction.submission_mode).toBe("online");
     expect(db.correction.proof_file_url).toContain("tds-corrections/corr1/online-");
     await waitFor(() => expect(screen.getByText("submission.png")).toBeInTheDocument());
