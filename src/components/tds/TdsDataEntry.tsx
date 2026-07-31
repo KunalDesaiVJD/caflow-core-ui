@@ -38,7 +38,7 @@ import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2, Undo2,
   CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
-  Archive, ArchiveRestore, ChevronDown, ChevronRight,
+  Archive, ArchiveRestore, ChevronDown, ChevronRight, Search, X,
 } from "lucide-react";
 import { undoCorrectionRow, diffCorrectionRow, effectiveCorrectionAction, getEffectiveClientLedger } from "@/lib/tdsCorrections";
 import { generateGeniusExport } from "@/lib/genius-export";
@@ -437,6 +437,7 @@ export function TdsDataEntry({
   const [showArchivedChallans, setShowArchivedChallans] = useState(false);
   const [archivedChallans, setArchivedChallans] = useState<Challan[]>([]);
   const [archivingId, setArchivingId] = useState<string | null>(null);
+  const [archivedSearch, setArchivedSearch] = useState("");
   // Archived Challans is fetched per-client (not per-quarter/form), so it
   // only needs to reset on an actual CLIENT switch — resetting on every
   // quarter/form change within the same client would just force a redundant
@@ -445,7 +446,19 @@ export function TdsDataEntry({
   useEffect(() => {
     setShowArchivedChallans(false);
     setArchivedChallans([]);
+    setArchivedSearch("");
   }, [selClient]);
+  const filteredArchivedChallans = useMemo(() => {
+    const q = archivedSearch.trim().toLowerCase();
+    if (!q) return archivedChallans;
+    return archivedChallans.filter(ac =>
+      (ac.bsr_code || "").toLowerCase().includes(q) ||
+      (ac.challan_serial_no || "").toLowerCase().includes(q) ||
+      (ac.section_code || "").toLowerCase().includes(q) ||
+      `${ac.form_type} ${ac.quarter} ${ac.financial_year}`.toLowerCase().includes(q) ||
+      String(ac.total_challan_amount || "").includes(q)
+    );
+  }, [archivedChallans, archivedSearch]);
   const [loading, setLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
@@ -2097,14 +2110,17 @@ export function TdsDataEntry({
                         on tds_challans) — a correction is a fixed snapshot, so
                         this does not apply to it. */}
                     {!isCorrectionMode && (
-                      <Button size="sm" variant="ghost" className="gap-1 h-7 text-xs text-muted-foreground"
+                      <Button
+                        size="sm"
+                        variant={showArchivedChallans ? "secondary" : "ghost"}
+                        className="gap-1 h-7 text-xs text-muted-foreground"
                         onClick={() => {
                           const next = !showArchivedChallans;
                           setShowArchivedChallans(next);
                           if (next && selClient) void fetchArchivedChallans(selClient);
                         }}>
                         <Archive size={12} /> {showArchivedChallans ? "Hide" : "Show"} Archived Challans
-                        {archivedChallans.length > 0 && !showArchivedChallans && (
+                        {archivedChallans.length > 0 && (
                           <Badge variant="secondary" className="text-[9px] px-1 ml-0.5">{archivedChallans.length}</Badge>
                         )}
                       </Button>
@@ -2119,41 +2135,103 @@ export function TdsDataEntry({
                 )}
               </div>
 
+              {/* Archived Challans — a visually distinct panel (tinted background,
+                  dashed border) so it never reads as part of the active challan
+                  strip above/below it. Its own search box scopes to just this
+                  client's archive, independent of anything filtering the active
+                  list, since an archive can span many quarters at once. */}
               {challansExpanded && showArchivedChallans && (
-                <div className="space-y-1">
-                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Archived Challans (this client, any period)</p>
+                <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-1.5">
+                      <Archive size={13} className="text-muted-foreground shrink-0" />
+                      <p className="text-xs font-semibold text-foreground">Archived Challans</p>
+                      <Badge variant="secondary" className="text-[9px] px-1.5">{archivedChallans.length}</Badge>
+                      <span className="text-[10px] text-muted-foreground hidden sm:inline">· this client, any period</span>
+                    </div>
+                    {archivedChallans.length > 0 && (
+                      <div className="relative">
+                        <Search size={11} className="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+                        <Input
+                          placeholder="Search BSR, challan no, period..."
+                          className="h-7 w-56 pl-6 pr-6 text-[11px]"
+                          value={archivedSearch}
+                          onChange={e => setArchivedSearch(e.target.value)}
+                        />
+                        {archivedSearch && (
+                          <button
+                            type="button"
+                            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                            onClick={() => setArchivedSearch("")}
+                            title="Clear search"
+                          >
+                            <X size={11} />
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
                   {archivedChallans.length === 0 ? (
-                    <p className="text-xs text-muted-foreground py-2">No archived challans.</p>
+                    <p className="text-xs text-muted-foreground py-4 text-center">
+                      No archived challans for this client — challans you archive will show up here, still fully restorable.
+                    </p>
+                  ) : filteredArchivedChallans.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-4 text-center">
+                      No archived challans match "{archivedSearch}".
+                    </p>
                   ) : (
                     <div className="flex gap-2 overflow-x-auto pb-1">
-                      {archivedChallans.map(ac => (
-                        <Card key={ac.id} className="flex-shrink-0 w-60 bg-muted/40 border-dashed">
-                          <CardContent className="p-2.5 space-y-1">
-                            <div className="flex items-start justify-between gap-1">
-                              <div className="flex items-center gap-1.5 flex-wrap min-w-0">
-                                <Archive size={12} className="text-muted-foreground shrink-0" />
-                                <span className="text-xs font-semibold font-mono truncate">{ac.bsr_code || "No BSR"}</span>
-                                {ac.section_code && <Badge variant="outline" className="text-[9px] px-1">{ac.section_code}</Badge>}
-                              </div>
-                              <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0" title="Restore to active challans"
-                                disabled={archivingId === ac.id} onClick={() => void unarchiveChallan(ac)}>
-                                {archivingId === ac.id ? <Loader2 size={10} className="animate-spin" /> : <ArchiveRestore size={10} />}
-                              </Button>
-                            </div>
-                            <p className="text-[10px] text-muted-foreground truncate">
-                              {ac.deposit_date ? format(new Date(ac.deposit_date), "dd MMM yyyy") : "No date"}
-                              {ac.challan_serial_no && ` • No: ${ac.challan_serial_no}`}
-                              {" · "}{ac.form_type} {ac.quarter} FY {ac.financial_year}
-                            </p>
-                            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
-                              <span>Total</span>
-                              <span className="font-semibold">₹{(ac.total_challan_amount || 0).toLocaleString("en-IN")}</span>
-                            </div>
-                            {ac.archived_at && (
-                              <p className="text-[9px] text-muted-foreground">Archived {format(new Date(ac.archived_at), "dd MMM yyyy")}</p>
-                            )}
-                          </CardContent>
-                        </Card>
+                      {filteredArchivedChallans.map(ac => (
+                        <TooltipProvider key={ac.id}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Card
+                                className={cn(
+                                  "cursor-pointer transition-all hover:shadow-sm hover:border-muted-foreground/50 flex-shrink-0 w-60 bg-background/60 border-dashed",
+                                  selectedChallan?.id === ac.id ? "border-primary ring-1 ring-primary/30" : "",
+                                )}
+                                onClick={() => selectChallan(ac)}>
+                                <CardContent className="p-2.5 space-y-1.5">
+                                  <div className="flex items-start justify-between gap-1">
+                                    <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                      <CreditCard size={12} className="text-muted-foreground shrink-0" />
+                                      <span className="text-xs font-semibold font-mono truncate text-muted-foreground">{ac.bsr_code || "No BSR"}</span>
+                                      {ac.section_code && <Badge variant="outline" className="text-[9px] px-1">{ac.section_code}</Badge>}
+                                    </div>
+                                    <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0" title="Restore to active challans"
+                                      disabled={archivingId === ac.id}
+                                      onClick={e => { e.stopPropagation(); void unarchiveChallan(ac); }}>
+                                      {archivingId === ac.id ? <Loader2 size={10} className="animate-spin" /> : <ArchiveRestore size={10} />}
+                                    </Button>
+                                  </div>
+                                  <p className="text-[10px] text-muted-foreground truncate">
+                                    {ac.deposit_date ? format(new Date(ac.deposit_date), "dd MMM yyyy") : "No date"}
+                                    {ac.challan_serial_no && ` • No: ${ac.challan_serial_no}`}
+                                  </p>
+                                  <p className="text-[10px] text-muted-foreground truncate">{ac.form_type} {ac.quarter} FY {ac.financial_year}</p>
+                                  <div className="flex items-center justify-between text-[10px] pt-1 border-t border-border/50">
+                                    <span className="text-muted-foreground">Total</span>
+                                    <span className="font-semibold text-muted-foreground">₹{(ac.total_challan_amount || 0).toLocaleString("en-IN")}</span>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-1 pt-0.5">
+                                    <Badge variant="secondary" className="text-[9px] gap-1 bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                      <Archive size={8} /> Archived
+                                    </Badge>
+                                    {ac.archived_at && (
+                                      <span className="text-[9px] text-muted-foreground">{format(new Date(ac.archived_at), "dd MMM yyyy")}</span>
+                                    )}
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            </TooltipTrigger>
+                            <TooltipContent>
+                              <div>Click to view this challan's entries.</div>
+                              <div>Use the restore icon to bring it back to the active list.</div>
+                              {ac.archived_at && <div>Archived {format(new Date(ac.archived_at), "dd MMM yyyy 'at' HH:mm")}</div>}
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                       ))}
                     </div>
                   )}

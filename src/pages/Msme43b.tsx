@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
+import { getClassificationsForFY } from '@/utils/classificationUtils';
 import { MultiYearTrend } from '@/components/msme43b/MultiYearTrend';
 import { AccuracyReview } from '@/components/msme43b/AccuracyReview';
 import { PanelReview } from '@/components/msme43b/PanelReview';
@@ -34,6 +35,23 @@ interface ClientOpt { id: string; name: string }
 
 const inr = (v: number) =>
   new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(v));
+
+/** Current financial year in "YYYY-YY" form (e.g. "2026-27" from April 2026). */
+function getCurrentFY(): string {
+  const today = new Date();
+  const year = today.getFullYear();
+  const startYear = today.getMonth() >= 3 ? year : year - 1; // April = month 3
+  return `${startYear}-${String(startYear + 1).slice(-2)}`;
+}
+
+const FY_OPTIONS = (() => {
+  const [startStr] = getCurrentFY().split('-');
+  const start = Number(startStr);
+  return Array.from({ length: 6 }, (_, i) => {
+    const s = start - i;
+    return `${s}-${String(s + 1).slice(-2)}`;
+  });
+})();
 
 interface IngestResult {
   ledgers: VendorLedger[];
@@ -94,7 +112,11 @@ export default function Msme43b() {
   const [cyFiles, setCyFiles] = useState<File[]>([]);
   const [fyFiles, setFyFiles] = useState<File[]>([]);
   const [clients, setClients] = useState<ClientOpt[]>([]);
+  const [clientsLoading, setClientsLoading] = useState(true);
   const [clientId, setClientId] = useState<string>('');
+  const [clientSearch, setClientSearch] = useState('');
+  const [clientOpen, setClientOpen] = useState(false);
+  const [fy, setFy] = useState<string>(getCurrentFY());
   const [windowDays, setWindowDays] = useState(45);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<Msme43bReport | null>(null);
@@ -131,12 +153,43 @@ export default function Msme43b() {
     [profile, windowDays],
   );
 
-  // Load client list.
+  // Load client list, restricted to clients classified "Audit" for the
+  // selected financial year — MSME 43B(h) disallowance only applies to
+  // audited entities, so the dropdown should never show non-audit clients.
+  // Mirrors the searchable-dropdown UX of the Depreciation Register page,
+  // but the filter here is a genuine classification check (getClassificationsForFY)
+  // rather than an entity-type restriction.
   useEffect(() => {
-    supabase.from('clients')
-      .select('id, name').eq('is_draft', false).is('deleted_at', null).neq('is_active', false).order('name')
-      .then(({ data }) => setClients((data || []).filter((c): c is ClientOpt => !!c.name)));
-  }, []);
+    let cancelled = false;
+    setClientsLoading(true);
+    (async () => {
+      let q = supabase.from('clients')
+        .select('id, name, firm_id')
+        .eq('is_draft', false).is('deleted_at', null).neq('is_active', false)
+        .order('name');
+      if (user?.role !== 'superadmin' && user?.firm_id) q = q.eq('firm_id', user.firm_id);
+      const { data } = await q;
+      const all = (data || []).filter((c): c is ClientOpt & { firm_id: string } => !!c.name);
+      if (cancelled) return;
+      if (all.length === 0) { setClients([]); setClientsLoading(false); return; }
+
+      const clsMap = await getClassificationsForFY(all.map((c) => c.id), fy);
+      if (cancelled) return;
+      const audited = all.filter((c) => (clsMap.get(c.id) || '').toLowerCase() === 'audit');
+      setClients(audited.map((c) => ({ id: c.id, name: c.name })));
+      setClientsLoading(false);
+    })();
+    return () => { cancelled = true; };
+  }, [user?.firm_id, user?.role, fy]);
+
+  // If the FY changes and the previously-selected client falls out of the
+  // audited set for the new FY, clear the selection rather than silently
+  // keeping an id that's no longer visible in the dropdown.
+  useEffect(() => {
+    if (clientId && !clientsLoading && !clients.some((c) => c.id === clientId)) {
+      setClientId('');
+    }
+  }, [clients, clientsLoading, clientId]);
 
   const refreshRuns = useCallback(async (cid: string) => {
     if (!cid) { setSavedRuns([]); return; }
@@ -428,13 +481,62 @@ export default function Msme43b() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-4 md:grid-cols-3">
             <div>
-              <Label className="text-sm">Client</Label>
-              <Select value={clientId} onValueChange={setClientId}>
-                <SelectTrigger><SelectValue placeholder="Select a client (required to save)" /></SelectTrigger>
+              <Label className="text-sm">Client *</Label>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setClientOpen((v) => !v)}
+                  className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring"
+                >
+                  <span className={clientId ? 'text-foreground' : 'text-muted-foreground'}>
+                    {clientId
+                      ? clients.find((c) => c.id === clientId)?.name || 'Select client'
+                      : clientsLoading ? 'Loading clients…' : 'Select a client (required to save)'}
+                  </span>
+                  <ChevronDown className="h-4 w-4 opacity-50 shrink-0" />
+                </button>
+                {clientOpen && (
+                  <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-lg">
+                    <div className="p-2">
+                      <input
+                        autoFocus
+                        className="w-full rounded border px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-ring"
+                        placeholder="Search client…"
+                        value={clientSearch}
+                        onChange={(e) => setClientSearch(e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    </div>
+                    <div className="max-h-60 overflow-y-auto">
+                      {clients
+                        .filter((c) => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
+                        .map((c) => (
+                          <div
+                            key={c.id}
+                            className="flex cursor-pointer items-center px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground"
+                            onClick={() => { setClientId(c.id); setClientOpen(false); setClientSearch(''); }}
+                          >
+                            {clientId === c.id && <Check className="mr-2 h-4 w-4" />}
+                            <span className={clientId === c.id ? 'font-medium' : ''}>{c.name}</span>
+                          </div>
+                        ))}
+                      {!clientsLoading && !clients.filter((c) => c.name.toLowerCase().includes(clientSearch.toLowerCase())).length && (
+                        <div className="px-3 py-2 text-sm text-muted-foreground">No audited clients found</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">Audited clients only, for the selected FY</p>
+            </div>
+            <div>
+              <Label className="text-sm">Financial Year</Label>
+              <Select value={fy} onValueChange={setFy}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {clients.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  {FY_OPTIONS.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
