@@ -623,6 +623,136 @@ export function effectiveCorrectionAction(row: any): CorrectionAction {
   return diffCorrectionRow(row).length > 0 ? "modify" : "unchanged";
 }
 
+// ─── Effective (post-correction) ledger ────────────────────────────────────
+
+/** A tds_challans row, with a filed correction's values substituted in if one revised it. */
+export interface EffectiveChallan extends Record<string, any> {
+  id: string;
+  financial_year: string | null;
+  quarter: string | null;
+  total_challan_amount: number | null;
+  late_fees_234e: number | null;
+}
+
+/** A tds_deductees row, with a filed correction's values substituted in if one revised it. */
+export interface EffectiveDeductee extends Record<string, any> {
+  id: string;
+  challan_id: string | null;
+  financial_year: string | null;
+  quarter: string | null;
+}
+
+/**
+ * The client's challans and deductees as they now stand — the originally
+ * filed data, with any FILED correction's values substituted in for the
+ * period it revised.
+ *
+ * Corrections never write to tds_challans / tds_deductees (see file header),
+ * so anything that reads those tables directly for CROSS-PERIOD math — most
+ * importantly, carry-forward: whether a prior challan still has unconsumed
+ * balance — sees pre-correction numbers even after a correction is filed.
+ * This is the one place that reconciles the two, so carry-forward and any
+ * other cross-quarter check can read "what's actually true now" instead of
+ * "what was originally filed."
+ *
+ * A challan/deductee a correction revises keeps its ORIGINAL id in the
+ * result, so every existing challan_id reference — a later quarter's
+ * carry-forward usage, a UI selection — keeps resolving correctly. A challan
+ * a correction adds from scratch (action='add', no original_challan_id) has
+ * no row in tds_challans at all and so cannot be selected for a new live
+ * entry; it is deliberately left out of the result rather than surfaced as
+ * something the user can pick but not actually use. Same for a deductee a
+ * correction adds against such a challan.
+ */
+export async function getEffectiveClientLedger(clientId: string): Promise<{
+  challans: EffectiveChallan[]; deductees: EffectiveDeductee[];
+}> {
+  const [{ data: challans }, { data: deductees }, { data: corrections }] = await Promise.all([
+    supabase.from("tds_challans").select("*").eq("client_id", clientId),
+    supabase.from("tds_deductees").select("*").eq("client_id", clientId),
+    supabase.from("tds_corrections" as any).select("*")
+      .eq("client_id", clientId).eq("status", "filed"),
+  ]);
+
+  const baseChallans = (challans || []) as any[];
+  const baseDeductees = (deductees || []) as any[];
+  const filedCorrections = (corrections || []) as any[];
+  if (filedCorrections.length === 0) {
+    return { challans: baseChallans as EffectiveChallan[], deductees: baseDeductees as EffectiveDeductee[] };
+  }
+
+  // A period (client+FY+quarter+form) can have been corrected more than
+  // once over time — only the most recently filed correction for it is the
+  // current truth.
+  const latestByPeriod = new Map<string, any>();
+  for (const c of filedCorrections) {
+    const key = `${c.financial_year}|${c.quarter}|${c.form_type}`;
+    const existing = latestByPeriod.get(key);
+    const at = c.filed_at || c.updated_at || c.created_at;
+    const existingAt = existing ? (existing.filed_at || existing.updated_at || existing.created_at) : null;
+    if (!existing || (at && (!existingAt || at > existingAt))) latestByPeriod.set(key, c);
+  }
+  const latestCorrectionIds = Array.from(latestByPeriod.values()).map(c => c.id);
+
+  const [{ data: corrChallans }, { data: corrDeductees }] = await Promise.all([
+    supabase.from("tds_correction_challans" as any).select("*").in("correction_id", latestCorrectionIds),
+    supabase.from("tds_correction_deductees" as any).select("*").in("correction_id", latestCorrectionIds),
+  ]);
+  const allCorrChallans = (corrChallans || []) as any[];
+  const allCorrDeductees = (corrDeductees || []) as any[];
+
+  // original_challan_id -> corrected row (dropping deletes). Challans a
+  // correction added from scratch have no original id and are excluded — see
+  // the function doc.
+  const revisedChallanIds = new Set<string>();
+  const correctedChallanById = new Map<string, any>();
+  for (const cc of allCorrChallans) {
+    if (!cc.original_challan_id) continue;
+    revisedChallanIds.add(cc.original_challan_id);
+    if (effectiveCorrectionAction(cc) === "delete") continue;
+    correctedChallanById.set(cc.original_challan_id, { ...cc, id: cc.original_challan_id });
+  }
+
+  const effectiveChallans: EffectiveChallan[] = baseChallans
+    .filter(c => !revisedChallanIds.has(c.id) || correctedChallanById.has(c.id))
+    .map(c => correctedChallanById.get(c.id) || c);
+
+  // original_deductee_id -> its ORIGINAL challan_id. Resolving via the
+  // deductee (not correction_challan_id) matters for a deductee entered in a
+  // LATER quarter against an EARLIER quarter's carry-forward challan: that
+  // challan is not the correcting period's "own" challan, so createCorrection
+  // could not map correction_challan_id for it — the original deductee row is
+  // the only reliable link back to which challan it actually used.
+  const originalChallanIdByDeducteeId = new Map<string, string | null>();
+  for (const d of baseDeductees) originalChallanIdByDeducteeId.set(d.id, d.challan_id ?? null);
+
+  const revisedDeducteeIds = new Set<string>();
+  const correctedDeductees: any[] = [];
+  for (const cd of allCorrDeductees) {
+    if (cd.original_deductee_id) revisedDeducteeIds.add(cd.original_deductee_id);
+    if (effectiveCorrectionAction(cd) === "delete") continue;
+
+    let challanId: string | null = null;
+    if (cd.original_deductee_id && originalChallanIdByDeducteeId.has(cd.original_deductee_id)) {
+      challanId = originalChallanIdByDeducteeId.get(cd.original_deductee_id) ?? null;
+    } else {
+      const parentChallan = allCorrChallans.find(cc => cc.id === cd.correction_challan_id);
+      challanId = parentChallan?.original_challan_id ?? null;
+    }
+    // A brand-new deductee against a brand-new challan has no live challan_id
+    // to attach to — see the function doc.
+    if (!challanId) continue;
+
+    correctedDeductees.push({ ...cd, id: cd.original_deductee_id || cd.id, challan_id: challanId });
+  }
+
+  const effectiveDeductees: EffectiveDeductee[] = baseDeductees
+    .filter(d => !revisedDeducteeIds.has(d.id))
+    .concat(correctedDeductees);
+
+  return { challans: effectiveChallans, deductees: effectiveDeductees };
+}
+
 // ─── Proof of submission ────────────────────────────────────────────────────
 
 /**

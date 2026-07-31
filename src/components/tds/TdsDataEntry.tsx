@@ -39,7 +39,7 @@ import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2, Undo2,
   CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
 } from "lucide-react";
-import { undoCorrectionRow, diffCorrectionRow, effectiveCorrectionAction } from "@/lib/tdsCorrections";
+import { undoCorrectionRow, diffCorrectionRow, effectiveCorrectionAction, getEffectiveClientLedger } from "@/lib/tdsCorrections";
 import { generateGeniusExport } from "@/lib/genius-export";
 import { importGeniusXls, repairFilingSectionCodes } from "@/lib/genius-import";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
@@ -665,11 +665,11 @@ export function TdsDataEntry({
 
     const currentPeriod = periodToNum(fy, quarter);
 
-    // Query challans by stable metadata (client_id) rather than walking
-    // filing_id → prior filings. A challan's filing_id can drift if its
-    // owning filing was deleted and re-created, which would cause the old
-    // filing_id→filings lookup to silently skip the challan. Querying
-    // directly on the challan's own quarter/FY columns is drift-proof.
+    // Read the EFFECTIVE ledger — originally filed challans/deductees, with
+    // any FILED correction's numbers substituted in for the period it
+    // revised — not the raw tables. Otherwise a challan whose consumption a
+    // correction reduced (freeing up balance) would keep showing as fully
+    // used here, and the freed balance would never reach later quarters.
     //
     // Deliberately NOT scoped to form_type: a COMBINED PAYMENT — one bank
     // challan funding both e.g. 24Q and 26Q — is recorded under whichever
@@ -682,23 +682,19 @@ export function TdsDataEntry({
     // already sum every form's deductees against it (unfiltered by form),
     // so this is purely about not hiding a challan that money-wise is still
     // usable here.
-    const { data: priorChallansRaw } = await supabase.from(SRC.challans as any).select("*")
-      .eq("client_id", clientId)
-      .order("deposit_date", { ascending: true });
+    const { challans: effectiveChallans, deductees: effectiveDeductees } = await getEffectiveClientLedger(clientId);
 
-    const priorChallans = ((priorChallansRaw as unknown as Challan[]) || []).filter(c =>
+    const priorChallans = (effectiveChallans as unknown as Challan[]).filter(c =>
       c.quarter && c.financial_year &&
       periodToNum(c.financial_year, c.quarter) < currentPeriod
     );
     if (priorChallans.length === 0) { setCarryForwardChallans([]); return; }
 
-    const challanIds = priorChallans.map(c => c.id);
+    const challanIds = new Set(priorChallans.map(c => c.id));
     // Fetch FULL deductee rows (not just sum fields) so we can merge them into
     // allChallanDeductees — getChallanBreakdownAll looks up deductees from that
     // map to compute 'Used (all Q)' for carry-forward challans.
-    const { data: allDeds } = await supabase.from(SRC.deductees as any)
-      .select("*")
-      .in("challan_id", challanIds);
+    const allDeds = effectiveDeductees.filter(d => d.challan_id && challanIds.has(d.challan_id));
 
     // Track which prior challans have CURRENT-QUARTER utilisation — i.e.,
     // deductees whose quarter+FY matches the currently-selected quarter.

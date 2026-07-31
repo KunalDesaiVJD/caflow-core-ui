@@ -78,6 +78,15 @@ describe("filing proof upload", () => {
     await waitFor(() => expect(db.uploaded.length).toBe(1));
   };
 
+  // Filed on + Acknowledgement no. are mandatory alongside proof — fill both
+  // the way a user would before Mark as Filed can ever be enabled.
+  const fillFiledOnAndAck = () => {
+    const dateInput = document.querySelector('input[type="date"]') as HTMLInputElement;
+    expect(dateInput).toBeTruthy();
+    fireEvent.change(dateInput, { target: { value: "2026-07-31" } });
+    fireEvent.change(screen.getByPlaceholderText(/Required/i), { target: { value: "ACK12345" } });
+  };
+
   it("Offline filing uploads the ACK and then enables Filed", async () => {
     await open();
     // gated before any attachment
@@ -92,6 +101,9 @@ describe("filing proof upload", () => {
 
     // the attached file is shown back to the user
     await waitFor(() => expect(screen.getByText("ack.pdf")).toBeInTheDocument());
+    // still gated until Filed on + Acknowledgement no. are entered too
+    expect(screen.getByRole("button", { name: /Mark as Filed/i })).toBeDisabled();
+    fillFiledOnAndAck();
     // ...and Filed unlocks once the user confirms
     fireEvent.click(screen.getByRole("checkbox"));
     await waitFor(() =>
@@ -104,6 +116,7 @@ describe("filing proof upload", () => {
     expect(db.correction.submission_mode).toBe("online");
     expect(db.correction.proof_file_url).toContain("tds-corrections/corr1/online-");
     await waitFor(() => expect(screen.getByText("submission.png")).toBeInTheDocument());
+    fillFiledOnAndAck();
     fireEvent.click(screen.getByRole("checkbox"));
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Mark as Filed/i })).toBeEnabled());
