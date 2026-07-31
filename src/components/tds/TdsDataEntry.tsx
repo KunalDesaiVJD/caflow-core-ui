@@ -848,7 +848,7 @@ export function TdsDataEntry({
    *  current-period usage and is exactly what this feature exists for, so
    *  callers pass the period-scoped count rather than an all-time one. */
   const archiveChallan = async (c: Challan, activePeriodCount: number) => {
-    if (!user?.id) return;
+    if (!user?.id || isFilingLocked) return;
     if (activePeriodCount > 0) {
       toast({ title: "Can't archive", description: `This challan still has ${activePeriodCount} deductee${activePeriodCount === 1 ? "" : "s"} attached in the current period — remove or reassign them first.`, variant: "destructive" });
       return;
@@ -882,7 +882,7 @@ export function TdsDataEntry({
    *  separate "reactivation" step, since archiving never touched anything
    *  but these three columns. */
   const unarchiveChallan = async (c: Challan) => {
-    if (!user?.id) return;
+    if (!user?.id || isFilingLocked) return;
     setArchivingId(c.id);
     const { error } = await supabase.from(SRC.challans as any)
       .update({ is_archived: false, archived_at: null, archived_by: null })
@@ -914,6 +914,7 @@ export function TdsDataEntry({
    *  completely. Editing an existing adjustment re-opens with its current
    *  total rather than the delta, since the field IS the total. */
   const openKasarVatavDialog = (c: Challan) => {
+    if (isFilingLocked) return;
     const bd = getChallanBreakdownAll(c.id);
     const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
     const rawUnconsumed = Math.max(0, allocatable - bd.applied);
@@ -931,7 +932,7 @@ export function TdsDataEntry({
 
   const submitKasarVatav = async () => {
     const c = kasarVatavDialogChallan;
-    if (!c || !user?.id) return;
+    if (!c || !user?.id || isFilingLocked) return;
     const bd = getChallanBreakdownAll(c.id);
     const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
     const rawUnconsumed = Math.max(0, allocatable - bd.applied);
@@ -1233,7 +1234,7 @@ export function TdsDataEntry({
   }, [challanForm.total_tax, challanForm.surcharge, challanForm.education_cess, challanForm.interest, challanForm.others, challanForm.late_fees_234e]);
 
   const saveChallan = async () => {
-    if (!filing) return;
+    if (!filing || isFilingLocked) return;
     if (!challanForm.bsr_code || challanForm.bsr_code.length !== 7) {
       toast({ title: "BSR Code must be 7 digits", variant: "destructive" }); return;
     }
@@ -1339,6 +1340,7 @@ export function TdsDataEntry({
   };
 
   const deleteChallan = async (id: string) => {
+    if (isFilingLocked) return;
     const { error } = await supabase.from(SRC.challans as any).delete().eq("id", id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
     toast({ title: "Challan deleted" });
@@ -1955,6 +1957,14 @@ export function TdsDataEntry({
       toast({ title: "Select a filing first", description: "Pick Client / FY / Quarter / Form before importing.", variant: "destructive" });
       return;
     }
+    // A bulk import inserts new challans/deductees straight into the return —
+    // exactly the kind of change the Ready to File/Filed freeze exists to
+    // block, so it needs the same permission-request flow as every other
+    // change, not a bypass via a file picker.
+    if (isFilingLocked) {
+      toast({ title: "This return is locked", description: "Data Entry is frozen once a return is Ready to File or Filed — request edit access to import.", variant: "destructive" });
+      return;
+    }
     importFileInputRef.current?.click();
   };
 
@@ -1963,6 +1973,7 @@ export function TdsDataEntry({
     // Reset so picking the same file again still triggers onChange
     if (importFileInputRef.current) importFileInputRef.current.value = "";
     if (!file) return;
+    if (isFilingLocked) return;
     if (!filing || !client) {
       toast({ title: "Select a filing first", variant: "destructive" });
       return;
@@ -2151,7 +2162,8 @@ export function TdsDataEntry({
                 size="sm"
                 variant="outline"
                 className="ml-auto gap-1.5"
-                disabled={importLoading || exportLoading}
+                disabled={importLoading || exportLoading || isFilingLocked}
+                title={isFilingLocked ? "Locked — request edit access to import" : undefined}
                 onClick={handleGeniusImportClick}
               >
                 {importLoading
@@ -2195,7 +2207,11 @@ export function TdsDataEntry({
           {isFilingLocked && (
             <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-amber-50 border-2 border-amber-300 text-amber-900 text-sm font-medium">
               <Lock size={16} className="shrink-0" />
-              <span>{lockNotice ?? <>This filing is <strong>Filed</strong>. All data is read-only. Change status in Filings list to unlock.</>}</span>
+              <span>{lockNotice ?? <>
+                This return is <strong>{lockBadgeLabel ?? "Filed"}</strong> — challans and data entries are frozen and read-only,
+                permanently, including once it's Filed. To make a change, request edit access from the <strong>Validate &amp; Finalise</strong> tab;
+                a Firm Admin or Super Admin must approve it before anything here can change again.
+              </>}</span>
             </div>
           )}
 
@@ -2333,11 +2349,16 @@ export function TdsDataEntry({
                                       <span className="text-xs font-semibold font-mono truncate text-muted-foreground">{ac.bsr_code || "No BSR"}</span>
                                       {ac.section_code && <Badge variant="outline" className="text-[9px] px-1">{ac.section_code}</Badge>}
                                     </div>
-                                    <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0" title="Restore to active challans"
-                                      disabled={archivingId === ac.id}
-                                      onClick={e => { e.stopPropagation(); void unarchiveChallan(ac); }}>
-                                      {archivingId === ac.id ? <Loader2 size={10} className="animate-spin" /> : <ArchiveRestore size={10} />}
-                                    </Button>
+                                    {/* Restoring re-enters the active list of the currently open
+                                        filing — blocked once that filing is Ready to File/Filed,
+                                        same as every other change here (see isFilingLocked). */}
+                                    {!isFilingLocked && (
+                                      <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0" title="Restore to active challans"
+                                        disabled={archivingId === ac.id}
+                                        onClick={e => { e.stopPropagation(); void unarchiveChallan(ac); }}>
+                                        {archivingId === ac.id ? <Loader2 size={10} className="animate-spin" /> : <ArchiveRestore size={10} />}
+                                      </Button>
+                                    )}
                                   </div>
                                   <p className="text-[10px] text-muted-foreground truncate">
                                     {ac.deposit_date ? format(new Date(ac.deposit_date), "dd MMM yyyy") : "No date"}
@@ -2463,19 +2484,23 @@ export function TdsDataEntry({
                                         </Badge>
                                       )}
                                     </div>
-                                    {/* Blocked only while THIS quarter still draws on it — a
-                                        carry-forward challan whose balance was used up in a
-                                        prior quarter has no reason to keep showing up here. */}
-                                    <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0" title="Archive — hide from active use, restorable any time"
-                                      disabled={archivingId === cf.challan.id}
-                                      onClick={e => {
-                                        e.stopPropagation();
-                                        const activeCount = (allChallanDeductees[cf.challan.id] || [])
-                                          .filter(d => d.quarter === selQuarter && d.financial_year === selFy).length;
-                                        void archiveChallan(cf.challan, activeCount);
-                                      }}>
-                                      {archivingId === cf.challan.id ? <Loader2 size={10} className="animate-spin" /> : <Archive size={10} />}
-                                    </Button>
+                                    {/* Blocked while THIS quarter still draws on it (a carry-forward
+                                        challan whose balance was used up in a prior quarter has no
+                                        reason to keep showing up here) OR while the currently open
+                                        filing is Ready to File/Filed — every change here goes through
+                                        the same freeze + permission-request flow as Edit/Delete. */}
+                                    {!isFilingLocked && (
+                                      <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0" title="Archive — hide from active use, restorable any time"
+                                        disabled={archivingId === cf.challan.id}
+                                        onClick={e => {
+                                          e.stopPropagation();
+                                          const activeCount = (allChallanDeductees[cf.challan.id] || [])
+                                            .filter(d => d.quarter === selQuarter && d.financial_year === selFy).length;
+                                          void archiveChallan(cf.challan, activeCount);
+                                        }}>
+                                        {archivingId === cf.challan.id ? <Loader2 size={10} className="animate-spin" /> : <Archive size={10} />}
+                                      </Button>
+                                    )}
                                   </div>
                                   <div className="flex items-center justify-between text-[10px]">
                                     <span className="text-muted-foreground">Available</span>
@@ -2596,9 +2621,9 @@ export function TdsDataEntry({
                                     )}
                                   </div>
                                   <div className="flex gap-0.5 shrink-0">
-                                    {/* Issue 2: Hide Edit/Delete when filed — Archive stays available
-                                        even once Filed, since it's the only way to stop a fully-used,
-                                        already-filed challan from cluttering future quarters' carry-forward. */}
+                                    {/* Issue 2: Hide Edit/Delete/Archive when the filing is Ready to
+                                        File/Filed — every change here goes through the freeze +
+                                        permission-request flow, permanently, even once Filed. */}
                                     {!isFilingLocked && (
                                       <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); openEditChallan(c); }}>
                                         <Pencil size={10} />
@@ -2606,7 +2631,7 @@ export function TdsDataEntry({
                                     )}
                                     {/* Archiving is a live-data concept — does not apply to a
                                         correction's fixed snapshot (see fetchChallans). */}
-                                    {!isCorrectionMode && (
+                                    {!isFilingLocked && !isCorrectionMode && (
                                       <Button variant="ghost" size="icon" className="h-5 w-5" title="Archive — hide from active use, restorable any time"
                                         disabled={archivingId === c.id}
                                         onClick={e => {
@@ -2764,14 +2789,13 @@ export function TdsDataEntry({
                             )}
                             {/* Kasar-Vatav: close out a small, genuinely unattachable residual
                                 balance so the challan can read as Fully Utilised without a
-                                fake deductee row. Deliberately available even when the
-                                currently-viewed filing is Filed/locked — same reasoning as
-                                Archive: it's a challan-level bookkeeping adjustment, not an
-                                edit to this filing's own tax entries, and the whole point is
-                                closing out old, already-filed carry-forward challans (see the
-                                Archive "not available on Filed challans" fix for the same
-                                pattern). Not offered on archived challans (already put away). */}
-                            {!isCorrectionMode && !selectedChallan.is_archived && (unconsumed > 0 || (selectedChallan.kasar_vatav_amount || 0) > 0) && (
+                                fake deductee row. Blocked while the currently open filing is
+                                Ready to File/Filed — a challan-level adjustment is still a
+                                change to return data, and this stays frozen permanently
+                                alongside Edit/Delete/Archive until an approved edit request
+                                reverts the return out of that status. Not offered on archived
+                                challans (already put away). */}
+                            {!isFilingLocked && !isCorrectionMode && !selectedChallan.is_archived && (unconsumed > 0 || (selectedChallan.kasar_vatav_amount || 0) > 0) && (
                               <Button
                                 size="sm" variant="outline" className="h-6 gap-1 text-[10px] px-2 border-violet-300 text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950"
                                 onClick={() => openKasarVatavDialog(selectedChallan)}
