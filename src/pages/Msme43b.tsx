@@ -16,7 +16,6 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { getClassificationsForFY } from '@/utils/classificationUtils';
 import { MultiYearTrend } from '@/components/msme43b/MultiYearTrend';
 import { AccuracyReview } from '@/components/msme43b/AccuracyReview';
 import { PanelReview } from '@/components/msme43b/PanelReview';
@@ -36,19 +35,25 @@ interface ClientOpt { id: string; name: string }
 const inr = (v: number) =>
   new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 }).format(Math.round(v));
 
-/** Current financial year in "YYYY-YY" form (e.g. "2026-27" from April 2026). */
-function getCurrentFY(): string {
+/** Default financial year for audit tooling: the LAST COMPLETED FY (the one
+ *  whose books are currently under audit), not the FY nominally in progress
+ *  by the calendar. In Jul 2026 the auditor is working on FY 2025-26; the
+ *  ongoing FY (2026-27) is irrelevant until next Apr. Matches the same
+ *  helper used by the Clients page (ClassificationByFYView) and the
+ *  Depreciation Register so every audit-tools page defaults to the same FY. */
+function getDefaultAuditFY(): string {
   const today = new Date();
-  const year = today.getFullYear();
-  const startYear = today.getMonth() >= 3 ? year : year - 1; // April = month 3
-  return `${startYear}-${String(startYear + 1).slice(-2)}`;
+  const y = today.getFullYear();
+  const m = today.getMonth(); // 0 = Jan
+  const start = m >= 3 ? y - 1 : y - 2;
+  return `${start}-${String(start + 1).slice(-2)}`;
 }
 
 const FY_OPTIONS = (() => {
-  const [startStr] = getCurrentFY().split('-');
-  const start = Number(startStr);
+  const today = new Date();
+  const cur = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
   return Array.from({ length: 6 }, (_, i) => {
-    const s = start - i;
+    const s = cur + 1 - i;
     return `${s}-${String(s + 1).slice(-2)}`;
   });
 })();
@@ -116,7 +121,7 @@ export default function Msme43b() {
   const [clientId, setClientId] = useState<string>('');
   const [clientSearch, setClientSearch] = useState('');
   const [clientOpen, setClientOpen] = useState(false);
-  const [fy, setFy] = useState<string>(getCurrentFY());
+  const [fy, setFy] = useState<string>(getDefaultAuditFY());
   const [windowDays, setWindowDays] = useState(45);
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<Msme43bReport | null>(null);
@@ -156,26 +161,36 @@ export default function Msme43b() {
   // Load client list, restricted to clients classified "Audit" for the
   // selected financial year — MSME 43B(h) disallowance only applies to
   // audited entities, so the dropdown should never show non-audit clients.
-  // Mirrors the searchable-dropdown UX of the Depreciation Register page,
-  // but the filter here is a genuine classification check (getClassificationsForFY)
-  // rather than an entity-type restriction.
+  //
+  // Queries client_fy_classifications directly (financial_year = fy AND
+  // classification = 'Audit'), the SAME source of truth the Clients page's
+  // ClassificationByFYView reads for its per-FY Audit count — that's what
+  // the auditor sees as "128 Audit clients" for FY 2025-26 and expects to
+  // match here. An earlier version routed through getClassificationsForFY,
+  // which additionally consults client_classification_history and can
+  // resolve to a STALE pre-FY-2025-26 entry for a client whose
+  // client_fy_classifications row was set directly (e.g. via bulk import)
+  // without a matching history row — that mismatch was silently returning
+  // zero audited clients even at the correct FY.
   useEffect(() => {
     let cancelled = false;
     setClientsLoading(true);
     (async () => {
       let q = supabase.from('clients')
-        .select('id, name, firm_id')
-        .eq('is_draft', false).is('deleted_at', null).neq('is_active', false)
+        .select('id, name, client_fy_classifications!inner(id)')
+        .eq('client_fy_classifications.financial_year', fy)
+        .eq('client_fy_classifications.classification', 'Audit')
+        .is('deleted_at', null)
+        .or('is_draft.eq.false,and(is_draft.eq.true,source.eq.api_import)')
         .order('name');
-      if (user?.role !== 'superadmin' && user?.firm_id) q = q.eq('firm_id', user.firm_id);
-      const { data } = await q;
-      const all = (data || []).filter((c): c is ClientOpt & { firm_id: string } => !!c.name);
+      if (user?.role !== 'superadmin' && user?.firm_id) {
+        q = q.eq('firm_id', user.firm_id);
+        q = q.eq('client_fy_classifications.firm_id', user.firm_id);
+      }
+      const { data, error } = await q;
       if (cancelled) return;
-      if (all.length === 0) { setClients([]); setClientsLoading(false); return; }
-
-      const clsMap = await getClassificationsForFY(all.map((c) => c.id), fy);
-      if (cancelled) return;
-      const audited = all.filter((c) => (clsMap.get(c.id) || '').toLowerCase() === 'audit');
+      if (error) { console.error('[Msme43b] audited-client query failed:', error); setClients([]); setClientsLoading(false); return; }
+      const audited = (data || []).filter((c): c is ClientOpt => !!c.name);
       setClients(audited.map((c) => ({ id: c.id, name: c.name })));
       setClientsLoading(false);
     })();
