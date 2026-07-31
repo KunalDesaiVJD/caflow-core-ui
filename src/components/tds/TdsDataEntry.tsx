@@ -38,6 +38,7 @@ import { cn } from "@/lib/utils";
 import {
   Plus, Trash2, Pencil, AlertTriangle, CheckCircle2, Undo2,
   CreditCard, RefreshCw, ArrowRight, RotateCcw, Lock, FileText, Loader2, FileSpreadsheet, Upload,
+  Archive, ArchiveRestore,
 } from "lucide-react";
 import { undoCorrectionRow, diffCorrectionRow, effectiveCorrectionAction, getEffectiveClientLedger } from "@/lib/tdsCorrections";
 import { generateGeniusExport } from "@/lib/genius-export";
@@ -74,6 +75,7 @@ interface Challan {
   // Issue 6 + 7D + 7H
   late_fees_used: number; fully_utilized: boolean;
   origin_quarter: string | null; origin_fy: string | null;
+  is_archived?: boolean; archived_at?: string | null; archived_by?: string | null;
 }
 
 interface Deductee {
@@ -401,6 +403,11 @@ export function TdsDataEntry({
   // tables, so every existing call site behaves exactly as before.
   const SRC = source ?? LIVE_TDS_SOURCE;
   const isCorrectionMode = SRC.challans !== LIVE_TDS_SOURCE.challans;
+  // Collapsed by default, Correction tab only — a correction usually touches
+  // one or two entries, so the full challan grid + deductee table is mostly
+  // noise until the user asks to see it. Data Entry is unaffected: it never
+  // sets this to false, so the section there stays exactly as it always has.
+  const [challansExpanded, setChallansExpanded] = useState(!isCorrectionMode);
   // Display name for the acting user on audit-log entries — resolved from the
   // already-fetched `users` list (same pattern as other TDS screens), no
   // separate fetch needed.
@@ -421,6 +428,24 @@ export function TdsDataEntry({
   const [allChallanDeductees, setAllChallanDeductees] = useState<Record<string, Deductee[]>>({});
   const [carryForwardChallans, setCarryForwardChallans] = useState<{ challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[]>([]);
   const [selectedChallan, setSelectedChallan] = useState<Challan | null>(null);
+  // Archive: hides a no-longer-needed challan from every active list (this
+  // filing's own challans, Carry-Forward candidates, balance/utilisation
+  // calculations) without deleting it — reversible via Unarchive. Fetched
+  // for THIS CLIENT as a whole (not scoped to the current quarter/form) since
+  // an archived challan is being put away more permanently, the same way
+  // Carry-Forward already looks across periods.
+  const [showArchivedChallans, setShowArchivedChallans] = useState(false);
+  const [archivedChallans, setArchivedChallans] = useState<Challan[]>([]);
+  const [archivingId, setArchivingId] = useState<string | null>(null);
+  // Archived Challans is fetched per-client (not per-quarter/form), so it
+  // only needs to reset on an actual CLIENT switch — resetting on every
+  // quarter/form change within the same client would just force a redundant
+  // refetch. Collapsed closed too, so the next client starts from a clean
+  // toggle rather than immediately showing (possibly stale-looking) state.
+  useEffect(() => {
+    setShowArchivedChallans(false);
+    setArchivedChallans([]);
+  }, [selClient]);
   const [loading, setLoading] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [importLoading, setImportLoading] = useState(false);
@@ -758,6 +783,87 @@ export function TdsDataEntry({
     setAllChallanDeductees(prev => ({ ...prev, ...cfGrouped }));
   };
 
+  // Client-wide, not scoped to the current quarter/form/filing — an archived
+  // challan is being put away more permanently (the same reasoning
+  // fetchCarryForwardChallans already applies across periods), so "Show
+  // Archived Challans" surfaces every archived challan for this client.
+  const fetchArchivedChallans = async (clientId: string) => {
+    const { data } = await supabase.from(SRC.challans as any)
+      .select("*").eq("client_id", clientId).eq("is_archived", true)
+      .order("archived_at", { ascending: false });
+    setArchivedChallans((data as unknown as Challan[]) || []);
+  };
+
+  /** Archive: a soft, reversible way to put away a challan that's no longer
+   *  needed, without deleting it (and its history) outright. Blocked while
+   *  the challan still has any deductee attached — an archived challan must
+   *  never be "in use" (see requirement: excluded from active lists,
+   *  validations and utilisation until restored), so there is deliberately
+   *  no code path anywhere that has to reconcile "archived but still has
+   *  live entries". */
+  const archiveChallan = async (c: Challan) => {
+    if (!user?.id) return;
+    const attachedCount = allChallanDeductees[c.id]?.length
+      ?? (deductees.filter(d => d.challan_id === c.id).length + prevEntries.filter(d => d.challan_id === c.id).length);
+    if (attachedCount > 0) {
+      toast({ title: "Can't archive", description: `This challan still has ${attachedCount} deductee${attachedCount === 1 ? "" : "s"} attached — remove or reassign them first.`, variant: "destructive" });
+      return;
+    }
+    setArchivingId(c.id);
+    const now = new Date().toISOString();
+    const { error } = await supabase.from(SRC.challans as any)
+      .update({ is_archived: true, archived_at: now, archived_by: user.id })
+      .eq("id", c.id).eq("is_archived", false); // CAS — a no-op if already archived
+    if (error) {
+      toast({ title: "Archive failed", description: error.message, variant: "destructive" });
+      setArchivingId(null);
+      return;
+    }
+    await logReconAudit({
+      filingId: c.filing_id, firmId: c.firm_id, userId: user.id, userName: userMap[user.id] || user.email || "Unknown",
+      actionType: "CHALLAN_ARCHIVED",
+      oldValue: `${c.bsr_code || "—"} / ${c.challan_serial_no || "—"} — active`,
+      newValue: "archived",
+      remark: `Archived challan ${c.bsr_code || "—"} / ${c.challan_serial_no || "—"} (₹${(c.total_challan_amount || 0).toLocaleString("en-IN")}).`,
+    });
+    toast({ title: "Challan archived", description: "It no longer appears in the active list or Carry-Forward. Restore it any time from Show Archived Challans." });
+    setChallans(prev => prev.filter(x => x.id !== c.id));
+    setCarryForwardChallans(prev => prev.filter(x => x.challan.id !== c.id));
+    if (selectedChallan?.id === c.id) setSelectedChallan(null);
+    if (showArchivedChallans && selClient) await fetchArchivedChallans(selClient);
+    setArchivingId(null);
+  };
+
+  /** Restore — the challan re-enters the active list exactly as it was; no
+   *  separate "reactivation" step, since archiving never touched anything
+   *  but these three columns. */
+  const unarchiveChallan = async (c: Challan) => {
+    if (!user?.id) return;
+    setArchivingId(c.id);
+    const { error } = await supabase.from(SRC.challans as any)
+      .update({ is_archived: false, archived_at: null, archived_by: null })
+      .eq("id", c.id).eq("is_archived", true); // CAS — a no-op if already active
+    if (error) {
+      toast({ title: "Restore failed", description: error.message, variant: "destructive" });
+      setArchivingId(null);
+      return;
+    }
+    await logReconAudit({
+      filingId: c.filing_id, firmId: c.firm_id, userId: user.id, userName: userMap[user.id] || user.email || "Unknown",
+      actionType: "CHALLAN_UNARCHIVED",
+      oldValue: "archived",
+      newValue: `${c.bsr_code || "—"} / ${c.challan_serial_no || "—"} — active`,
+      remark: `Restored challan ${c.bsr_code || "—"} / ${c.challan_serial_no || "—"} from the archive.`,
+    });
+    toast({ title: "Challan restored", description: "It's back in the active challan list, available for utilisation again." });
+    setArchivedChallans(prev => prev.filter(x => x.id !== c.id));
+    // Refresh the active lists so a restored challan that belongs to the
+    // CURRENTLY selected filing/period reappears immediately.
+    if (filing?.id) await fetchChallans(filing.id);
+    if (selClient) await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
+    setArchivingId(null);
+  };
+
   const fetchChallans = async (filingId: string) => {
     // Query by the stable logical key (client+FY+quarter+form) rather than
     // just filing_id. filing_id is a UUID that can drift if the filing row
@@ -771,15 +877,21 @@ export function TdsDataEntry({
     // and the logical key cannot tell them apart, so it would merge two
     // corrections' challans into one screen. Correction rows also get their
     // filing_id from a trigger, so it cannot drift and needs no self-heal.
+    // Archived challans are excluded from the active list here (both the
+    // live and correction paths) — they must not appear, be selectable, or
+    // count toward any balance/utilisation total until restored. A
+    // correction against an already-archived challan is not a real workflow
+    // this app supports, so no special-casing is needed there either.
     const challanQuery = isCorrectionMode
       ? supabase.from(SRC.challans as any).select("*")
-          .eq("filing_id", filingId)
+          .eq("filing_id", filingId).eq("is_archived", false)
           .order("deposit_date", { ascending: true })
       : supabase.from(SRC.challans as any).select("*")
           .eq("client_id", selClient)
           .eq("form_type", selForm)
           .eq("financial_year", selFy)
           .eq("quarter", selQuarter)
+          .eq("is_archived", false)
           .order("deposit_date", { ascending: true });
 
     const { data } = await challanQuery;
@@ -821,7 +933,11 @@ export function TdsDataEntry({
       .filter(id => !ownIds.has(id));
     let sharedList: Challan[] = [];
     if (sharedIds.length > 0) {
-      const { data: sharedChallans } = await supabase.from(SRC.challans as any).select("*").in("id", sharedIds);
+      // Defensive only — archiving a challan is blocked while it still has
+      // deductees attached (see archiveChallan below), so a live deductee
+      // should never actually reference an archived one. Filtered anyway so
+      // this stays correct even if that invariant is ever relaxed.
+      const { data: sharedChallans } = await supabase.from(SRC.challans as any).select("*").in("id", sharedIds).eq("is_archived", false);
       sharedList = (sharedChallans as unknown as Challan[]) || [];
     }
 
@@ -1947,13 +2063,67 @@ export function TdsDataEntry({
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-foreground">Challans</h3>
-                {/* Issue 2: Hide Add Challan when filed */}
-                {!isFilingLocked && (
-                  <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={openAddChallan}>
-                    <Plus size={12} /> Add Challan
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="ghost" className="gap-1 h-7 text-xs text-muted-foreground"
+                    onClick={() => {
+                      const next = !showArchivedChallans;
+                      setShowArchivedChallans(next);
+                      if (next && selClient) void fetchArchivedChallans(selClient);
+                    }}>
+                    <Archive size={12} /> {showArchivedChallans ? "Hide" : "Show"} Archived Challans
+                    {archivedChallans.length > 0 && !showArchivedChallans && (
+                      <Badge variant="secondary" className="text-[9px] px-1 ml-0.5">{archivedChallans.length}</Badge>
+                    )}
                   </Button>
-                )}
+                  {/* Issue 2: Hide Add Challan when filed */}
+                  {!isFilingLocked && (
+                    <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={openAddChallan}>
+                      <Plus size={12} /> Add Challan
+                    </Button>
+                  )}
+                </div>
               </div>
+
+              {showArchivedChallans && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Archived Challans (this client, any period)</p>
+                  {archivedChallans.length === 0 ? (
+                    <p className="text-xs text-muted-foreground py-2">No archived challans.</p>
+                  ) : (
+                    <div className="flex gap-2 overflow-x-auto pb-1">
+                      {archivedChallans.map(ac => (
+                        <Card key={ac.id} className="flex-shrink-0 w-60 bg-muted/40 border-dashed">
+                          <CardContent className="p-2.5 space-y-1">
+                            <div className="flex items-start justify-between gap-1">
+                              <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                <Archive size={12} className="text-muted-foreground shrink-0" />
+                                <span className="text-xs font-semibold font-mono truncate">{ac.bsr_code || "No BSR"}</span>
+                                {ac.section_code && <Badge variant="outline" className="text-[9px] px-1">{ac.section_code}</Badge>}
+                              </div>
+                              <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0" title="Restore to active challans"
+                                disabled={archivingId === ac.id} onClick={() => void unarchiveChallan(ac)}>
+                                {archivingId === ac.id ? <Loader2 size={10} className="animate-spin" /> : <ArchiveRestore size={10} />}
+                              </Button>
+                            </div>
+                            <p className="text-[10px] text-muted-foreground truncate">
+                              {ac.deposit_date ? format(new Date(ac.deposit_date), "dd MMM yyyy") : "No date"}
+                              {ac.challan_serial_no && ` • No: ${ac.challan_serial_no}`}
+                              {" · "}{ac.form_type} {ac.quarter} FY {ac.financial_year}
+                            </p>
+                            <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                              <span>Total</span>
+                              <span className="font-semibold">₹{(ac.total_challan_amount || 0).toLocaleString("en-IN")}</span>
+                            </div>
+                            {ac.archived_at && (
+                              <p className="text-[9px] text-muted-foreground">Archived {format(new Date(ac.archived_at), "dd MMM yyyy")}</p>
+                            )}
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Carry-forward challans (Issue 7H: show origin quarter/FY) */}
               {carryForwardChallans.length > 0 && (
@@ -2125,6 +2295,10 @@ export function TdsDataEntry({
                                     <div className="flex gap-0.5 shrink-0">
                                       <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); openEditChallan(c); }}>
                                         <Pencil size={10} />
+                                      </Button>
+                                      <Button variant="ghost" size="icon" className="h-5 w-5" title="Archive — hide from active use, restorable any time"
+                                        disabled={archivingId === c.id} onClick={e => { e.stopPropagation(); void archiveChallan(c); }}>
+                                        {archivingId === c.id ? <Loader2 size={10} className="animate-spin" /> : <Archive size={10} />}
                                       </Button>
                                       <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); deleteChallan(c.id); }}>
                                         <Trash2 size={10} className="text-destructive" />

@@ -9242,6 +9242,8 @@ export type Database = {
       }
       tds_challans: {
         Row: {
+          archived_at: string | null
+          archived_by: string | null
           bank_name: string | null
           bsr_code: string | null
           challan_remarks: string | null
@@ -9257,6 +9259,7 @@ export type Database = {
           form_type: string
           id: string
           interest_deposited: number | null
+          is_archived: boolean
           is_book_entry: boolean | null
           minor_head_of_challan: string | null
           others_deposited: number | null
@@ -9269,6 +9272,8 @@ export type Database = {
           updated_at: string | null
         }
         Insert: {
+          archived_at?: string | null
+          archived_by?: string | null
           bank_name?: string | null
           bsr_code?: string | null
           challan_remarks?: string | null
@@ -9284,6 +9289,7 @@ export type Database = {
           form_type: string
           id?: string
           interest_deposited?: number | null
+          is_archived?: boolean
           is_book_entry?: boolean | null
           minor_head_of_challan?: string | null
           others_deposited?: number | null
@@ -9296,6 +9302,8 @@ export type Database = {
           updated_at?: string | null
         }
         Update: {
+          archived_at?: string | null
+          archived_by?: string | null
           bank_name?: string | null
           bsr_code?: string | null
           challan_remarks?: string | null
@@ -9311,6 +9319,7 @@ export type Database = {
           form_type?: string
           id?: string
           interest_deposited?: number | null
+          is_archived?: boolean
           is_book_entry?: boolean | null
           minor_head_of_challan?: string | null
           others_deposited?: number | null
