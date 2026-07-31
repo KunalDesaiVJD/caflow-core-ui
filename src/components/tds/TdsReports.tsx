@@ -124,14 +124,15 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
 
       // Challans
       const { data: challans } = await supabase.from("tds_challans").select("*").in("filing_id", filingIds);
-      const challanIds = (challans || []).map((c: any) => c.id);
 
-      // Deductees
-      let deductees: any[] = [];
-      if (challanIds.length > 0) {
-        const { data: dd } = await supabase.from("tds_deductees").select("*").in("challan_id", challanIds);
-        deductees = dd || [];
-      }
+      // Deductees — scoped by the deductee's OWN filing_id, not by "attached to
+      // one of these filings' challans": a challan is routinely reused across a
+      // client's 24Q and 26Q filings (one combined bank deposit, allocated
+      // across both returns), so a challan_id-only join pulls in deductees that
+      // belong to a filing outside this report's own filingIds set. Same fix as
+      // Stage 1/2/3 of Validate & Finalise.
+      const { data: dd } = await supabase.from("tds_deductees").select("*").in("filing_id", filingIds);
+      const deductees = dd || [];
 
       setReportData([{ filings: filings || [], challans: challans || [], deductees }]);
     }

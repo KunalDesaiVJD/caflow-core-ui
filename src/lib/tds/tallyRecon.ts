@@ -152,7 +152,25 @@ export function oneSidedLabel(r: { result: TallyResult }): string {
   }
 }
 
-const inr = (v: number | null | undefined) => (v == null ? "—" : `₹${Math.round(v).toLocaleString("en-IN")}`);
+// Money verdicts below (EXACT_EPS, see moneyEq) flag ANY gap of ₹0.005 or
+// more — deliberately tighter than whole-rupee rounding, so a genuine
+// sub-rupee difference (Tally often carries paise; office TDS is entered
+// rounded to the whole rupee — see TdsDataEntry.tsx) is never silently
+// absorbed into "Matched". But Math.round()-ing BOTH figures for display
+// then contradicted that verdict: two numbers that differ by, say, ₹0.03
+// rounded to the identical whole-rupee string on both sides, while the
+// reason sentence still said they "differ" — with the stated difference
+// itself rounding to "₹0". Showing 2 decimals whenever the value actually
+// carries a fractional rupee (matching EXACT_EPS's own threshold) makes the
+// displayed numbers agree with the verdict that flagged them, without
+// cluttering the overwhelmingly common whole-rupee case with ".00".
+const inr = (v: number | null | undefined) => {
+  if (v == null) return "—";
+  const hasPaise = Math.abs(v - Math.round(v)) >= 0.005;
+  return hasPaise
+    ? `₹${v.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : `₹${Math.round(v).toLocaleString("en-IN")}`;
+};
 const days = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
 
 /**
@@ -587,11 +605,22 @@ function applySplitEntryGrouping(rows: TallyReconRow[], office: OfficeTxn[]): Ta
       if (anchorFigure == null) continue;
       if (leftovers.some((i) => figureOf(rows[i]) == null)) continue; // an ungrounded member — don't guess
       const leftoverSum = leftovers.reduce((sum, i) => sum + (figureOf(rows[i]) ?? 0), 0);
-      if (Math.abs(anchor.tally_credit - (anchorFigure + leftoverSum)) > SPLIT_FOLD_TOLERANCE) continue;
+      const foldTotal = anchorFigure + leftoverSum;
+      const foldGap = anchor.tally_credit - foldTotal;
+      if (Math.abs(foldGap) > SPLIT_FOLD_TOLERANCE) continue;
 
+      // SPLIT_FOLD_TOLERANCE is a flat ±₹1 slack, not an exact-equality check
+      // (see its own doc above) — so foldGap can be a genuine few paise, which
+      // inr() now displays rather than silently rounding away. Saying the two
+      // figures match "exactly" while showing two different numbers would be
+      // the same self-contradiction the paisa-aware inr() exists to eliminate
+      // elsewhere; state the real relationship instead.
+      const foldGapExact = Math.abs(foldGap) < 0.005; // same float-safety floor as EXACT_EPS
       const foldReason = `Office Data splits this payment to "${anchor.office_name ?? "—"}" (${anchor.office_date ?? "—"}) across multiple rows; `
-        + `together they total ${inr(anchorFigure + leftoverSum)}, matching the single Tally ledger entry "${anchor.tally_party ?? "—"}" `
-        + `${anchor.tally_date ?? "—"} ${inr(anchor.tally_credit)} exactly.`;
+        + `together they total ${inr(foldTotal)}, matching the single Tally ledger entry "${anchor.tally_party ?? "—"}" `
+        + (foldGapExact
+          ? `${anchor.tally_date ?? "—"} ${inr(anchor.tally_credit)} exactly.`
+          : `${anchor.tally_date ?? "—"} ${inr(anchor.tally_credit)} — a ${inr(Math.abs(foldGap))} rounding gap, within the split-fold tolerance.`);
 
       for (const i of leftovers) {
         const o = rows[i];

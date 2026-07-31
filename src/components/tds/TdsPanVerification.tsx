@@ -225,16 +225,15 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
     if (!filingId) { settledFiling.current = null; setBatch(null); setBatches([]); setResults(null); setOfficeParties([]); return; }
 
     // Office Data (master) — party name + PAN for this quarter's filing.
-    const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filingId);
+    // Scoped by the deductee's OWN filing_id, not by "attached to a challan
+    // this filing owns" — a challan is routinely reused across a client's 24Q
+    // and 26Q filings (one combined bank deposit, allocated across both
+    // returns), so filtering by challan_id alone pulled the OTHER filing's
+    // entire party list in here too. Same fix as Stage 1's tds-recon-compare.
+    const { data: ded } = await supabase.from("tds_deductees")
+      .select("id, deductee_pan, deductee_name").eq("filing_id", filingId);
     if (stale()) return;
-    const chIds = (ch || []).map((c: any) => c.id);
-    let parties: OfficeParty[] = [];
-    if (chIds.length) {
-      const { data: ded } = await supabase.from("tds_deductees")
-        .select("id, deductee_pan, deductee_name").in("challan_id", chIds);
-      if (stale()) return;
-      parties = (ded || []).map((d: any) => ({ deductee_id: d.id, pan: d.deductee_pan, name: d.deductee_name }));
-    }
+    const parties: OfficeParty[] = (ded || []).map((d: any) => ({ deductee_id: d.id, pan: d.deductee_pan, name: d.deductee_name }));
     setOfficeParties(parties);
 
     // ALL TRACES batches for the filing — a firm may split the bulk-PAN output
@@ -274,21 +273,19 @@ export function TdsPanVerification({ filing, selClient, selFy, selQuarter, selFo
   const runAudit = useCallback(async (fId: string) => {
     const seq = loadSeq.current;
     const firmId = await resolveFirmId();
-    const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", fId);
-    const chIds = (ch || []).map((c: any) => c.id);
-    let office: OfficeParty[] = [];
-    if (chIds.length) {
-      // Pull the TDS figures too, for the §206AA higher-rate cross-check.
-      const { data: ded } = await supabase.from("tds_deductees")
-        .select("id, deductee_pan, deductee_name, amount_paid_credited, total_tax_deducted, rate_of_tds, section_code, nature_of_payment, deductee_type, pan_not_available")
-        .in("challan_id", chIds);
-      office = (ded || []).map((d: any) => ({
-        deductee_id: d.id, pan: d.deductee_pan, name: d.deductee_name,
-        amount: d.amount_paid_credited, tds: d.total_tax_deducted, rate: d.rate_of_tds,
-        section: d.section_code || d.nature_of_payment, deductee_type: d.deductee_type,
-        pan_not_available: d.pan_not_available,
-      }));
-    }
+    // Scoped by filing_id, not by "attached to one of this filing's challans"
+    // — see loadAll's Office Data query above for why the challan_id join
+    // over-collects deductees from a DIFFERENT filing that shares a challan.
+    // Pull the TDS figures too, for the §206AA higher-rate cross-check.
+    const { data: ded } = await supabase.from("tds_deductees")
+      .select("id, deductee_pan, deductee_name, amount_paid_credited, total_tax_deducted, rate_of_tds, section_code, nature_of_payment, deductee_type, pan_not_available")
+      .eq("filing_id", fId);
+    const office: OfficeParty[] = (ded || []).map((d: any) => ({
+      deductee_id: d.id, pan: d.deductee_pan, name: d.deductee_name,
+      amount: d.amount_paid_credited, tds: d.total_tax_deducted, rate: d.rate_of_tds,
+      section: d.section_code || d.nature_of_payment, deductee_type: d.deductee_type,
+      pan_not_available: d.pan_not_available,
+    }));
     // UNION of all TRACES rows for the filing, newest import first (created_at
     // desc) so the richer-row dedupe in comparePanVerification prefers the latest.
     const { data: tr } = await supabase.from("tds_pan_verification_rows")

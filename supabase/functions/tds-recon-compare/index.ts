@@ -582,18 +582,22 @@ serve(async (req) => {
       return json({ error: "That import batch does not belong to this filing." }, 400);
     }
 
-    // ── Office Data: deductees for this filing (via its challans) ───────────────
-    const { data: challans } = await supabase
-      .from("tds_challans").select("id").eq("filing_id", filing_id);
-    const challanIds = (challans ?? []).map((c: any) => c.id);
-    let office: any[] = [];
-    if (challanIds.length) {
-      const { data: ded } = await supabase
-        .from("tds_deductees")
-        .select("id, deductee_name, deductee_pan, section_code, amount_paid_credited, total_tax_deducted, tds_amount, interest_amount, date_of_payment, challan_id")
-        .in("challan_id", challanIds);
-      office = ded ?? [];
-    }
+    // ── Office Data: deductees for this filing ───────────────────────────────
+    // Scoped by the deductee's OWN filing_id, not by "attached to one of this
+    // filing's challans" — a single challan payment is routinely reused across
+    // a client's 24Q AND 26Q filings for the same TAN/quarter (one combined
+    // bank deposit, allocated across both returns' deductees), so a deductee's
+    // challan_id can legitimately point at a challan owned by a DIFFERENT
+    // filing/form. Scoping by challan_id alone pulled that other filing's
+    // entire deductee set into "Office Data" here — confirmed against a real
+    // filing where a 24Q return's Office Data showed all 91 of its client's
+    // 26Q deductees mixed in with its own 9, because both forms' challans
+    // happened to be the same three challan rows.
+    const { data: ded } = await supabase
+      .from("tds_deductees")
+      .select("id, deductee_name, deductee_pan, section_code, amount_paid_credited, total_tax_deducted, tds_amount, interest_amount, date_of_payment, challan_id")
+      .eq("filing_id", filing_id);
+    const office = ded ?? [];
 
     // ── Imported Data: ALL rows across EVERY batch for this filing ──────────────
     // Clients often keep TDS in SEPARATE files (e.g. 194Q in its own workbook,

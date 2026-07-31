@@ -145,11 +145,12 @@ export interface QuarterFilingReport {
 // check" notes.)
 
 async function fetchOfficeParties(filingId: string): Promise<OfficeParty[]> {
-  const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filingId);
-  const chIds = (ch || []).map((c: any) => c.id);
-  if (!chIds.length) return [];
+  // Scoped by filing_id, not by "attached to one of this filing's challans" —
+  // a challan is routinely reused across a client's 24Q and 26Q filings, so a
+  // challan_id-only join over-collects a DIFFERENT filing's deductees. Same
+  // fix as TdsPanVerification.tsx's loadAll/runAudit.
   const { data: ded } = await supabase.from("tds_deductees")
-    .select("id, deductee_pan, deductee_name").in("challan_id", chIds);
+    .select("id, deductee_pan, deductee_name").eq("filing_id", filingId);
   return (ded || []).map((d: any) => ({ deductee_id: d.id, pan: d.deductee_pan, name: d.deductee_name }));
 }
 
@@ -167,11 +168,11 @@ async function fetchTracesRows(filingId: string): Promise<TracesPanRow[]> {
  *  TdsTallyRecon.tsx's `missingSections` note. Mirrors that file's `loadOffice`
  *  section formula: `section_code || nature_of_payment`. */
 async function fetchOfficeSections(filingId: string): Promise<string[]> {
-  const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", filingId);
-  const chIds = (ch || []).map((c: any) => c.id);
-  if (!chIds.length) return [];
+  // Scoped by filing_id — see fetchOfficeParties above for why a
+  // challan_id-only join is wrong (challans are reused across a client's 24Q
+  // and 26Q filings).
   const { data: ded } = await supabase.from("tds_deductees")
-    .select("section_code, nature_of_payment").in("challan_id", chIds);
+    .select("section_code, nature_of_payment").eq("filing_id", filingId);
   return (ded || []).map((d: any) => d.section_code || d.nature_of_payment).filter(Boolean);
 }
 

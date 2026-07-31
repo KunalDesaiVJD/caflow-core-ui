@@ -372,13 +372,15 @@ export function TdsValidateFinalise({
     const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", match.id);
     if (stale()) return;
     const chIds = (ch || []).map((c: any) => c.id);
-    let dedCount = 0;
-    if (chIds.length) {
-      const { count } = await supabase.from("tds_deductees").select("id", { count: "exact", head: true }).in("challan_id", chIds);
-      if (stale()) return;
-      dedCount = count || 0;
-    }
-    setOfficeCount({ deductees: dedCount, challans: chIds.length });
+    // Deductee count is scoped by the deductee's OWN filing_id, not by "attached
+    // to one of this filing's challans" — a challan is often reused across a
+    // client's 24Q and 26Q filings for the same combined bank deposit, so
+    // scoping by challan_id alone double-counted the OTHER filing's deductees
+    // into this card too. See the matching fix in supabase/functions/
+    // tds-recon-compare/index.ts for the full explanation.
+    const { count } = await supabase.from("tds_deductees").select("id", { count: "exact", head: true }).eq("filing_id", match.id);
+    if (stale()) return;
+    setOfficeCount({ deductees: count || 0, challans: chIds.length });
 
     // Load ALL import batches for the filing (a client may keep sections/months
     // in separate files) and present a COMBINED view — total records across every
