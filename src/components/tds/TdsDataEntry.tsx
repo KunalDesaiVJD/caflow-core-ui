@@ -795,18 +795,18 @@ export function TdsDataEntry({
   };
 
   /** Archive: a soft, reversible way to put away a challan that's no longer
-   *  needed, without deleting it (and its history) outright. Blocked while
-   *  the challan still has any deductee attached — an archived challan must
-   *  never be "in use" (see requirement: excluded from active lists,
-   *  validations and utilisation until restored), so there is deliberately
-   *  no code path anywhere that has to reconcile "archived but still has
-   *  live entries". */
-  const archiveChallan = async (c: Challan) => {
+   *  needed, without deleting it (and its history) outright. Blocked only
+   *  while the challan has a deductee attached IN THE PERIOD CURRENTLY BEING
+   *  VIEWED — an in-progress own challan or a carry-forward challan actually
+   *  drawn on this quarter must not silently vanish mid-use. A carry-forward
+   *  challan whose balance was consumed entirely in a PRIOR quarter (the
+   *  "why does this fully-utilised challan keep showing up" case) has no
+   *  current-period usage and is exactly what this feature exists for, so
+   *  callers pass the period-scoped count rather than an all-time one. */
+  const archiveChallan = async (c: Challan, activePeriodCount: number) => {
     if (!user?.id) return;
-    const attachedCount = allChallanDeductees[c.id]?.length
-      ?? (deductees.filter(d => d.challan_id === c.id).length + prevEntries.filter(d => d.challan_id === c.id).length);
-    if (attachedCount > 0) {
-      toast({ title: "Can't archive", description: `This challan still has ${attachedCount} deductee${attachedCount === 1 ? "" : "s"} attached — remove or reassign them first.`, variant: "destructive" });
+    if (activePeriodCount > 0) {
+      toast({ title: "Can't archive", description: `This challan still has ${activePeriodCount} deductee${activePeriodCount === 1 ? "" : "s"} attached in the current period — remove or reassign them first.`, variant: "destructive" });
       return;
     }
     setArchivingId(c.id);
@@ -2182,17 +2182,32 @@ export function TdsDataEntry({
                                 )}
                                 onClick={() => selectChallan(cf.challan)}>
                                 <CardContent className="p-2.5 space-y-1">
-                                  <div className="flex items-center gap-1.5 flex-wrap">
-                                    <CreditCard size={12} className="text-accent-foreground shrink-0" />
-                                    <span className="text-xs font-semibold font-mono">{cf.challan.bsr_code || "No BSR"}</span>
-                                    <Badge variant="secondary" className="text-[9px]">From {cf.fromQuarter} {cf.fromFy}</Badge>
-                                    {/* Combined-payment challan carried forward from a DIFFERENT form —
-                                        e.g. a 26Q challan still funding this 24Q return. */}
-                                    {cf.challan.form_type !== selForm && (
-                                      <Badge variant="outline" className="text-[9px] px-1 border-primary/40 text-primary">
-                                        Shared with {cf.challan.form_type}
-                                      </Badge>
-                                    )}
+                                  <div className="flex items-start justify-between gap-1">
+                                    <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+                                      <CreditCard size={12} className="text-accent-foreground shrink-0" />
+                                      <span className="text-xs font-semibold font-mono">{cf.challan.bsr_code || "No BSR"}</span>
+                                      <Badge variant="secondary" className="text-[9px]">From {cf.fromQuarter} {cf.fromFy}</Badge>
+                                      {/* Combined-payment challan carried forward from a DIFFERENT form —
+                                          e.g. a 26Q challan still funding this 24Q return. */}
+                                      {cf.challan.form_type !== selForm && (
+                                        <Badge variant="outline" className="text-[9px] px-1 border-primary/40 text-primary">
+                                          Shared with {cf.challan.form_type}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {/* Blocked only while THIS quarter still draws on it — a
+                                        carry-forward challan whose balance was used up in a
+                                        prior quarter has no reason to keep showing up here. */}
+                                    <Button variant="ghost" size="icon" className="h-5 w-5 shrink-0" title="Archive — hide from active use, restorable any time"
+                                      disabled={archivingId === cf.challan.id}
+                                      onClick={e => {
+                                        e.stopPropagation();
+                                        const activeCount = (allChallanDeductees[cf.challan.id] || [])
+                                          .filter(d => d.quarter === selQuarter && d.financial_year === selFy).length;
+                                        void archiveChallan(cf.challan, activeCount);
+                                      }}>
+                                      {archivingId === cf.challan.id ? <Loader2 size={10} className="animate-spin" /> : <Archive size={10} />}
+                                    </Button>
                                   </div>
                                   <div className="flex items-center justify-between text-[10px]">
                                     <span className="text-muted-foreground">Available</span>
@@ -2309,21 +2324,31 @@ export function TdsDataEntry({
                                       </Button>
                                     )}
                                   </div>
-                                  {/* Issue 2: Hide Edit/Delete when filed */}
-                                  {!isFilingLocked && (
-                                    <div className="flex gap-0.5 shrink-0">
+                                  <div className="flex gap-0.5 shrink-0">
+                                    {/* Issue 2: Hide Edit/Delete when filed — Archive stays available
+                                        even once Filed, since it's the only way to stop a fully-used,
+                                        already-filed challan from cluttering future quarters' carry-forward. */}
+                                    {!isFilingLocked && (
                                       <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); openEditChallan(c); }}>
                                         <Pencil size={10} />
                                       </Button>
-                                      <Button variant="ghost" size="icon" className="h-5 w-5" title="Archive — hide from active use, restorable any time"
-                                        disabled={archivingId === c.id} onClick={e => { e.stopPropagation(); void archiveChallan(c); }}>
-                                        {archivingId === c.id ? <Loader2 size={10} className="animate-spin" /> : <Archive size={10} />}
-                                      </Button>
+                                    )}
+                                    <Button variant="ghost" size="icon" className="h-5 w-5" title="Archive — hide from active use, restorable any time"
+                                      disabled={archivingId === c.id}
+                                      onClick={e => {
+                                        e.stopPropagation();
+                                        const activeCount = deductees.filter(d => d.challan_id === c.id).length
+                                          + prevEntries.filter(d => d.challan_id === c.id).length;
+                                        void archiveChallan(c, activeCount);
+                                      }}>
+                                      {archivingId === c.id ? <Loader2 size={10} className="animate-spin" /> : <Archive size={10} />}
+                                    </Button>
+                                    {!isFilingLocked && (
                                       <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); deleteChallan(c.id); }}>
                                         <Trash2 size={10} className="text-destructive" />
                                       </Button>
-                                    </div>
-                                  )}
+                                    )}
+                                  </div>
                                 </div>
                                 <p className="text-[10px] text-muted-foreground truncate">
                                   {c.deposit_date ? format(new Date(c.deposit_date), "dd MMM yyyy") : "No date"}
