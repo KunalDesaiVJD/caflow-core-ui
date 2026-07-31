@@ -2150,6 +2150,11 @@ export function TdsDataEntry({
                     const allocatable = (selectedChallan.total_challan_amount || 0) - (selectedChallan.late_fees_234e || 0);
                     const matchOk = isChallanFullyUtilised(challanDeducteeTds, allocatable);
                     const overApplied = isChallanOverApplied(challanDeducteeTds, allocatable);
+                    // Floored at 0 — an over-applied challan has nothing left to give a
+                    // future deductee, which is what this field answers ("how much can I
+                    // still allocate here"), not the negative over-draw amount itself
+                    // (that's what the Over-applied badge already communicates).
+                    const unconsumed = Math.max(0, allocatable - challanDeducteeTds);
                     return (
                       <Card className="bg-muted/30">
                         <CardContent className="px-3 py-1.5">
@@ -2193,6 +2198,9 @@ export function TdsDataEntry({
                               {matchOk
                                 ? <CheckCircle2 size={12} className="inline ml-1" />
                                 : <AlertTriangle size={12} className="inline ml-1" />}
+                            </span>
+                            <span className={cn("font-semibold", unconsumed > 0 ? "text-amber-600" : "text-muted-foreground")}>
+                              Unconsumed Amount: ₹{unconsumed.toLocaleString("en-IN")}
                             </span>
                             {overApplied ? (
                               <Badge className="text-[9px] bg-red-100 text-red-700">Over-applied</Badge>
