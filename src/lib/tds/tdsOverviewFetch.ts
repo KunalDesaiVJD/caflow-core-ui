@@ -97,6 +97,15 @@ interface TallyResultRow {
 /** Mirrors TdsTallyRecon.tsx's own (module-local, unexported) `isTallyIssue`. */
 const isTallyIssue = (r: string) => r !== "Matched";
 
+/** Mirrors TdsTallyRecon.tsx's own `isOfficeAnchored`/`isDisplayMismatch` —
+ *  see that file's doc comment for the full 24Q-only rationale. A pure
+ *  ledger-surplus row (no Office Data counterpart) always has office_name
+ *  null; this report must hide those as mismatches for 24Q while everything
+ *  else (Total/Matched/Mapped/Overridden, and the underlying tds_tally_results
+ *  rows themselves) is untouched. */
+const isDisplayMismatch = (r: { result: string; office_name: string | null }, form: string) =>
+  isTallyIssue(r.result) && (form !== "24Q" || r.office_name != null);
+
 // oneSidedLabel is imported from tallyRecon.ts — see its doc there for why this
 // must never be re-implemented locally.
 
@@ -226,7 +235,7 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
   const summary3 = {
     total: results3.length,
     matched: results3.filter((r) => r.result === "Matched").length,
-    issues: results3.filter((r) => isTallyIssue(r.result) && !r.overridden).length,
+    issues: results3.filter((r) => isDisplayMismatch(r, ctx.formLabel) && !r.overridden).length,
     mapped: results3.filter((r) => r.mapped).length,
     overridden: results3.filter((r) => r.overridden).length,
   };
@@ -343,7 +352,7 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
       Remarks: r.overridden ? `Overridden — ${r.override_reason || "accepted"}` : (r.reason || ""),
       Overridden: r.overridden ? "Yes" : "No",
     });
-    const unresolved = results3.filter((r) => isTallyIssue(r.result) && !r.overridden);
+    const unresolved = results3.filter((r) => isDisplayMismatch(r, ctx.formLabel) && !r.overridden);
     stage3Report = {
       title: "Stage 3 - Tally Ledger Reconciliation",
       subtitle: `Office Data vs the imported Tally ledger PDFs — date, party and TDS (credit)${ledgerSections.length ? ` · sections ${ledgerSections.join(", ")}` : ""}`,
@@ -390,7 +399,7 @@ export async function fetchFilingReport(filing: FilingRef, ctx: FilingReportCont
       }))
     : [];
   const s3Audit: AuditRow[] = tallyApplicable
-    ? results3.filter((r) => r.overridden || isTallyIssue(r.result) || (r.mapped && r.result === "Matched")).map((r): AuditRow => ({
+    ? results3.filter((r) => r.overridden || isDisplayMismatch(r, ctx.formLabel) || (r.mapped && r.result === "Matched")).map((r): AuditRow => ({
         stage: "Stage 3",
         record: r.office_name || r.tally_party || "—",
         errorType: r.overridden ? oneSidedLabel(r) : r.result,

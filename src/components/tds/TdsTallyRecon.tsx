@@ -162,6 +162,31 @@ async function parseLedgerFile(file: File) {
 const isTallyIssue = (r: string) => r !== "Matched";
 
 /**
+ * A row anchored to an actual Office Data (Data Entry) record — as opposed to
+ * a pure ledger-surplus row (office_deductee_id/office_name both null, see
+ * runAudit's surplusRows), which exists only because SOME ledger credit had
+ * no office record to claim it.
+ */
+export const isOfficeAnchored = (r: ResultRow) => r.office_deductee_id != null || r.office_name != null;
+
+/**
+ * Whether a mismatch should be shown to the user as one — vs. merely existing
+ * in `results` for the dual reconciliation's own internal mapping/matching
+ * purposes. Everywhere except 24Q this is identical to isTallyIssue: every
+ * exception in either direction is a real mismatch to review.
+ *
+ * 24Q is a deliberate exception (firm policy, not a defect): a ledger credit
+ * with no Office Data counterpart ("Taxable Income/TDS Missing from Office
+ * Data") must still run and persist — the dual reconciliation stays fully
+ * live in the background for mapping, name identification and record
+ * matching (isOpenRow below is untouched, so those rows remain valid mapping
+ * candidates) — but it must not surface as a REVIEWABLE mismatch. Only a
+ * Data-Entry-anchored record failing to reconcile against the ledger counts.
+ */
+export const isDisplayMismatch = (r: ResultRow, form: string) =>
+  isTallyIssue(r.result) && (form !== "24Q" || isOfficeAnchored(r));
+
+/**
  * Whether a record is still "open" — i.e. eligible to appear as a mapping
  * candidate on the OPPOSITE side's picker. A record stops being open only once
  * it is CONFIRMED one way or another: auto-Matched by the engine, manually
@@ -171,6 +196,11 @@ const isTallyIssue = (r: string) => r !== "Matched";
  * is exactly what broke bidirectional mapping: a ledger row that had its own
  * open "Office Data Not Found" surplus entry was being treated as claimed by
  * ITSELF, so it could never be offered to a different unmatched office record.
+ *
+ * Deliberately NOT form-gated like isDisplayMismatch — 24Q's ledger-surplus
+ * rows must stay open mapping candidates even though they're hidden from the
+ * mismatch display; that's the entire point of keeping dual reconciliation
+ * running in the background for 24Q.
  */
 const isOpenRow = (r: ResultRow) => isTallyIssue(r.result) && !r.mapped && !r.overridden;
 
@@ -956,7 +986,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       Remarks: r.overridden ? `Overridden — ${r.override_reason || "accepted"}` : (r.reason || ""),
       Overridden: r.overridden ? "Yes" : "No",
     });
-    const unresolved = rs.filter((r) => isTallyIssue(r.result) && !r.overridden);
+    const unresolved = rs.filter((r) => isDisplayMismatch(r, selForm) && !r.overridden);
     return {
       title: "Stage 3 - Tally Ledger Reconciliation",
       subtitle: `Office Data vs the imported Tally ledger PDFs — date, party and TDS (credit)${ledgerSections.length ? ` · sections ${ledgerSections.join(", ")}` : ""}`,
@@ -983,10 +1013,10 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const rs = results || [];
     return {
       total: rs.length, matched: rs.filter((r) => r.result === "Matched").length,
-      issues: rs.filter((r) => isTallyIssue(r.result) && !r.overridden).length,
+      issues: rs.filter((r) => isDisplayMismatch(r, selForm) && !r.overridden).length,
       mapped: rs.filter((r) => r.mapped).length, overridden: rs.filter((r) => r.overridden).length,
     };
-  }, [results]);
+  }, [results, selForm]);
 
   /** Every Tally exception as one Stage-4 audit row. A record resolved via a saved
    *  party mapping (matched AND mapped) is "Resolved", not "Unresolved" — a real
@@ -994,7 +1024,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
    *  not just silence. Overridden always wins (it can co-exist with a mapping). */
   const tallyAuditRows = (): AuditRow[] =>
     (results || [])
-      .filter((r) => r.overridden || isTallyIssue(r.result) || (r.mapped && r.result === "Matched"))
+      .filter((r) => r.overridden || isDisplayMismatch(r, selForm) || (r.mapped && r.result === "Matched"))
       .map((r): AuditRow => ({
         stage: "Stage 3",
         record: r.office_name || r.tally_party || "—",
@@ -1023,19 +1053,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
 
   const issueRows = useMemo(() => {
     const q = recordSearch.trim().toLowerCase();
-    return bySearch((results || []).filter((r) => isTallyIssue(r.result)), q)
+    return bySearch((results || []).filter((r) => isDisplayMismatch(r, selForm)), q)
       .sort((a, b) => (a.overridden ? 1 : 0) - (b.overridden ? 1 : 0));
-  }, [results, recordSearch]);
+  }, [results, recordSearch, selForm]);
   const cardFiltered = useMemo((): ResultRow[] | null => {
     const rs = results || [];
     const q = recordSearch.trim().toLowerCase();
     switch (activeFilter) {
       case "total": return bySearch(rs, q); case "matched": return bySearch(rs.filter((r) => r.result === "Matched"), q);
-      case "issues": return bySearch(rs.filter((r) => isTallyIssue(r.result) && !r.overridden), q);
+      case "issues": return bySearch(rs.filter((r) => isDisplayMismatch(r, selForm) && !r.overridden), q);
       case "mapped": return bySearch(rs.filter((r) => r.mapped), q); case "overridden": return bySearch(rs.filter((r) => r.overridden), q);
       default: return null;
     }
-  }, [results, activeFilter, recordSearch]);
+  }, [results, activeFilter, recordSearch, selForm]);
 
   /** A ledger-anchored ResultRow's OWN section — NOT persisted on
    *  tds_tally_results (only office_section is a column, and that's always
