@@ -848,6 +848,41 @@ export async function uploadCorrectionProof(
   return { error: null };
 }
 
+/**
+ * Remove the attached proof without touching the chosen submission mode, so
+ * "Delete" then "Re-add" is just clearing the file and uploading again — the
+ * user does not have to re-pick Offline/Online. Only possible before filing;
+ * the same DB trigger that blocks every other edit on a filed correction
+ * blocks this too.
+ */
+export async function removeCorrectionProof(
+  c: Correction, actor: Actor,
+): Promise<{ error: string | null }> {
+  if (c.proof_file_url) {
+    // Best-effort: the object's storage path is the tail of its public URL.
+    const path = c.proof_file_url.split(`${PROOF_BUCKET}/`).pop();
+    if (path) await supabase.storage.from(PROOF_BUCKET).remove([path]).catch(() => {});
+  }
+
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("tds_corrections" as any)
+    .update({
+      proof_file_name: null, proof_file_url: null,
+      proof_uploaded_at: null, proof_uploaded_by: null,
+      updated_at: now,
+    })
+    .eq("id", c.id);
+  if (error) return { error: error.message };
+
+  await logCorrectionAction({
+    correctionId: c.id, firmId: c.firm_id, clientId: c.client_id,
+    actionType: "FILING_PROOF_REMOVED",
+    detail: c.proof_file_name || undefined,
+    oldValue: c.proof_file_name || undefined, actor,
+  });
+  return { error: null };
+}
+
 // ─── Undo ───────────────────────────────────────────────────────────────────
 
 /**

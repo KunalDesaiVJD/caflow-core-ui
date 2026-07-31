@@ -36,6 +36,9 @@ describe("correction grid", () => {
     await waitFor(() => expect(screen.getAllByTitle("Open correction").length).toBeGreaterThan(0));
     fireEvent.click(screen.getAllByTitle("Open correction")[0]);
     await new Promise(r => setTimeout(r, 700));
+    // Challans is collapsed by default in the Correction tab — expand it first.
+    fireEvent.click(screen.getByText("Challans").closest("button")!);
+    await new Promise(r => setTimeout(r, 100));
     const t = document.body.textContent!.replace(/\s+/g," ");
     const i = t.indexOf("Applied");
     console.log("BALANCE:", t.slice(i - 120, i + 80));

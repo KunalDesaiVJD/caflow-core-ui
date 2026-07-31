@@ -190,6 +190,10 @@ describe("correction detail is the Data Entry engine", () => {
     await waitFor(() => expect(screen.getAllByText("Acme Pvt Ltd").length).toBeGreaterThan(0));
     fireEvent.click(screen.getAllByTitle("Open correction")[0]);
     await waitFor(() => expect(screen.getByText("All corrections")).toBeInTheDocument());
+    // Challans is collapsed by default in the Correction tab — expand it so
+    // the engine's own controls (Add Challan, Add Row, balances) are visible.
+    await waitFor(() => expect(screen.getByText("Challans")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("Challans").closest("button")!);
   };
 
   it("renders the real Data Entry engine, not a look-alike", async () => {

@@ -45,7 +45,7 @@ import { cn } from "@/lib/utils";
 import {
   Search, Plus, ArrowLeft, PenTool, Trash2, Pencil, RotateCcw, X, GitCompare,
   CheckCircle2, XCircle, Landmark, ShieldCheck, Lock, ChevronDown, ChevronRight,
-  AlertTriangle, Send, Upload,
+  AlertTriangle, Send, Upload, Eye,
 } from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { TdsDataEntry, CORRECTION_TDS_SOURCE } from "./TdsDataEntry";
@@ -54,7 +54,7 @@ import {
   createCorrection, loadCorrectionDetail, submitCorrection,
   signAsPreparer, approveAsSenior, markCorrectionFiled,
   rejectCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
-  undoCorrectionRow, uploadCorrectionProof, canMarkFiled, effectiveCorrectionAction,
+  undoCorrectionRow, uploadCorrectionProof, removeCorrectionProof, canMarkFiled, effectiveCorrectionAction,
   SUBMISSION_MODE_META, type SubmissionMode,
   type Correction, type CorrectionStatus, type CorrectionChallan,
   type CorrectionDeductee, type CorrectionAction, type Actor, type FieldDiff,
@@ -222,7 +222,7 @@ function CorrectionDashboard({
     if (q) {
       const hay = [
         clientMap[r.client_id], r.financial_year, r.quarter, r.form_type,
-        r.reason, r.raised_by_name, r.signed_by_name,
+        r.reason, r.raised_by_name, r.prepared_by_name, r.approved_by_name, r.signed_by_name,
         CORRECTION_STATUS_META[r.status]?.label,
       ].filter(Boolean).join(" ").toLowerCase();
       if (!hay.includes(q)) return false;
@@ -395,7 +395,12 @@ function CorrectionDashboard({
                         )}
                       </TableCell>
                       <TableCell className="text-xs py-1.5 whitespace-nowrap">{shortDate(r.raised_at)}</TableCell>
-                      <TableCell className="text-xs py-1.5 whitespace-nowrap">{r.signed_by_name || "—"}</TableCell>
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">
+                        {/* Two-stage workflow signs via approved_by (senior); signed_by is the
+                            legacy single-signature column, kept as a fallback for older rows. */}
+                        {r.approved_by_name || (r.approved_by ? userMap[r.approved_by] : null)
+                          || r.signed_by_name || "—"}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -869,9 +874,14 @@ function CorrectionDetail({
                   Correction Filed <Lock size={11} />
                 </p>
                 <p className="text-emerald-700 dark:text-emerald-400">
-                  Signed by {correction.signed_by_name || "—"}
-                  {correction.signed_by_role ? ` (${correction.signed_by_role})` : ""}
-                  {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}. Read-only.
+                  {/* Two-stage workflow signs via approved_by (senior); signed_by/_role/_at
+                      are the legacy single-signature columns, kept as a fallback. */}
+                  Signed by {correction.approved_by_name || correction.signed_by_name || "—"}
+                  {(correction.approved_by_role || correction.signed_by_role)
+                    ? ` (${correction.approved_by_role || correction.signed_by_role})` : ""}
+                  {(correction.approved_at || correction.signed_at)
+                    ? ` on ${format(new Date(correction.approved_at || correction.signed_at || ""), "dd/MM/yyyy HH:mm")}`
+                    : ""}. Read-only.
                 </p>
               </div>
             </div>
@@ -1355,6 +1365,7 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
   const [confirmed, setConfirmed] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setMode(correction.submission_mode ?? null); }, [correction.submission_mode]);
@@ -1373,6 +1384,16 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
     setUploading(false);
     if (error) { toast?.({ title: "Upload failed", description: error, variant: "destructive" }); return; }
     toast?.({ title: `${SUBMISSION_MODE_META[mode].proofLabel} attached` });
+    onRefresh?.();
+  };
+
+  const removeProof = async () => {
+    if (!window.confirm(`Remove ${proofName}? You'll need to re-attach it before this correction can be filed.`)) return;
+    setRemoving(true);
+    const { error } = await removeCorrectionProof(correction, actor);
+    setRemoving(false);
+    if (error) { toast?.({ title: "Could not remove file", description: error, variant: "destructive" }); return; }
+    toast?.({ title: "Attachment removed" });
     onRefresh?.();
   };
 
@@ -1455,8 +1476,18 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
                 <div className="flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20 px-1.5 py-1 text-[11px]">
                   <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
                   <span className="truncate flex-1">{proofName}</span>
-                  <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5" disabled={uploading} onClick={() => fileRef.current?.click()}>
+                  {correction.proof_file_url && (
+                    <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5 gap-1" asChild>
+                      <a href={correction.proof_file_url} target="_blank" rel="noreferrer">
+                        <Eye size={10} /> View
+                      </a>
+                    </Button>
+                  )}
+                  <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5" disabled={uploading || removing} onClick={() => fileRef.current?.click()}>
                     Replace
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-5 text-[10px] px-1.5 text-destructive hover:text-destructive gap-1" disabled={uploading || removing} onClick={removeProof}>
+                    <Trash2 size={10} /> {removing ? "Removing…" : "Delete"}
                   </Button>
                 </div>
               ) : (

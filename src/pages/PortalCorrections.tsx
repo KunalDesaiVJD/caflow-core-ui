@@ -188,7 +188,7 @@ export default function PortalCorrections() {
                       </TableCell>
                       <TableCell className="py-1.5"><StatusBadge status={r.status} /></TableCell>
                       <TableCell className="text-xs py-1.5 whitespace-nowrap">{shortDate(r.raised_at)}</TableCell>
-                      <TableCell className="text-xs py-1.5 whitespace-nowrap">{r.signed_by_name || "—"}</TableCell>
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">{r.approved_by_name || r.signed_by_name || "—"}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -428,8 +428,10 @@ function PortalCorrectionDetail({ correctionId, clientName, actor, onBack, toast
               Correction Filed <Lock size={12} />
             </p>
             <p className="text-xs text-emerald-700">
-              Signed by {correction.signed_by_name || "your firm"}
-              {correction.signed_at ? ` on ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}.
+              Signed by {correction.approved_by_name || correction.signed_by_name || "your firm"}
+              {(correction.approved_at || correction.signed_at)
+                ? ` on ${format(new Date(correction.approved_at || correction.signed_at || ""), "dd/MM/yyyy HH:mm")}`
+                : ""}.
               This is now read-only.
             </p>
           </div>
@@ -492,11 +494,13 @@ function PortalCorrectionDetail({ correctionId, clientName, actor, onBack, toast
           {locked ? (
             <div className="space-y-1">
               <div className="border-b border-foreground/40 w-56 pb-1">
-                <p className="font-semibold text-sm">{correction.signed_by_name || "—"}</p>
+                <p className="font-semibold text-sm">{correction.approved_by_name || correction.signed_by_name || "—"}</p>
               </div>
               <p className="text-xs text-muted-foreground">
-                {correction.signed_by_role || "Authorised signatory"}
-                {correction.signed_at ? ` · ${format(new Date(correction.signed_at), "dd/MM/yyyy HH:mm")}` : ""}
+                {correction.approved_by_role || correction.signed_by_role || "Authorised signatory"}
+                {(correction.approved_at || correction.signed_at)
+                  ? ` · ${format(new Date(correction.approved_at || correction.signed_at || ""), "dd/MM/yyyy HH:mm")}`
+                  : ""}
               </p>
             </div>
           ) : (
