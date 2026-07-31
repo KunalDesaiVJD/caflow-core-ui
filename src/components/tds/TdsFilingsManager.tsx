@@ -105,12 +105,14 @@ interface VfStatus {
 // top of the row's exact work_status. "reviewed" is the one exception that
 // DOES map 1:1 to a single FILING_STATUSES value ("Reviewed"), kept as its
 // own group (rather than just relying on the exact-status Select) so a
-// Dashboard KPI card can drive it the same way as the other aggregate cards.
-export type KpiStatusGroup = "all" | "returns-due" | "reviewed" | "filed" | "processed" | "nil";
+// Dashboard KPI card can drive it the same way as the other aggregate cards
+// ("ready-to-file" is a second such 1:1 group).
+export type KpiStatusGroup = "all" | "returns-due" | "reviewed" | "ready-to-file" | "filed" | "processed" | "nil";
 
 const KPI_STATUS_GROUP_LABELS: Record<Exclude<KpiStatusGroup, "all">, string> = {
   "returns-due": "Returns Due",
   reviewed: "Under Review",
+  "ready-to-file": "Ready to File",
   filed: "Filed / Submitted",
   processed: "Processed / Accepted",
   nil: "NIL Returns",
@@ -166,6 +168,12 @@ interface Props {
   refreshKey?: number;
 }
 
+/** The signed-off-but-not-yet-filed state. Exported so Validate & Finalise and
+ *  the Dashboard reference the same literal instead of re-typing it — a typo
+ *  here would silently create a second, unreachable status (work_status is a
+ *  plain TEXT column with no DB-level CHECK constraint). */
+export const READY_TO_FILE_STATUS = "Ready to File";
+
 const FILING_STATUSES = [
   "Not Started",
   "NIL",
@@ -173,6 +181,11 @@ const FILING_STATUSES = [
   "Under Process",
   "Queries Sent to Client",
   "Reviewed",
+  // Sits between Reviewed and Filed deliberately: Validate & Finalise is
+  // complete and the checker has signed, but the return has NOT gone out to
+  // the portal yet. It is NOT a terminal status — these returns still count
+  // as due until an ACK proves they were actually filed.
+  READY_TO_FILE_STATUS,
   "Filed",
   "Processed",
 ] as const;
@@ -184,6 +197,9 @@ const FILING_STATUS_COLORS: Record<string, string> = {
   "Under Process": "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300",
   "Queries Sent to Client": "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
   "Reviewed": "bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300",
+  // Sky, not emerald: emerald is reserved for Filed/Processed ("it's done").
+  // Ready to File must not read as done at a glance — the return is still due.
+  [READY_TO_FILE_STATUS]: "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300",
   "Filed": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
   "Processed": "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
 };
@@ -597,6 +613,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       const isTerminal = ["Filed", "Submitted", "Processed", "Accepted", "NIL"].includes(f.work_status);
       if (statusGroup === "returns-due" && isTerminal) return false;
       if (statusGroup === "reviewed" && f.work_status !== "Reviewed") return false;
+      if (statusGroup === "ready-to-file" && f.work_status !== READY_TO_FILE_STATUS) return false;
       if (statusGroup === "filed" && !["Filed", "Submitted"].includes(f.work_status)) return false;
       if (statusGroup === "processed" && !["Processed", "Accepted"].includes(f.work_status)) return false;
       if (statusGroup === "nil" && f.work_status !== "NIL") return false;
@@ -1307,7 +1324,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // picked it from a dropdown". NIL and every other status are never gated —
   // a NIL return has no deductee records to run Stage 1-4 against at all.
   const isFiledLikeStatus = (s: string) => s === "Filed" || s === "Processed";
-  const isReadyToFile = (filingId: string) => vfStatuses.get(filingId)?.ready ?? false;
+  // "Ready to File" asserts the SAME validation gate as Filed/Processed
+  // (Stage 1-3 clean + the checker's Digital Signature) but deliberately NOT
+  // the ACK gate: an ACK only exists AFTER the return has actually been filed
+  // on the portal, so requiring one here would make the status unreachable.
+  const isReadyToFileStatus = (s: string) => s === READY_TO_FILE_STATUS;
+  /** Validate & Finalise readiness for a filing (Stage 1-3 done AND signed) —
+   *  named for the gate it reads, not for the status it permits, so it isn't
+   *  confused with isReadyToFileStatus() above. */
+  const isVfReady = (filingId: string) => vfStatuses.get(filingId)?.ready ?? false;
   // The ACK PDF itself is the authoritative signal — ackFiles is fetched from
   // tds_ack_files and kept in sync by handleAttachAck (adds)/deleteAckFile
   // (removes). filing.ack_file_url is a legacy column nothing in this app
@@ -1318,17 +1343,23 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const oldStatus = filing.work_status;
     if (oldStatus === newStatus) return;
 
-    if (isFiledLikeStatus(newStatus)) {
-      if (!isReadyToFile(filing.id)) {
+    if (isFiledLikeStatus(newStatus) || isReadyToFileStatus(newStatus)) {
+      if (!isVfReady(filing.id)) {
         toast({
           title: "Not ready to file",
-          description: "Complete Stage 1-3 and the checker's Digital Signature in Validate & Finalise before marking this return Filed/Processed.",
+          description: isReadyToFileStatus(newStatus)
+            ? "Complete Stage 1-3 and the checker's Digital Signature in Validate & Finalise before marking this return Ready to File."
+            : "Complete Stage 1-3 and the checker's Digital Signature in Validate & Finalise before marking this return Filed/Processed.",
           variant: "destructive",
         });
         return;
       }
-      // ACK upload is now mandatory before Filed/Processed — reversing the
-      // prior "ACK is completely optional" behaviour per explicit request.
+    }
+    if (isFiledLikeStatus(newStatus)) {
+      // ACK upload is mandatory before Filed/Processed — those two statuses
+      // assert the return actually went out, and the ACK is the only proof of
+      // that. Ready to File deliberately skips this check (see
+      // isReadyToFileStatus): no ACK can exist before the return is filed.
       if (!hasAckAttached(filing.id)) {
         toast({
           title: "ACK upload required",
@@ -1422,8 +1453,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       for (const id of ids) {
         const filing = filings.find(f => f.id === id);
         if (filing) {
+          if (isFiledLikeStatus(newStatus) || isReadyToFileStatus(newStatus)) {
+            if (!isVfReady(id)) { skippedNotReady++; continue; }
+          }
           if (isFiledLikeStatus(newStatus)) {
-            if (!isReadyToFile(id)) { skippedNotReady++; continue; }
             if (!hasAckAttached(id)) { skippedNoAck++; continue; }
           }
           const payload: any = {
@@ -1757,7 +1790,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                           </SelectTrigger>
                           <SelectContent>
                             {FILING_STATUSES.map(s => {
-                              const notReady = isFiledLikeStatus(s) && !isReadyToFile(f.id);
+                              const notReady = (isFiledLikeStatus(s) || isReadyToFileStatus(s)) && !isVfReady(f.id);
                               const noAck = isFiledLikeStatus(s) && !hasAckAttached(f.id);
                               const blocked = notReady || noAck;
                               const reason = notReady && noAck

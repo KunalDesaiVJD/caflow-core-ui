@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
+import { READY_TO_FILE_STATUS } from "@/components/tds/TdsFilingsManager";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -767,9 +768,49 @@ export function TdsValidateFinalise({
       actionType: "CHECKER_SIGNATURE_REVOKED", oldValue: signature.signedByName,
       remark: "Signature revoked before filing.",
     });
+    // Revoking the signature un-does the thing "Ready to File" asserts, so a
+    // return sitting in that status must not stay there claiming a sign-off
+    // that no longer exists — send it back to Reviewed. This is also the
+    // in-page escape hatch out of the isLocked editing freeze. Any other
+    // status (Filed, Under Process, …) is left exactly as it was.
+    //
+    // The revert is a DB-level compare-and-swap (.eq on work_status), NOT a
+    // blind write off local state — the same guard filingActivity.ts uses.
+    // `filing` here can be arbitrarily stale: this component has no Realtime
+    // subscription and loadAll only re-runs when the client/FY/quarter/form
+    // selection changes, so while this tab sits open a colleague can file the
+    // return from the Filings Manager. An unfiltered write would then silently
+    // un-file a filed return, moving "Filed" back to "Reviewed" while its ACK
+    // stays attached. The CAS makes that case a harmless no-op instead.
+    const wantsRevert = filing.work_status === READY_TO_FILE_STATUS;
     // Same Realtime nudge as handleSign, so a revoke also reaches the
     // Dashboard immediately instead of waiting on the next poll.
-    await supabase.from("tds_filings").update({ last_updated_by: user.id, last_updated_at: new Date().toISOString() }).eq("id", filing.id);
+    const nudge = { last_updated_by: user.id, last_updated_at: new Date().toISOString() };
+    let reverted = false;
+    if (wantsRevert) {
+      const { data, error } = await supabase.from("tds_filings")
+        .update({ work_status: "Reviewed", ...nudge })
+        .eq("id", filing.id).eq("work_status", READY_TO_FILE_STATUS).select("id");
+      // Only claim the revert — in local state, in the audit trail and to the
+      // user — once the DB confirms a row actually changed. A failed or
+      // no-op write must not unlock the workspace against a row that is still
+      // "Ready to File" (or has since moved to Filed).
+      reverted = !error && !!data && data.length > 0;
+      if (error) {
+        toast({ title: "Couldn't update status", description: `Signature revoked, but the status could not be moved back: ${error.message}`, variant: "destructive" });
+      }
+    } else {
+      await supabase.from("tds_filings").update(nudge).eq("id", filing.id);
+    }
+    if (reverted) {
+      await logReconAudit({
+        filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: userMap[user.id],
+        actionType: "STATUS_CHANGE", oldValue: READY_TO_FILE_STATUS, newValue: "Reviewed",
+        remark: "Auto-reverted: checker signature revoked, so the return is no longer ready to file.",
+      });
+      setFiling({ ...filing, work_status: "Reviewed" });
+      toast({ title: "Signature revoked", description: "Status moved back to Under Review — this return is no longer marked Ready to File." });
+    }
     setSignature(null); setAttestChecked(false);
     setSigning(false);
   };
@@ -783,16 +824,25 @@ export function TdsValidateFinalise({
     if (!signature) { toast({ title: "Digital signature required", description: "The checker must digitally sign this return before it can be marked ready to file.", variant: "destructive" }); setConfirmOpen(false); return; }
     setFinalising(true);
     const actingName = userMap[user?.id ?? ""];
-    // Set checker_id ("Filed By") on entering Filed — same invariant the Filings
-    // Manager enforces, so a return filed from here still records who filed it.
+    // This button means "signed off, cleared to go to the portal" — NOT "the
+    // return has been filed". It used to write work_status "Filed", which was
+    // wrong twice over: it claimed a filing that hadn't happened, and because
+    // it wrote Filed directly it also bypassed the Filings Manager's mandatory
+    // ACK-upload gate on Filed/Processed (no acknowledgement can exist yet at
+    // this point). It now parks the return in READY_TO_FILE_STATUS, where it
+    // stays until someone actually files it and attaches the ACK.
+    //
+    // checker_id ("Filed By") is deliberately NOT set here for the same
+    // reason: nobody has filed anything yet. The Filings Manager sets it when
+    // the status genuinely becomes Filed.
     const { error } = await supabase.from("tds_filings").update({
-      work_status: "Filed", checker_id: user?.id, last_updated_by: user?.id, last_updated_at: new Date().toISOString(),
+      work_status: READY_TO_FILE_STATUS, last_updated_by: user?.id, last_updated_at: new Date().toISOString(),
     }).eq("id", filing.id);
     if (error) toast({ title: "Error", description: error.message, variant: "destructive" });
     else {
-      await logReconAudit({ filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: actingName, actionType: "STATUS_CHANGE", oldValue: filing.work_status || null, newValue: "Filed", remark: "Marked Ready to File from Validate & Finalise" });
-      if (user?.id) await logReconAudit({ filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: actingName, actionType: "FILED_BY_SET", newValue: actingName || "—", remark: "Auto-set: status moved to Filed" });
-      toast({ title: "Return marked as Filed" }); setFiling({ ...filing, work_status: "Filed", checker_id: user?.id });
+      await logReconAudit({ filingId: filing.id, firmId: filing.firm_id, userId: user?.id, userName: actingName, actionType: "STATUS_CHANGE", oldValue: filing.work_status || null, newValue: READY_TO_FILE_STATUS, remark: "Marked Ready to File from Validate & Finalise" });
+      toast({ title: "Return marked as Ready to File", description: "File it on the portal, then attach the ACK to move it to Filed." });
+      setFiling({ ...filing, work_status: READY_TO_FILE_STATUS });
     }
     setFinalising(false);
     setConfirmOpen(false);
@@ -852,6 +902,18 @@ export function TdsValidateFinalise({
     ? `${tallyStatus.issues} Stage-3 Tally item${tallyStatus.issues === 1 ? "" : "s"} still unresolved — map, override or resolve each one to continue.`
     : "";
   const isFiled = filing?.work_status === "Filed";
+  // Signed off and cleared for the portal, but NOT yet filed. Rendered as its
+  // own end-state so the big "Mark Return as Ready to File" button doesn't
+  // invite a second, pointless click on a return that's already there.
+  const isMarkedReadyToFile = filing?.work_status === READY_TO_FILE_STATUS;
+  // Editing freeze for the Stage 1-3 workspace (imports, overrides, file
+  // deletes). Ready to File freezes it exactly as Filed does: the checker
+  // digitally signed THIS data, so it must not change underneath that
+  // signature. Before "Ready to File" existed this button wrote "Filed"
+  // directly, so finalising had always frozen the workspace — keeping that
+  // behaviour here is what stops the fix from silently unfreezing it.
+  // Escape hatch: Revoke Signature (below) sends the return back to Reviewed.
+  const isLocked = isFiled || isMarkedReadyToFile;
   const cErr = selClient ? complianceError() : null;
   const selectedClient = clients.find(c => c.id === selClient);
 
@@ -957,7 +1019,7 @@ export function TdsValidateFinalise({
         <RotateCcw size={12} /> Undo override
       </Button>
     ) : (
-      <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={isFiled}>
+      <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" onClick={() => openOverride(r)} disabled={isLocked}>
         <ShieldCheck size={12} /> Override
       </Button>
     )
@@ -982,7 +1044,7 @@ export function TdsValidateFinalise({
               {section != null && section !== "" && <Badge variant="outline" className="text-[10px] shrink-0">{String(section)}</Badge>}
               {r.overridden && <Badge variant="outline" className="text-[10px] text-blue-600 border-blue-300 shrink-0">Overridden{r.overridden_by && userMap[r.overridden_by] ? ` · ${userMap[r.overridden_by]}` : ""}</Badge>}
             </div>
-            {!isFiled && overrideBtn(r)}
+            {!isLocked && overrideBtn(r)}
           </div>
           <div className="overflow-x-auto">
             <Table>
@@ -1113,7 +1175,7 @@ export function TdsValidateFinalise({
       notes: [
         `Ready to file: ${canFile ? "Yes" : "No"}${!canFile && fileBlockReason ? ` — ${fileBlockReason}` : ""}`,
         `Digital signature: ${signature ? `Signed by ${signature.signedByName} on ${new Date(signature.signedAt).toLocaleString("en-IN")}` : "Not signed"}`,
-        `Filing status: ${isFiled ? "Filed" : "Not filed"}`,
+        `Filing status: ${isFiled ? "Filed" : isMarkedReadyToFile ? "Ready to File — signed off, not yet filed" : "Not filed"}`,
       ],
     };
   };
@@ -1156,8 +1218,12 @@ export function TdsValidateFinalise({
         // Signature is required too, so a clean Stage 1-3 with no signature yet
         // is reported as its own distinct state, not folded into "0 unresolved"
         // (which would misleadingly read as fully done).
+        // NOTE: buildOverviewWorkbook() colours this cell green only when the
+        // text contains the word "complete" (see tdsReportExcel.ts), so the
+        // Ready-to-File wording below must keep it.
         status: !stage1Ran ? "Not run"
           : isFiled ? "Filed"
+          : isMarkedReadyToFile ? "Complete — Ready to File"
           : !canFile ? `${stage4Data.totalMismatches} unresolved`
           : !signature ? "Awaiting digital signature"
           : "Complete",
@@ -1174,7 +1240,8 @@ export function TdsValidateFinalise({
     // the on-screen hint and can read "Finishing validation status checks…" while
     // a stage is still settling — a transient UI message that has no business in a
     // report going to a client or an auditor.
-    finalStatus: isFiled ? "Filed / Ready to File"
+    finalStatus: isFiled ? "Filed (validation complete)"
+      : isMarkedReadyToFile ? "Ready to File — validation complete and signed, not yet filed"
       : canFile ? "All validations complete — ready to mark as Ready to File"
       : (() => {
           const open: string[] = [];
@@ -1186,7 +1253,7 @@ export function TdsValidateFinalise({
           else if (tallyStatus.applicable && tallyStatus.issues > 0) open.push(`Stage 3: ${tallyStatus.issues} unresolved`);
           return open.length ? `Not ready to file — ${open.join("; ")}` : "Validation incomplete";
         })(),
-    ready: isFiled || canFile,
+    ready: isFiled || isMarkedReadyToFile || canFile,
   });
 
   const [exportingOverview, setExportingOverview] = useState(false);
@@ -1330,7 +1397,7 @@ export function TdsValidateFinalise({
                       e.currentTarget.value = "";
                     }} />
                   <Button size="sm" variant={batch ? "outline" : "default"} className="gap-1 h-6 px-2 text-[11px] shrink-0"
-                    disabled={importing || isFiled} onClick={() => { setReplaceTargetId(null); fileInputRef.current?.click(); }}>
+                    disabled={importing || isLocked} onClick={() => { setReplaceTargetId(null); fileInputRef.current?.click(); }}>
                     {importing ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
                     {importing ? "Importing…" : batch ? "Add / re-import" : "Import"}
                   </Button>
@@ -1348,13 +1415,13 @@ export function TdsValidateFinalise({
                     {(selBatchIds.size > 0 || batches.length > 1) && (
                       <div className="flex items-center justify-end gap-1.5 mt-1">
                         {selBatchIds.size > 0 && (
-                          <Button size="sm" variant="destructive" className="h-7 gap-1 text-xs px-2" disabled={deleting || isFiled}
+                          <Button size="sm" variant="destructive" className="h-7 gap-1 text-xs px-2" disabled={deleting || isLocked}
                             onClick={() => setDeleteConfirm({ ids: [...selBatchIds], label: `${selBatchIds.size} selected file(s)` })}>
                             <Trash2 size={12} /> Delete ({selBatchIds.size})
                           </Button>
                         )}
                         {batches.length > 1 && selBatchIds.size === 0 && (
-                          <Button size="sm" variant="ghost" className="h-6 text-[11px] px-2 text-muted-foreground hover:text-destructive" disabled={deleting || isFiled}
+                          <Button size="sm" variant="ghost" className="h-6 text-[11px] px-2 text-muted-foreground hover:text-destructive" disabled={deleting || isLocked}
                             onClick={() => setDeleteConfirm({ ids: batches.map((b) => b.id), label: "all imported files" })}>
                             Delete all
                           </Button>
@@ -1365,7 +1432,7 @@ export function TdsValidateFinalise({
                     <div className="mt-1.5 rounded-md border divide-y overflow-hidden">
                       {batches.length > 1 && (
                         <label className="flex items-center gap-2 px-2 py-1 bg-muted/40 text-[11px] text-muted-foreground cursor-pointer">
-                          <Checkbox checked={allSelected} onCheckedChange={toggleSelAll} aria-label="Select all files" className="h-3.5 w-3.5" disabled={isFiled} />
+                          <Checkbox checked={allSelected} onCheckedChange={toggleSelAll} aria-label="Select all files" className="h-3.5 w-3.5" disabled={isLocked} />
                           Select all
                         </label>
                       )}
@@ -1373,15 +1440,15 @@ export function TdsValidateFinalise({
                         /* ONE line per file — name and meta share the row, so N files
                            cost N lines rather than 2N. Meta hides on narrow widths. */
                         <div key={b.id} className="flex items-center gap-1.5 px-2 py-1" title={b.file_name || ""}>
-                          <Checkbox checked={selBatchIds.has(b.id)} onCheckedChange={() => toggleSel(b.id)} aria-label={`Select ${b.file_name || "file"}`} className="h-3 w-3 shrink-0" disabled={isFiled} />
+                          <Checkbox checked={selBatchIds.has(b.id)} onCheckedChange={() => toggleSel(b.id)} aria-label={`Select ${b.file_name || "file"}`} className="h-3 w-3 shrink-0" disabled={isLocked} />
                           <p className="font-medium text-[11px] truncate min-w-0 flex-1">{b.file_name || "(unnamed file)"}</p>
                           <span className="text-[10px] text-muted-foreground whitespace-nowrap shrink-0 hidden sm:inline">
                             {b.row_count} rows{b.imported_at ? ` · ${fmtDateTime(b.imported_at)}` : ""}
                           </span>
                           <div className="flex items-center shrink-0">
                             <Button size="icon" variant="ghost" className="h-5 w-5" title="View details" onClick={() => openDetails(b)}><Eye size={12} /></Button>
-                            <Button size="icon" variant="ghost" className="h-5 w-5" title="Replace this file" disabled={importing || deleting || isFiled} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={12} /></Button>
-                            <Button size="icon" variant="ghost" className="h-5 w-5 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || isFiled}
+                            <Button size="icon" variant="ghost" className="h-5 w-5" title="Replace this file" disabled={importing || deleting || isLocked} onClick={() => handleReplaceClick(b.id)}><RotateCcw size={12} /></Button>
+                            <Button size="icon" variant="ghost" className="h-5 w-5 text-muted-foreground hover:text-destructive" title="Delete this file" disabled={deleting || isLocked}
                               onClick={() => setDeleteConfirm({ ids: [b.id], label: b.file_name || "this file" })}><Trash2 size={12} /></Button>
                           </div>
                         </div>
@@ -1399,7 +1466,7 @@ export function TdsValidateFinalise({
           {/* Single Run Validation */}
           <div className="flex items-center gap-3">
             <Button className="gap-2 font-semibold h-9" onClick={handleRunValidation}
-              disabled={comparing || !batch || isFiled}>
+              disabled={comparing || !batch || isLocked}>
               {comparing ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               {comparing ? "Validating…" : "Run Validation"}
             </Button>
@@ -1498,7 +1565,7 @@ export function TdsValidateFinalise({
               selForm={selForm}
               runSignal={runSignal}
               resolveFirmId={resolveFirmId}
-              disabled={isFiled}
+              disabled={isLocked}
               onStatusChange={setPanStatus}
               onActivity={bumpUnderProcess}
             />
@@ -1517,7 +1584,7 @@ export function TdsValidateFinalise({
               selQuarter={selQuarter}
               selForm={selForm}
               resolveFirmId={resolveFirmId}
-              disabled={isFiled}
+              disabled={isLocked}
               onStatusChange={setTallyStatus}
               onActivity={bumpUnderProcess}
             />
@@ -1704,6 +1771,17 @@ export function TdsValidateFinalise({
                         ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
                       </p>
                     </div>
+                  ) : isMarkedReadyToFile ? (
+                    <div className="p-4 rounded-lg bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800">
+                      <p className="text-sm font-semibold text-sky-700 dark:text-sky-300">
+                        ✓ Return marked as Ready to File.
+                      </p>
+                      <p className="text-xs text-sky-700/80 dark:text-sky-300/80 mt-1">
+                        All validations are complete and the checker has signed. This return is
+                        <b> not filed yet</b> — file it on the income-tax portal, then attach the
+                        acknowledgement (ACK) in the Client Filing Summary to move it to Filed.
+                      </p>
+                    </div>
                   ) : (
                     <>
                       <div className="flex items-start gap-3 mb-4">
@@ -1816,13 +1894,15 @@ export function TdsValidateFinalise({
               </div>
             </div>
             <p className="text-sm text-muted-foreground">
-              This will mark the return as <strong>Filed</strong> and enable the Genius XLS Export in Reports. Proceed?
+              This will mark the return as <strong>Ready to File</strong> and enable the Genius XLS
+              Export in Reports. It does <strong>not</strong> file the return — after filing on the
+              portal, attach the ACK in the Client Filing Summary to move it to Filed. Proceed?
             </p>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmOpen(false)}>Cancel</Button>
             <Button onClick={handleFinalise} disabled={finalising}>
-              {finalising ? "Finalising…" : "Confirm & Mark Filed"}
+              {finalising ? "Finalising…" : "Confirm & Mark Ready to File"}
             </Button>
           </DialogFooter>
         </DialogContent>

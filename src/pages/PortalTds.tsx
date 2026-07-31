@@ -110,6 +110,8 @@ const sortFilings = (a: PortalFiling, b: PortalFiling) =>
 
 const STATUS_TONE: Record<string, string> = {
   Filed: "bg-emerald-100 text-emerald-700",
+  // Sky, never emerald — a client must not read "Ready to File" as "filed".
+  "Ready to File": "bg-sky-100 text-sky-700",
   "Under Process": "bg-amber-100 text-amber-700",
   "Data Received": "bg-slate-100 text-slate-700",
 };

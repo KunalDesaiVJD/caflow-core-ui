@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { TdsFilingsManager, type KpiStatusGroup, type FilingsPreset, getDueDate, getDueDateColor } from "@/components/tds/TdsFilingsManager";
+import { TdsFilingsManager, READY_TO_FILE_STATUS, type KpiStatusGroup, type FilingsPreset, getDueDate, getDueDateColor } from "@/components/tds/TdsFilingsManager";
 import { getDefaultTdsQuarter, isClientTdsEligible, clientHasTdsForm, isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -16,7 +16,7 @@ import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   Users, Clock, CheckCheck, CheckCircle2, FileCheck, MinusCircle,
-  Printer, TrendingUp, Info,
+  Printer, TrendingUp, Info, ShieldCheck,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -53,6 +53,10 @@ const FY_OPTIONS = Array.from({ length: 7 }, (_, i) => { const s = 2020 + i; ret
 const QUARTER_OPTIONS = ["Q1", "Q2", "Q3", "Q4"];
 const ALL_FORMS = ["26Q", "24Q", "27Q", "27EQ"];
 
+// Deliberately EXCLUDES "Ready to File": that return has been validated and
+// signed but has NOT gone to the portal yet, so it is still a return that is
+// due. Adding it here would make the Returns Due count under-report real
+// outstanding work — the opposite of what the card is for.
 const TERMINAL_STATUSES = new Set([
   "Filed", "Submitted", "Processed", "Accepted", "NIL",
 ]);
@@ -187,6 +191,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     const activeClientIds = new Set(filteredFilings.map(f => f.client_id));
     const notTerminal = filteredFilings.filter(f => !TERMINAL_STATUSES.has(f.work_status));
     const reviewed = filteredFilings.filter(f => f.work_status === "Reviewed");
+    const readyToFile = filteredFilings.filter(f => f.work_status === READY_TO_FILE_STATUS);
     const filed = filteredFilings.filter(f => ["Filed", "Submitted"].includes(f.work_status));
     const processed = filteredFilings.filter(f => ["Processed", "Accepted"].includes(f.work_status));
     const nil = filteredFilings.filter(f => f.work_status === "NIL");
@@ -194,6 +199,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       activeClients: activeClientIds.size,
       returnsDue: notTerminal.length,
       reviewed: reviewed.length,
+      readyToFile: readyToFile.length,
       filed: filed.length,
       processed: processed.length,
       nil: nil.length,
@@ -249,7 +255,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
     return (
       <div className="space-y-4">
         <Skeleton className="h-10 w-full" />
-        <div className="grid grid-cols-6 gap-3">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">{Array.from({ length: 7 }).map((_, i) => <Skeleton key={i} className="h-20" />)}</div>
         <Skeleton className="h-64 w-full" />
       </div>
     );
@@ -262,6 +268,10 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       tooltip: "Counts pending returns, not clients. A client may have multiple pending returns (different TANs/forms), so this count can exceed Active TDS Clients.",
     },
     { label: "Under Review", value: stats.reviewed, icon: CheckCheck, color: "text-violet-600", bg: "bg-violet-50 dark:bg-violet-950/30", statusGroup: "reviewed" },
+    {
+      label: "Ready to File", value: stats.readyToFile, icon: ShieldCheck, color: "text-sky-600", bg: "bg-sky-50 dark:bg-sky-950/30", statusGroup: "ready-to-file",
+      tooltip: "Validated and digitally signed, but NOT filed yet — these still count under Returns Due. Attach the ACK after filing to move them to Filed.",
+    },
     { label: "Filed / Submitted", value: stats.filed, icon: CheckCircle2, color: "text-emerald-600", bg: "bg-emerald-50 dark:bg-emerald-950/30", statusGroup: "filed" },
     { label: "Processed / Accepted", value: stats.processed, icon: FileCheck, color: "text-emerald-700", bg: "bg-emerald-100 dark:bg-emerald-900/40", statusGroup: "processed" },
     { label: "NIL Returns", value: stats.nil, icon: MinusCircle, color: "text-teal-600", bg: "bg-teal-50 dark:bg-teal-950/30", statusGroup: "nil" },
@@ -320,7 +330,7 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
       </div>
 
       {/* ═══ ROW 2: 7 KPI Cards — click filters the Client Filing Summary table below ═══ */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
         {kpiCards.map(kpi => (
           <Card
             key={kpi.label}

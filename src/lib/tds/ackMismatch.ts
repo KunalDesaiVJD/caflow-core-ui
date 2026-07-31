@@ -4,19 +4,24 @@
  * filing row it's being attached to, and decide REJECT vs WARN per field.
  *
  * Split deliberately by field:
- *   - Form Type / Financial Year / Quarter — HARD BLOCK, unconditionally. All
- *     three are printed verbatim on the government receipt as closed,
- *     unambiguous values (Form is one of 24Q/26Q/27Q/27EQ, FY is "YYYY-YY",
- *     Quarter is exactly Q1-Q4). There is no realistic way for a
- *     genuinely-extracted "24Q"/"Q4" to be confused with a genuinely-filed
- *     "26Q"/"Q1" — a definite mismatch on any of these three is always a real
- *     data error (wrong receipt attached to the wrong filing), never a false
- *     positive from OCR noise. Regression history: a Q4 acknowledgement was
- *     once attached to a Q1 filing, and separately a 24Q acknowledgement was
+ *   - Form Type / Financial Year / Quarter — HARD BLOCK. All three are
+ *     printed verbatim on the government receipt as closed, unambiguous
+ *     values (Form is one of 24Q/26Q/27Q/27EQ, FY is "YYYY-YY", Quarter is
+ *     exactly Q1-Q4). There is no realistic way for a genuinely-extracted
+ *     "24Q"/"Q4" to be confused with a genuinely-filed "26Q"/"Q1" — a
+ *     definite mismatch on any of these three is always a real data error
+ *     (wrong receipt attached to the wrong filing), never a false positive
+ *     from OCR noise. Regression history: a Q4 acknowledgement was once
+ *     attached to a Q1 filing, and separately a 24Q acknowledgement was
  *     attached to a 26Q filing, both accepted with no effective block (each
  *     was only a soft warning, easy to miss/overwrite) — this module exists
  *     so none of these fields can ever again result in a successful,
  *     un-blocked attach when they genuinely disagree.
+ *     ONE carve-out, on Form Type only: the 2026-27 portal template prints a
+ *     numeric form CODE ("Form 138") rather than "Form 24Q". A code this app
+ *     hasn't mapped yet means "cannot verify", not "verified wrong", so it
+ *     WARNS rather than blocks — see FORM_NO_PORTAL_ALIASES /
+ *     UNKNOWN_PORTAL_CODE_RE. A mapped-but-different form still hard blocks.
  *   - Client Name — HARD BLOCK, UNLESS the TAN already matches exactly. TAN
  *     is the actual unique legal identifier a TDS return is filed under; a
  *     free-text "Name" is not. For a proprietorship, the government receipt
@@ -60,11 +65,12 @@ export interface AckClientIdentity {
 }
 
 export interface AckMismatchResult {
-  /** Financial Year / Quarter mismatches — a non-empty array here means the
-   *  attach MUST be blocked: no storage upload, no tds_ack_files insert, no
-   *  acknowledgment_number update. */
+  /** Form Type / Client Name / Financial Year / Quarter mismatches — a
+   *  non-empty array here means the attach MUST be blocked: no storage
+   *  upload, no tds_ack_files insert, no acknowledgment_number update. */
   rejectReasons: string[];
-  /** Name / TAN / Form No. mismatches — informational only, never blocks. */
+  /** TAN mismatches, plus a Form Type printed as an unmapped numeric portal
+   *  code — informational only, never blocks. */
   warnReasons: string[];
 }
 
@@ -86,19 +92,37 @@ const normalizeQuarter = (v: string | null | undefined): string => (v ?? "").tri
 // 2026-27, evidently tied to the new Income Tax Act 2025 renumbering
 // (this template cites "section 397(3)(b)", not the old Act's 200(3)) —
 // prints a bare portal form CODE ("Form 140") instead of the familiar
-// 24Q/26Q/27Q/27EQ label. Confirmed real: a genuine "Form 140" receipt for
-// an ATC LOGISTICS 26Q Q1 FY2026-27 return lists its own attachment as
-// "26QRQ1.zip" and describes itself as "...deduction of tax...in respect of
-// payments made other than salary" — the defining description of 26Q — so
-// this was a real return being falsely REJECTED, not OCR noise. Only 140→26Q
-// is confirmed; the other three forms' new portal codes are unknown until a
-// real receipt surfaces one — add them here the same way when they do,
-// rather than guessing numbers with no evidence behind them.
-const FORM_NO_PORTAL_ALIASES: Record<string, string> = { "140": "26Q" };
+// 24Q/26Q/27Q/27EQ label. Each entry below is confirmed against a REAL
+// receipt, never guessed — the receipt's own attachment name and Form
+// Description are what pin the code to a form:
+//
+//   140 → 26Q — ATC LOGISTICS, 26Q Q1 FY2026-27. Attachment "26QRQ1.zip";
+//               described as "...in respect of payments made other than
+//               salary" — the defining description of 26Q.
+//   138 → 24Q — ORVIX TECHNOLOGIES, 24Q Q1 FY2026-27. Attachment
+//               "24QRQ1.zip"; described as "...in respect of salary paid to
+//               employee under section 392, or income of specified senior
+//               citizen under section 393(1)" — the defining description of
+//               24Q (salary).
+//
+// 27Q and 27EQ's portal codes are still unknown. Rather than guess them,
+// UNKNOWN_PORTAL_CODE_RE below makes an unrecognised numeric code a WARNING
+// instead of a hard reject — see the Form Type check for why.
+const FORM_NO_PORTAL_ALIASES: Record<string, string> = { "140": "26Q", "138": "24Q" };
 const normalizeFormNo = (v: string): string => {
   const s = v.trim().toUpperCase();
   return FORM_NO_PORTAL_ALIASES[s] ?? s;
 };
+
+// A bare numeric portal code that survived normalizeFormNo() is one this
+// codebase has never seen — NOT evidence of a wrong attachment. "138" read
+// off a genuine 24Q receipt looks nothing like "24Q", so a blind string
+// compare called it a mismatch and hard-blocked a correct filing (exactly
+// what happened to 140/26Q before it was mapped, then again to 138/24Q).
+// An unknown code means "cannot verify", which must never be treated as
+// "verified wrong" — so it warns instead, leaving the real 24Q-vs-26Q class
+// of error still hard-blocked below.
+const UNKNOWN_PORTAL_CODE_RE = /^\d{2,4}$/;
 
 /** Evaluate every cross-check field. Pure function — no I/O, no React,
  *  directly unit-testable with a synthetic AckFields + filing row. */
@@ -158,8 +182,19 @@ export function evaluateAckMismatch(
   // by extractAckFields). Regression: a 24Q acknowledgement was attached to
   // a 26Q filing and accepted with no block — this was a soft warning only,
   // easy to miss, exactly the same class of gap FY/Quarter closed earlier. ─
-  if (fields.formNo && filing.tds_forms?.[0] && normalizeFormNo(fields.formNo) !== normalizeFormNo(filing.tds_forms[0])) {
-    rejectReasons.push(`Form Type (${fields.formNo} vs ${filing.tds_forms[0]})`);
+  if (fields.formNo && filing.tds_forms?.[0]) {
+    const receiptForm = normalizeFormNo(fields.formNo);
+    const filingForm = normalizeFormNo(filing.tds_forms[0]);
+    if (receiptForm !== filingForm) {
+      if (UNKNOWN_PORTAL_CODE_RE.test(receiptForm)) {
+        // Unrecognised portal code — "cannot verify", not "verified wrong".
+        // Warn so the human still eyeballs it, but never block a filing on a
+        // code we simply haven't mapped yet (see FORM_NO_PORTAL_ALIASES).
+        warnReasons.push(`Form Type (receipt shows portal code "Form ${fields.formNo}", which this app can't yet map to a form — could not confirm it is ${filing.tds_forms[0]})`);
+      } else {
+        rejectReasons.push(`Form Type (${fields.formNo} vs ${filing.tds_forms[0]})`);
+      }
+    }
   }
 
   return { rejectReasons, warnReasons };
