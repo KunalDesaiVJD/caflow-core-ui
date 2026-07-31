@@ -815,22 +815,22 @@ export function TdsDataEntry({
   // fetchCarryForwardChallans already applies across periods), so "Show
   // Archived Challans" surfaces every archived challan for this client.
   const fetchArchivedChallans = async (clientId: string) => {
-    const { data } = await supabase.from(SRC.challans as any)
-      .select("*").eq("client_id", clientId).eq("is_archived", true)
-      .order("archived_at", { ascending: false });
-    const archived = (data as unknown as Challan[]) || [];
-    setArchivedChallans(archived);
-    // An archived challan's own deductees are never fetched by anything
-    // else — fetchChallans/fetchCarryForwardChallans both exclude
-    // is_archived rows entirely — so without this getChallanBreakdownAll
-    // has nothing to look up and every archived card would show ₹0 applied
-    // regardless of what it actually holds. Fetched live-table only (Archive
-    // is a live-filing-only feature, same as Kasar-Vatav).
+    // Read through getEffectiveClientLedger (same as fetchCarryForwardChallans)
+    // rather than the raw tables directly — a filed correction that reduced a
+    // deductee's amount (freeing up balance) must show that freed balance
+    // here too. Querying tds_deductees directly, as this used to, showed the
+    // stale pre-correction figures: a challan the active Carry-Forward list
+    // correctly reported as "Available ₹9" read as fully consumed the moment
+    // it was archived, because the raw table still held the original,
+    // uncorrected deductee amount.
+    const { challans: archived, deductees: effectiveDeductees } = await getEffectiveClientLedger(clientId, { archived: true });
+    archived.sort((a: any, b: any) => (b.archived_at || "").localeCompare(a.archived_at || ""));
+    setArchivedChallans(archived as unknown as Challan[]);
     if (archived.length) {
-      const { data: deds } = await supabase.from("tds_deductees")
-        .select("*").in("challan_id", archived.map(c => c.id));
+      const archivedIds = new Set(archived.map((c: any) => c.id));
       const grouped: Record<string, Deductee[]> = {};
-      (deds || []).forEach((d: any) => {
+      effectiveDeductees.forEach((d: any) => {
+        if (!d.challan_id || !archivedIds.has(d.challan_id)) return;
         if (!grouped[d.challan_id]) grouped[d.challan_id] = [];
         grouped[d.challan_id].push(d as Deductee);
       });
@@ -2764,10 +2764,14 @@ export function TdsDataEntry({
                             )}
                             {/* Kasar-Vatav: close out a small, genuinely unattachable residual
                                 balance so the challan can read as Fully Utilised without a
-                                fake deductee row. Not offered on archived challans (already
-                                put away) or while the filing is locked (same convention as
-                                Late Fees Used / Edit / Delete on challan-level monetary fields). */}
-                            {!isFilingLocked && !isCorrectionMode && !selectedChallan.is_archived && (unconsumed > 0 || (selectedChallan.kasar_vatav_amount || 0) > 0) && (
+                                fake deductee row. Deliberately available even when the
+                                currently-viewed filing is Filed/locked — same reasoning as
+                                Archive: it's a challan-level bookkeeping adjustment, not an
+                                edit to this filing's own tax entries, and the whole point is
+                                closing out old, already-filed carry-forward challans (see the
+                                Archive "not available on Filed challans" fix for the same
+                                pattern). Not offered on archived challans (already put away). */}
+                            {!isCorrectionMode && !selectedChallan.is_archived && (unconsumed > 0 || (selectedChallan.kasar_vatav_amount || 0) > 0) && (
                               <Button
                                 size="sm" variant="outline" className="h-6 gap-1 text-[10px] px-2 border-violet-300 text-violet-700 hover:bg-violet-50 dark:text-violet-300 dark:hover:bg-violet-950"
                                 onClick={() => openKasarVatavDialog(selectedChallan)}

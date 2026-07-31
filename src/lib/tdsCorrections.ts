@@ -664,15 +664,19 @@ export interface EffectiveDeductee extends Record<string, any> {
  * something the user can pick but not actually use. Same for a deductee a
  * correction adds against such a challan.
  */
-export async function getEffectiveClientLedger(clientId: string): Promise<{
+export async function getEffectiveClientLedger(clientId: string, opts?: { archived?: boolean }): Promise<{
   challans: EffectiveChallan[]; deductees: EffectiveDeductee[];
 }> {
+  // Archived challans are excluded by default — the single shared source
+  // fetchCarryForwardChallans reads from, where an archived challan must
+  // never surface as a Carry-Forward candidate regardless of its balance,
+  // until restored. Pass { archived: true } for the opposite set (used by
+  // the Archived Challans panel, which needs the SAME correction-substituted
+  // numbers — a filed correction that freed up balance must still show as
+  // freed once the challan is archived, not the stale pre-correction figure).
+  const wantArchived = opts?.archived ?? false;
   const [{ data: challans }, { data: deductees }, { data: corrections }] = await Promise.all([
-    // Archived challans are deliberately excluded here, at the single shared
-    // source every "effective ledger" consumer reads from (currently just
-    // fetchCarryForwardChallans) — an archived challan must never surface as
-    // a Carry-Forward candidate regardless of its balance, until restored.
-    supabase.from("tds_challans").select("*").eq("client_id", clientId).eq("is_archived", false),
+    supabase.from("tds_challans").select("*").eq("client_id", clientId).eq("is_archived", wantArchived),
     supabase.from("tds_deductees").select("*").eq("client_id", clientId),
     supabase.from("tds_corrections" as any).select("*")
       .eq("client_id", clientId).eq("status", "filed"),
