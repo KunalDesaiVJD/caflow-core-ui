@@ -987,9 +987,14 @@ export function TdsDataEntry({
     // count toward any balance/utilisation total until restored. A
     // correction against an already-archived challan is not a real workflow
     // this app supports, so no special-casing is needed there either.
+    // is_archived only exists on the live tds_challans table, not on
+    // tds_correction_challans — a correction is a fixed snapshot, so
+    // "archiving" (a live-data concept) does not apply to it. Filtering on
+    // that column in correction mode queries a nonexistent column, which
+    // silently returns zero rows and makes the whole section look empty.
     const challanQuery = isCorrectionMode
       ? supabase.from(SRC.challans as any).select("*")
-          .eq("filing_id", filingId).eq("is_archived", false)
+          .eq("filing_id", filingId)
           .order("deposit_date", { ascending: true })
       : supabase.from(SRC.challans as any).select("*")
           .eq("client_id", selClient)
@@ -1041,8 +1046,11 @@ export function TdsDataEntry({
       // Defensive only — archiving a challan is blocked while it still has
       // deductees attached (see archiveChallan below), so a live deductee
       // should never actually reference an archived one. Filtered anyway so
-      // this stays correct even if that invariant is ever relaxed.
-      const { data: sharedChallans } = await supabase.from(SRC.challans as any).select("*").in("id", sharedIds).eq("is_archived", false);
+      // this stays correct even if that invariant is ever relaxed. Not
+      // applicable in correction mode — see the comment on challanQuery above.
+      let sharedQuery = supabase.from(SRC.challans as any).select("*").in("id", sharedIds);
+      if (!isCorrectionMode) sharedQuery = sharedQuery.eq("is_archived", false);
+      const { data: sharedChallans } = await sharedQuery;
       sharedList = (sharedChallans as unknown as Challan[]) || [];
     }
 
@@ -2186,7 +2194,10 @@ export function TdsDataEntry({
                   >
                     {challansExpanded ? <ChevronDown size={14} className="text-muted-foreground" /> : <ChevronRight size={14} className="text-muted-foreground" />}
                     <h3 className="text-sm font-semibold text-foreground">Challans</h3>
-                    {!challansExpanded && (
+                    {/* Only once loaded — otherwise this flashes "0 challans" for
+                        the instant between the correction opening and its own
+                        challans finishing their fetch, which reads as data loss. */}
+                    {!challansExpanded && filingLoaded && (
                       <span className="text-xs text-muted-foreground">
                         {challans.length} challan{challans.length === 1 ? "" : "s"}
                       </span>
@@ -2197,20 +2208,25 @@ export function TdsDataEntry({
                 )}
                 {challansExpanded && (
                   <div className="flex items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant={showArchivedChallans ? "secondary" : "ghost"}
-                      className="gap-1 h-7 text-xs text-muted-foreground"
-                      onClick={() => {
-                        const next = !showArchivedChallans;
-                        setShowArchivedChallans(next);
-                        if (next && selClient) void fetchArchivedChallans(selClient);
-                      }}>
-                      <Archive size={12} /> {showArchivedChallans ? "Hide" : "Show"} Archived Challans
-                      {archivedChallans.length > 0 && (
-                        <Badge variant="secondary" className="text-[9px] px-1 ml-0.5">{archivedChallans.length}</Badge>
-                      )}
-                    </Button>
+                    {/* Archiving is a live-data concept (is_archived only exists
+                        on tds_challans) — a correction is a fixed snapshot, so
+                        this does not apply to it. */}
+                    {!isCorrectionMode && (
+                      <Button
+                        size="sm"
+                        variant={showArchivedChallans ? "secondary" : "ghost"}
+                        className="gap-1 h-7 text-xs text-muted-foreground"
+                        onClick={() => {
+                          const next = !showArchivedChallans;
+                          setShowArchivedChallans(next);
+                          if (next && selClient) void fetchArchivedChallans(selClient);
+                        }}>
+                        <Archive size={12} /> {showArchivedChallans ? "Hide" : "Show"} Archived Challans
+                        {archivedChallans.length > 0 && (
+                          <Badge variant="secondary" className="text-[9px] px-1 ml-0.5">{archivedChallans.length}</Badge>
+                        )}
+                      </Button>
+                    )}
                     {/* Issue 2: Hide Add Challan when filed */}
                     {!isFilingLocked && (
                       <Button size="sm" variant="outline" className="gap-1 h-7 text-xs" onClick={openAddChallan}>
@@ -2516,16 +2532,20 @@ export function TdsDataEntry({
                                         <Pencil size={10} />
                                       </Button>
                                     )}
-                                    <Button variant="ghost" size="icon" className="h-5 w-5" title="Archive — hide from active use, restorable any time"
-                                      disabled={archivingId === c.id}
-                                      onClick={e => {
-                                        e.stopPropagation();
-                                        const activeCount = deductees.filter(d => d.challan_id === c.id).length
-                                          + prevEntries.filter(d => d.challan_id === c.id).length;
-                                        void archiveChallan(c, activeCount);
-                                      }}>
-                                      {archivingId === c.id ? <Loader2 size={10} className="animate-spin" /> : <Archive size={10} />}
-                                    </Button>
+                                    {/* Archiving is a live-data concept — does not apply to a
+                                        correction's fixed snapshot (see fetchChallans). */}
+                                    {!isCorrectionMode && (
+                                      <Button variant="ghost" size="icon" className="h-5 w-5" title="Archive — hide from active use, restorable any time"
+                                        disabled={archivingId === c.id}
+                                        onClick={e => {
+                                          e.stopPropagation();
+                                          const activeCount = deductees.filter(d => d.challan_id === c.id).length
+                                            + prevEntries.filter(d => d.challan_id === c.id).length;
+                                          void archiveChallan(c, activeCount);
+                                        }}>
+                                        {archivingId === c.id ? <Loader2 size={10} className="animate-spin" /> : <Archive size={10} />}
+                                      </Button>
+                                    )}
                                     {!isFilingLocked && (
                                       <Button variant="ghost" size="icon" className="h-5 w-5" onClick={e => { e.stopPropagation(); deleteChallan(c.id); }}>
                                         <Trash2 size={10} className="text-destructive" />
