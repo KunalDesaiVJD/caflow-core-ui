@@ -955,6 +955,53 @@ describe("canonicalSection — a hand-written Tally ledger title", () => {
   });
 });
 
+describe("canonicalSection — informal '194IA' meaning 194-I(a) (machinery rent), not real 194-IA", () => {
+  // Pinned against a real Bindra Construction ledger, title read verbatim:
+  // "TDS on Machinery Rent 2% (194IA) - 1008". The client's own Tally books
+  // dropped the parenthesis around 194-I's "(a)" sub-clause, colliding with
+  // the digits of the real, unrelated section 194-IA (immovable property
+  // transfer). Before this fix the ledger parsed as "194IA", while Office
+  // Data's own "194I(a)" canonicalises to bare "194I" — the two could never
+  // match, so every deductee in this real, already-imported ledger came
+  // back "No Ledger for Section 194I".
+  it("reads a rent-described '(194IA)' ledger title as 194I, not 194IA", () => {
+    expect(canonicalSection("TDS on Machinery Rent 2% (194IA) - 1008")).toBe("194I");
+    expect(sectionsMatch("194I(a)", "TDS on Machinery Rent 2% (194IA) - 1008")).toBe(true);
+  });
+
+  it("still reads a bare '194IA' — no rent description at all — as the real section 194-IA", () => {
+    // No keyword to disambiguate with = trust the digits, exactly as before.
+    expect(canonicalSection("194IA")).toBe("194IA");
+    expect(canonicalSection("TDS Payable-194IA 25-26")).toBe("194IA");
+  });
+
+  it("never reclassifies a genuine immovable-property 194-IA ledger just because some other word matches loosely", () => {
+    // A real 194-IA ledger's own defining language is a property TRANSFER —
+    // it never describes itself as rent, so this guard cannot misfire here.
+    expect(canonicalSection("TDS on Purchase of Immovable Property (194IA)")).toBe("194IA");
+    expect(canonicalSection("194 IA - Property Transfer TDS")).toBe("194IA");
+  });
+
+  it("does NOT extend the same treatment to 194-IB — real 194-IB is itself a rent section", () => {
+    // Unlike 194-IA, statutory 194-IB (rent by an individual/HUF not liable
+    // to tax audit) genuinely IS about rent, so a "rent" keyword can't tell
+    // it apart from an informal "194-I(b)" reading — must stay untouched.
+    expect(canonicalSection("TDS on Rent (194IB)")).toBe("194IB");
+  });
+
+  it("end-to-end: an office 194I(a) record now reconciles against the informally-labelled ledger", () => {
+    const officeRecord: OfficeTxn = {
+      deductee_id: "a", name: "Shlok Enterprise", date_iso: "2026-04-30",
+      amount: 220000, tds: 4400, section: "194I(a)", pan: null,
+    };
+    const out = reconcileTally(
+      [officeRecord],
+      [row(0, "Shlok Enterprise", "2026-04-30", 4400, "TDS on Machinery Rent 2% (194IA) - 1008")], null);
+    expect(out[0].result).toBe("Matched");
+    expect(out[0].result).not.toBe("No Ledger for Section");
+  });
+});
+
 describe("nameEvidence — a Tally annotation is not part of the party name", () => {
   it("ignores a rate or section suffix the ledger appends", () => {
     // Once ENTERPRISE/TRADERS are stopwords these collapse to ONE token, and one token
