@@ -106,6 +106,7 @@ export const defaultAdvancedInfo: AdvancedInfoData = {
 const CLASSIFICATIONS = [
   "Audit",
   "Non-Audit",
+  "Non-Audit (BP)",
   "Partner in Audited Firm",
   "Not Applicable",
 ];

@@ -29,6 +29,7 @@ import { supabase } from "@/integrations/supabase/client";
 export type Classification =
   | "Audit"
   | "Non-Audit"
+  | "Non-Audit (BP)"
   | "Partner in Audited Firm"
   | "Not Applicable"
   | string; // tolerate legacy / freeform values

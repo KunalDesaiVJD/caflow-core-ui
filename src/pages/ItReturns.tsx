@@ -132,7 +132,7 @@ function formatDateDDMMYYYY(dateStr: string | null): string {
 }
 
 // Classification to tab mapping
-type FilingSubTab = "audited" | "non_audited" | "partner_in_audited_firm" | "non_itr";
+type FilingSubTab = "audited" | "non_audited" | "non_audit_bp" | "partner_in_audited_firm" | "non_itr";
 
 // 2026-06-25 (V J Desai request) — sentinel value used on virtual rows for
 // clients whose Income Tax Returns service toggle is OFF. Lets the sub-tab
@@ -145,6 +145,10 @@ function getClientSubTab(classification: string | undefined): FilingSubTab {
   if (cls === NON_ITR_SENTINEL) return "non_itr";
   if (cls === "audit") return "audited";
   if (cls === "partner in audited firm" || cls === "partner_in_audited_firm") return "partner_in_audited_firm";
+  // "Non-Audit (BP)" — proprietor / Business & Profession clients whose
+  // ITR due date is 31 Aug (vs. the 31 Jul non-audit bucket). Split from
+  // "Non-Audited" so due-date planning can bifurcate the two.
+  if (cls === "non-audit (bp)" || cls === "non_audit_bp") return "non_audit_bp";
   return "non_audited";
 }
 
@@ -1093,7 +1097,7 @@ function FilingTab({
 
   // Sub-tab counts
   const subTabCounts = useMemo(() => {
-    const counts = { audited: 0, non_audited: 0, partner_in_audited_firm: 0, non_itr: 0 };
+    const counts = { audited: 0, non_audited: 0, non_audit_bp: 0, partner_in_audited_firm: 0, non_itr: 0 };
     for (const p of allProfiles) {
       const tab = getClientSubTab((p as ItrProfile).client_classification);
       counts[tab]++;
@@ -1314,14 +1318,19 @@ function FilingTab({
       <Tabs value={filingSubTab} onValueChange={v => setFilingSubTab(v as FilingSubTab)}>
         <TabsList>
           <TabsTrigger value="audited">Audited ({subTabCounts.audited})</TabsTrigger>
-          <TabsTrigger value="non_audited">Non-Audited ({subTabCounts.non_audited})</TabsTrigger>
+          <TabsTrigger value="non_audited" title="Non-audit clients with 31 July due date">
+            Non-Audited ({subTabCounts.non_audited})
+          </TabsTrigger>
+          <TabsTrigger value="non_audit_bp" title="Business & Profession non-audit clients with 31 August due date">
+            Non-Audit (BP) ({subTabCounts.non_audit_bp})
+          </TabsTrigger>
           <TabsTrigger value="partner_in_audited_firm">Partner in Audited Firm ({subTabCounts.partner_in_audited_firm})</TabsTrigger>
           <TabsTrigger value="non_itr" title="Clients whose Income Tax Returns service is turned OFF">
             Non-ITR ({subTabCounts.non_itr})
           </TabsTrigger>
         </TabsList>
 
-        {(["audited", "non_audited", "partner_in_audited_firm", "non_itr"] as FilingSubTab[]).map(tab => (
+        {(["audited", "non_audited", "non_audit_bp", "partner_in_audited_firm", "non_itr"] as FilingSubTab[]).map(tab => (
           <TabsContent key={tab} value={tab}>
             {isLoading ? (
               <div className="space-y-2">{[1, 2, 3].map(i => <Skeleton key={i} className="h-12 w-full" />)}</div>
