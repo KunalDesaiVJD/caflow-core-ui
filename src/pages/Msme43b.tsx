@@ -121,6 +121,7 @@ export default function Msme43b() {
   const [clientId, setClientId] = useState<string>('');
   const [clientSearch, setClientSearch] = useState('');
   const [clientOpen, setClientOpen] = useState(false);
+  const [clientActiveIndex, setClientActiveIndex] = useState(0);
   const [fy, setFy] = useState<string>(getDefaultAuditFY());
   const [windowDays, setWindowDays] = useState(45);
   const [running, setRunning] = useState(false);
@@ -502,7 +503,7 @@ export default function Msme43b() {
               <div className="relative">
                 <button
                   type="button"
-                  onClick={() => setClientOpen((v) => !v)}
+                  onClick={() => { setClientOpen((v) => !v); setClientActiveIndex(0); }}
                   className="flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring"
                 >
                   <span className={clientId ? 'text-foreground' : 'text-muted-foreground'}>
@@ -512,37 +513,59 @@ export default function Msme43b() {
                   </span>
                   <ChevronDown className="h-4 w-4 opacity-50 shrink-0" />
                 </button>
-                {clientOpen && (
-                  <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-lg">
-                    <div className="p-2">
-                      <input
-                        autoFocus
-                        className="w-full rounded border px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-ring"
-                        placeholder="Search client…"
-                        value={clientSearch}
-                        onChange={(e) => setClientSearch(e.target.value)}
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    </div>
-                    <div className="max-h-60 overflow-y-auto">
-                      {clients
-                        .filter((c) => c.name.toLowerCase().includes(clientSearch.toLowerCase()))
-                        .map((c) => (
+                {clientOpen && (() => {
+                  const matches = clients.filter((c) => c.name.toLowerCase().includes(clientSearch.toLowerCase()));
+                  const pick = (c: ClientOpt) => { setClientId(c.id); setClientOpen(false); setClientSearch(''); setClientActiveIndex(0); };
+                  return (
+                    <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-lg">
+                      <div className="p-2">
+                        <input
+                          autoFocus
+                          className="w-full rounded border px-2 py-1 text-sm outline-none focus:ring-1 focus:ring-ring"
+                          placeholder="Search client…"
+                          value={clientSearch}
+                          onChange={(e) => { setClientSearch(e.target.value); setClientActiveIndex(0); }}
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => {
+                            if (e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              setClientActiveIndex((i) => Math.min(i + 1, matches.length - 1));
+                            } else if (e.key === 'ArrowUp') {
+                              e.preventDefault();
+                              setClientActiveIndex((i) => Math.max(i - 1, 0));
+                            } else if (e.key === 'Enter') {
+                              e.preventDefault();
+                              const c = matches[clientActiveIndex];
+                              if (c) pick(c);
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              setClientOpen(false);
+                            }
+                          }}
+                        />
+                      </div>
+                      <div className="max-h-60 overflow-y-auto">
+                        {matches.map((c, i) => (
                           <div
                             key={c.id}
-                            className="flex cursor-pointer items-center px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground"
-                            onClick={() => { setClientId(c.id); setClientOpen(false); setClientSearch(''); }}
+                            className={cn(
+                              'flex cursor-pointer items-center px-3 py-2 text-sm hover:bg-accent hover:text-accent-foreground',
+                              i === clientActiveIndex && 'bg-accent text-accent-foreground',
+                            )}
+                            onMouseEnter={() => setClientActiveIndex(i)}
+                            onClick={() => pick(c)}
                           >
                             {clientId === c.id && <Check className="mr-2 h-4 w-4" />}
                             <span className={clientId === c.id ? 'font-medium' : ''}>{c.name}</span>
                           </div>
                         ))}
-                      {!clientsLoading && !clients.filter((c) => c.name.toLowerCase().includes(clientSearch.toLowerCase())).length && (
-                        <div className="px-3 py-2 text-sm text-muted-foreground">No audited clients found</div>
-                      )}
+                        {!clientsLoading && matches.length === 0 && (
+                          <div className="px-3 py-2 text-sm text-muted-foreground">No audited clients found</div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
               <p className="text-xs text-muted-foreground mt-1">Audited clients only, for the selected FY</p>
             </div>
