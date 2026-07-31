@@ -668,7 +668,11 @@ export async function getEffectiveClientLedger(clientId: string): Promise<{
   challans: EffectiveChallan[]; deductees: EffectiveDeductee[];
 }> {
   const [{ data: challans }, { data: deductees }, { data: corrections }] = await Promise.all([
-    supabase.from("tds_challans").select("*").eq("client_id", clientId),
+    // Archived challans are deliberately excluded here, at the single shared
+    // source every "effective ledger" consumer reads from (currently just
+    // fetchCarryForwardChallans) — an archived challan must never surface as
+    // a Carry-Forward candidate regardless of its balance, until restored.
+    supabase.from("tds_challans").select("*").eq("client_id", clientId).eq("is_archived", false),
     supabase.from("tds_deductees").select("*").eq("client_id", clientId),
     supabase.from("tds_corrections" as any).select("*")
       .eq("client_id", clientId).eq("status", "filed"),

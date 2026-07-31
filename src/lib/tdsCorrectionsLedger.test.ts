@@ -5,6 +5,12 @@
  * freed-up balance to the NEXT quarter, not the amount that was originally
  * filed. tds_challans / tds_deductees are never written by a correction (see
  * tdsCorrections.ts header), so this is the one place that reconciles them.
+ *
+ * Every tds_challans fixture below carries is_archived: false — the function
+ * filters on it (an archived challan must never surface as a Carry-Forward
+ * candidate), and the mock's .eq() below only matches when the field is
+ * genuinely present (never a real Postgres NOT NULL DEFAULT false column, so
+ * a fixture that omits it is filtered out entirely rather than passing).
  */
 import { describe, it, expect, vi } from "vitest";
 
@@ -49,7 +55,7 @@ const reset = () => {
 describe("getEffectiveClientLedger", () => {
   it("returns the original data untouched when nothing has been corrected", async () => {
     reset();
-    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 675, late_fees_234e: 0 }];
+    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 675, late_fees_234e: 0, is_archived: false }];
     rows.tds_deductees = [{ id: "d1", client_id: "c1", challan_id: "ch1", financial_year: "2025-26", quarter: "Q4", total_tax_deducted: 675 }];
 
     const { challans, deductees } = await getEffectiveClientLedger("c1");
@@ -59,7 +65,7 @@ describe("getEffectiveClientLedger", () => {
 
   it("substitutes a filed correction's reduced deductee amount, freeing up balance for carry-forward", async () => {
     reset();
-    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 675, late_fees_234e: 0 }];
+    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 675, late_fees_234e: 0, is_archived: false }];
     rows.tds_deductees = [{ id: "d1", client_id: "c1", challan_id: "ch1", financial_year: "2025-26", quarter: "Q4", total_tax_deducted: 675 }];
     rows.tds_corrections = [{ id: "corr1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", form_type: "26Q", status: "filed", filed_at: "2026-07-31T10:00:00Z" }];
     rows.tds_correction_challans = [{ id: "cc1", correction_id: "corr1", original_challan_id: "ch1", action: "unchanged", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 675, late_fees_234e: 0 }];
@@ -82,7 +88,7 @@ describe("getEffectiveClientLedger", () => {
 
   it("drops a deductee the correction deleted", async () => {
     reset();
-    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 500, late_fees_234e: 0 }];
+    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 500, late_fees_234e: 0, is_archived: false }];
     rows.tds_deductees = [{ id: "d1", client_id: "c1", challan_id: "ch1", financial_year: "2025-26", quarter: "Q4", total_tax_deducted: 500 }];
     rows.tds_corrections = [{ id: "corr1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", form_type: "26Q", status: "filed", filed_at: "2026-07-31T10:00:00Z" }];
     rows.tds_correction_deductees = [{
@@ -96,7 +102,7 @@ describe("getEffectiveClientLedger", () => {
 
   it("drops a challan the correction deleted entirely", async () => {
     reset();
-    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 500, late_fees_234e: 0 }];
+    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 500, late_fees_234e: 0, is_archived: false }];
     rows.tds_corrections = [{ id: "corr1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", form_type: "26Q", status: "filed", filed_at: "2026-07-31T10:00:00Z" }];
     rows.tds_correction_challans = [{ id: "cc1", correction_id: "corr1", original_challan_id: "ch1", action: "delete", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 500 }];
 
@@ -106,7 +112,7 @@ describe("getEffectiveClientLedger", () => {
 
   it("uses only the most recently filed correction when a period was corrected twice", async () => {
     reset();
-    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 1000, late_fees_234e: 0 }];
+    rows.tds_challans = [{ id: "ch1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", total_challan_amount: 1000, late_fees_234e: 0, is_archived: false }];
     rows.tds_deductees = [{ id: "d1", client_id: "c1", challan_id: "ch1", financial_year: "2025-26", quarter: "Q4", total_tax_deducted: 1000 }];
     rows.tds_corrections = [
       { id: "corr1", client_id: "c1", financial_year: "2025-26", quarter: "Q4", form_type: "26Q", status: "filed", filed_at: "2026-07-01T10:00:00Z" },
