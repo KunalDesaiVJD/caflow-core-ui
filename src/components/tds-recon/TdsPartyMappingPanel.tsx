@@ -136,14 +136,29 @@ function EditForm({
   saving: boolean;
 }) {
   const [name,    setName]    = useState(mapping.tds_deductee_name);
-  const [section, setSection] = useState(mapping.tds_section_code ?? "");
+  // 2026-07-25 — Root cause of "Something went wrong" when clicking the
+  // Edit / Override Mapping pencil: the Section <Select> below used to
+  // render a <SelectItem value=""> for the "— None —" option. Radix
+  // Select v2 (which shipped with the current @radix-ui/react-select
+  // in this repo) throws with "A <Select.Item /> must have a value prop
+  // that is not an empty string" and takes the whole panel down to the
+  // ErrorBoundary. We now use a private sentinel token ("__none__") for
+  // the UI value and translate it back to `null` at save-time so the
+  // DB continues to see NULL for an unset section.
+  //
+  // If mapping.tds_section_code is null / empty when the form opens,
+  // we seed the local state with the sentinel too so the Select's
+  // controlled value is always non-empty.
+  const NONE = "__none__";
+  const [section, setSection] = useState(mapping.tds_section_code || NONE);
   const [note,    setNote]    = useState(mapping.notes ?? "");
-  // 2026-07-24 — Root cause of Issue 2: the form previously had no status
-  // control so `updateMapping` always forced "confirmed". Now the auditor
-  // can flip Confirmed → Pending → Needs Review → Rejected in-place and
-  // the change is persisted via the `mapping_status` field the hook now
-  // honours (see useTdsPartyMappings.updateMapping).
-  const [status, setStatus] = useState<MappingStatus>(mapping.mapping_status ?? "confirmed");
+  // Status: same reasoning — never allow the controlled value to be an
+  // empty string; default to "confirmed" when the DB row's status is
+  // absent / unrecognised.
+  const KNOWN_STATUSES: MappingStatus[] = ["confirmed","pending","needs_review","rejected"];
+  const seedStatus: MappingStatus = KNOWN_STATUSES.includes(mapping.mapping_status as MappingStatus)
+    ? (mapping.mapping_status as MappingStatus) : "confirmed";
+  const [status, setStatus] = useState<MappingStatus>(seedStatus);
 
   return (
     <div className="p-3 bg-blue-50/60 border border-blue-100 rounded-lg space-y-2">
@@ -164,7 +179,7 @@ function EditForm({
               <SelectValue placeholder="Select section" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="">— None —</SelectItem>
+              <SelectItem value={NONE}>— None —</SelectItem>
               {TDS_SECTIONS.map(s => (
                 <SelectItem key={s} value={s}>{s}</SelectItem>
               ))}
@@ -200,7 +215,13 @@ function EditForm({
         </Button>
         <Button
           size="sm" variant="default" className="h-6 text-xs bg-blue-600 hover:bg-blue-700"
-          onClick={() => onSave({ tds_deductee_name: name.trim(), tds_section_code: section || null, notes: note, mapping_status: status })}
+          onClick={() => onSave({
+            tds_deductee_name: name.trim(),
+            // Translate the "__none__" UI sentinel back to a DB-side NULL.
+            tds_section_code: section && section !== NONE ? section : null,
+            notes: note,
+            mapping_status: status,
+          })}
           disabled={!name.trim() || saving}
         >
           {saving ? <Loader2 size={11} className="animate-spin mr-1" /> : <Save size={11} className="mr-1" />}
