@@ -3125,6 +3125,14 @@ export function TdsDataEntry({
                                           {d.section_code && selectedChallan?.section_code && d.section_code !== selectedChallan.section_code && (
                                             <span className="text-[9px] text-amber-600 leading-tight block">⚠ Differs from challan</span>
                                           )}
+                                          {/* A section explicitly scoped to Individual/HUF (e.g. 194C(a)) can never
+                                              apply to any other deductee type — the rate lookup already refuses to
+                                              return a rate for this combination (see rateEngine's
+                                              sectionRestrictedToIndividual), so surface WHY the rate field just
+                                              unlocked instead of leaving it a silent, unexplained change. */}
+                                          {d.section_code && d.deductee_type && getRateForSection(d.section_code, d.deductee_type, d.date_of_payment).sectionRestrictedToIndividual && (
+                                            <span className="text-[9px] text-destructive leading-tight block">⚠ {d.deductee_type} — this section is Individual/HUF only</span>
+                                          )}
                                         </div>
                                       </TableCell>
                                       <TableCell className="text-right">

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav } from "./rateEngine";
+import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, getRateForSection, type RateEntry } from "./rateEngine";
 
 /**
  * Regression: TdsDataEntry.tsx's "Unconsumed Amount" (and the underlying
@@ -161,5 +161,69 @@ describe("withKasarVatav", () => {
     const effectiveApplied = withKasarVatav(applied, rawUnconsumed);
     expect(isChallanFullyUtilised(effectiveApplied, allocatable)).toBe(true);
     expect(isChallanOverApplied(effectiveApplied, allocatable)).toBe(false);
+  });
+});
+
+/**
+ * Regression: a real return deducted TDS at 1% under 194C(a) on a Ltd
+ * company, instead of 2% under 194C(b) — accepted silently, with the rate
+ * field LOCKED as "auto-computed" so there was no way to even notice.
+ *
+ * Root cause: the Section 393 reform split 194C into an Individual/HUF-only
+ * variant (194C(a), 1%) and an Others variant (194C(b), 2%). The rate
+ * master's 194C(a) row still has a rate_company column populated (schema
+ * completeness, not a real combination) — getRateForSection blindly returned
+ * it for a Company deductee. A company can never legitimately fall under an
+ * "Individual/HUF" section; getRateForSection must refuse to hand back that
+ * rate rather than confidently return a wrong number.
+ */
+describe("getRateForSection — an Individual/HUF-only section must never rate a non-individual deductee", () => {
+  const SEC_194C_A: RateEntry = {
+    section_code: "194C(a)", nature_of_payment: "Contractor / Sub-contractor - Individual/HUF",
+    rate_individual: 1, rate_company: 1, rate_no_pan: 20,
+    threshold_individual: 30000, threshold_company: 30000,
+    effective_from: "2026-04-01", effective_to: null,
+  };
+  const SEC_194C_B: RateEntry = {
+    section_code: "194C(b)", nature_of_payment: "Contractor / Sub-contractor - Others",
+    rate_individual: 2, rate_company: 2, rate_no_pan: 20,
+    threshold_individual: 30000, threshold_company: 30000,
+    effective_from: "2026-04-01", effective_to: null,
+  };
+  const rateMaster = [SEC_194C_A, SEC_194C_B];
+
+  it("refuses a rate for a Company under the Individual/HUF-only 194C(a) — the real-world bug", () => {
+    const r = getRateForSection(rateMaster, "194C(a)", "Company", "2026-04-30");
+    expect(r.rate).toBeNull();
+    expect(r.rateFound).toBe(false);
+    expect(r.sectionRestrictedToIndividual).toBe(true);
+  });
+
+  it("still correctly rates an Individual/HUF under 194C(a) at 1%", () => {
+    const r = getRateForSection(rateMaster, "194C(a)", "Individual", "2026-04-30");
+    expect(r.rate).toBe(1);
+    expect(r.rateFound).toBe(true);
+    expect(r.sectionRestrictedToIndividual).toBe(false);
+  });
+
+  it("correctly rates a Company under the sibling 194C(b) at 2% — the fix, not just the refusal", () => {
+    const r = getRateForSection(rateMaster, "194C(b)", "Company", "2026-04-30");
+    expect(r.rate).toBe(2);
+    expect(r.rateFound).toBe(true);
+    expect(r.sectionRestrictedToIndividual).toBe(false);
+  });
+
+  // "Non-Company" is the government's own Form 26Q status code (Genius
+  // import maps status "02" to it — see genius-import.ts), and is this app's
+  // long-standing, intentional stand-in for "gets the Individual/HUF rate" —
+  // 344 live deductee rows depend on exactly this today. The guard must key
+  // off the literal "Company" value, not "not an individual", or it would
+  // newly misflag every one of those 344 correct rows instead of just the
+  // 2 genuinely wrong "Company" ones this bug was pinned against.
+  it("does NOT refuse 'Non-Company' — the pre-existing, correct stand-in for the individual/HUF rate", () => {
+    const r = getRateForSection(rateMaster, "194C(a)", "Non-Company", "2026-04-30");
+    expect(r.rate).toBe(1);
+    expect(r.rateFound).toBe(true);
+    expect(r.sectionRestrictedToIndividual).toBe(false);
   });
 });

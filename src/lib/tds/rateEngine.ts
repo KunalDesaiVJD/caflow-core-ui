@@ -55,7 +55,7 @@ export function getRateForSection(
   deducteeType?: string | null, asOfDate?: string | null,
 ) {
   const candidates = rateMaster.filter(r => r.section_code === sectionCode);
-  if (!candidates.length) return { rate: null as number | null, noPanRate: null as number | null, nature: null as string | null, threshold: null as number | null, rateFound: false };
+  if (!candidates.length) return { rate: null as number | null, noPanRate: null as number | null, nature: null as string | null, threshold: null as number | null, rateFound: false, sectionRestrictedToIndividual: false };
   const asOf = asOfDate || new Date().toISOString().slice(0, 10);
   const eligible = candidates.filter(r =>
     (!r.effective_from || r.effective_from <= asOf) && (!r.effective_to || r.effective_to >= asOf));
@@ -65,12 +65,43 @@ export function getRateForSection(
   const match = pool.reduce((best, r) =>
     (!best || (r.effective_from || "") > (best.effective_from || "")) ? r : best, null as RateEntry | null)!;
   const useIndRate = isIndividualRateType(deducteeType || null);
+  // Section 393 split some sections into an Individual/HUF-only variant and an
+  // "Others" variant with a DIFFERENT rate (194C(a) 1% vs 194C(b) 2%, seeded by
+  // the FY2026-27 rate master migration) — but the rate master row for the (a)
+  // variant still carries a populated rate_company column for schema
+  // completeness, not because a company under (a) is a valid combination. A
+  // company can genuinely never fall under an "Individual/HUF" section; handing
+  // it that row's rate_company anyway is how a real return got 194C(a) @ 1% on
+  // a Ltd company instead of 194C(b) @ 2% — silently, with the rate field
+  // locked as "auto" so there was no way to even notice or correct it inline.
+  // Treated as "no rate for this deductee" so the caller can react (unlock the
+  // field, or better, prompt the user toward the correct sibling section)
+  // rather than confidently returning a number that was never meant for them.
+  //
+  // Deliberately checked against the literal "Company" value ONLY — not
+  // "!useIndRate" (which is also true for "Non-Company", "Firm", "LLP",
+  // "Trust", "AOP"). "Non-Company" is the government's own Form 26Q status
+  // code (Genius import: "01" -> Company, "02" -> Non-Company — see
+  // genius-import.ts) and is the long-standing, intentional value this app
+  // already uses for the Individual/HUF-equivalent 1% bucket under 194C(a):
+  // 344 live "Non-Company" + 80 "Individual" rows currently rely on exactly
+  // that. Only 2 live rows were ever genuinely "Company" under 194C(a) — both
+  // real, unambiguous instances of this bug. A blanket !useIndRate guard would
+  // have newly misflagged all 344 correct ones instead of fixing 2 wrong ones.
+  const individualOnlySection = /individual\s*\/\s*huf/i.test(match.nature_of_payment || "");
+  if (individualOnlySection && deducteeType === "Company") {
+    return {
+      rate: null as number | null, noPanRate: match.rate_no_pan, nature: match.nature_of_payment,
+      threshold: match.threshold_company, rateFound: false, sectionRestrictedToIndividual: true,
+    };
+  }
   return {
     rate: useIndRate ? match.rate_individual : match.rate_company,
     noPanRate: match.rate_no_pan,
     nature: match.nature_of_payment,
     threshold: useIndRate ? match.threshold_individual : match.threshold_company,
     rateFound: true,
+    sectionRestrictedToIndividual: false,
   };
 }
 
