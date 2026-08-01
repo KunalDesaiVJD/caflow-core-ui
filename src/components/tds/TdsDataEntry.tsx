@@ -1158,7 +1158,30 @@ export function TdsDataEntry({
   const fetchDeductees = async (challanId: string) => {
     const { data } = await supabase.from(SRC.deductees as any).select("*")
       .eq("challan_id", challanId).order("created_at", { ascending: true });
-    const list = (data || []) as unknown as Deductee[];
+    const rawList = (data || []) as unknown as Deductee[];
+
+    // The CURRENT quarter's own entries are live and editable, so they always
+    // come straight from the raw table. Any OTHER quarter's entries attached
+    // to this challan are read-only history — if that quarter has since had
+    // a correction filed, history must show the corrected values, not what
+    // was originally filed (see getEffectiveClientLedger). Without this, a
+    // freshly-selected carry-forward challan overwrote allChallanDeductees
+    // with the raw, pre-correction rows fetchCarryForwardChallans had
+    // already substituted correctly — the balance and the read-only history
+    // both silently reverted to the filed-return figures the moment the
+    // card was clicked.
+    let list = rawList;
+    if (!isCorrectionMode && selClient) {
+      const currentRaw = rawList.filter(d => isCurrentQuarterDeductee(d));
+      const hasPriorRows = rawList.some(d => !isCurrentQuarterDeductee(d));
+      if (hasPriorRows) {
+        const { deductees: effectiveDeductees } = await getEffectiveClientLedger(selClient);
+        const priorEffective = effectiveDeductees.filter((d: any) =>
+          d.challan_id === challanId && !isCurrentQuarterDeductee(d));
+        list = [...priorEffective, ...currentRaw] as unknown as Deductee[];
+      }
+    }
+
     // Store ALL entries for cross-quarter balance calc (Issue 7A)
     setAllChallanDeductees(prev => ({ ...prev, [challanId]: list }));
     // Two-way split:
