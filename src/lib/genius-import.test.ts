@@ -67,7 +67,8 @@ vi.mock("@/integrations/supabase/client", () => ({
 }));
 
 import * as XLSX from "xlsx";
-import { cleanSection, ensureRateMasterSections, repairFilingSectionCodes, resolveExistingChallansByNumber, resolveDeclaredAssessmentYear, validateFinancialYearMatch, parseGeniusXls, parseAnnexIISalaryDetails } from "./genius-import";
+import { cleanSection, ensureRateMasterSections, repairFilingSectionCodes, resolveExistingChallansByNumber, resolveDeclaredAssessmentYear, validateFinancialYearMatch, parseGeniusXls, parseAnnexIISalaryDetails, findCompanySectionViolations, type ParsedDeductee } from "./genius-import";
+import type { RateEntry } from "@/lib/tds/rateEngine";
 
 beforeEach(() => {
   upsertCalls.length = 0;
@@ -508,5 +509,76 @@ describe("parseAnnexIISalaryDetails — 24Q salary break-up, only when the file 
       standardDeduction: 75000, // NOT "No" / not the Manual Edit Flag column
       totalTaxableIncome: 432000,
     });
+  });
+});
+
+describe("findCompanySectionViolations — a Company can never import under an Individual/HUF-only section", () => {
+  // Real Section 393 rate-master shape: 194C split into an Individual/HUF-only
+  // variant (1%) and an Others variant (2%) — see the FY2026-27 rate master
+  // migration. This is the exact real-world incident: a Ltd company imported
+  // under 194C(a) at 1% instead of 194C(b) at 2%, silently, with the rate
+  // then locked as "auto-computed" in Data Entry so it was never corrected.
+  const rateMaster: RateEntry[] = [
+    {
+      section_code: "194C(a)", nature_of_payment: "Contractor / Sub-contractor - Individual/HUF",
+      rate_individual: 1, rate_company: 1, rate_no_pan: 20,
+      threshold_individual: 30000, threshold_company: 30000,
+      effective_from: "2026-04-01", effective_to: null,
+    },
+    {
+      section_code: "194C(b)", nature_of_payment: "Contractor / Sub-contractor - Others",
+      rate_individual: 2, rate_company: 2, rate_no_pan: 20,
+      threshold_individual: 30000, threshold_company: 30000,
+      effective_from: "2026-04-01", effective_to: null,
+    },
+  ];
+
+  const mkDeductee = (overrides: Partial<ParsedDeductee>): ParsedDeductee => ({
+    challanSerialNo: 1, sectionCode: "194C(a)", deducteeType: "Non-Company",
+    pan: "AAAAA0000A", refNo: "", name: "Test Deductee", amountPaid: 30000,
+    datePaid: "2026-04-30", rateOfTds: 1, surchargeRate: 0, cessRate: 0,
+    tdsAmount: 300, surchargeAmount: 0, cessAmount: 0, totalTaxDeducted: 300,
+    dateOfDeduction: "2026-04-30", reason: "", certificateNo: "",
+    ...overrides,
+  });
+
+  it("flags a Company under 194C(a), naming the row number, name, section and file's own rate", () => {
+    const rows = [mkDeductee({ deducteeType: "Company", name: "Shree Maruti Integrated Logistics Limited" })];
+    const violations = findCompanySectionViolations(rows, rateMaster);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toContain("Row 2"); // idx 0 -> Excel row 2 (1-indexed + header)
+    expect(violations[0]).toContain("Shree Maruti Integrated Logistics Limited");
+    expect(violations[0]).toContain("194C(a)");
+    expect(violations[0]).toContain("1%");
+  });
+
+  it("does NOT flag 'Non-Company' — the file format's own valid status code for the Individual/HUF rate", () => {
+    const rows = [mkDeductee({ deducteeType: "Non-Company" })];
+    expect(findCompanySectionViolations(rows, rateMaster)).toEqual([]);
+  });
+
+  it("does NOT flag 'Individual' under 194C(a) — a genuinely valid combination", () => {
+    const rows = [mkDeductee({ deducteeType: "Individual" })];
+    expect(findCompanySectionViolations(rows, rateMaster)).toEqual([]);
+  });
+
+  it("does NOT flag a Company under the sibling 194C(b) — that's the correct section for it", () => {
+    const rows = [mkDeductee({ deducteeType: "Company", sectionCode: "194C(b)", rateOfTds: 2 })];
+    expect(findCompanySectionViolations(rows, rateMaster)).toEqual([]);
+  });
+
+  it("reports every violating row with its own correct Excel row number, in one pass", () => {
+    const rows = [
+      mkDeductee({ deducteeType: "Non-Company", name: "OK Vendor" }),        // row 2 — fine
+      mkDeductee({ deducteeType: "Company", name: "Bad Co One" }),           // row 3 — violation
+      mkDeductee({ deducteeType: "Individual", name: "OK Person" }),         // row 4 — fine
+      mkDeductee({ deducteeType: "Company", name: "Bad Co Two" }),           // row 5 — violation
+    ];
+    const violations = findCompanySectionViolations(rows, rateMaster);
+    expect(violations).toHaveLength(2);
+    expect(violations[0]).toContain("Row 3");
+    expect(violations[0]).toContain("Bad Co One");
+    expect(violations[1]).toContain("Row 5");
+    expect(violations[1]).toContain("Bad Co Two");
   });
 });

@@ -18,6 +18,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import { findSeedRate } from "@/lib/tdsRateSeed";
 import { assessmentYearToFinancialYear, financialYearToAssessmentYear } from "@/lib/tdsQuarter";
+import { getRateForSection, type RateEntry } from "@/lib/tds/rateEngine";
 
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -832,6 +833,32 @@ export async function repairFilingSectionCodes(
 }
 
 /**
+ * Finds every imported deductee row whose Section is Individual/HUF-only
+ * (e.g. 194C(a)) but whose own deducteeType is literally "Company" — a
+ * combination that can never be legitimate (see getRateForSection's
+ * sectionRestrictedToIndividual for the same guard, and the doc comment on
+ * its call site in importGeniusXls for the real-world incident this closes).
+ * Returns one human-readable, row-numbered message per violation; an empty
+ * array means the file is clean. Pure and independently testable on purpose —
+ * importGeniusXls only wires it to a rate-master fetch and a throw.
+ */
+export function findCompanySectionViolations(
+  deductees: ParsedDeductee[], rateMaster: RateEntry[],
+): string[] {
+  const violations: string[] = [];
+  deductees.forEach((d, idx) => {
+    const { sectionRestrictedToIndividual } = getRateForSection(rateMaster, d.sectionCode, d.deducteeType, d.datePaid);
+    if (sectionRestrictedToIndividual) {
+      violations.push(
+        `Row ${idx + 2}: "${d.name || "—"}" is a Company but is entered under ${d.sectionCode}, which is Individual/HUF-only ` +
+        `(rate ${d.rateOfTds}%). Companies must use the "Others" variant of this section instead.`
+      );
+    }
+  });
+  return violations;
+}
+
+/**
  * Full import: parse → validate → bulk-insert.
  * Does NOT delete existing challans/deductees — only adds new ones. If the
  * caller wants replace semantics they should clear existing rows first.
@@ -925,6 +952,50 @@ export async function importGeniusXls(
       }
     } catch (sErr: any) {
       console.warn("[GeniusImport] Section auto-creation skipped:", sErr);
+    }
+  }
+
+  // ── Validation: a deductee row's own type/section combination must be a
+  // real one ─────────────────────────────────────────────────────────────
+  // Section 393 split some sections into an Individual/HUF-only variant and
+  // an "Others" variant at a DIFFERENT rate (194C(a) 1% vs 194C(b) 2%) — a
+  // "Company" deductee can never legitimately fall under the Individual/HUF
+  // variant, no matter what rate the file itself claims. This exact
+  // combination (a Ltd company imported under 194C(a) at 1% instead of
+  // 194C(b) at 2%) previously imported silently, with the rate then LOCKED
+  // in Data Entry as "auto-computed" so the wrong deduction was never even
+  // visible to correct — see getRateForSection in rateEngine.ts for the same
+  // guard applied there. Checked here too so the bad row is rejected AT
+  // IMPORT, before any challan or deductee is written, rather than caught
+  // only after it's already live on the return.
+  //
+  // Deliberately checked against getRateForSection's own
+  // sectionRestrictedToIndividual flag — NOT a broader "rate doesn't match
+  // rate master" check — to stay exactly as narrowly scoped as the Data
+  // Entry fix: "Non-Company" is the file format's own valid status code for
+  // the Individual/HUF rate and must never be flagged.
+  if (firmId) {
+    try {
+      const { data: rmRows } = await supabase.from("tds_rate_master")
+        .select("section_code, nature_of_payment, rate_individual, rate_company, rate_no_pan, threshold_individual, threshold_company, effective_from, effective_to, payment_code, new_section_code, new_section_description")
+        .eq("form_type", formType).eq("financial_year", financialYear).eq("is_active", true);
+      const rateMaster = (rmRows || []) as RateEntry[];
+      const violations = findCompanySectionViolations(parsed.deductees, rateMaster);
+      if (violations.length > 0) {
+        throw new Error(
+          `Import rejected — ${violations.length} row(s) have an invalid Company/Section combination:\n` +
+          violations.slice(0, 10).join("\n") +
+          (violations.length > 10 ? `\n…and ${violations.length - 10} more.` : "") +
+          `\n\nFix these row(s) in the Genius file (use the correct section for a company) and re-import.`
+        );
+      }
+    } catch (e: any) {
+      // A genuine validation failure (the throw above) must propagate and
+      // block the import — only a lookup/infra error (rate master fetch
+      // itself failing) is swallowed, matching every other best-effort
+      // enrichment step in this function.
+      if (e instanceof Error && e.message.startsWith("Import rejected")) throw e;
+      console.warn("[GeniusImport] Company/section validation skipped:", e);
     }
   }
 

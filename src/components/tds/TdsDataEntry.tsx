@@ -2066,9 +2066,17 @@ export function TdsDataEntry({
       onCorrectionChanged?.();
     } catch (err: any) {
       console.error("[GeniusImport] Failed:", err);
+      const msg = err?.message || String(err);
+      // A per-row validation rejection (see importGeniusXls's Company/Section
+      // check) is a newline-joined list — the toast's default whitespace
+      // handling collapses \n, so render each line separately instead of
+      // letting a multi-row rejection run together as one unreadable block.
+      const lines = msg.split("\n").filter(Boolean);
       toast({
         title: "Import failed",
-        description: err?.message || String(err),
+        description: lines.length > 1
+          ? <div className="space-y-0.5">{lines.map((l: string, i: number) => <p key={i}>{l}</p>)}</div>
+          : msg,
         variant: "destructive",
       });
     } finally {
