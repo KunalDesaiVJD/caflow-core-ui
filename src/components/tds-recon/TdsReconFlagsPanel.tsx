@@ -66,6 +66,18 @@ const FLAG_META: Record<FlagType, {
     color: "text-amber-700 bg-amber-50 border-amber-200",
     goalNum: 2,
   },
+  // 2026-07-25 — flag emitted by the "Books TDS > Module TDS" branch in
+  // runReconEngine (Issue 11). Missing meta here caused FlagTypePill to
+  // dereference `undefined.color` and the whole TDS Analytics panel
+  // crashed to the ErrorBoundary the moment a client's recon produced
+  // such a flag.
+  books_tds_gt_module: {
+    label: "Books TDS > Module TDS",
+    shortLabel: "Books TDS",
+    icon: <BookText size={12} />,
+    color: "text-fuchsia-700 bg-fuchsia-50 border-fuchsia-200",
+    goalNum: 2,
+  },
   missing_tds_obligation: {
     label: "Missing TDS Obligation",
     shortLabel: "Missing TDS",
@@ -92,14 +104,22 @@ function fmtINR(n: number | null | undefined, signed = false): string {
 }
 
 function FlagTypePill({ type }: { type: FlagType }) {
-  const m = FLAG_META[type];
+  // Defensive fallback: any future flag_type introduced on the engine
+  // side that hasn't been added to FLAG_META yet renders as a neutral
+  // slate pill instead of crashing the whole TDS Analytics panel.
+  const m = FLAG_META[type] ?? {
+    label: type, shortLabel: String(type),
+    icon: <AlertTriangle size={12} />,
+    color: "text-slate-700 bg-slate-50 border-slate-200",
+    goalNum: 0,
+  };
   return (
     <span className={cn(
       "inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium",
-      m?.color,
+      m.color,
     )}>
-      {m?.icon}
-      {m?.shortLabel ?? type}
+      {m.icon}
+      {m.shortLabel ?? type}
     </span>
   );
 }
@@ -596,6 +616,13 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
             colorClass="bg-amber-50 border-amber-200 text-amber-700 hover:bg-amber-100"
             active={typeFilter === "over_deduction"}
             onClick={() => setTypeFilter(typeFilter === "over_deduction" ? "all" : "over_deduction")}
+          />
+          <TypeChip
+            label="Books TDS"   count={counts.books_tds_gt_module}
+            icon={<BookText size={11} />}
+            colorClass="bg-fuchsia-50 border-fuchsia-200 text-fuchsia-700 hover:bg-fuchsia-100"
+            active={typeFilter === "books_tds_gt_module"}
+            onClick={() => setTypeFilter(typeFilter === "books_tds_gt_module" ? "all" : "books_tds_gt_module")}
           />
         </div>
 

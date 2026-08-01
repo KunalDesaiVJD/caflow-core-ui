@@ -13,6 +13,9 @@ export type FlagType =
   | "entry_in_tds_not_in_books"
   | "short_deduction"
   | "over_deduction"
+  // 2026-07-25 (Issue 11) — TDS booked in Tally against a deductee
+  // exceeds the TDS filed for that deductee in the return.
+  | "books_tds_gt_module"
   | "missing_tds_obligation";
 
 export interface TdsReconFlag {
@@ -65,6 +68,7 @@ export interface FlagCounts {
   in_tds_not_books: number;
   short_deduction: number;
   over_deduction: number;
+  books_tds_gt_module: number;
 }
 
 interface UseTdsReconFlagsResult {
@@ -134,6 +138,7 @@ export function useTdsReconFlags(
     in_tds_not_books:flags.filter(f => f.flag_type === "entry_in_tds_not_in_books").length,
     short_deduction: flags.filter(f => f.flag_type === "short_deduction").length,
     over_deduction:  flags.filter(f => f.flag_type === "over_deduction").length,
+    books_tds_gt_module: flags.filter(f => f.flag_type === "books_tds_gt_module").length,
   };
 
   const updateFlagStatus = useCallback(async (

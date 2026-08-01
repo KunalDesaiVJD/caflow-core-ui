@@ -240,14 +240,51 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
     let cancelled = false;
     async function resolve() {
       if (!clientId || !financialYear) { setTallyEngId(null); return; }
-      const { data } = await (supabase as any)
-        .from("tally_groups")
-        .select("engagement_id")
-        .eq("client_id", clientId)
-        .eq("financial_year", financialYear)
-        .limit(1)
-        .maybeSingle();
-      if (!cancelled) setTallyEngId((data as any)?.engagement_id ?? null);
+      // 2026-07-25 — 3-step fallback so every client with a completed
+      // Tally sync gets a valid `?eng=<id>` on their View-Ledger link.
+      //   1. tally_groups row for exact client + FY
+      //   2. any tally_trial_balance row for exact client + FY
+      //   3. any tally_trial_balance row for the client (last resort)
+      // Without step 2, clients whose sync predates the tally_groups
+      // rollout — or whose group row was archived — silently fell back
+      // to the audit engagement id and LedgerVouchersView responded
+      // "Engagement not resolved". The TB table is the ground truth
+      // for what data actually exists to render.
+      let id: string | null = null;
+      try {
+        const { data } = await (supabase as any)
+          .from("tally_groups")
+          .select("engagement_id")
+          .eq("client_id", clientId)
+          .eq("financial_year", financialYear)
+          .limit(1)
+          .maybeSingle();
+        id = (data as any)?.engagement_id ?? null;
+      } catch { /* ignore — fall through */ }
+      if (!id) {
+        try {
+          const { data } = await (supabase as any)
+            .from("tally_trial_balance")
+            .select("engagement_id")
+            .eq("client_id", clientId)
+            .eq("financial_year", financialYear)
+            .limit(1)
+            .maybeSingle();
+          id = (data as any)?.engagement_id ?? null;
+        } catch { /* ignore */ }
+      }
+      if (!id) {
+        try {
+          const { data } = await (supabase as any)
+            .from("tally_trial_balance")
+            .select("engagement_id")
+            .eq("client_id", clientId)
+            .limit(1)
+            .maybeSingle();
+          id = (data as any)?.engagement_id ?? null;
+        } catch { /* ignore */ }
+      }
+      if (!cancelled) setTallyEngId(id);
     }
     resolve();
     return () => { cancelled = true; };

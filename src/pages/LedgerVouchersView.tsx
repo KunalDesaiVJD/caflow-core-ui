@@ -152,12 +152,43 @@ export default function LedgerVouchersView() {
           .maybeSingle();
         id = (data as any)?.engagement_id ?? null;
       }
+      // 2026-07-25 — Root cause of "Engagement not resolved" when the TDS
+      // Analytics module launches a View Ledger click for a client whose
+      // Tally sync did not write a tally_groups row (older syncs before
+      // groups were persisted, or a group row scoped to a slightly
+      // different FY / client_id). Fall back to `tally_trial_balance`:
+      // if this specific LEDGER exists under the client for the FY (or
+      // any FY, as a last resort), we know an engagement_id that will
+      // serve up its vouchers. This closes the loop for every client
+      // where tally_groups is stale but the TB is fresh.
+      if (!id && clientId && ledgerName) {
+        const { data } = await supabase
+          .from("tally_trial_balance" as any)
+          .select("engagement_id")
+          .eq("client_id", clientId)
+          .eq("ledger_name", ledgerName)
+          .limit(1)
+          .maybeSingle();
+        id = (data as any)?.engagement_id ?? null;
+      }
+      if (!id && clientId && ledgerName) {
+        const { data } = await supabase
+          .from("tally_trial_balance" as any)
+          .select("engagement_id,financial_year")
+          .eq("client_id", clientId)
+          .eq("ledger_name", ledgerName)
+          .limit(1)
+          .maybeSingle();
+        if (data) {
+          id = (data as any).engagement_id ?? null;
+        }
+      }
       setEngId(id);
       setScopedFy(fy ?? null);
       setScopedIsPy(!!(selectedEngagement as any)?.is_py_shell);
     }
     resolveEngId();
-  }, [selectedEngagement, engOverride]);
+  }, [selectedEngagement, engOverride, ledgerName]);
 
   // Load vouchers for this ledger and the TB row
   useEffect(() => {
