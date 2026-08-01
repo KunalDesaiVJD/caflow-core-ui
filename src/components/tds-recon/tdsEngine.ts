@@ -634,6 +634,74 @@ export async function runReconEngine(params: {
     closedFingerprints.add(`${f.mapping_id ?? ""}|${f.flag_type ?? ""}|${f.section_code ?? ""}|${(f.tds_deductee_name ?? "").toLowerCase()}`);
   }
 
+  // 2026-08-01 — Scenario 1 (voucher-level section override): load the
+  // auditor's per-voucher section decisions so books-side aggregation
+  // can split a single mapping across multiple sections. The DB table
+  // tds_voucher_classification is optional — if the migration hasn't
+  // been applied on this environment the query fails silently and we
+  // fall back to the mapping-default section for every voucher (i.e.
+  // pre-Scenario-1 behaviour).
+  const voucherClassByMapping = new Map<string, Array<{
+    voucher_id: string;
+    section_code_override: string | null;
+    is_tds_applicable: boolean;
+  }>>();
+  try {
+    const mappingIds = mappings.map(m => m.id).filter(Boolean);
+    if (mappingIds.length > 0) {
+      const { data: classRows } = await (supabase as any)
+        .from("tds_voucher_classification")
+        .select("mapping_id, voucher_id, section_code_override, is_tds_applicable")
+        .eq("client_id", client_id).eq("financial_year", financial_year)
+        .in("mapping_id", mappingIds);
+      for (const c of (classRows ?? []) as any[]) {
+        if (!voucherClassByMapping.has(c.mapping_id)) voucherClassByMapping.set(c.mapping_id, []);
+        voucherClassByMapping.get(c.mapping_id)!.push({
+          voucher_id: c.voucher_id,
+          section_code_override: c.section_code_override ?? null,
+          is_tds_applicable: c.is_tds_applicable !== false,
+        });
+      }
+    }
+  } catch { /* table missing — non-fatal */ }
+
+  // 2026-08-01 — for each mapping that has any classification rows, fetch
+  // the underlying vouchers so we can attribute rupees to the right
+  // section. Cached by mapping so repeat lookups are avoided.
+  const mappingVoucherAmounts = new Map<string, Map<string, number>>();
+  const classifiedMappingIds = Array.from(voucherClassByMapping.keys());
+  if (classifiedMappingIds.length > 0) {
+    // Collate all voucher ids we need to fetch.
+    const voucherIdSet = new Set<string>();
+    for (const arr of voucherClassByMapping.values()) {
+      for (const c of arr) voucherIdSet.add(c.voucher_id);
+    }
+    if (voucherIdSet.size > 0) {
+      try {
+        const voucherIds = Array.from(voucherIdSet);
+        const amountById = new Map<string, number>();
+        // PostgREST limits IN() batches; chunk by 400.
+        for (let i = 0; i < voucherIds.length; i += 400) {
+          const slice = voucherIds.slice(i, i + 400);
+          const { data: vchData } = await (supabase as any)
+            .from("tally_vouchers")
+            .select("id, amount, line_items, party_ledger")
+            .in("id", slice);
+          for (const v of (vchData ?? []) as any[]) {
+            amountById.set(v.id, Math.abs(Number(v.amount ?? 0)));
+          }
+        }
+        for (const m of mappings) {
+          const arr = voucherClassByMapping.get(m.id);
+          if (!arr) continue;
+          const perM = new Map<string, number>();
+          for (const c of arr) perM.set(c.voucher_id, amountById.get(c.voucher_id) ?? 0);
+          mappingVoucherAmounts.set(m.id, perM);
+        }
+      } catch { /* voucher fetch fail — non-fatal */ }
+    }
+  }
+
   // 6. Freshen the tb_total_debit snapshot for every confirmed / pending
   // mapping from the LATEST tally_trial_balance before running any goal.
   // Root cause of "Re-Tally-Sync doesn't refresh TDS Analytics": the
@@ -674,6 +742,36 @@ export async function runReconEngine(params: {
     const dedKey = `${mapping.tds_deductee_name.trim().toLowerCase()}|${mapping.tds_section_code ?? ""}`;
     const ded = aggDeductees.get(dedKey);
 
+    // 2026-08-01 — Scenario 1: pre-compute per-section rupee attribution
+    // from any voucher classifications for this mapping. When no rows
+    // exist, everything continues to fall to the mapping's default
+    // section (backward compatible with pre-Scenario-1 clients).
+    const classArr    = voucherClassByMapping.get(mapping.id) ?? [];
+    const voucherAmts = mappingVoucherAmounts.get(mapping.id) ?? new Map<string, number>();
+    // Sum of all classified vouchers' amounts (whether TDS-applicable or
+    // not); used to subtract from the mapping total to derive the residual
+    // that still belongs to the default section.
+    let classifiedTotal = 0;
+    const bookBySection = new Map<string, number>();
+    for (const c of classArr) {
+      const amt = voucherAmts.get(c.voucher_id) ?? 0;
+      classifiedTotal += amt;
+      if (!c.is_tds_applicable) continue;
+      const sec = c.section_code_override ?? (mapping.tds_section_code ?? "");
+      if (!sec) continue;
+      bookBySection.set(sec, (bookBySection.get(sec) ?? 0) + amt);
+    }
+    // Any activity NOT classified stays under the mapping's default
+    // section — that's the residual bucket.
+    const rawBookForResidual = Math.max(0, (Number(mapping.tb_total_debit ?? 0)) - classifiedTotal);
+    if (mapping.tds_section_code && rawBookForResidual > 0) {
+      bookBySection.set(
+        mapping.tds_section_code,
+        (bookBySection.get(mapping.tds_section_code) ?? 0) + rawBookForResidual,
+      );
+    }
+    const isSplit = classArr.length > 0 && bookBySection.size > 1;
+
     if (goalNumbers.includes(1)) {
       // Issue 9: TB book amount is GST-inclusive; normalise by stripping a typical
       // 18 % GST component so the existence comparison is on like-for-like bases.
@@ -707,6 +805,68 @@ export async function runReconEngine(params: {
     }
 
     if (goalNumbers.includes(2) && mapping.tds_section_code) {
+      // 2026-08-01 — Scenario 1: when the mapping has voucher-level
+      // classifications, run Goal 2 per-section using the deductee's
+      // TDS aggregates for THAT section (not the mapping default).
+      // Each per-section iteration emits its own flag (or none), so
+      // "ABC Pvt Ltd — 194C portion" and "ABC Pvt Ltd — 194J portion"
+      // land as separate rows the auditor can action independently.
+      if (isSplit) {
+        for (const [sec, bookAmtForSec] of bookBySection) {
+          if (bookAmtForSec <= 0) continue;
+          const rateEntrySec = getRateEntry(sec);
+          if (!rateEntrySec) continue;
+          const dedKeySec = `${mapping.tds_deductee_name.trim().toLowerCase()}|${sec}`;
+          const dedSec = aggDeductees.get(dedKeySec);
+          const amtPaidSec   = dedSec?.total_amount_paid ?? 0;
+          const actualTdsSec = dedSec?.total_tds ?? 0;
+          if (amtPaidSec <= 0) continue;
+          const isCompSec = isCompany(dedSec?.primary_deductee_type ?? null);
+          let rateSec = isCompSec ? rateEntrySec.rate_company : rateEntrySec.rate_individual;
+          const threshSec = isCompSec ? rateEntrySec.threshold_company : rateEntrySec.threshold_individual;
+          if (sec === "194J") {
+            rateSec = refined194JRate(
+              (mapping as any).nature_of_payment ?? null,
+              mapping.tds_deductee_name, mapping.tb_ledger_name,
+            );
+          }
+          if (amtPaidSec <= threshSec) continue;
+          const expectedTdsSec = amtPaidSec * rateSec / 100;
+          if (expectedTdsSec <= 0) continue;
+          const varianceSec = expectedTdsSec - actualTdsSec;
+          const absVarSec = Math.abs(varianceSec);
+          const varPctSec = absVarSec / expectedTdsSec;
+          const actualRateSec = amtPaidSec > 0 ? (actualTdsSec / amtPaidSec) * 100 : 0;
+          if (absVarSec >= G2_TDS_VARIANCE_AMOUNT_MIN && varPctSec >= G2_TDS_VARIANCE_PCT_MIN) {
+            const flag_type = varianceSec > 0 ? "short_deduction" : "over_deduction";
+            const fp = `${mapping.id ?? ""}|${flag_type}|${sec}|${(mapping.tds_deductee_name ?? "").toLowerCase()}`;
+            if (closedFingerprints.has(fp)) continue;
+            newFlags.push({
+              client_id, firm_id, financial_year, flag_type, goal_number: 2,
+              tb_ledger_name: mapping.tb_ledger_name,
+              tds_deductee_name: mapping.tds_deductee_name,
+              section_code: sec,
+              nature_of_payment: rateEntrySec.nature,
+              book_amount: amtPaidSec || null, tds_amount: null,
+              expected_tds: expectedTdsSec, actual_tds: actualTdsSec || null,
+              variance_amount: varianceSec,
+              expected_rate: rateSec, actual_rate: actualRateSec || null,
+              threshold_amount: threshSec, voucher_ids: [],
+              deductee_ids: dedSec?.deductee_ids ?? [],
+              mapping_id: mapping.id,
+              ai_reasoning:
+                `Split mapping — Section ${sec} portion. Deductee TDS filings under ${sec}: ` +
+                `paid ₹${amtPaidSec.toLocaleString("en-IN")}, TDS ₹${actualTdsSec.toLocaleString("en-IN",{maximumFractionDigits:0})} ` +
+                `(effective ${actualRateSec.toFixed(2)}%). Expected at ${rateSec}% = ₹${expectedTdsSec.toLocaleString("en-IN",{maximumFractionDigits:0})}. ` +
+                `${varianceSec > 0 ? "Short" : "Over"}: ₹${absVarSec.toLocaleString("en-IN",{maximumFractionDigits:0})} (${(varPctSec*100).toFixed(1)}%).`,
+              ai_confidence: varianceConfidence(varPctSec),
+              sample_narrations: [], flag_status: "pending",
+            });
+          }
+        }
+        continue; // skip the single-section fall-through below
+      }
+
       const rateEntry = getRateEntry(mapping.tds_section_code);
       if (!rateEntry) continue;
       const amtPaid   = ded?.total_amount_paid ?? mapping.tds_total_amount ?? 0;

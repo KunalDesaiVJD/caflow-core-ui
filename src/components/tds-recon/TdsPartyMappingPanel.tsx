@@ -24,7 +24,7 @@ import {
 import {
   Bot, RefreshCw, CheckCircle2, XCircle, Pencil, Save, X,
   ChevronDown, ChevronRight, Info, Loader2, Search, ExternalLink,
-  AlertTriangle, BadgeCheck,
+  AlertTriangle, BadgeCheck, Rows3,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -34,6 +34,7 @@ import {
 } from "./hooks/useTdsPartyMappings";
 import { usePartyExpenseLedgers } from "./hooks/usePartyExpenseLedgers";
 import { runAiMapper } from "./tdsEngine";
+import { SplitByVoucherPanel } from "./SplitByVoucherPanel";
 
 // ─── Common TDS sections for the edit dropdown ────────────────────────────────
 const TDS_SECTIONS = [
@@ -320,6 +321,9 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [search,      setSearch]      = useState("");
   const [editId,      setEditId]      = useState<string | null>(null);
+  // 2026-08-01 — Scenario 1: which mapping row is showing its voucher-level
+  // section drill-down (one at a time to keep the panel compact).
+  const [splitId,     setSplitId]     = useState<string | null>(null);
   const [savingId,    setSavingId]    = useState<string | null>(null);
   const [expandedId,  setExpandedId]  = useState<string | null>(null);
   // Issue 1 — track which rows have their full expense-ledger list expanded.
@@ -542,6 +546,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
               const isExpanded = expandedId === m.id;
               const isEditing  = editId === m.id;
               const isSaving   = savingId === m.id;
+              const isSplit    = splitId === m.id;
 
               return (
                 <div key={m.id} className="hover:bg-muted/10 transition-colors">
@@ -752,6 +757,28 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                           </TooltipTrigger>
                           <TooltipContent side="bottom" className="text-xs">Edit / override mapping</TooltipContent>
                         </Tooltip>
+                        {/* 2026-08-01 — Scenario 1: split-by-voucher toggle.
+                            Opens the voucher drill-down where the auditor
+                            tags individual vouchers to a specific TDS
+                            section. Reuses the tally engagement resolved
+                            for the View-Ledger link. */}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              className={cn(
+                                "p-0.5 rounded",
+                                isSplit
+                                  ? "bg-slate-200 text-slate-700"
+                                  : "text-slate-500 hover:bg-slate-100",
+                              )}
+                              onClick={() => { setSplitId(isSplit ? null : m.id); setEditId(null); setExpandedId(null); }}
+                            >
+                              <Rows3 size={12} />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" className="text-xs">Split by voucher (per-section)</TooltipContent>
+                        </Tooltip>
                         {m.ai_reasoning && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -794,6 +821,20 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                         onSave={patch => handleSaveEdit(m.id, patch)}
                         onCancel={() => setEditId(null)}
                         saving={isSaving}
+                      />
+                    </div>
+                  )}
+                  {/* Split-by-voucher drill-down */}
+                  {isSplit && (
+                    <div className="px-4 pb-3">
+                      <SplitByVoucherPanel
+                        clientId={clientId}
+                        firmId={firmId}
+                        financialYear={financialYear}
+                        engagementId={tallyEngId}
+                        mappingId={m.id}
+                        tbLedgerName={m.tb_ledger_name}
+                        defaultSection={m.tds_section_code ?? null}
                       />
                     </div>
                   )}
