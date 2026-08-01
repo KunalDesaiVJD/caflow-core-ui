@@ -140,6 +140,11 @@ type FilingSubTab = "audited" | "non_audited" | "non_audit_bp" | "partner_in_aud
 // real Audit / Non-Audit / Partner-in-Audited-Firm classification.
 const NON_ITR_SENTINEL = "__non_itr__";
 
+// Sentinel for the Responsible Person filter's "Unassigned" option — lets
+// the filter select clients with NO responsible person set, without
+// conflicting with "" (which means "All Responsible" / no filter active).
+const UNASSIGNED_SENTINEL = "__unassigned__";
+
 function getClientSubTab(classification: string | undefined): FilingSubTab {
   const cls = (classification || "").toLowerCase();
   if (cls === NON_ITR_SENTINEL) return "non_itr";
@@ -702,7 +707,11 @@ const ItReturns = () => {
       if (filterPreparedBy && (p as any).prepared_by !== filterPreparedBy) return false;
       if (filterCheckedBy && (p as any).checked_by !== filterCheckedBy) return false;
       if (filterReviewedBy && (p as any).reviewed_by !== filterReviewedBy) return false;
-      if (filterResponsiblePerson && p.client_responsible_person_id !== filterResponsiblePerson) return false;
+      if (filterResponsiblePerson === UNASSIGNED_SENTINEL) {
+        if (p.client_responsible_person_id) return false;
+      } else if (filterResponsiblePerson && p.client_responsible_person_id !== filterResponsiblePerson) {
+        return false;
+      }
       if (filterFiled === "filed" && (p.filing_status || "") !== "Filed") return false;
       if (filterFiled === "not_filed" && (p.filing_status || "") === "Filed") return false;
       return true;
@@ -1215,6 +1224,14 @@ function FilingTab({
     return counts;
   }, [allProfiles]);
 
+  // Count of clients with no responsible person set — surfaced in the
+  // "Unassigned" filter option so the auditor can see the gap size before
+  // even opening the filter.
+  const unassignedCount = useMemo(
+    () => (allProfiles as ItrProfile[]).filter(p => !p.client_responsible_person_id).length,
+    [allProfiles],
+  );
+
   // Add Row handler — pick a client first
   const [addingRow, setAddingRow] = useState(false);
   const [showAddRowDialog, setShowAddRowDialog] = useState(false);
@@ -1333,6 +1350,9 @@ function FilingTab({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__all__">All Responsible</SelectItem>
+            <SelectItem value={UNASSIGNED_SENTINEL} className="text-destructive font-medium">
+              Unassigned {unassignedCount > 0 ? `(${unassignedCount})` : ""}
+            </SelectItem>
             {(responsiblePersons as { id: string; name: string }[]).map(u => (
               <SelectItem key={u.id} value={u.id}>{u.name || u.id}</SelectItem>
             ))}
