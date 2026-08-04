@@ -3171,9 +3171,30 @@ export default function PipelineFinancialStatements({
     const amounts: Record<string, number> = {};
     let hasInvMapping = false;
 
+    // 2026-08-04 — Ledger-name normalisation index (RAY WINGS fix). A raw
+    // exact-match lookup drops Tally ledgers whose names carry stray CRLF
+    // whitespace ("The District TB Centre\r\n"). computeCOATotals — the
+    // reconciliation validator — already tolerates this via trim+CI, so a
+    // face built from raw lookup lands out of sync with the validator (and
+    // with the note total). Mirror the same fallback here so every path
+    // resolves the same ledger set.
+    const coaMappingCI: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(coaMapping || {})) {
+      if (!v?.code) continue;
+      const kk = String(k).trim().toLowerCase();
+      if (!(kk in coaMappingCI)) coaMappingCI[kk] = v;
+    }
+    const lookupMap = (name: string | null | undefined) => {
+      if (!name) return undefined;
+      const raw = String(name);
+      return (coaMapping as any)[raw]
+          ?? (coaMapping as any)[raw.trim()]
+          ?? coaMappingCI[raw.trim().toLowerCase()];
+    };
+
     // Aggregate TB accounts → FS line items via COA mapping
     for (const acct of tbAccounts) {
-      const mapping = coaMapping[acct.account_name];
+      const mapping = lookupMap(acct.account_name);
       if (!mapping) continue;
       const plCode = INV_DUAL_MAP[mapping.code];
       if (plCode) {
@@ -3353,6 +3374,21 @@ export default function PipelineFinancialStatements({
   // always comes from prior engagement's fa_financial_statements.
   const computedAmountsPY: Record<string, number> = useMemo(() => {
     const amounts: Record<string, number> = {};
+    // 2026-08-04 — trim+CI fallback so CRLF-suffixed Tally ledger names
+    // resolve the same on this face path as they do inside computeCOATotals.
+    const coaMappingCI: Record<string, { code: string }> = {};
+    for (const [k, v] of Object.entries(coaMapping || {})) {
+      if (!v?.code) continue;
+      const kk = String(k).trim().toLowerCase();
+      if (!(kk in coaMappingCI)) coaMappingCI[kk] = v;
+    }
+    const lookupMap = (name: string | null | undefined) => {
+      if (!name) return undefined;
+      const raw = String(name);
+      return (coaMapping as any)[raw]
+          ?? (coaMapping as any)[raw.trim()]
+          ?? coaMappingCI[raw.trim().toLowerCase()];
+    };
     for (const acct of tbAccounts) {
       // 2026-06-01 — Mirror PipelineStage3's alias resolution so FS computes
       // the same PY opening-balance aggregate the COA Mapping screen shows.
@@ -3361,8 +3397,8 @@ export default function PipelineFinancialStatements({
       // BS PY totals — divergence was causing MAHARSH INFRA Trade Payables PY
       // to read 1,26,66,373 on the FS while COA Mapping showed 1,23,35,971.
       const aliasName = aliases[acct.account_name];
-      const mapping = (aliasName ? coaMapping[aliasName] : null)
-                   ?? coaMapping[acct.account_name];
+      const mapping = (aliasName ? lookupMap(aliasName) : null)
+                   ?? lookupMap(acct.account_name);
       if (!mapping) continue;
       const opening = acct.opening_balance ?? 0;
       if (!opening) continue;
