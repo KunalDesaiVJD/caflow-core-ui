@@ -284,6 +284,16 @@ const TdsFilings = () => {
       .channel("tds-module-realtime")
       .on("postgres_changes", { event: "*", schema: "public", table: "client_services" }, () => refreshRef.current())
       .on("postgres_changes", { event: "*", schema: "public", table: "tds_filings" }, () => refreshRef.current())
+      // The Dashboard's "Ready" badge (TdsFilingsManager's fetchVfStatuses)
+      // reads these four tables too — completing Stage 1-3 or signing in
+      // Validate & Finalise must reach an already-open Dashboard tab
+      // immediately, not only on the next 45s poll or manual tab click.
+      // Requires 20260804152100_tds_vf_status_realtime.sql (publication +
+      // REPLICA IDENTITY FULL), same pattern as tds_filings above.
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_recon_results" }, () => refreshRef.current())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_pan_verification_results" }, () => refreshRef.current())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_tally_results" }, () => refreshRef.current())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_filing_audit_log" }, () => refreshRef.current())
       .subscribe((status) => {
         // On (re)connect, pull once so any change that happened while the
         // socket was down is picked up immediately.
