@@ -691,6 +691,26 @@ export function TdsDataEntry({
     // filingOverride?.id so opening a different correction reloads the screen.
   }, [selClient, selFy, selQuarter, selForm, filingOverride?.id]); // loadFiling/resetFiling intentionally omitted — stable callbacks
 
+  // ── Live lock/unlock sync ──────────────────────────────────────────────────
+  // isFilingLocked (below) reads filing.work_status from this component's own
+  // state, which loadFiling only (re)populates on mount/selector-change — a
+  // Firm Admin/Super Admin approving an edit-access request in Validate &
+  // Finalise (which reverts work_status away from Ready to File) would
+  // otherwise leave an already-open Data Entry tab showing the stale
+  // "locked" state until the user reselects the filing or reloads the page.
+  // Full loadFiling() re-run (not just a work_status patch) since the whole
+  // point of an approved unlock is that the underlying data may now differ.
+  const loadFilingRef = useRef(loadFiling);
+  loadFilingRef.current = loadFiling;
+  useEffect(() => {
+    if (!filing?.id) return;
+    const channel = supabase
+      .channel(`tds-data-entry-lock-${filing.id}`)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "tds_filings", filter: `id=eq.${filing.id}` }, () => loadFilingRef.current())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [filing?.id]);
+
   // ─── Carry Forward — CP-04: cross-FY support ──────────────────────────────
   //
   // Convert a (FY, Quarter) pair to a single sortable integer so periods from
