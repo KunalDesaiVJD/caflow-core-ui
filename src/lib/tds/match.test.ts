@@ -75,6 +75,25 @@ describe("nameCompare — spelling variants vs genuinely different names", () =>
     expect(nameCompare("HIRENKUMAR GOPALBHAI PATEL", "Krishna Construction")).not.toBe("match");
   });
 
+  // REAL 24Q client (Accurate PMS Pvt Ltd): "JATIN PATEL" auto-matched to
+  // "Hiral J Patel - Salary" — a total stranger who merely shares the surname
+  // — because tokenRule's initial rule can't tell WHOSE initial "J" is: PATEL
+  // matched PATEL, "J" "matched" JATIN by first letter alone, and the
+  // alignment accepted on those two hits while HIRAL — this Tally row's own
+  // real, distinctive first name — sat unmatched and silently ignored.
+  // Reported a fabricated ₹62,230 "Taxable Income Amount Mismatch" against
+  // an unrelated employee's salary. The initial rule itself must stay
+  // (Taruben S ↔ Taruben Sureshbhai below still needs it) — the fix is
+  // narrower: an initial pairing can't carry a match while a real name from
+  // the SAME side goes unused.
+  it("never lets an unrelated person's middle initial stand in for a different first name", () => {
+    expect(nameCompare("JATIN PATEL", "Hiral J Patel - Salary")).not.toBe("match");
+    expect(nameCompare("JATIN PATEL", "Jatinbhai Patel - Salary")).toBe("match");   // his own real name, unaffected
+    // A harmless unconsumed initial beside an otherwise-COMPLETE match must
+    // still pass — the initial there does no work, so nothing objects to it.
+    expect(nameCompare("Hiral Patel", "Hiral J Patel")).toBe("match");
+  });
+
   it("keeps the pre-existing order/abbreviation tolerance", () => {
     expect(nameCompare("Jayant Kantilal Jagani", "Jayant Jagani Kantilal")).toBe("match");
     expect(nameCompare("KONE ELEVATOR INDIA PRIVATE LIMITED", "Kone Elevator India Pvt Ltd")).toBe("match");
