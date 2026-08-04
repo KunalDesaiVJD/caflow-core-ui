@@ -141,6 +141,10 @@ function isReservesSurplusPopulated(
 // ─── Public types ──────────────────────────────────────────────────────────────
 
 export interface NoteMismatch {
+  /** Note key (e.g. "reserves_surplus", "trade_receivables", "ppe"). Callers
+   *  use this to gate specific downstream behaviours (e.g. block Save only
+   *  when R&S or Trade Receivables mismatch). */
+  noteKey:       string;
   noteNo:        number;
   label:         string;
   bsAmount:      number;   // stage5_notes[section][key].cy
@@ -326,6 +330,7 @@ export function detectMismatches(
     if (Math.abs(diff) < 1) continue;
 
     mismatches.push({
+      noteKey:       key,
       noteNo,
       label:         meta.label,
       bsAmount,
@@ -355,6 +360,7 @@ export function detectMismatches(
       const diff = ppeHeadline - faTotalCy;
       if (Math.abs(diff) >= 1) {
         mismatches.push({
+          noteKey:       "ppe",
           noteNo:        ppeNoteNo,
           label:         "PPE & Intangible Assets",
           bsAmount:      ppeHeadline,

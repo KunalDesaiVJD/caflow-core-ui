@@ -2136,6 +2136,19 @@ export default function PipelineFinancialStatements({
 
   // ─── Notes mismatch count (driven by NotesMismatchPanel callback) ─────────
   const [mismatchCount, setMismatchCount] = useState(0);
+  // Save-gate: only Reserves & Surplus and Trade Receivables mismatches block
+  // Save. These two notes have auditor-editable breakup rows that must sum
+  // to the "per BS" headline; on mismatch we disable Save and pop a dialog.
+  const [saveBlockList, setSaveBlockList] = useState<Array<{
+    noteKey:   string;
+    noteNo:    number;
+    label:     string;
+    bsAmount:  number;
+    notesSum:  number;
+    difference:number;
+    subTabKey: "bs_liab" | "bs_asset" | "pl" | "fa";
+  }>>([]);
+  const [saveBlockedDialogOpen, setSaveBlockedDialogOpen] = useState(false);
 
   // ─── NCE note navigation state ────────────────────────────────────────────
   const [nceNavNote, setNceNavNote] = useState<number | null>(null);
@@ -8380,7 +8393,28 @@ export default function PipelineFinancialStatements({
               {corpIsLocked ? "🔓 Unlock Preview" : "🔒 Lock Preview"}
             </Button>
           )}
-          <Button variant="outline" size="sm" onClick={saveFS} disabled={saving} className="gap-1">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              // Gate: R&S / Trade Receivables sub-rows must reconcile.
+              if (!isNonCorporate && saveBlockList.length > 0) {
+                setSaveBlockedDialogOpen(true);
+                return;
+              }
+              saveFS();
+            }}
+            disabled={saving}
+            className={cn(
+              "gap-1",
+              !isNonCorporate && saveBlockList.length > 0 && "border-red-400 text-red-600 hover:bg-red-50",
+            )}
+            title={
+              !isNonCorporate && saveBlockList.length > 0
+                ? `Save blocked: ${saveBlockList.map(m => m.label).join(" & ")} note total does not match sub-rows. Fix the note before saving.`
+                : "Save the current state of the financial statements"
+            }
+          >
             {saving ? <Loader2 size={14} className="animate-spin" /> : <FileSpreadsheet size={14} />}
             Save
           </Button>
@@ -8850,6 +8884,16 @@ export default function PipelineFinancialStatements({
           engagementId={engagementId}
           entityType={engagement?.entity_type || engagement?.clients?.entity_type}
           onCountChange={setMismatchCount}
+          onMismatchList={(list) => {
+            // Restrict Save-gate to R&S + Trade Receivables (the two notes
+            // whose sub-rows are auditor-editable and must reconcile to
+            // their own BS headline). Other mismatches surface in the
+            // amber banner but do not block Save.
+            const blocked = list.filter(
+              (m) => m.noteKey === "reserves_surplus" || m.noteKey === "trade_receivables"
+            );
+            setSaveBlockList(blocked);
+          }}
           // 2026-08-01 — pipe the same face-side tax total NoteBSLiab
           // uses to reach XV. Without this the R&S banner shows a
           // spurious Δ = tax component on any client whose notes
@@ -8876,6 +8920,65 @@ export default function PipelineFinancialStatements({
           }}
         />
       </div>
+
+      {/* Save-blocked dialog — appears when the user clicks Save while
+          Reserves & Surplus or Trade Receivables sub-rows don't sum to
+          the note's own BS headline. Lists each offender with a
+          jump-to-note button. */}
+      <Dialog open={saveBlockedDialogOpen} onOpenChange={setSaveBlockedDialogOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-red-700">
+              Cannot Save — Note total does not match COA mapping
+            </DialogTitle>
+          </DialogHeader>
+          <div className="text-sm text-gray-700 space-y-3 py-2">
+            <p>
+              The following note{saveBlockList.length > 1 ? "s have" : " has"} a
+              manual edit that does not tie to the amount derived from COA
+              mapping. Please reconcile the sub-rows with the headline total
+              before saving.
+            </p>
+            <div className="border rounded-md divide-y">
+              {saveBlockList.map((m) => (
+                <div key={m.noteKey} className="p-3 flex items-center justify-between gap-3">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold text-gray-800">
+                      Note {m.noteNo} — {m.label}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      Per BS: ₹{Math.abs(m.bsAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                      &nbsp;|&nbsp; Sub-rows sum: ₹{Math.abs(m.notesSum).toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                      &nbsp;|&nbsp; <span className="text-red-600 font-semibold">
+                        Diff: ₹{Math.abs(m.difference).toLocaleString("en-IN", { maximumFractionDigits: 0 })}
+                      </span>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setSaveBlockedDialogOpen(false);
+                      setActiveTab("notes");
+                      setCorpNavNote({ noteNo: m.noteNo, subTab: m.subTabKey as "bs_liab" | "bs_asset" | "pl" | "fa" });
+                      setTimeout(() => {
+                        document.getElementById(`note-${m.noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }, 300);
+                    }}
+                  >
+                    Fix →
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSaveBlockedDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {isLoading ? (
         <div className="flex items-center justify-center py-12">

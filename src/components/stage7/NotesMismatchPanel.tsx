@@ -29,6 +29,9 @@ interface Props {
   entityType?:   string;            // from engagement.entity_type
   /** Called whenever the mismatch count changes — drives the KPI card. */
   onCountChange: (count: number) => void;
+  /** Called with the full mismatch list — parent uses it to gate Save on
+   *  specific note keys (R&S + Trade Receivables). Optional. */
+  onMismatchList?: (list: NoteMismatch[]) => void;
   /** Called when the user clicks a note row's navigate button. */
   onNavigate:    (noteNo: number, subTab: "bs_liab" | "bs_asset" | "pl" | "fa") => void;
   /**
@@ -56,6 +59,7 @@ export function NotesMismatchPanel({
   engagementId,
   entityType,
   onCountChange,
+  onMismatchList,
   onNavigate,
   faceTaxCy = 0,
   faceTaxPy = 0,
@@ -90,6 +94,11 @@ export function NotesMismatchPanel({
   useEffect(() => {
     if (!notesLoading) onCountChange(mismatches.length);
   }, [mismatches.length, notesLoading, onCountChange]);
+
+  // Report the full list to parent (used to gate Save on R&S + Trade Receivables)
+  useEffect(() => {
+    if (!notesLoading) onMismatchList?.(mismatches);
+  }, [mismatches, notesLoading, onMismatchList]);
 
   // Nothing to show while loading or when all notes are reconciled
   if (notesLoading || mismatches.length === 0) return null;
