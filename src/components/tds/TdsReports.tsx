@@ -84,6 +84,8 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const [exportingOverview, setExportingOverview] = useState(false);
   const [overviewViewData, setOverviewViewData] = useState<{ meta: ReportMeta; stageReports: StageReport[]; overview: OverviewReport } | null>(null);
   const [loadingOverviewView, setLoadingOverviewView] = useState(false);
+  // Challan Register — "view all challans where Kasar-Vatav has been applied".
+  const [kasarVatavOnly, setKasarVatavOnly] = useState(false);
 
   const toggleQuarter = (q: string) => {
     setSelQuarters(prev => prev.includes(q) ? prev.filter(x => x !== q) : [...prev, q]);
@@ -309,7 +311,9 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const renderChallanRegister = () => {
     if (!reportData[0]) return <p className="text-muted-foreground">No data</p>;
     const { challans, deductees } = reportData[0];
-    const filtered = challans.filter((c: any) => selQuarters.includes(c.quarter));
+    const inQuarter = challans.filter((c: any) => selQuarters.includes(c.quarter));
+    const kasarVatavCount = inQuarter.filter((c: any) => (c.kasar_vatav_amount || 0) > 0).length;
+    const filtered = kasarVatavOnly ? inQuarter.filter((c: any) => (c.kasar_vatav_amount || 0) > 0) : inQuarter;
     const rows = filtered.map((c: any, i: number) => {
       const dCount = deductees.filter((d: any) => d.challan_id === c.id).length;
       const dTds = deductees.filter((d: any) => d.challan_id === c.id).reduce((s: number, d: any) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
@@ -326,38 +330,45 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         "Section": c.section_code || "—",
         "Deductees": dCount,
         "Matched": Math.abs(dTds - (c.total_tax_deposited || 0)) <= 5 ? "✓" : "✗",
+        "Kasar-Vatav": (c.kasar_vatav_amount || 0) > 0 ? `₹${(c.kasar_vatav_amount || 0).toLocaleString("en-IN")}` : "—",
       };
     });
 
     return (
       <>
-        <div className="flex justify-end gap-2 mb-3">
-          <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
-          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Challan_Register", rows)}><Download size={14} /> Export Excel</Button>
-          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Challan_Register", rows)}><FileText size={14} /> Download as PDF</Button>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <Checkbox checked={kasarVatavOnly} onCheckedChange={(v) => setKasarVatavOnly(!!v)} disabled={kasarVatavCount === 0} />
+            Kasar-Vatav adjusted only ({kasarVatavCount})
+          </label>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
+            <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Challan_Register", rows)}><Download size={14} /> Export Excel</Button>
+            <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Challan_Register", rows)}><FileText size={14} /> Download as PDF</Button>
+          </div>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
-                {Object.keys(rows[0] || {}).map(k => <TableHead key={k} className={["Tax", "Surcharge", "Cess", "Interest", "Total"].includes(k) ? "text-right" : ""}>{k}</TableHead>)}
+                {Object.keys(rows[0] || {}).map(k => <TableHead key={k} className={["Tax", "Surcharge", "Cess", "Interest", "Total", "Kasar-Vatav"].includes(k) ? "text-right" : ""}>{k}</TableHead>)}
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.length === 0 ? (
-                <TableRow><TableCell colSpan={12} className="text-center text-muted-foreground py-8">No challans found</TableCell></TableRow>
-              ) : rows.map((r, i) => (
-                <TableRow key={i}>
-                  {Object.entries(r).map(([k, v], j) => {
-                    const isMoney = ["Tax", "Surcharge", "Cess", "Interest", "Total"].includes(k);
-                    return (
-                      <TableCell key={j} className={cn("text-sm", isMoney ? "text-right" : "")}>
-                        {isMoney && typeof v === "number" ? formatINR(v) : String(v)}
+                <TableRow><TableCell colSpan={13} className="text-center text-muted-foreground py-8">{kasarVatavOnly ? "No Kasar-Vatav adjusted challans in this selection" : "No challans found"}</TableCell></TableRow>
+              ) : rows.map((r, i) => {
+                const isMoneyCol = (k: string) => ["Tax", "Surcharge", "Cess", "Interest", "Total"].includes(k);
+                return (
+                  <TableRow key={i}>
+                    {Object.entries(r).map(([k, v], j) => (
+                      <TableCell key={j} className={cn("text-sm", isMoneyCol(k) || k === "Kasar-Vatav" ? "text-right" : "", k === "Kasar-Vatav" && v !== "—" ? "text-violet-700 dark:text-violet-300 font-medium" : "")}>
+                        {isMoneyCol(k) && typeof v === "number" ? formatINR(v) : String(v)}
                       </TableCell>
-                    );
-                  })}
-                </TableRow>
-              ))}
+                    ))}
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent></Card>
