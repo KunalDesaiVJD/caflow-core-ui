@@ -633,7 +633,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       arr.sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""));
       arr.forEach((c, i) => ordinalOf.set(c.id, i + 1));
     }
-    const correctionById = new Map(corrections.map((c: any) => [c.id, c]));
+    const correctionById = new Map<string, any>(corrections.map((c: any) => [c.id, c]));
 
     for (const cc of correctionChallans) {
       if (cc.action === "unchanged" || !cc.original_challan_id || !activityByChallan.has(cc.original_challan_id)) continue;
