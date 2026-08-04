@@ -197,6 +197,11 @@ const FILING_STATUSES = [
   "Processed",
 ] as const;
 
+/** Index of Ready to File within FILING_STATUSES — the point past which the
+ *  status dropdown becomes forward-only (see handleStatusChange's own guard
+ *  and the SelectContent below). */
+const readyToFileIdx = FILING_STATUSES.indexOf(READY_TO_FILE_STATUS);
+
 const FILING_STATUS_COLORS: Record<string, string> = {
   "Not Started": "bg-muted text-muted-foreground",
   "NIL": "bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300",
@@ -1396,6 +1401,21 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     const oldStatus = filing.work_status;
     if (oldStatus === newStatus) return;
 
+    // Forward-only past Ready to File — enforced here too, not just via the
+    // dropdown's disabled items, since handleBulkAction reaches this same
+    // function through a path that never renders those SelectItems. See the
+    // SelectContent above for the full rationale.
+    const oldIdx = FILING_STATUSES.indexOf(oldStatus as any);
+    const newIdx = FILING_STATUSES.indexOf(newStatus as any);
+    if (oldIdx >= 0 && oldIdx >= readyToFileIdx && newIdx >= 0 && newIdx < oldIdx) {
+      toast({
+        title: "This return is locked",
+        description: `${statusLabel(oldStatus)} can't be reversed from here. Request edit access in Validate & Finalise — a Firm Admin or Super Admin must approve it before this return can be edited again.`,
+        variant: "destructive",
+      });
+      return;
+    }
+
     if (isFiledLikeStatus(newStatus) || isReadyToFileStatus(newStatus)) {
       if (!isVfReady(filing.id)) {
         toast({
@@ -1842,25 +1862,41 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                             <span className="truncate">{statusLabel(f.work_status)}</span>
                           </SelectTrigger>
                           <SelectContent>
-                            {FILING_STATUSES.map(s => {
-                              const notReady = (isFiledLikeStatus(s) || isReadyToFileStatus(s)) && !isVfReady(f.id);
-                              const noAck = isFiledLikeStatus(s) && !hasAckAttached(f.id);
-                              const blocked = notReady || noAck;
-                              const reason = notReady && noAck
-                                ? " (complete Validate & Finalise + upload ACK first)"
-                                : notReady
-                                ? " (complete Validate & Finalise first)"
-                                : noAck
-                                ? " (upload ACK first)"
-                                : "";
-                              return (
-                                <SelectItem key={s} value={s} disabled={blocked}>
-                                  <span className={cn(blocked && "text-muted-foreground")}>
-                                    {statusLabel(s)}{reason}
-                                  </span>
-                                </SelectItem>
-                              );
-                            })}
+                            {(() => {
+                              const currentIdx = FILING_STATUSES.indexOf(f.work_status as any);
+                              return FILING_STATUSES.map((s, sIdx) => {
+                                // Forward-only past Ready to File — once a return has reached
+                                // Ready to File, Filed, or Processed, the dropdown must not offer
+                                // any EARLIER stage. Selecting one here would silently undo the
+                                // lock and let someone edit data without going through the
+                                // edit-access request/approval flow (Stage 4 — see
+                                // tds_edit_requests / TdsValidateFinalise's submitEditRequest /
+                                // approveEditRequest). The only legitimate way back is Validate &
+                                // Finalise's "Revoke Signature" action, which requires Firm
+                                // Admin/Super Admin approval and reverts work_status itself — this
+                                // dropdown is never that path, so it stays forward-only here.
+                                const wouldGoBackward = currentIdx >= 0 && currentIdx >= readyToFileIdx && sIdx < currentIdx;
+                                const notReady = (isFiledLikeStatus(s) || isReadyToFileStatus(s)) && !isVfReady(f.id);
+                                const noAck = isFiledLikeStatus(s) && !hasAckAttached(f.id);
+                                const blocked = notReady || noAck || wouldGoBackward;
+                                const reason = wouldGoBackward
+                                  ? " (locked — request edit access in Validate & Finalise)"
+                                  : notReady && noAck
+                                  ? " (complete Validate & Finalise + upload ACK first)"
+                                  : notReady
+                                  ? " (complete Validate & Finalise first)"
+                                  : noAck
+                                  ? " (upload ACK first)"
+                                  : "";
+                                return (
+                                  <SelectItem key={s} value={s} disabled={blocked}>
+                                    <span className={cn(blocked && "text-muted-foreground")}>
+                                      {statusLabel(s)}{reason}
+                                    </span>
+                                  </SelectItem>
+                                );
+                              });
+                            })()}
                           </SelectContent>
                         </Select>
                       )}
