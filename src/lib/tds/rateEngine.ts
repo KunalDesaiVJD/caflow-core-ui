@@ -179,6 +179,35 @@ export const computeAllocatable = (totalChallanAmount: number, lateFees234E: num
 export const withKasarVatav = (rowsApplied: number, kasarVatavAmount: number | null | undefined) =>
   (rowsApplied || 0) + (kasarVatavAmount || 0);
 
+/** A deductee row shape wide enough for the live-interest recompute below —
+ *  superset of ApplicableRow. */
+export interface InterestApplicableRow extends ApplicableRow {
+  date_of_payment?: string | null;
+}
+
+/** The ONE definition of "is this challan over-applied", covering everything
+ *  challanDeducteeTds/getChallanBreakdownAll's per-challan detail card already
+ *  covers in TdsDataEntry.tsx — live interest recompute (a row's own stored
+ *  interest_amount can be stale; see that component's own doc on why this
+ *  must never be trusted directly), Kasar-Vatav, and late fees — so a SECOND
+ *  caller (e.g. a Stage-1 pre-flight gate) reaches the identical verdict
+ *  without re-deriving any of that logic itself. Takes plain data, no
+ *  component state, so it's usable anywhere a challan + its deductees can be
+ *  fetched. */
+export function computeChallanOverApplied(
+  challan: { total_challan_amount?: number | null; late_fees_234e?: number | null; kasar_vatav_amount?: number | null; deposit_date?: string | null },
+  deductees: InterestApplicableRow[],
+): { overApplied: boolean; effectiveApplied: number; allocatable: number } {
+  const liveInterestRows = deductees.map((d) => ({
+    ...d,
+    interest_amount: calcAutoInterest(d.total_tax_deducted || d.tds_amount || 0, d.date_of_payment ?? null, challan.deposit_date ?? null).interest,
+  }));
+  const { applied } = computeApplied(liveInterestRows);
+  const effectiveApplied = withKasarVatav(applied, challan.kasar_vatav_amount);
+  const allocatable = computeAllocatable(challan.total_challan_amount || 0, challan.late_fees_234e || 0);
+  return { overApplied: isChallanOverApplied(effectiveApplied, allocatable), effectiveApplied, allocatable };
+}
+
 export function challanStatus(applied: number, allocatable: number): "Over-applied" | "Fully Utilised" | "Unconsumed" {
   if (isChallanOverApplied(applied, allocatable)) return "Over-applied";
   if (isChallanFullyUtilised(applied, allocatable)) return "Fully Utilised";

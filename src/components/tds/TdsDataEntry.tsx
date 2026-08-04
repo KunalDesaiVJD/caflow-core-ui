@@ -1284,12 +1284,15 @@ export function TdsDataEntry({
     if (dupRows && dupRows.length > 0) {
       const d = dupRows[0] as any;
       const sameClient = d.client_id === filing.client_id;
-      const whereMsg = sameClient
-        ? `${d.form_type} ${d.quarter} ${d.financial_year} of this client`
-        : `another client's ${d.form_type} ${d.quarter} ${d.financial_year} filing`;
+      // Deductor name — only needs a lookup for the "another client" case;
+      // the current client's own name is already in scope via `clients`.
+      const deductorName = sameClient
+        ? (clients.find(c => c.id === filing.client_id)?.name || "this client")
+        : ((await supabase.from("clients").select("name").eq("id", d.client_id).single()).data?.name || "another client");
+      const whereMsg = `${deductorName}'s ${d.form_type} ${d.quarter} FY ${d.financial_year} filing (BSR ${d.bsr_code})`;
       toast({
-        title: "Duplicate Challan Number",
-        description: `Challan Number ${challanForm.challan_serial_no} already exists in ${whereMsg} (BSR ${d.bsr_code}). Each Challan Number is globally unique — its balance flows to later quarters via Carry-Forward, don't re-add the challan.`,
+        title: "This challan already exists in the system and cannot be imported or created again.",
+        description: `Challan Number ${challanForm.challan_serial_no} already exists in ${whereMsg}. Its balance flows to later quarters via Carry-Forward — don't re-add the challan.`,
         variant: "destructive",
       });
       return;
@@ -2896,6 +2899,16 @@ export function TdsDataEntry({
                                   {f.formType}: ₹{f.applied.toLocaleString("en-IN")} ({f.count} deductee{f.count === 1 ? "" : "s"})
                                 </span>
                               ))}
+                            </div>
+                          )}
+                          {/* Explicit, always-visible error text — the small red
+                              "Over-applied" badge above is easy to miss; this states
+                              the problem outright and blocks Stage 1 Run Validation
+                              (see TdsValidateFinalise.tsx's own gate) until fixed. */}
+                          {overApplied && (
+                            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive mt-1.5">
+                              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                              <span><b>Challan has been over-applied.</b> Remove or correct entries against this challan until Applied no longer exceeds Total Paid — Stage 1 validation can't run until this is fixed.</span>
                             </div>
                           )}
                         </CardContent>
