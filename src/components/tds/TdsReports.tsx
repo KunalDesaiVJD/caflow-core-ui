@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { calcAutoInterest, withKasarVatav, computeApplied, computeAllocatable } from "@/lib/tds/rateEngine";
+import { calcAutoInterest, withKasarVatav, computeApplied, computeAllocatable, challanStatus } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import {
   FileText, Users, Receipt, BarChart3, FileSpreadsheet,
   AlertTriangle, Award, Download, Printer, ArrowLeft,
-  ClipboardList, CalendarCheck, Shield, ShieldCheck, Loader2, Info, Eye, Wallet,
+  ClipboardList, CalendarCheck, Shield, ShieldCheck, Loader2, Info, Eye, Wallet, History,
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
 import { generateGeniusExport } from "@/lib/genius-export";
@@ -32,7 +32,7 @@ import { reportFileName, type ReportMeta, type StageReport, type OverviewReport 
 import { buildOverviewWorkbook, downloadWorkbook } from "@/lib/tds/tdsReportExcel";
 import { exportOverviewPdf } from "@/lib/tds/tdsReportPdf";
 import { fetchFilingReport, mergeQuarterlyReports, type QuarterReportInput } from "@/lib/tds/tdsOverviewFetch";
-import { getEffectiveClientLedger } from "@/lib/tdsCorrections";
+import { getEffectiveClientLedger, diffCorrectionRow, CORRECTION_STATUS_META, type CorrectionStatus, type FieldDiff } from "@/lib/tdsCorrections";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -53,13 +53,14 @@ const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 const formatINR = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const fmtDate = (d: string | null) => { if (!d) return "—"; try { return format(new Date(d), "dd/MM/yyyy"); } catch { return d; } };
 
-type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "unconsumed-report" | "section-summary" | "annual-summary" | "non-filer" | "lower-cert" | "cross-quarter" | "genius-export" | "overview-report" | null;
+type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "unconsumed-report" | "challan-utilization" | "section-summary" | "annual-summary" | "non-filer" | "lower-cert" | "cross-quarter" | "genius-export" | "overview-report" | null;
 
 const REPORT_CARDS: { key: ReportType; label: string; desc: string; icon: any; color: string }[] = [
   { key: "filing-status", label: "Filing Status Report", desc: "All clients, all forms, any period", icon: ClipboardList, color: "text-blue-600" },
   { key: "deductee-wise", label: "Deductee-wise Report", desc: "One deductee across all quarters", icon: Users, color: "text-emerald-600" },
   { key: "challan-register", label: "Challan Register", desc: "All challans for a client", icon: Receipt, color: "text-purple-600" },
   { key: "unconsumed-report", label: "Unconsumed Report", desc: "Unconsumed challan balances, active + archived", icon: Wallet, color: "text-teal-600" },
+  { key: "challan-utilization", label: "Challan Utilization Report", desc: "Every activity against each challan, original + corrections, with running balance", icon: History, color: "text-cyan-600" },
   { key: "section-summary", label: "Section-wise Summary", desc: "TDS by section code", icon: BarChart3, color: "text-amber-600" },
   { key: "annual-summary", label: "Annual TDS Summary", desc: "Full year summary per client", icon: CalendarCheck, color: "text-emerald-500" },
   { key: "non-filer", label: "No-PAN Report", desc: "Deductees without PAN", icon: AlertTriangle, color: "text-destructive" },
@@ -118,7 +119,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       if (selClient !== "all") q = q.eq("client_id", selClient);
       const { data } = await q;
       setReportData((data || []).filter(isCompliant));
-    } else if (selectedReport === "challan-register" || selectedReport === "unconsumed-report" || selectedReport === "deductee-wise" || selectedReport === "section-summary" || selectedReport === "annual-summary" || selectedReport === "non-filer" || selectedReport === "lower-cert" || selectedReport === "cross-quarter" || selectedReport === "genius-export") {
+    } else if (selectedReport === "challan-register" || selectedReport === "unconsumed-report" || selectedReport === "challan-utilization" || selectedReport === "deductee-wise" || selectedReport === "section-summary" || selectedReport === "annual-summary" || selectedReport === "non-filer" || selectedReport === "lower-cert" || selectedReport === "cross-quarter" || selectedReport === "genius-export") {
       // Get filings first
       let fq = supabase.from("tds_filings").select("id, client_id, financial_year, quarter, tds_forms, tan, work_status")
         .eq("financial_year", selFy);
@@ -174,7 +175,31 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       const challans = allChallans.filter(inScope);
       const deductees = allDeductees.filter(inScope);
 
-      setReportData([{ filings: filings || [], challans, deductees }]);
+      // Challan Utilization Report's activity trail needs the RAW correction
+      // history — every status, not just the latest filed version
+      // getEffectiveClientLedger returns above. A plain, separate fetch: it's
+      // only needed by this one report, so no point paying for it on the
+      // other 8 that share this branch.
+      let corrections: any[] = [];
+      let correctionChallans: any[] = [];
+      let correctionDeductees: any[] = [];
+      if (selectedReport === "challan-utilization") {
+        const { data: rawCorrections } = await supabase.from("tds_corrections" as any)
+          .select("id, client_id, financial_year, quarter, form_type, status, created_at, filed_at, raised_by_name, prepared_by_name, approved_by_name, filed_by_name")
+          .in("client_id", clientIds);
+        corrections = ((rawCorrections || []) as any[]).filter(inScope);
+        const correctionIds = corrections.map((c) => c.id);
+        if (correctionIds.length > 0) {
+          const [{ data: cc }, { data: cd }] = await Promise.all([
+            supabase.from("tds_correction_challans" as any).select("*").in("correction_id", correctionIds),
+            supabase.from("tds_correction_deductees" as any).select("*").in("correction_id", correctionIds),
+          ]);
+          correctionChallans = (cc || []) as any[];
+          correctionDeductees = (cd || []) as any[];
+        }
+      }
+
+      setReportData([{ filings: filings || [], challans, deductees, corrections, correctionChallans, correctionDeductees }]);
     }
     setLoading(false);
   };
@@ -531,6 +556,188 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
             </TableBody>
           </Table>
         </CardContent></Card>
+      </>
+    );
+  };
+
+  /**
+   * Every challan's current balance (SAME pipeline as renderUnconsumedReport,
+   * so the two reports can never silently disagree on one challan's number —
+   * see that function's own comment for why each step is there), plus a full
+   * activity trail of what every correction — filed or still in progress —
+   * did to it, reusing diffCorrectionRow (tdsCorrections.ts) rather than
+   * re-deriving field-level changes here.
+   */
+  const renderChallanUtilizationReport = () => {
+    if (!reportData[0]) return <p className="text-muted-foreground">No data</p>;
+    const { challans, deductees, corrections = [], correctionChallans = [], correctionDeductees = [] } = reportData[0];
+    const inQuarter = challans.filter((c: any) => selQuarters.includes(c.quarter));
+
+    const computed = inQuarter.map((c: any) => {
+      const cDeductees = deductees.filter((d: any) => d.challan_id === c.id);
+      const liveInterestRows = cDeductees.map((d: any) => ({
+        ...d,
+        interest_amount: calcAutoInterest(d.total_tax_deducted || d.tds_amount || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest,
+      }));
+      const { applied } = computeApplied(liveInterestRows);
+      const effectiveApplied = withKasarVatav(applied, c.kasar_vatav_amount);
+      const allocatable = computeAllocatable(c.total_challan_amount || 0, c.late_fees_234e || 0);
+      const unconsumed = Math.max(0, allocatable - effectiveApplied);
+      const client = clients.find(cl => cl.id === c.client_id);
+      return { c, client, applied: effectiveApplied, allocatable, unconsumed, status: challanStatus(effectiveApplied, allocatable) };
+    });
+    computed.sort((a: any, b: any) => (a.client?.name || "").localeCompare(b.client?.name || "") || (a.c.deposit_date || "").localeCompare(b.c.deposit_date || ""));
+
+    const balanceRows = computed.map((r: any, i: number) => ({
+      "Sr": i + 1,
+      "Client": r.client?.name || "—",
+      "FY": r.c.financial_year || "—",
+      "Quarter": r.c.quarter || "—",
+      "Form": r.c.form_type || "—",
+      "BSR Code": r.c.bsr_code || "—",
+      "Challan Number": r.c.challan_serial_no || "—",
+      "Date": fmtDate(r.c.deposit_date),
+      "Total Challan Amount": r.c.total_challan_amount || 0,
+      "Interest Deposited": r.c.interest_deposited || 0,
+      "Late Fee (234E)": r.c.late_fees_234e || 0,
+      "Allocatable": r.allocatable,
+      "Applied": r.applied,
+      "Unutilized Balance": r.unconsumed,
+      "Status": r.status,
+    }));
+    const moneyCols = ["Total Challan Amount", "Interest Deposited", "Late Fee (234E)", "Allocatable", "Applied", "Unutilized Balance"];
+
+    // ── Activity trail ────────────────────────────────────────────────────
+    // One "Original filing" entry per challan, plus one entry per correction
+    // VERSION (filed or not) that actually changed something against it —
+    // draft/awaiting/rejected corrections included on purpose (per the ask:
+    // "displaying all the activities done by the users"), clearly labelled by
+    // status so they read as history/context, never as part of the balance
+    // table above (which only ever reflects the latest FILED state).
+    type Activity = { kind: string; label: string; status: string | null; by: string | null; at: string | null; changes: FieldDiff[] };
+    const activityByChallan = new Map<string, Activity[]>();
+    for (const r of computed) activityByChallan.set(r.c.id, [{ kind: "Original", label: "Original filing", status: null, by: null, at: null, changes: [] }]);
+
+    // Ordinal ("Correction #1", "#2"...) is display-only — there is no stored
+    // sequence field on tds_corrections (siblings, not a chain) — computed
+    // here by sorting each period's corrections chronologically.
+    const correctionsByPeriod = new Map<string, any[]>();
+    for (const corr of corrections) {
+      const key = `${corr.client_id}|${corr.financial_year}|${corr.quarter}|${corr.form_type}`;
+      const arr = correctionsByPeriod.get(key) || [];
+      arr.push(corr);
+      correctionsByPeriod.set(key, arr);
+    }
+    const ordinalOf = new Map<string, number>();
+    for (const arr of correctionsByPeriod.values()) {
+      arr.sort((a, b) => (a.created_at || "").localeCompare(b.created_at || ""));
+      arr.forEach((c, i) => ordinalOf.set(c.id, i + 1));
+    }
+    const correctionById = new Map(corrections.map((c: any) => [c.id, c]));
+
+    for (const cc of correctionChallans) {
+      if (cc.action === "unchanged" || !cc.original_challan_id || !activityByChallan.has(cc.original_challan_id)) continue;
+      const corr = correctionById.get(cc.correction_id);
+      if (!corr) continue;
+      activityByChallan.get(cc.original_challan_id)!.push({
+        kind: `Correction #${ordinalOf.get(corr.id)}`, label: `Challan ${cc.action}`, status: corr.status,
+        by: corr.filed_by_name || corr.raised_by_name || null, at: corr.filed_at || corr.created_at || null,
+        changes: diffCorrectionRow(cc),
+      });
+    }
+    for (const cd of correctionDeductees) {
+      if (cd.action === "unchanged") continue;
+      // A deductee's own link is correction_challan_id -> the correction's OWN
+      // copy of the challan; resolve back to the LIVE challan id via that copy's
+      // own original_challan_id. A deductee added onto a brand-new challan
+      // within the same correction (no original_challan_id) has no live
+      // balance row to attach to — skip it, it belongs to a challan this
+      // report doesn't carry a balance for.
+      const parentCc = correctionChallans.find((c: any) => c.id === cd.correction_challan_id);
+      const challanId = parentCc?.original_challan_id;
+      if (!challanId || !activityByChallan.has(challanId)) continue;
+      const corr = correctionById.get(cd.correction_id);
+      if (!corr) continue;
+      activityByChallan.get(challanId)!.push({
+        kind: `Correction #${ordinalOf.get(corr.id)}`, label: `Deductee "${cd.deductee_name || "—"}" ${cd.action}`, status: corr.status,
+        by: corr.filed_by_name || corr.raised_by_name || null, at: corr.filed_at || corr.created_at || null,
+        changes: diffCorrectionRow(cd),
+      });
+    }
+    const touchedChallans = computed.filter((r: any) => (activityByChallan.get(r.c.id) || []).length > 1);
+
+    return (
+      <>
+        <div className="flex justify-end gap-2 mb-3">
+          <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Challan_Utilization", balanceRows)}><Download size={14} /> Export Excel</Button>
+          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Challan_Utilization", balanceRows)}><FileText size={14} /> Download as PDF</Button>
+        </div>
+
+        <Card className="mb-4"><CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                {Object.keys(balanceRows[0] || {
+                  "Sr": 0, "Client": 0, "FY": 0, "Quarter": 0, "Form": 0, "BSR Code": 0, "Challan Number": 0, "Date": 0,
+                  "Total Challan Amount": 0, "Interest Deposited": 0, "Late Fee (234E)": 0, "Allocatable": 0, "Applied": 0,
+                  "Unutilized Balance": 0, "Status": 0,
+                }).map(k => <TableHead key={k} className={moneyCols.includes(k) ? "text-right" : ""}>{k}</TableHead>)}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {balanceRows.length === 0 ? (
+                <TableRow><TableCell colSpan={15} className="text-center text-muted-foreground py-8">No challans in this selection</TableCell></TableRow>
+              ) : balanceRows.map((r, i) => (
+                <TableRow key={i}>
+                  {Object.entries(r).map(([k, v], j) => (
+                    <TableCell key={j} className={cn("text-sm", moneyCols.includes(k) ? "text-right tabular-nums" : "", k === "Unutilized Balance" ? "font-semibold text-cyan-700 dark:text-cyan-400" : "")}>
+                      {k === "Status" ? (
+                        <Badge variant={v === "Over-applied" ? "destructive" : v === "Fully Utilised" ? "outline" : "secondary"} className="text-[10px]">{String(v)}</Badge>
+                      ) : moneyCols.includes(k) && typeof v === "number" ? formatINR(v) : String(v)}
+                    </TableCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent></Card>
+
+        <h3 className="text-sm font-semibold mb-2">Activity Trail</h3>
+        {touchedChallans.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No challan in this selection has been touched by any correction.</p>
+        ) : (
+          <div className="space-y-3">
+            {touchedChallans.map((r: any) => (
+              <Card key={r.c.id}>
+                <CardContent className="p-3">
+                  <p className="text-xs font-medium mb-2">
+                    {r.client?.name || "—"} — {r.c.bsr_code} / {r.c.challan_serial_no} ({fmtDate(r.c.deposit_date)})
+                  </p>
+                  <div className="space-y-2">
+                    {(activityByChallan.get(r.c.id) || []).map((a, i) => (
+                      <div key={i} className="text-xs border-l-2 border-muted pl-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium">{a.kind}</span>
+                          {a.status && (
+                            <Badge className={cn("text-[10px]", CORRECTION_STATUS_META[a.status as CorrectionStatus]?.tone)}>
+                              {CORRECTION_STATUS_META[a.status as CorrectionStatus]?.label ?? a.status}
+                            </Badge>
+                          )}
+                          {a.by && <span className="text-muted-foreground">by {a.by}{a.at ? ` · ${fmtDate(a.at)}` : ""}</span>}
+                        </div>
+                        {a.kind !== "Original" && <p className="text-muted-foreground">{a.label}</p>}
+                        {a.changes.map((d, j) => (
+                          <p key={j} className="text-muted-foreground">{d.label}: {String(d.original ?? "—")} → {String(d.corrected ?? "—")}</p>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )}
       </>
     );
   };
@@ -1236,6 +1443,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       case "deductee-wise": return renderDeducteeWise();
       case "challan-register": return renderChallanRegister();
       case "unconsumed-report": return renderUnconsumedReport();
+      case "challan-utilization": return renderChallanUtilizationReport();
       case "section-summary": return renderSectionSummary();
       case "annual-summary": return renderAnnualSummary();
       case "non-filer": return renderNonFilerAlert();

@@ -219,6 +219,7 @@ function RaiseCorrectionDialog({
   onCreated: (id: string) => void;
 }) {
   const [filings, setFilings] = useState<any[]>([]);
+  const [openPeriods, setOpenPeriods] = useState<Set<string>>(new Set());
   const [pick, setPick] = useState("");
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
@@ -227,21 +228,35 @@ function RaiseCorrectionDialog({
     if (!open || !clientId) return;
     setPick(""); setReason("");
     // Only this entity's own filings — RLS would block anything else anyway.
-    supabase.from("tds_filings")
-      .select("id, financial_year, quarter, tds_forms, work_status")
-      .eq("client_id", clientId)
-      .then(({ data }) => setFilings((data || []) as any[]));
+    Promise.all([
+      supabase.from("tds_filings")
+        .select("id, financial_year, quarter, tds_forms, work_status")
+        .eq("client_id", clientId),
+      // Sequencing gate (firm instruction, 2026-08-04): a period already
+      // holding an open (non-filed, non-rejected) correction isn't offered
+      // again — same rule TdsCorrectionsModule enforces, and the DB backstops
+      // via trg_tds_corrections_sequencing_guard (20260804180500).
+      supabase.from("tds_corrections" as any)
+        .select("financial_year, quarter, form_type")
+        .eq("client_id", clientId).not("status", "in", "(filed,rejected)"),
+    ]).then(([{ data: f }, { data: open }]) => {
+      setFilings((f || []) as any[]);
+      setOpenPeriods(new Set(((open || []) as any[]).map(c => `${c.financial_year}|${c.quarter}|${c.form_type}`)));
+    });
   }, [open, clientId]);
 
-  // One option per (filing × form), since a correction targets a single form.
+  // One option per (filing × form), since a correction targets a single form —
+  // only for a Processed return, and only when no correction is already open
+  // for that exact period (see the fetch above).
   const options = useMemo(() => filings.flatMap(f =>
-    ((f.tds_forms || []) as string[]).map(form => ({
+    f.work_status === "Processed" ? ((f.tds_forms || []) as string[]).map(form => ({
       key: `${f.id}::${form}`,
       filingId: f.id, form,
       fy: f.financial_year, quarter: f.quarter,
       label: `${form} · ${f.quarter} ${f.financial_year}`,
-    })),
-  ).sort((a, b) => b.fy.localeCompare(a.fy) || a.quarter.localeCompare(b.quarter)), [filings]);
+    })) : []
+  ).filter(o => !openPeriods.has(`${o.fy}|${o.quarter}|${o.form}`))
+    .sort((a, b) => b.fy.localeCompare(a.fy) || a.quarter.localeCompare(b.quarter)), [filings, openPeriods]);
 
   const chosen = options.find(o => o.key === pick) || null;
 
