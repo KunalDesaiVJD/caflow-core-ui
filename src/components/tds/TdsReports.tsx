@@ -145,13 +145,20 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       // outside that list (is_archived, kasar_vatav_amount, late_fees_used)
       // come back undefined for a corrected row, not the pre-correction
       // value. Unrevised rows (the vast majority) are unaffected.
+      // NOTE: deductees have no is_archived column at all — the ledger's
+      // deductees query is identical regardless of the archived option, so
+      // only CHALLANS are merged from both calls; taking deductees from both
+      // too would silently double-count every one in every report below.
       const clientIds = Array.from(new Set(filings.map((f: any) => f.client_id)));
-      const ledgers = await Promise.all(clientIds.flatMap((cid: string) => [
-        getEffectiveClientLedger(cid, { archived: false }),
-        getEffectiveClientLedger(cid, { archived: true }),
-      ]));
-      const allChallans = ledgers.flatMap(l => l.challans);
-      const allDeductees = ledgers.flatMap(l => l.deductees);
+      const ledgerPairs = await Promise.all(clientIds.map(async (cid: string) => {
+        const [active, archived] = await Promise.all([
+          getEffectiveClientLedger(cid, { archived: false }),
+          getEffectiveClientLedger(cid, { archived: true }),
+        ]);
+        return { challans: [...active.challans, ...archived.challans], deductees: active.deductees };
+      }));
+      const allChallans = ledgerPairs.flatMap(l => l.challans);
+      const allDeductees = ledgerPairs.flatMap(l => l.deductees);
 
       // Match by period (client+FY+quarter+form), not filing_id — a
       // correction's copy of a challan/deductee doesn't carry the original

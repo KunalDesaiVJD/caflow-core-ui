@@ -494,6 +494,32 @@ export function TdsValidateFinalise({
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
+  // ── Live sync with Data Entry ──────────────────────────────────────────────
+  // Data Entry and Validate & Finalise are SIBLING tabs that stay mounted (see
+  // TdsFilings.tsx's `hidden` class toggle — switching tabs never unmounts
+  // either), so an edit made in Data Entry does not, by itself, cause this
+  // screen's office counts / over-applied pre-flight check to refetch. Without
+  // this, fixing an over-applied challan in Data Entry left this screen
+  // showing the stale pre-fix "over-applied" verdict until the user changed
+  // the client/FY/quarter/form selection — read as "Validate & Finalise and
+  // Data Entry disagree" when the underlying data was already consistent.
+  // tds_challans/tds_deductees are already on the realtime publication (see
+  // 20260729161000_tds_data_entry_realtime.sql, added for the client Portal).
+  const loadAllRef = useRef(loadAll);
+  loadAllRef.current = loadAll;
+  useEffect(() => {
+    const channel = supabase
+      .channel("tds-vf-office-data-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_challans" }, () => loadAllRef.current())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_deductees" }, () => loadAllRef.current())
+      .subscribe((status) => {
+        // On (re)connect, pull once so any Data Entry edit made while the
+        // socket was down is picked up immediately.
+        if (status === "SUBSCRIBED") loadAllRef.current();
+      });
+    return () => { supabase.removeChannel(channel); };
+  }, []);
+
   // ── Any source format → a normalised payload the importer understands ────────
   // rows (tabular) · pdf_base64 · image_base64 (scanned/photo) · raw_text (text).
   const IMAGE_MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", bmp: "image/bmp", tif: "image/tiff", tiff: "image/tiff", heic: "image/heic", heif: "image/heif" };

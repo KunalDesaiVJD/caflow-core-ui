@@ -477,6 +477,29 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   const ackFileInputRefs = useRef<Map<string, HTMLInputElement>>(new Map());
   // Guards the loading skeleton to first-load-only — see fetchFilings below.
   const hasLoadedFilingsRef = useRef(false);
+  // OUT-OF-ORDER RESPONSE GUARD. Realtime fires fetchFilings() once per row
+  // change on ANY of 6 subscribed tables (client_services, tds_filings,
+  // tds_recon_results, tds_pan_verification_results, tds_tally_results,
+  // tds_filing_audit_log — TdsFilings.tsx's own subscription) — and Stage
+  // 1-4 completion + the checker's signature is exactly the kind of event
+  // that writes several of those tables in quick succession (e.g. Run
+  // Validation deletes then re-inserts tds_recon_results, then the
+  // signature lands in tds_filing_audit_log a moment later). Each write
+  // fires its own refresh, so several overlapping fetchFilings() calls are
+  // routinely in flight together — and fetchVfStatuses' OWN 7 parallel
+  // sub-queries have enough latency variance that an OLDER call can finish
+  // AFTER a newer one and silently overwrite correct, fresh vfStatuses with
+  // stale data. This surfaced as a real filing: Stage 1-4 all genuinely
+  // complete and signed in the database, yet the Dashboard's "Ready" badge
+  // stayed stuck red/"Stage 1 pending" indefinitely, surviving repeated
+  // hard refreshes (each refresh re-triggers the SAME racy realtime burst).
+  // setFilings() itself was never affected — it's a single fast query, so
+  // whichever call's OWN filings write happens last in wall-clock time is
+  // simply the most recent one anyway — but fetchVfStatuses' nested,
+  // multi-query state needs an explicit sequence check before every write,
+  // the same `stale()` pattern TdsValidateFinalise.tsx's own loadAll()
+  // already uses for its analogous races.
+  const fetchSeqRef = useRef(0);
   // Map of filing_id → TdsAckFile (populated after each fetch)
   const [ackFiles, setAckFiles] = useState<Map<string, TdsAckFile>>(new Map());
   // Map of filing_id → VfStatus, for the "Validate & Finalise" summary column
@@ -556,6 +579,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     // file input between the OS dialog closing and its change event firing.
     // Data still refreshes live on every trigger as before; only the
     // skeleton-driven remount is now first-load-only.
+    // This call's own generation number — see fetchSeqRef's own doc. Every
+    // state write below (this function's own AND fetchVfStatuses', which
+    // this passes the token through to) is skipped once a LATER call has
+    // already started, so an older, slower-resolving fetch can never
+    // overwrite what a newer one already wrote.
+    const mySeq = ++fetchSeqRef.current;
+    const stale = () => mySeq !== fetchSeqRef.current;
+
     const isBackgroundRefresh = hasLoadedFilingsRef.current;
     if (!isBackgroundRefresh) setLoading(true);
     const firmId = await resolveFirmId();
@@ -567,6 +598,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     if (quarterFilter !== "all") q = q.eq("quarter", quarterFilter);
     if (clientFilter !== "all") q = q.eq("client_id", clientFilter);
     const { data } = await q;
+    if (stale()) return;
     const allFilings = (data || []) as TdsFiling[];
 
     // Fetch deleted clients info (including name) for filings' client IDs
@@ -577,6 +609,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         .select("id, name, deleted_at")
         .in("id", clientIds)
         .not("deleted_at", "is", null);
+      if (stale()) return;
       for (const dc of (delClients || [])) {
         if (dc.deleted_at) delMap.set(dc.id, { name: dc.name || null, deleted_at: dc.deleted_at });
       }
@@ -587,7 +620,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     if (!isBackgroundRefresh) setLoading(false);
     // Fetch ACK files + the Validate & Finalise status summary for all loaded filings
     const filingIds = allFilings.map(f => f.id);
-    await Promise.all([fetchAckFiles(filingIds), fetchVfStatuses(filingIds)]);
+    await Promise.all([fetchAckFiles(filingIds, stale), fetchVfStatuses(filingIds, stale)]);
   }, [isSuperadmin, resolveFirmId, fyFilter, quarterFilter, clientFilter]);
 
   // Re-fetch on mount, on filter change, and whenever the host bumps
@@ -828,10 +861,11 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
   // ─── ACK File System (documents bucket + tds_ack_files table) ───────────────
   // Fetch all ACK file records for a list of filing IDs and populate the map
-  const fetchAckFiles = async (filingIds: string[]) => {
-    if (filingIds.length === 0) { setAckFiles(new Map()); return; }
+  const fetchAckFiles = async (filingIds: string[], stale: () => boolean) => {
+    if (filingIds.length === 0) { if (!stale()) setAckFiles(new Map()); return; }
     const { data, error } = await (supabase.from('tds_ack_files' as any).select('*').in('filing_id', filingIds));
     if (error) { console.log('fetchAckFiles error:', error); return; }
+    if (stale()) return; // see fetchSeqRef's own doc — an older call must never overwrite a newer one's result
     const map = new Map<string, TdsAckFile>();
     (data || []).forEach((f: any) => map.set(f.filing_id, f as TdsAckFile));
     setAckFiles(map);
@@ -848,8 +882,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
    *  on tds_tally_results marks an issue (TdsTallyRecon.tsx). A stage that
    *  isn't applicable counts as satisfied (matches each stage's own
    *  `!applicable || issues === 0` gate), not as an open issue. */
-  const fetchVfStatuses = async (filingIds: string[]) => {
-    if (filingIds.length === 0) { setVfStatuses(new Map()); return; }
+  const fetchVfStatuses = async (filingIds: string[], stale: () => boolean) => {
+    if (filingIds.length === 0) { if (!stale()) setVfStatuses(new Map()); return; }
     const [s1Res, panBatchRes, panResRes, tallyBatchRes, tallyResRes, sigRes, tallyBypassRes] = await Promise.all([
       fetchInChunks((c) => supabase.from("tds_recon_results").select("filing_id, match_status, overridden").in("filing_id", c), filingIds),
       fetchInChunks((c) => supabase.from("tds_pan_verification_batches").select("filing_id").in("filing_id", c), filingIds),
@@ -878,6 +912,14 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     // not a hypothetical: it is the most likely explanation for a "Ready"
     // filing that a hard refresh never fixes. Surface it loudly instead of
     // quietly rendering every filing on the page as not-ready.
+    // A newer fetchFilings() call already started (and will write its own,
+    // more current vfStatuses) while these 7 queries were in flight — see
+    // fetchSeqRef's own doc for why this race is routine, not rare, once
+    // Realtime can fire several of these calls in a burst. Stop here: no
+    // point building a map (or showing an error toast) for a result the UI
+    // will never use anyway.
+    if (stale()) return;
+
     const allErrors = [s1Res, panBatchRes, panResRes, tallyBatchRes, tallyResRes, sigRes, tallyBypassRes].flatMap((r) => r.errors);
     if (allErrors.length > 0) {
       console.error("fetchVfStatuses: one or more chunked queries failed", allErrors);
@@ -954,7 +996,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
       map.set(id, { s1, s1Detail, s2, s2Detail, s3, s3Detail, s4, s4Detail, signed, signedDetail, ready });
     }
-    setVfStatuses(map);
+    // Re-checked here too: the sequence could have been superseded by a
+    // newer call while the loop above ran (synchronous, so unlikely, but
+    // free to check and removes any doubt this is the actual last writer).
+    if (!stale()) setVfStatuses(map);
   };
 
   // Financial Year/Quarter (REJECT) vs Name/TAN/Form No. (WARN) cross-check

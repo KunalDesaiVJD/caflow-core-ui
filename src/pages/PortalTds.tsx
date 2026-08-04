@@ -43,6 +43,7 @@ import {
 } from "@/components/ui/table";
 import { format } from "date-fns";
 import { Receipt, Lock, FileText, Landmark } from "lucide-react";
+import { getEffectiveClientLedger } from "@/lib/tdsCorrections";
 
 // ─── Types (subset of the staff-side shapes — only what is displayed) ────────
 
@@ -209,54 +210,57 @@ export default function PortalTds() {
   const filingId = activeFiling?.id ?? null;
 
   const fetchDetail = useCallback(async (opts?: { silent?: boolean }) => {
-    if (!filingId || !clientId) { setChallans([]); setDeductees([]); return; }
+    if (!filingId || !clientId || !activeFiling) { setChallans([]); setDeductees([]); return; }
     const req = ++detailReqRef.current;
     // Live refreshes are silent — flashing skeletons over a table the client is
     // reading, every time staff save a row, would be worse than the stale ms.
     if (!opts?.silent) setDetailLoading(true);
-    const CHALLAN_COLS = "id, form_type, bsr_code, challan_serial_no, deposit_date, total_tax_deposited, interest_deposited, late_fees_234e, total_challan_amount, minor_head_of_challan, is_book_entry, bank_name";
-    const [{ data: ownCh }, { data: de }] = await Promise.all([
-      supabase.from("tds_challans").select(CHALLAN_COLS).eq("filing_id", filingId).eq("client_id", clientId),
-      supabase
-        .from("tds_deductees")
-        .select("id, challan_id, form_type, deductee_name, deductee_pan, pan_not_available, deductee_type, section_code, amount_paid_credited, date_of_payment, rate_of_tds, tds_amount, total_tax_deducted, interest_amount, reason_for_lower_or_nil_deduction, gross_salary, standard_deduction_allowed, net_taxable_salary")
-        .eq("filing_id", filingId)
-        .eq("client_id", clientId),
+
+    // Correction-aware: the latest filed correction is the current dataset
+    // everywhere in the app EXCEPT the Validation stage (which deliberately
+    // stays independent — see TdsValidateFinalise.tsx). A correction never
+    // rewrites tds_challans/tds_deductees (see tdsCorrections.ts's own header
+    // invariant), so a client viewing their own portal must see the
+    // corrected figures, not what was originally filed. Read through
+    // getEffectiveClientLedger() — same as TdsReports.tsx — rather than the
+    // raw tables directly. Both archived states merged in since this screen
+    // never filtered on is_archived.
+    //
+    // NOTE: deductees have no is_archived column at all — the ledger's
+    // deductees query is identical regardless of the archived option, so
+    // only CHALLANS are merged from both calls; taking deductees from both
+    // too would silently duplicate every row below.
+    const [activeLedger, archivedLedger] = await Promise.all([
+      getEffectiveClientLedger(clientId, { archived: false }),
+      getEffectiveClientLedger(clientId, { archived: true }),
     ]);
     if (req !== detailReqRef.current) return;
-    const forForm = (r: { form_type: string | null }) => !r.form_type || r.form_type === selForm;
-    const deducteeRows = ((de || []) as unknown as PortalDeductee[]).filter(forForm);
+    const allChallans = [...activeLedger.challans, ...archivedLedger.challans] as unknown as PortalChallan[];
+    const allDeductees = activeLedger.deductees as unknown as PortalDeductee[];
+
+    const inPeriod = (r: { financial_year?: string | null; quarter?: string | null; form_type?: string | null }) =>
+      r.financial_year === activeFiling.financial_year && r.quarter === activeFiling.quarter && r.form_type === selForm;
+    const deducteeRows = allDeductees.filter(inPeriod);
 
     // A COMBINED PAYMENT — one bank challan funding deductions on more than one
     // form (e.g. 24Q and 26Q) — keeps the form_type of whichever form's Genius
     // import created it; it never gets relabelled for every form that later
     // reuses it (see the identical fix + full rationale in
-    // TdsDataEntry.tsx's loadFiling, "A COMBINED PAYMENT" comment). Querying
-    // tds_challans by filing_id alone misses that challan here even though
-    // this filing's own deductees are genuinely attached to it — which is why
-    // the stat cards could show real deductee/TDS totals while the section
-    // below rendered nothing (the deductees aren't "unlinked": their
-    // challan_id is a real, non-null id, just one this query never fetched).
-    // Fetch it explicitly via the deductee side, same as the staff screen.
-    const ownIds = new Set((ownCh || []).map((c: any) => c.id as string));
-    const sharedIds = Array.from(new Set(deducteeRows.map(d => d.challan_id).filter((id): id is string => !!id && !ownIds.has(id))));
-    const sharedCh = sharedIds.length > 0
-      ? (await supabase.from("tds_challans").select(CHALLAN_COLS).in("id", sharedIds).eq("client_id", clientId)).data
-      : [];
-    if (req !== detailReqRef.current) return;
+    // TdsDataEntry.tsx's loadFiling, "A COMBINED PAYMENT" comment). Filtering
+    // challans by period/form alone would drop it even though this form's
+    // deductees are genuinely attached to it — include any challan a
+    // this-period deductee references, whatever its own form_type. The full
+    // ledger (no filing_id restriction at all) makes this a lookup, not an
+    // extra query, unlike the old filing_id-scoped version of this fetch.
+    const ownChallans = allChallans.filter(inPeriod);
+    const ownIds = new Set(ownChallans.map(c => c.id));
+    const sharedIds = new Set(deducteeRows.map(d => d.challan_id).filter((id): id is string => !!id && !ownIds.has(id)));
+    const sharedChallans = allChallans.filter(c => sharedIds.has(c.id));
 
-    // Cast through unknown: src/integrations/supabase/types.ts is stale and
-    // does not know about late_fees_234e (added in 20260401090000) — it is a
-    // protected file, regenerated via the Supabase CLI only.
-    //
-    // NOTE: unlike deductees, challans are NOT filtered by forForm — a shared
-    // challan's own form_type may legitimately belong to a different form (see
-    // above); what makes it belong on THIS screen is that a deductee under
-    // THIS filing references it, not its own form_type label.
-    setChallans([...((ownCh || []) as unknown as PortalChallan[]), ...((sharedCh || []) as unknown as PortalChallan[])]);
+    setChallans([...ownChallans, ...sharedChallans]);
     setDeductees(deducteeRows);
     setDetailLoading(false);
-  }, [filingId, clientId, selForm]);
+  }, [filingId, clientId, selForm, activeFiling]);
 
   useEffect(() => { fetchDetail(); }, [fetchDetail]);
 

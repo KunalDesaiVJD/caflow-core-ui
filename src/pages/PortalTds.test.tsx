@@ -12,6 +12,13 @@
  * It also catches the fetch→setState→fetch loop that an effect keyed on the
  * activeClient OBJECT (rather than its id) reintroduces — that version OOMs
  * this test instead of silently hanging a client's browser.
+ *
+ * Since PortalTds.tsx reads through getEffectiveClientLedger() (correction-
+ * aware — see that fetchDetail's own doc), the mock supabase client below
+ * does REAL .eq()/.in() filtering, not a no-op — otherwise the {archived:
+ * false} and {archived: true} ledger calls would return identical
+ * (duplicated) rows, since both share the exact same underlying query shape
+ * apart from the is_archived value.
  */
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -22,13 +29,15 @@ const FILING = {
   date_of_filing: null, acknowledgment_number: null,
 };
 const CHALLAN = {
-  id: "ch1", form_type: "26Q", bsr_code: "0510308", challan_serial_no: "00123",
+  id: "ch1", client_id: "c1", is_archived: false, financial_year: "2025-26", quarter: "Q1",
+  form_type: "26Q", bsr_code: "0510308", challan_serial_no: "00123",
   deposit_date: "2025-07-07", total_tax_deposited: 5000, interest_deposited: 0,
   late_fees_234e: 0, total_challan_amount: 5000, minor_head_of_challan: "200",
   is_book_entry: false, bank_name: "HDFC Bank",
 };
 const DEDUCTEE = {
-  id: "d1", challan_id: "ch1", form_type: "26Q", deductee_name: "Acme Traders",
+  id: "d1", client_id: "c1", financial_year: "2025-26", quarter: "Q1",
+  challan_id: "ch1", form_type: "26Q", deductee_name: "Acme Traders",
   deductee_pan: "AAAPA1234A", pan_not_available: false, deductee_type: "Company",
   section_code: "194C", amount_paid_credited: 250000, date_of_payment: "2025-06-15",
   rate_of_tds: 2, tds_amount: 5000, total_tax_deducted: 5000, interest_amount: 0,
@@ -37,17 +46,20 @@ const DEDUCTEE = {
 };
 // A COMBINED-PAYMENT challan: created under 24Q's Genius import (so its own
 // form_type is "24Q"), but reused for a 26Q deductee too — the exact scenario
-// TdsDataEntry.tsx's "A COMBINED PAYMENT" fetch fix handles. The plain
-// filing_id+client_id query for this filing never returns it; it only comes
-// back via the .in("id", sharedIds) lookup keyed off the deductee side.
+// TdsDataEntry.tsx's "A COMBINED PAYMENT" fetch fix handles. Filtering
+// challans strictly by period/form would drop it; PortalTds.tsx's
+// fetchDetail finds it via the deductee side instead, from the SAME full
+// client ledger (no extra query needed).
 const SHARED_CHALLAN = {
-  id: "ch2", form_type: "24Q", bsr_code: "0510309", challan_serial_no: "00456",
+  id: "ch2", client_id: "c1", is_archived: false, financial_year: "2025-26", quarter: "Q1",
+  form_type: "24Q", bsr_code: "0510309", challan_serial_no: "00456",
   deposit_date: "2025-07-08", total_tax_deposited: 8000, interest_deposited: 0,
   late_fees_234e: 0, total_challan_amount: 8000, minor_head_of_challan: "200",
   is_book_entry: false, bank_name: "HDFC Bank",
 };
 const SHARED_DEDUCTEE = {
-  id: "d2", challan_id: "ch2", form_type: "26Q", deductee_name: "Beta Supplies",
+  id: "d2", client_id: "c1", financial_year: "2025-26", quarter: "Q1",
+  challan_id: "ch2", form_type: "26Q", deductee_name: "Beta Supplies",
   deductee_pan: "BBBPB5678B", pan_not_available: false, deductee_type: "Company",
   section_code: "194J", amount_paid_credited: 400000, date_of_payment: "2025-06-20",
   rate_of_tds: 2, tds_amount: 8000, total_tax_deducted: 8000, interest_amount: 0,
@@ -66,22 +78,17 @@ const { channelObj, removeChannel } = vi.hoisted(() => {
 
 vi.mock("@/integrations/supabase/client", () => {
   const table = (name: string) => {
-    let inFilter: string[] | null = null;
+    let data: any[] =
+      name === "tds_filings" ? [FILING]
+      : name === "tds_challans" ? [CHALLAN, SHARED_CHALLAN]
+      : name === "tds_deductees" ? [DEDUCTEE, SHARED_DEDUCTEE]
+      : []; // tds_corrections and friends — no filed corrections in this fixture set
     const builder: any = {
       select: () => builder,
-      eq: () => builder,
-      in: (_col: string, values: string[]) => { inFilter = values; return builder; },
-      then: (res: any) => {
-        let rows: any[];
-        if (name === "tds_filings") rows = [FILING];
-        else if (name === "tds_challans") {
-          // The FIRST tds_challans query (own, by filing_id+client_id) never
-          // calls .in — only the second (shared, by challan id) does.
-          rows = inFilter ? [CHALLAN, SHARED_CHALLAN].filter(c => inFilter!.includes(c.id)) : [CHALLAN];
-        } else if (name === "tds_deductees") rows = [DEDUCTEE, SHARED_DEDUCTEE];
-        else rows = [];
-        return Promise.resolve({ data: rows, error: null }).then(res);
-      },
+      eq: (col: string, val: any) => { data = data.filter((r: any) => r[col] === val); return builder; },
+      in: (col: string, vals: any[]) => { data = data.filter((r: any) => vals.includes(r[col])); return builder; },
+      order: () => builder,
+      then: (res: any) => Promise.resolve({ data, error: null }).then(res),
     };
     return builder;
   };
@@ -129,7 +136,7 @@ describe("PortalTds render check", () => {
     // Combined-payment challan (own form_type "24Q", only reachable via the
     // deductee side) still surfaces on this 26Q screen, along with its row —
     // it must not silently vanish just because its own form_type differs and
-    // it isn't covered by the filing_id-scoped query.
+    // it isn't covered by a period-only filter.
     expect(screen.getByText(/Challan 00456/)).toBeInTheDocument();
     expect(screen.getByText("Beta Supplies")).toBeInTheDocument();
 

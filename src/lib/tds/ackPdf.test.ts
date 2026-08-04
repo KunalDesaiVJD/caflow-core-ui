@@ -101,8 +101,16 @@ describe("extractAckNumber", () => {
   // left-aligned under the wrapped "Tax Invoice cum Token / Number" header,
   // three bands below it (the header itself wraps across three lines before
   // the value row starts).
-  it("reads the acknowledgement number from the Protean 'Tax Invoice cum Token Number' column, with no 'Acknowledgement Number' label anywhere", () => {
+  // Includes the real receipt's own "Tax Invoice cum Provisional Receipt"
+  // heading a few lines above the real header — a genuinely different line
+  // that shares the same opening words. A first version of this fix found
+  // "Token" in the header's own wrapped row and mistook THAT heading for
+  // the real one (its own lookahead reached far enough to see it), landing
+  // on the wrong column-x and returning null on the real file — see
+  // findTokenNumberHeaderBandIdx's own doc.
+  it("reads the acknowledgement number from the Protean 'Tax Invoice cum Token Number' column, with no 'Acknowledgement Number' label anywhere, and is not fooled by the 'Tax Invoice cum Provisional Receipt' heading above it", () => {
     const items: PdfTextItem[] = [
+      cell(135, 765, "Tax Invoice cum Provisional Receipt"),
       cell(24, 751, "Tax Invoice cum Token"), cell(411, 751, "GSTIN of"), cell(485, 751, "Receipt no.(note i) (to"),
       cell(120, 746, "Name of Deductor"),
       cell(51, 742, "Number"), cell(485, 742, "be quoted on TDS"),
@@ -111,6 +119,26 @@ describe("extractAckNumber", () => {
       cell(20, 721, "334899600554750"), cell(385, 721, "NA"), cell(485, 721, "QWIMJVUD"),
     ];
     expect(extractAckNumber([items])).toBe("334899600554750");
+  });
+
+  // A SECOND real receipt (D G I T (INV) AHMEDABAD, 26Q — "Form No" prints
+  // "140", already mapped to 26Q) wraps the SAME header at a DIFFERENT word:
+  // "Tax Invoice cum" / "Token Number", not "Tax Invoice cum Token" /
+  // "Number" as the first receipt above does. The break point moves with
+  // the printed Name of Deductor's own length. A fix anchored to only the
+  // first shape is a client-specific fix wearing a generic name — this is
+  // exactly the case that caught it.
+  it("reads the acknowledgement number when the SAME header wraps at a different word ('Tax Invoice cum' / 'Token Number')", () => {
+    const items: PdfTextItem[] = [
+      cell(154, 765, "Tax Invoice cum Provisional Receipt"),
+      cell(20, 751, "Tax Invoice cum"), cell(385, 751, "GSTIN of"), cell(485, 751, "Receipt no.(note i) (to"),
+      cell(120, 746, "Name of Deductor"),
+      cell(485, 742, "be quoted on TDS"),
+      cell(20, 741, "Token Number"), cell(385, 741, "Deductor/Collector"),
+      cell(120, 722, "D G I T (INV) AHMEDABAD"),
+      cell(20, 721, "334899600554676"), cell(385, 721, "NA"), cell(485, 721, "QWIGOLUG"),
+    ];
+    expect(extractAckNumber([items])).toBe("334899600554676");
   });
 });
 
@@ -270,6 +298,7 @@ describe("extractAckFields — the Protean 'Tax Invoice cum Token Number' templa
   // is a "Label : Value" row — every one is a column value, left-aligned
   // under its own header, on the row(s) directly below it.
   const items: PdfTextItem[] = [
+    cell(135, 765, "Tax Invoice cum Provisional Receipt"),
     cell(24, 751, "Tax Invoice cum Token"), cell(411, 751, "GSTIN of"), cell(485, 751, "Receipt no.(note i) (to"),
     cell(120, 746, "Name of Deductor"),
     cell(51, 742, "Number"), cell(485, 742, "be quoted on TDS"),
@@ -290,6 +319,38 @@ describe("extractAckFields — the Protean 'Tax Invoice cum Token Number' templa
       quarter: "Q1",
       formNo: "138",
       tan: "AHMP14665A",
+    });
+  });
+
+  // A SECOND real receipt (D G I T (INV) AHMEDABAD, 334899600554676, 26Q Q1
+  // FY2026-27 — "Form No" prints "140", already mapped to 26Q) wraps "Tax
+  // Invoice cum Token Number" at a different word than the fixture above
+  // ("Tax Invoice cum" / "Token Number", not "Tax Invoice cum Token" /
+  // "Number") — same template family, different Name of Deductor length
+  // pushing the wrap point around. Reported separately from the 24Q case
+  // above specifically because a fix proven against only one shape is not
+  // a generic fix — see findTokenNumberHeaderBandIdx's own doc.
+  it("extracts every field from a second real receipt whose header wraps at a different word", () => {
+    const items2: PdfTextItem[] = [
+      cell(154, 765, "Tax Invoice cum Provisional Receipt"),
+      cell(20, 751, "Tax Invoice cum"), cell(385, 751, "GSTIN of"), cell(485, 751, "Receipt no.(note i) (to"),
+      cell(120, 746, "Name of Deductor"),
+      cell(485, 742, "be quoted on TDS"),
+      cell(20, 741, "Token Number"), cell(385, 741, "Deductor/Collector"),
+      cell(120, 722, "D G I T (INV) AHMEDABAD"),
+      cell(20, 721, "334899600554676"), cell(385, 721, "NA"), cell(485, 721, "QWIGOLUG"),
+      cell(20, 699, "Date"), cell(120, 699, "TAN"), cell(205, 699, "AO Code"), cell(270, 699, "Form No"),
+      cell(320, 699, "Periodicity"), cell(380, 699, "Type of Statement"), cell(485, 699, "Tax Year"),
+      cell(20, 679, "31 July 2026"), cell(120, 679, "AHMD04141E"), cell(205, 679, "GUJWT1471"), cell(270, 679, "140"),
+      cell(320, 679, "Q1"), cell(380, 679, "Regular"), cell(485, 679, "2026-27"),
+    ];
+    expect(extractAckFields([items2])).toEqual({
+      ackNumber: "334899600554676",
+      name: "D G I T (INV) AHMEDABAD",
+      financialYear: "2026-27",
+      quarter: "Q1",
+      formNo: "140",
+      tan: "AHMD04141E",
     });
   });
 
