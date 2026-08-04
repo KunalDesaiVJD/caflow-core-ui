@@ -5230,9 +5230,26 @@ export default function PipelineFinancialStatements({
         setPySourceDialog(false);
         return;
       }
+      // Resolve the firm_id to stamp on the shell. Stamping null (the old
+      // fallback) made the shell INVISIBLE to non-superadmin firm members
+      // under RLS (audit_engagements SELECT gates on
+      // firm_id = current_user_firm_id()), so only the superadmin — who
+      // bypasses RLS — could see the PY Shell banner / "Open PY Shell Tally
+      // Sync" button. A PY shell is a client-derived record, so it must
+      // inherit the client's firm. Fall back to the client's firm_id when the
+      // CY engagement's firm_id is missing.
+      let shellFirmId: string | null =
+        engagement.firm_id ?? (engagement as any)?.clients?.firm_id ?? null;
+      if (!shellFirmId && engagement.client_id) {
+        const { data: cli } = await (supabase.from as any)("clients")
+          .select("firm_id")
+          .eq("id", engagement.client_id)
+          .maybeSingle();
+        shellFirmId = (cli as any)?.firm_id ?? null;
+      }
       const { data, error } = await (supabase.from as any)("audit_engagements").insert({
         client_id: engagement.client_id,
-        firm_id: engagement.firm_id ?? null,
+        firm_id: shellFirmId,
         financial_year: prevFy,
         audit_type: engagement.audit_type ?? "statutory",
         entity_type: engagement.entity_type ?? engagement?.clients?.entity_type ?? null,
