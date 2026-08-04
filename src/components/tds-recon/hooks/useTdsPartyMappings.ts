@@ -115,7 +115,8 @@ export function useTdsPartyMappings(
         // (Phase 3) — those placeholders broke View Ledger.
         return methods.includes("name_similarity")
           || methods.includes("voucher_evidence")
-          || methods.includes("tds_amount_tie");
+          || methods.includes("tds_amount_tie")
+          || methods.includes("tds_amount_near");
       });
 
       // 2026-07-24 — Root cause of Issues 9 & 12: this read-time dedupe was

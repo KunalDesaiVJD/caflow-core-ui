@@ -307,33 +307,30 @@ export async function runAiMapper(params: {
 }): Promise<MapperResult> {
   const { client_id, financial_year, firm_id, force_rematch = false } = params;
 
-  // 2026-08-04 Phase 3 — clean up stale "(unmapped: <deductee>)" placeholder
+  // 2026-08-04 Phase 3c — clean up stale "(unmapped: <deductee>)" placeholder
   // rows from the previous seeding logic. Their synthetic tb_ledger_name
-  // (starting with "(unmapped: ") broke View Ledger and created phantom
-  // TDS>Books variance flags. Delete ALL rows with match_method="deductee_only"
-  // — even ones the auditor previously confirmed, because their tb_ledger_name
-  // is synthetic and will always fail View Ledger. The new flow re-links each
-  // deductee via the manual Tally-ledger picker (Phase 5), which creates
-  // proper mapped_by="auditor" rows with real tb_ledger_name.
+  // broke View Ledger. A straight DELETE fails with FK constraint from
+  // tds_recon_flags, so we cascade: find the stale mapping ids first,
+  // delete referencing flags, then delete the mappings.
   try {
-    await (supabase as any)
+    const { data: staleRows } = await (supabase as any)
       .from("tds_tb_party_mappings")
-      .delete()
+      .select("id")
       .eq("client_id", client_id)
       .eq("financial_year", financial_year)
-      .eq("match_method", "deductee_only");
+      .or("match_method.eq.deductee_only,tb_ledger_name.like.(unmapped:%");
+    const staleIds = ((staleRows as any[]) || []).map(r => r.id);
+    if (staleIds.length > 0) {
+      await (supabase as any)
+        .from("tds_recon_flags")
+        .delete()
+        .in("mapping_id", staleIds);
+      await (supabase as any)
+        .from("tds_tb_party_mappings")
+        .delete()
+        .in("id", staleIds);
+    }
   } catch { /* non-fatal — cleanup only */ }
-  // Also delete rows whose tb_ledger_name still carries the "(unmapped: "
-  // prefix (belt-and-braces — the match_method column MIGHT have been
-  // overwritten by a subsequent edit but the synthetic name persists).
-  try {
-    await (supabase as any)
-      .from("tds_tb_party_mappings")
-      .delete()
-      .eq("client_id", client_id)
-      .eq("financial_year", financial_year)
-      .like("tb_ledger_name", "(unmapped:%");
-  } catch { /* non-fatal */ }
 
   // 1. Fetch Trial Balance ledgers — PAGINATE (PostgREST caps a single response
   // at 1000 rows; un-paginated, expense/creditor ledgers past row 1000 were
@@ -518,6 +515,7 @@ export async function runAiMapper(params: {
       // ₹2,790 ↔ SHANKARLAL ₹2,790). Section must also agree. This bypasses
       // the nameScore floor entirely.
       let tdsAmtTie = false;
+      let tdsAmtNear = false; // relaxed: strong but not conclusive
       if (hasVoucherEvidence && voucherTds > 0 && ded.total_tds > 0) {
         const diff    = Math.abs(voucherTds - ded.total_tds);
         const ratio   = diff / Math.max(voucherTds, ded.total_tds);
@@ -525,13 +523,23 @@ export async function runAiMapper(params: {
           || !ded.section_code
           || String((tb as any).__voucher_section).replace(/[^0-9a-z]/gi, "").toUpperCase()
              === String(ded.section_code).replace(/[^0-9a-z]/gi, "").toUpperCase();
+        // Exact tie — auto-confirm.
         if (sectionOk && (diff <= 10 || ratio <= 0.02)) tdsAmtTie = true;
+        // "Near" tie — Tally split a vendor across multiple ledger names
+        // (Shanker Furniture ₹2,790 but SHANKARLAL was reported for ₹3,535
+        // total across 3 quarters, one of which was booked to a different
+        // Tally ledger). Allow up to 30 % relative gap with matching
+        // section; downstream still routes this through "needs_review"
+        // (not auto-confirmed) so the auditor eyeballs it.
+        else if (sectionOk && ratio <= 0.30) tdsAmtNear = true;
       }
       // Issue 3: Require ≥ 70% name similarity — BUT voucher-derived candidates
       // get 60% (and hasVoucherEvidence extends that to TB rows also seen in
-      // vouchers). When tdsAmtTie is true, name floor is bypassed entirely.
+      // vouchers). When tdsAmtTie or tdsAmtNear is true, name floor is
+      // bypassed entirely — the amount signal is enough to justify a
+      // review-quality suggestion.
       const nameFloor = hasVoucherEvidence ? 60 : 70;
-      if (!tdsAmtTie && nameScore < nameFloor) continue;
+      if (!tdsAmtTie && !tdsAmtNear && nameScore < nameFloor) continue;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
       // Use GST-normalised gross comparison to avoid spurious mismatches
       const { score: amtScore, gstAdjusted } = grossAmountScore(tbActivity, ded.total_amount_paid);
@@ -539,7 +547,8 @@ export async function runAiMapper(params: {
       // Base composite; overridden below when the TDS-amount tie fires
       // because it's a much stronger signal than fuzzy name/gross scores.
       let confidence = Math.round(nameScore * 0.50 + amtScore * 0.30 + secScore * 0.20);
-      if (tdsAmtTie) confidence = Math.max(confidence, 85);
+      if (tdsAmtTie)  confidence = Math.max(confidence, 85);
+      if (tdsAmtNear) confidence = Math.max(confidence, 60); // pending, not confirmed
       if (confidence < 40) continue;
       if (!best || confidence > best.confidence) {
         const methods: string[] = [];
@@ -547,8 +556,9 @@ export async function runAiMapper(params: {
         if (amtScore  >= 75) methods.push("amount_ratio");
         if (secScore  >= 80) methods.push("section_context");
         if (hasVoucherEvidence) methods.push("voucher_evidence");
-        if (tdsAmtTie) methods.push("tds_amount_tie");
-        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted, tdsAmtTie };
+        if (tdsAmtTie)  methods.push("tds_amount_tie");
+        if (tdsAmtNear) methods.push("tds_amount_near");
+        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted, tdsAmtTie: tdsAmtTie || tdsAmtNear };
       }
     }
 
