@@ -6,6 +6,7 @@
  * Replaces: tds-ai-mapper, tds-recon-engine, tds-missing-scanner, tds-demand-calculator
  */
 import { supabase } from "@/integrations/supabase/client";
+import { discoverTdsLedgers, extractPartiesFromTdsVouchers } from "./tdsLedgerDiscovery";
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -315,6 +316,76 @@ export async function runAiMapper(params: {
   }
 
   const expenseLedgers = tbRows.filter((l: any) => isExpenseGroup(l.parent_group));
+
+  // 2026-08-04 — RAY WINGS class of fix: TB-only party discovery misses
+  // any deductee whose creditor was cleared within the year (payment
+  // vouchers to bank) or whose Journal was booked against a TDS ledger
+  // the client named differently ("TDS Payable 194C", "TDS on Prof
+  // Fees", "Duties & Taxes / TDS-194J"). We now:
+  //
+  //   1. Auto-discover the engagement's TDS-payable ledger set via
+  //      parent_group and name signals (tdsLedgerDiscovery.ts).
+  //   2. Walk tally_vouchers for every discovered TDS ledger and pull
+  //      out the counterpart party on each Journal-family voucher.
+  //   3. Union those parties into `expenseLedgers` as synthetic TB rows,
+  //      so the existing match loop below sees the full universe.
+  //
+  // Synthetic rows use parent_group = "Sundry Creditors (voucher-
+  // derived)" so isExpenseGroup accepts them AND sectionContextScore's
+  // "creditor" token still scores 95 for 194C/J/H (the typical business-
+  // expense sections). Amount signal is derived from voucher-summed
+  // TDS × 10 (10 % 194J-baseline) which is deliberately loose — the
+  // AI mapper's final "confirmed" gate requires all four criteria
+  // (nameScore 90+, amount, tds>0, rate), so a fuzzy amount just holds
+  // the row at "pending" for the auditor to review. Every 26Q deductee
+  // now surfaces in the mapping panel — whether they closed the year
+  // as an open creditor or were paid in full.
+  let discoveredTdsLedgers: Awaited<ReturnType<typeof discoverTdsLedgers>> = [];
+  let voucherParties:       Awaited<ReturnType<typeof extractPartiesFromTdsVouchers>> = [];
+  try {
+    discoveredTdsLedgers = await discoverTdsLedgers({ client_id, financial_year });
+    if (discoveredTdsLedgers.length > 0) {
+      voucherParties = await extractPartiesFromTdsVouchers({
+        client_id, financial_year, tds_ledgers: discoveredTdsLedgers,
+      });
+    }
+  } catch (err) {
+    // Non-fatal: fall back to the pre-2026-08-04 TB-only universe. The
+    // AI mapper still runs — it just may miss paid-off parties.
+    console.warn("[tdsEngine] TDS-ledger discovery failed:", err);
+  }
+
+  // Union in voucher-derived parties that are NOT already represented in TB
+  // by name (case-insensitive, trimmed) — same normalisation the FS
+  // reconciliation path uses to handle CRLF/whitespace quirks.
+  const tbNamesLower = new Set<string>(
+    expenseLedgers.map((l: any) => String(l.ledger_name ?? "").trim().toLowerCase()),
+  );
+  for (const p of voucherParties) {
+    const key = p.party_ledger.trim().toLowerCase();
+    if (!key || tbNamesLower.has(key)) continue;
+    tbNamesLower.add(key);
+    expenseLedgers.push({
+      ledger_name:     p.party_ledger,
+      // Synthetic group carries the "creditor" token so sectionContextScore
+      // treats these rows the same as real Sundry Creditors. The parenthetical
+      // is preserved for auditor traceability in the mapping panel reasoning.
+      parent_group:    "Sundry Creditors (voucher-derived)",
+      // No live TB debit/credit; derive an approximate gross from the total
+      // TDS deducted assuming 10 % (baseline 194J rate). Undershoots for
+      // 194C (1 %) and overshoots for 194A (10 %) — good enough for the
+      // AI mapper's amount score which is capped anyway. See long note above.
+      debit_amount:    p.tds_amount * 10,
+      credit_amount:   0,
+      closing_balance: 0,
+      balance_type:    "cr",
+      // Marker so downstream (and future audit) can tell these apart from TB rows.
+      __source:        "voucher",
+      __voucher_section: p.section,
+      __voucher_count:   p.voucher_count,
+    });
+  }
+
   if (expenseLedgers.length === 0) {
     return { mapped: 0, skipped: 0, confirmed: 0, pending: 0, needs_review: 0,
       message: "No expense/creditor ledgers found in Trial Balance" };
