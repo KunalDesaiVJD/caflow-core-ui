@@ -651,7 +651,13 @@ const NewClientWizard = () => {
     return Object.keys(errors).length === 0;
   };
 
-  const validateServiceBilling = (): boolean => {
+  // Returns the errors record directly (empty = valid) rather than just a
+  // boolean — setServiceErrors(errors) below is an async state update, so a
+  // caller reading the `serviceErrors` STATE variable immediately after
+  // calling this function would still see the PREVIOUS render's stale value,
+  // not what was just computed. Callers that need the actual message (e.g.
+  // to show a toast) must use this return value, not the state.
+  const validateServiceBilling = (): Record<string, string> => {
     const errors: Record<string, string> = {};
     const hasActiveService = Object.keys(serviceBilling.activeServices).length > 0;
     const hasPackageService = serviceBilling.packageConfig.service_ids.length > 0;
@@ -691,7 +697,7 @@ const NewClientWizard = () => {
       }
     }
     setServiceErrors(errors);
-    return Object.keys(errors).length === 0;
+    return errors;
   };
 
   /* ───── Payload builders ───── */
@@ -802,60 +808,77 @@ const NewClientWizard = () => {
         console.error("[Services] package upsert error:", svcError);
         throw svcError;
       }
-    } else {
-      // Save active individual services (service-specific mode)
-      const serviceEntries = Object.entries(serviceBilling.activeServices);
-      if (serviceEntries.length > 0) {
-        const rows = serviceEntries.map(([serviceId, cfg]) => ({
-          client_id: targetClientId,
-          service_category_id: serviceId,
-          is_active: true,
-          frequency_override: cfg.frequency,
-          billing_amount: cfg.billing_amount,
-          reminder_date: cfg.reminder_date,
-          invoice_gen_type: cfg.invoice_gen_type,
-          billing_mode: serviceBilling.billingMode,
-          ...(cfg.tds_start_fy ? {
-            tds_effective_from_fy: cfg.tds_start_fy,
-            tds_effective_from_q: cfg.tds_start_quarter || null,
-            tds_end_fy: cfg.tds_end_fy || null,
-            tds_end_quarter: cfg.tds_end_quarter || null,
-            tds_forms_applicable: cfg.tds_forms && cfg.tds_forms.length > 0 ? cfg.tds_forms : null,
-          } : {}),
-        }));
-        const { data: upserted, error: svcError } = await supabase.from("client_services").upsert(rows as any, {
-          onConflict: "client_id,service_category_id",
-        }).select("id, service_category_id");
-        if (svcError) {
-          console.error("[Services] upsert error:", svcError);
-          throw svcError;
-        }
+    }
 
-        // ITD/TRACES credentials never travel through the upsert above —
-        // passwords need server-side encryption (see StepServiceBilling's
-        // ServiceConfig doc), so they're saved separately, per TDS row,
-        // through the tds-portal-credentials edge function once we know the
-        // row's real id. Only calls it for a row the user actually touched
-        // (typed a login id, or a NEW password) — never re-sends a blank
-        // password, which would otherwise clear a previously saved one.
-        const idByServiceCategory = new Map((upserted || []).map((r: any) => [r.service_category_id, r.id]));
-        for (const [serviceId, cfg] of serviceEntries) {
-          const touchedCreds = cfg.itd_login_id !== undefined || cfg.itd_password !== undefined
-            || cfg.traces_login_id !== undefined || cfg.traces_password !== undefined;
-          if (!touchedCreds) continue;
-          const clientServiceId = idByServiceCategory.get(serviceId);
-          if (!clientServiceId) continue;
-          const { error: credError } = await supabase.functions.invoke("tds-portal-credentials", {
-            body: {
-              action: "save", client_service_id: clientServiceId,
-              itd_login_id: cfg.itd_login_id, itd_password: cfg.itd_password,
-              traces_login_id: cfg.traces_login_id, traces_password: cfg.traces_password,
-            },
-          });
-          if (credError) {
-            console.error("[Services] credential save error:", credError);
-            toast({ title: "ITD/TRACES credentials were not saved", description: credError.message, variant: "destructive" });
-          }
+    // Individual services — ALWAYS processed, regardless of billing mode.
+    // Bug fixed 2026-08-04: this whole block (including the ITD/TRACES
+    // credentials save two paragraphs down) used to live in the `else` of
+    // the isPackageMode check above, so it was skipped ENTIRELY whenever the
+    // client was in package-wise mode — silently dropping the TDS
+    // Compliance range/forms AND any typed ITD/TRACES login the user entered
+    // for a service configured as "Individual (not in package)" alongside
+    // an otherwise-packaged client (StepServiceBilling.tsx's
+    // nonPackageServices list — exactly what TDS Compliance commonly is).
+    // serviceBilling.activeServices is populated by toggleService/
+    // updateServiceConfig in BOTH billing modes (see StepServiceBilling.tsx)
+    // — in package mode it holds only the non-package individual services;
+    // in service-specific mode it holds every active service.
+    const serviceEntries = Object.entries(serviceBilling.activeServices);
+    if (serviceEntries.length > 0) {
+      const rows = serviceEntries.map(([serviceId, cfg]) => ({
+        client_id: targetClientId,
+        service_category_id: serviceId,
+        is_active: true,
+        frequency_override: cfg.frequency,
+        billing_amount: cfg.billing_amount,
+        reminder_date: cfg.reminder_date,
+        invoice_gen_type: cfg.invoice_gen_type,
+        // "service_specific" always — a row landing here is by definition
+        // configured individually, whether or not the CLIENT overall is in
+        // package-wise mode (client_service_packages is the source of truth
+        // for that, untouched by this row's own billing_mode value; see
+        // ClientDetail.tsx's isPackageMode derivation).
+        billing_mode: "service_specific",
+        ...(cfg.tds_start_fy ? {
+          tds_effective_from_fy: cfg.tds_start_fy,
+          tds_effective_from_q: cfg.tds_start_quarter || null,
+          tds_end_fy: cfg.tds_end_fy || null,
+          tds_end_quarter: cfg.tds_end_quarter || null,
+          tds_forms_applicable: cfg.tds_forms && cfg.tds_forms.length > 0 ? cfg.tds_forms : null,
+        } : {}),
+      }));
+      const { data: upserted, error: svcError } = await supabase.from("client_services").upsert(rows as any, {
+        onConflict: "client_id,service_category_id",
+      }).select("id, service_category_id");
+      if (svcError) {
+        console.error("[Services] upsert error:", svcError);
+        throw svcError;
+      }
+
+      // ITD/TRACES credentials never travel through the upsert above —
+      // passwords need server-side encryption (see StepServiceBilling's
+      // ServiceConfig doc), so they're saved separately, per TDS row,
+      // through the tds-portal-credentials edge function once we know the
+      // row's real id. Only calls it for a row the user actually touched
+      // (typed a login id, or a NEW password) — never re-sends a blank
+      // password, which would otherwise clear a previously saved one.
+      const idByServiceCategory = new Map((upserted || []).map((r: any) => [r.service_category_id, r.id]));
+      for (const [serviceId, cfg] of serviceEntries) {
+        const touchedCreds = cfg.itd_login_id !== undefined || cfg.itd_password !== undefined
+          || cfg.traces_login_id !== undefined || cfg.traces_password !== undefined;
+        if (!touchedCreds) continue;
+        const clientServiceId = idByServiceCategory.get(serviceId);
+        if (!clientServiceId) continue;
+        const { error: credError } = await supabase.functions.invoke("tds-portal-credentials", {
+          body: {
+            action: "save", client_service_id: clientServiceId,
+            itd_login_id: cfg.itd_login_id, itd_password: cfg.itd_password,
+            traces_login_id: cfg.traces_login_id, traces_password: cfg.traces_password,
+          },
+        });
+        if (credError) {
+          console.error("[Services] credential save error:", credError);
+          toast({ title: "ITD/TRACES credentials were not saved", description: credError.message, variant: "destructive" });
         }
       }
     }
@@ -1251,7 +1274,20 @@ const NewClientWizard = () => {
         const { data: authData } = await supabase.auth.getUser();
         await saveFYClassification(clientId, authData.user?.id);
       } else if (stepId === "services") {
-        if (!validateServiceBilling()) { setSaving(false); return; }
+        const svcErrs = validateServiceBilling();
+        if (Object.keys(svcErrs).length > 0) {
+          // Previously silent — the ONLY feedback was small inline red text
+          // near the top of the form (StepServiceBilling.tsx's errors.services),
+          // easy to miss when the user's attention (and scroll position) is on
+          // fields further down, e.g. the Portal Login Credentials block. A
+          // failed validation here skips the ENTIRE save, not just credentials.
+          toast({
+            title: "Service & Billing not saved",
+            description: Object.values(svcErrs)[0],
+            variant: "destructive",
+          });
+          setSaving(false); return;
+        }
         await saveServiceBillingData(clientId);
         // ROOT CAUSE A/B fix: check promotion on services save too (has early return)
         const promoted = await tryPromoteToFinal();
@@ -1356,7 +1392,7 @@ const NewClientWizard = () => {
   const handleNext = async () => {
     if (currentStepDef?.id === "basic" && !(await validateBasicInfo())) return;
     if (currentStepDef?.id === "advanced" && !validateAdvancedInfo()) return;
-    if (currentStepDef?.id === "services" && !validateServiceBilling()) return;
+    if (currentStepDef?.id === "services" && Object.keys(validateServiceBilling()).length > 0) return;
 
     // If last step, submit
     if (step === visibleSteps.length - 1) {

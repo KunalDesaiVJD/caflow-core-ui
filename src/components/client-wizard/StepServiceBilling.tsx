@@ -157,6 +157,13 @@ export const StepServiceBilling = ({
   // ServiceConfig's own doc on why. Keyed by `${catId}-itd`/`${catId}-traces`.
   const [revealedPasswords, setRevealedPasswords] = useState<Record<string, string>>({});
   const [revealingKey, setRevealingKey] = useState<string | null>(null);
+  // Show/hide for a password the user is CURRENTLY TYPING (a new one, not
+  // yet saved) — independent of revealedPasswords, which is specifically for
+  // an already-saved password decrypted from the server. A field with
+  // nothing saved yet (a brand-new credential) previously had no way to
+  // toggle visibility of what was just typed at all — the reveal button only
+  // rendered once cfg.itd_password_set was true.
+  const [showTypedPassword, setShowTypedPassword] = useState<Record<string, boolean>>({});
 
   const set = <K extends keyof ServiceBillingData>(key: K, val: ServiceBillingData[K]) =>
     onChange({ ...data, [key]: val });
@@ -379,7 +386,10 @@ export const StepServiceBilling = ({
                   <div className="flex gap-1">
                     <Input
                       className="h-8 text-xs font-mono"
-                      type={revealedPasswords[`${catId}-itd`] !== undefined ? "text" : "password"}
+                      type={
+                        revealedPasswords[`${catId}-itd`] !== undefined || showTypedPassword[`${catId}-itd`]
+                          ? "text" : "password"
+                      }
                       // "new-password" (not "off") is the one value Chrome/Firefox
                       // reliably honour to mean "do not offer or inject a saved
                       // credential here" — this field holds the CLIENT's stored
@@ -397,12 +407,27 @@ export const StepServiceBilling = ({
                       onFocus={(e) => { if (cfg.itd_password === undefined && cfg.itd_password_set) e.currentTarget.select(); }}
                       placeholder={cfg.itd_password_set ? "" : "Enter password"}
                     />
-                    {cfg.itd_password_set && cfg.itd_password === undefined && (
-                      <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0"
-                        onClick={() => revealCredential(catId, cfg, "itd")} disabled={revealingKey === `${catId}-itd`}>
-                        {revealingKey === `${catId}-itd` ? <Loader2 size={12} className="animate-spin" /> : revealedPasswords[`${catId}-itd`] !== undefined ? <EyeOff size={12} /> : <Eye size={12} />}
-                      </Button>
-                    )}
+                    <Button
+                      type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0"
+                      title={revealedPasswords[`${catId}-itd`] !== undefined || showTypedPassword[`${catId}-itd`] ? "Hide password" : "Show password"}
+                      onClick={() => {
+                        // A saved password not yet revealed needs a server round-trip
+                        // to decrypt (revealCredential also handles hiding it again
+                        // internally). Anything else — already revealed, or a fresh
+                        // value the user is actively typing — is a plain client-side
+                        // visibility toggle; the value is already sitting in state.
+                        if (cfg.itd_password_set && cfg.itd_password === undefined) {
+                          revealCredential(catId, cfg, "itd");
+                        } else {
+                          setShowTypedPassword(prev => ({ ...prev, [`${catId}-itd`]: !prev[`${catId}-itd`] }));
+                        }
+                      }}
+                      disabled={revealingKey === `${catId}-itd`}
+                    >
+                      {revealingKey === `${catId}-itd` ? <Loader2 size={12} className="animate-spin" />
+                        : (revealedPasswords[`${catId}-itd`] !== undefined || showTypedPassword[`${catId}-itd`])
+                        ? <EyeOff size={12} /> : <Eye size={12} />}
+                    </Button>
                   </div>
                 </div>
                 <div className="space-y-1">
@@ -423,7 +448,10 @@ export const StepServiceBilling = ({
                   <div className="flex gap-1">
                     <Input
                       className="h-8 text-xs font-mono"
-                      type={revealedPasswords[`${catId}-traces`] !== undefined ? "text" : "password"}
+                      type={
+                        revealedPasswords[`${catId}-traces`] !== undefined || showTypedPassword[`${catId}-traces`]
+                          ? "text" : "password"
+                      }
                       name="traces-password-no-autofill"
                       autoComplete="new-password"
                       data-lpignore="true"
@@ -437,12 +465,22 @@ export const StepServiceBilling = ({
                       onFocus={(e) => { if (cfg.traces_password === undefined && cfg.traces_password_set) e.currentTarget.select(); }}
                       placeholder={cfg.traces_password_set ? "" : "Enter password"}
                     />
-                    {cfg.traces_password_set && cfg.traces_password === undefined && (
-                      <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0"
-                        onClick={() => revealCredential(catId, cfg, "traces")} disabled={revealingKey === `${catId}-traces`}>
-                        {revealingKey === `${catId}-traces` ? <Loader2 size={12} className="animate-spin" /> : revealedPasswords[`${catId}-traces`] !== undefined ? <EyeOff size={12} /> : <Eye size={12} />}
-                      </Button>
-                    )}
+                    <Button
+                      type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0"
+                      title={revealedPasswords[`${catId}-traces`] !== undefined || showTypedPassword[`${catId}-traces`] ? "Hide password" : "Show password"}
+                      onClick={() => {
+                        if (cfg.traces_password_set && cfg.traces_password === undefined) {
+                          revealCredential(catId, cfg, "traces");
+                        } else {
+                          setShowTypedPassword(prev => ({ ...prev, [`${catId}-traces`]: !prev[`${catId}-traces`] }));
+                        }
+                      }}
+                      disabled={revealingKey === `${catId}-traces`}
+                    >
+                      {revealingKey === `${catId}-traces` ? <Loader2 size={12} className="animate-spin" />
+                        : (revealedPasswords[`${catId}-traces`] !== undefined || showTypedPassword[`${catId}-traces`])
+                        ? <EyeOff size={12} /> : <Eye size={12} />}
+                    </Button>
                   </div>
                 </div>
               </div>
