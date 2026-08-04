@@ -1518,6 +1518,31 @@ export async function nceAutoPopulate(
       // ── Pattern B ──────────────────────────────────────────────────────
       const codeSet    = new Set(noteFs.all);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
+      // 2026-08-04 — Ledger-name normalisation index (RAY WINGS TECHNOLOGY fix).
+      // A Tally-exported ledger like "The District TB Centre\r\n" has invisible
+      // CR/LF characters embedded in its name. computeCOATotals (which drives
+      // the BS/P&L FACE) already resolves this via a trim+lowercase fallback
+      // index, so the ledger contributes to the face. This CY walk previously
+      // used ONLY the raw `coaMapping[row.ledger_name]` lookup, which requires
+      // an exact string match — so the CRLF ledger silently dropped out of the
+      // note breakup and produced a face-note gap equal to that ledger's
+      // balance (₹1,20,960 on RAY WINGS). Build the same trim+CI index here
+      // and use it as a fallback so BS face and Note total resolve the same
+      // ledger set. Also fixes any legacy engagements whose COA mapping keys
+      // include stray leading/trailing whitespace.
+      const coaMappingCI: Record<string, { code: string }> = {};
+      for (const [k, v] of Object.entries(coaMapping || {})) {
+        if (!v?.code) continue;
+        const kk = String(k).trim().toLowerCase();
+        if (!(kk in coaMappingCI)) coaMappingCI[kk] = v;
+      }
+      const lookupCoa = (name: string | null | undefined): { code: string } | undefined => {
+        if (!name) return undefined;
+        const raw = String(name);
+        return (coaMapping as any)[raw]
+            ?? (coaMapping as any)[raw.trim()]
+            ?? coaMappingCI[raw.trim().toLowerCase()];
+      };
       // Stage 1: split each ledger into "matched-static" or "unmatched"
       // pyAmt is optional so PY-only ledgers (no CY balance) can still flow
       // through Stage 2 as their own customRow with amt = 0 and pyAmt set.
@@ -1538,7 +1563,7 @@ export async function nceAutoPopulate(
       const pyFromTbStatic: Record<string, number> = {}; // tracks rows with TB-derived PY
 
       for (const row of tb) {
-        const mapped = coaMapping[row.ledger_name];
+        const mapped = lookupCoa(row.ledger_name);
         if (!mapped || !codeSet.has(mapped.code)) continue;
         // ISSUE FIX (debit/credit netting): use signed amount so opposite-
         // side balances (e.g. a Dr-balance ledger inside a CR-natural head
@@ -1559,8 +1584,11 @@ export async function nceAutoPopulate(
           // Carry PY amount too so the expander shows BOTH CY + PY columns.
           if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
           // Per-ledger PY: look up against PY TB using the SAME head nature
-          // so signs net correctly in the expanded breakdown.
-          const pyRowLookup = pyTb.find(r => r.ledger_name?.toLowerCase() === row.ledger_name.toLowerCase());
+          // so signs net correctly in the expanded breakdown. Normalise both
+          // sides (trim + lowercase) so CRLF-suffixed Tally names (RAY WINGS
+          // "The District TB Centre\r\n") match their PY counterpart.
+          const cyKeyNorm = String(row.ledger_name || "").trim().toLowerCase();
+          const pyRowLookup = pyTb.find(r => String(r.ledger_name || "").trim().toLowerCase() === cyKeyNorm);
           const pyAmtLedger = pyRowLookup ? signedLedgerAmt(pyRowLookup, noteType) : 0;
           staticSources[matchedRowId].push({
             ledger: row.ledger_name,
