@@ -307,6 +307,38 @@ export async function runAiMapper(params: {
 }): Promise<MapperResult> {
   const { client_id, financial_year, firm_id, force_rematch = false } = params;
 
+  // 2026-08-04 P1-B — kill stale books_only rows whose TB ledger now has
+  // a real (mapped_by=auditor OR any deductee-linked) row. Shanker
+  // Furniture's manual-link left the older books_only row behind, which
+  // then showed up as a duplicate in the panel.
+  try {
+    const { data: allRows } = await (supabase as any)
+      .from("tds_tb_party_mappings")
+      .select("id,tb_ledger_name,tds_deductee_name,match_method")
+      .eq("client_id", client_id)
+      .eq("financial_year", financial_year);
+    const rows = (allRows as any[]) || [];
+    const claimed = new Set<string>(
+      rows
+        .filter(r => r.tds_deductee_name && r.tds_deductee_name !== "(not filed)")
+        .map(r => String(r.tb_ledger_name || "").trim().toLowerCase()),
+    );
+    const staleBooksOnlyIds = rows
+      .filter(r => String(r.match_method || "").includes("books_only")
+        && claimed.has(String(r.tb_ledger_name || "").trim().toLowerCase()))
+      .map(r => r.id);
+    if (staleBooksOnlyIds.length > 0) {
+      await (supabase as any)
+        .from("tds_recon_flags")
+        .delete()
+        .in("mapping_id", staleBooksOnlyIds);
+      await (supabase as any)
+        .from("tds_tb_party_mappings")
+        .delete()
+        .in("id", staleBooksOnlyIds);
+    }
+  } catch { /* non-fatal */ }
+
   // 2026-08-04 Phase 3c/3d — CLEANUP before running the mapper:
   //   • Always: stale "(unmapped: <deductee>)" placeholder rows and any
   //     match_method="deductee_only" left over from the previous seeding
@@ -638,15 +670,26 @@ export async function runAiMapper(params: {
     const grossOk  = best.amtScore >= 75;
     const tdsOk    = best.ded.total_tds > 0;
     const rateOk   = tdsRateMatchesSection(best.ded.section_code, best.ded.total_amount_paid, best.ded.total_tds);
+    // P1-D (2026-08-04) — the TDS-amount tie is a strong signal, but when
+    // gross amounts diverge by > 40 % AND names don't clearly match, the
+    // Tally ledger only PARTIALLY corresponds to that deductee (Vanraj
+    // Engineers ₹10.4 L vs HARDIK's 26Q ₹5.8 L — Vanraj also paid other
+    // parties). Downgrade to Pending so the recon engine still surfaces
+    // the gap for audit review.
+    const grossGap   = best.ded.total_amount_paid > 0
+      ? Math.abs(tbActivity - best.ded.total_amount_paid) / Math.max(tbActivity, best.ded.total_amount_paid)
+      : 0;
+    const grossPartialTie = grossGap > 0.40 && best.nameScore < 60;
     // Phase 4 — a confirmed TDS-amount tie stands in for the name-similarity
-    // 90 % floor. The amounts on both sides came from a signed accounting
-    // record + a filed 26Q; matching them within ₹10 / 2 % is stronger
-    // evidence than a fuzzy name score.
-    const bothMatch = (best.tdsAmtTie ? true : best.nameScore >= 90) && grossOk && tdsOk && rateOk;
+    // 90 % floor UNLESS grossPartialTie fires (see above).
+    const bothMatch = (best.tdsAmtTie && !grossPartialTie
+      ? true
+      : best.nameScore >= 90) && grossOk && tdsOk && rateOk;
     const mapping_status =
-      bothMatch                    ? "confirmed"   :
-      best.confidence >= 60        ? "pending"     :
-                                     "needs_review";
+      bothMatch                          ? "confirmed"   :
+      grossPartialTie                    ? "pending"     :
+      best.confidence >= 60              ? "pending"     :
+                                           "needs_review";
 
     // Build rich reasoning with difference explanation
     const diffNote = grossDifferenceReason(tbActivity, best.ded.total_amount_paid, best.ded.total_tds);
@@ -708,7 +751,22 @@ export async function runAiMapper(params: {
   // — allowing N ledgers per deductee — we can safely upsert every row
   // the mapper produced. Deduplication now happens only within a single
   // (tb_ledger, deductee) pair (which the unique index handles).
-  const finalRows = upsertRows;
+  // P1-B (2026-08-04) — dedupe: if the same TB ledger has BOTH a real
+  // match AND a books_only row (Shanker Furniture → SHANKARLAL manually
+  // linked, plus Shanker Furniture → "(not filed)" from books_only), drop
+  // the books_only. The auditor has already claimed the TDS journal
+  // amount against a real deductee — carrying the second row would
+  // double-count in the reconciliation engine.
+  const matchedTbNames = new Set<string>(
+    upsertRows
+      .filter((r: any) => r.tds_deductee_name && r.tds_deductee_name !== "(not filed)")
+      .map((r: any) => String(r.tb_ledger_name || "").trim().toLowerCase()),
+  );
+  const finalRows = upsertRows.filter((r: any) => {
+    if (!String(r.match_method || "").includes("books_only")) return true;
+    const key = String(r.tb_ledger_name || "").trim().toLowerCase();
+    return !matchedTbNames.has(key);
+  });
 
   if (finalRows.length > 0) {
     // Try upsert with tds_tds_amount (requires migration 20260501000002 applied).

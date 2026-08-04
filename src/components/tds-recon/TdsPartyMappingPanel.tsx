@@ -365,7 +365,20 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
           if (data.length < 1000) break;
         }
         if (!cancelled) {
-          setTbCreditors(rows.filter(r => /creditor/i.test(r.parent_group ?? "")));
+          // P1-A (2026-08-04) — widen the picker beyond "Sundry Creditors".
+          // Jayshreeben (194A interest) lives under "Unsecured Loans" — the
+          // old creditor-only filter never surfaced her. Include every
+          // party-bearing balance-sheet group; exclude only Bank/Cash, GST,
+          // capital/reserves, inventory, and expense/income groups.
+          const isPartyGroup = (pg: string | null): boolean => {
+            const p = String(pg ?? "").toLowerCase();
+            if (!p) return false;
+            const KEEP = /(creditor|debtor|loan|advance|deposit|payable|receivable|current liabilit|other liabilit|other asset)/;
+            const SKIP = /(bank|cash-in-hand|cash in hand|capital|reserve|fixed asset|investment|duties|inventory|stock|purchase|expense|income|indirect|direct|misc|suspense|branch|statutory)/;
+            if (SKIP.test(p)) return false;
+            return KEEP.test(p);
+          };
+          setTbCreditors(rows.filter(r => isPartyGroup(r.parent_group)));
         }
       } catch { if (!cancelled) setTbCreditors([]); }
     })();
@@ -727,12 +740,19 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                       })()}
 
                       {/* TDS deducted row + implied rate vs section.
-                          Issue 1: show the implied rate (TDS ÷ taxable gross)
-                          so the auditor can see at a glance whether it is
-                          consistent with the section's prescribed rate. */}
-                      {m.tds_tds_amount != null ? (() => {
+                          P1-C (2026-08-04) — silently hide the entire line
+                          when tds_tds_amount is null (schema not yet
+                          shipped) instead of showing "re-run mapper to
+                          populate" — the stale hint made every row look
+                          broken. books_only rows also hide it since they
+                          have no filing. Manual-link rows fall back to
+                          reasoning-derived amount if present. */}
+                      {(() => {
+                        const isBooksOnly = String(m.match_method || "").includes("books_only");
+                        if (isBooksOnly) return null;
+                        const tds      = m.tds_tds_amount ?? null;
+                        if (tds == null) return null;
                         const tdsGross = m.tds_total_amount ?? 0;
-                        const tds      = m.tds_tds_amount ?? 0;
                         const impliedRate = tdsGross > 0 ? (tds / tdsGross) * 100 : 0;
                         const tdsOk    = tds > 0;
                         return (
@@ -753,10 +773,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                             </span>
                           </div>
                         );
-                      })() : (
-                        /* Older row without tds_tds_amount — show neutral placeholder */
-                        <span className="text-[10px] text-muted-foreground/50 italic">TDS: — (re-run mapper to populate)</span>
-                      )}
+                      })()}
                     </div>
 
                     {/* Section */}
@@ -955,7 +972,11 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                       tds_total_amount:  d.amount_paid_credited,
                       tds_tds_amount:    d.tds_amount,
                       match_confidence:  100,
-                      match_method:      "name_similarity+manual_link",
+                      // P1-E (2026-08-04) — method is a single "manual_link"
+                      // token (no fake "name_similarity" tacked on). Panel
+                      // treats mapped_by="auditor" as authoritative and
+                      // renders "Manual link" as the source pill.
+                      match_method:      "manual_link",
                       ai_reasoning:      `Manually linked by auditor: ${tbLedgerName} → ${d.deductee_name} (${d.section_code ?? "section unknown"}).`,
                       mapping_status:    "confirmed",
                       mapped_by:         "auditor",
