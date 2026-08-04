@@ -550,8 +550,20 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // The TDS is DEBITED TO THE EMPLOYEE'S OWN ACCOUNT (settling part of what
   // is owed to them) and credited to "TDS 192 B". So the extra debit carries
   // the EMPLOYEE'S name, not the word TDS — a name-based tax filter never
-  // sees it. Summing it reported ₹2,19,800 against Office Data's ₹2,00,000,
-  // a false mismatch of exactly the TDS, on every director every month.
+  // sees it. Summing it (without the contra-exclusion below) reported
+  // ₹2,19,800 for this real MICROCIRCUITS director, Madhukant Kanjibhai
+  // Patel — and his real stored Office Data (queried directly: filing
+  // 1af64f16, section 192B, both April and May) is ₹2,00,000, confirming the
+  // FULL voucher debit — Professional Tax AND TDS both INCLUDED — is the
+  // right final figure, not 199,800 (PT excluded, TDS not) as this test used
+  // to assert with no real data behind that specific number. Parsing alone
+  // (this test) still excludes every tax line — that's what makes the GROSS
+  // reading (credit + ptExcluded, see resolveTaxableIncomeReading in
+  // tallyRecon.ts) reconstruct ₹2,00,000 exactly once Office Data is used to
+  // pick it; this layer only has to prove the self-contra Dr line is never
+  // double-counted, which is why it still equals 20,000 short of 2,00,000 —
+  // NOT 39,800 short (the un-fixed, contra-double-counted bug this test
+  // exists to guard against).
   it("never adds a contra debit posted to the deductee's OWN account", () => {
     const page = [
       ...HEADER,
@@ -568,7 +580,12 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
     expect(rows[0].party).toBe("Madhukant Kanjibhai Patel - Salary");
-    expect(rows[0].credit).toBe(199800);   // NOT 219,800 (TDS contra) — 200,000 minus 200 Professional Tax
+    // NOT 219,800 (the self-contra double-counted) and NOT 199,800 (PT
+    // excluded but TDS left in, this test's old, never-verified assumption)
+    // — 200,000 minus BOTH tax lines (200 PT + 19,800 TDS); ptExcluded
+    // carries the 20,000 back for resolveTaxableIncomeReading to restore.
+    expect(rows[0].credit).toBe(180000);
+    expect(rows[0].ptExcluded).toBe(20000);
   });
 
   it("never adds an explicitly TDS-labelled debit either", () => {
@@ -587,6 +604,13 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     expect(rows[0].credit).toBe(200000);
   });
 
+  // The bonus stays IN (a genuine Dr-side taxable component, not a tax
+  // line and not a self-contra) while the TDS Cr line comes back OUT — same
+  // exclusion as Madhukant's case above, at the parse layer. Net here
+  // (49,872) is 1,500 short of the old assumed 51,372; ptExcluded carries
+  // that 1,500 for resolveTaxableIncomeReading, which is where a real
+  // Office Data figure of 51,372 (bonus-and-TDS both in, as Madhukant's real
+  // office data shows for his own tax lines) would actually get restored.
   it("a genuine taxable component is still added when a TDS line sits beside it", () => {
     const page = [
       ...HEADER,
@@ -600,7 +624,8 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
       }),
     ];
     const { rows } = parseTallyPdfPages([page]);
-    expect(rows[0].credit).toBe(51372);    // bonus in, no tax added
+    expect(rows[0].credit).toBe(49872);    // bonus in, TDS excluded (see ptExcluded)
+    expect(rows[0].ptExcluded).toBe(1500);
   });
 
   // The sum must not leak across vouchers: the employee WITHOUT a bonus keeps
@@ -884,7 +909,7 @@ describe("parseTallyPdfPages → resolveTaxableIncomeReading → reconcileTallyF
         crLines: [
           { label: "Professional Tax - Employ", amount: 200 },
           { label: "192B - TDS Payable", amount: 7952 },
-          { label: "Education Cess TDS", amount: 328 },
+          { label: "Education Cess TDS", amount: 318 },
           { label: "Snehal Padsala", amount: 113030 },
         ],
       }),
@@ -893,7 +918,7 @@ describe("parseTallyPdfPages → resolveTaxableIncomeReading → reconcileTallyF
     expect(parsed.map((r) => ({ credit: r.credit, ptExcluded: r.ptExcluded }))).toEqual([
       { credit: 114275, ptExcluded: 8725 },  // 123,000 - (200 + 8,197 + 328)
       { credit: 112615, ptExcluded: 8385 },  // 121,000 - (200 + 7,870 + 315)
-      { credit: 113030, ptExcluded: 8480 },  // 121,500 - (200 + 7,952 + 328)
+      { credit: 113030, ptExcluded: 8470 },  // 121,500 - (200 + 7,952 + 318)
     ]);
 
     const resolved = resolveTaxableIncomeReading(office, parsed);
