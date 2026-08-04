@@ -3,6 +3,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { getDefaultTdsQuarter } from "@/lib/tdsQuarter";
 import { cn } from "@/lib/utils";
+import { format } from "date-fns";
 import {
   LayoutDashboard, PenLine,
   ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw, Repeat2,
@@ -81,17 +82,23 @@ const TdsFilings = () => {
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
 
-  // ── Filed correction for the CURRENT workspace context ────────────────────
-  // A third Workspace tab appears only once a correction return has actually
-  // been FILED for this client/FY/quarter/form. Data Entry and Validate &
-  // Finalise keep showing the ORIGINAL return; the Correction tab shows the
-  // latest filed correction, so the two versions sit side by side.
-  const [filedCorrection, setFiledCorrection] = useState<any | null>(null);
+  // ── Filed corrections for the CURRENT workspace context ───────────────────
+  // A third Workspace tab appears only once at least one correction return has
+  // actually been FILED for this client/FY/quarter/form. Data Entry and
+  // Validate & Finalise keep showing the ORIGINAL return; the Correction tab
+  // shows the full history of filed corrections for this period — each one
+  // its own record (filed date, filing reference, status) — with the LATEST
+  // one selected by default, since that is what every calculation elsewhere
+  // in the app (getEffectiveClientLedger) treats as the current/original
+  // dataset. Earlier corrections stay browsable, read-only, for history only.
+  const [filedCorrections, setFiledCorrections] = useState<any[]>([]);
+  const [selectedCorrectionId, setSelectedCorrectionId] = useState<string | null>(null);
+  const filedCorrection = filedCorrections.find(c => c.id === selectedCorrectionId) || filedCorrections[0] || null;
 
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      if (!ctxClient || !ctxFy || !ctxQuarter || !ctxForm) { setFiledCorrection(null); return; }
+      if (!ctxClient || !ctxFy || !ctxQuarter || !ctxForm) { setFiledCorrections([]); setSelectedCorrectionId(null); return; }
       const { data } = await supabase
         .from("tds_corrections" as any)
         .select("*")
@@ -101,14 +108,18 @@ const TdsFilings = () => {
         .eq("form_type", ctxForm)
         .eq("status", "filed");
       if (cancelled) return;
-      // Latest filed wins when a period has been corrected more than once.
-      const latest = ((data || []) as any[])
+      // Latest filed first — index 0 is what "current" means throughout.
+      const sorted = ((data || []) as any[])
         .slice()
-        .sort((a, b) => (b.filed_at || b.signed_at || "").localeCompare(a.filed_at || a.signed_at || ""))[0] || null;
-      setFiledCorrection(latest);
+        .sort((a, b) => (b.filed_at || b.signed_at || "").localeCompare(a.filed_at || a.signed_at || ""));
+      setFiledCorrections(sorted);
+      // Keep the user's current selection if it still exists in the refreshed
+      // list (e.g. a live update while they're mid-review); otherwise default
+      // to the latest.
+      setSelectedCorrectionId(prev => (prev && sorted.some(c => c.id === prev)) ? prev : (sorted[0]?.id ?? null));
       // If the tab is open and the context moved to a period with no filed
       // correction, fall back rather than showing an empty tab.
-      if (!latest) setWorkspaceTab(t => (t === "correction" ? "data-entry" : t));
+      if (sorted.length === 0) setWorkspaceTab(t => (t === "correction" ? "data-entry" : t));
     };
     run();
     return () => { cancelled = true; };
@@ -427,7 +438,7 @@ const TdsFilings = () => {
 
                 {/* Only once a correction has actually been FILED for this
                     return. No filed correction → only the two tabs above. */}
-                {filedCorrection && (
+                {filedCorrections.length > 0 && (
                   <button
                     onClick={() => setWorkspaceTab("correction")}
                     className={cn(
@@ -439,7 +450,9 @@ const TdsFilings = () => {
                   >
                     <span className="flex items-center gap-2">
                       <FileEdit size={14} /> Correction
-                      <Badge className="text-[9px] bg-emerald-100 text-emerald-700">Filed</Badge>
+                      <Badge className="text-[9px] bg-emerald-100 text-emerald-700">
+                        {filedCorrections.length > 1 ? `Filed ×${filedCorrections.length}` : "Filed"}
+                      </Badge>
                     </span>
                   </button>
                 )}
@@ -466,19 +479,62 @@ const TdsFilings = () => {
                 />
               </div>
 
-              {/* The filed correction — the SAME Data Entry engine, pointed at
-                  the correction's tables and read-only, so the two versions of
-                  the return are compared in one identical interface. */}
-              {filedCorrection && (
+              {/* The filed correction(s) — the SAME Data Entry engine, pointed
+                  at the SELECTED correction's tables and read-only, so any
+                  version of the return can be compared in one identical
+                  interface. A history list above lets the user pick which
+                  filed correction to view; every calculation elsewhere in the
+                  app (getEffectiveClientLedger) always treats the latest one
+                  — index 0, pre-selected below — as current. */}
+              {filedCorrections.length > 0 && (
                 <div className={workspaceTab === "correction" ? "" : "hidden"}>
+                  {filedCorrections.length > 1 && (
+                    <div className="mb-3 rounded-lg border overflow-hidden">
+                      <div className="px-3 py-2 bg-muted/50 text-xs font-semibold text-muted-foreground">
+                        Correction history — {filedCorrections.length} filed corrections for {ctxForm} · {ctxQuarter} {ctxFy}
+                      </div>
+                      <div className="divide-y">
+                        {filedCorrections.map((c, i) => {
+                          const seq = filedCorrections.length - i;
+                          const isLatest = i === 0;
+                          const isSelected = c.id === selectedCorrectionId;
+                          return (
+                            <button
+                              key={c.id}
+                              onClick={() => setSelectedCorrectionId(c.id)}
+                              className={cn(
+                                "w-full text-left px-3 py-2.5 flex items-center gap-3 text-xs hover:bg-muted/40 transition-colors",
+                                isSelected && "bg-primary/5"
+                              )}
+                            >
+                              <span className="font-semibold text-foreground w-24 shrink-0">Correction {seq}</span>
+                              <span className="text-muted-foreground w-28 shrink-0">
+                                {c.filed_at ? format(new Date(c.filed_at), "dd/MM/yyyy") : "—"}
+                              </span>
+                              <span className="text-muted-foreground flex-1 truncate">
+                                {c.filing_reference ? `Ref ${c.filing_reference}` : "No filing reference recorded"}
+                              </span>
+                              {isLatest ? (
+                                <Badge className="text-[9px] bg-emerald-100 text-emerald-700 shrink-0">Current</Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-[9px] text-muted-foreground shrink-0">Superseded</Badge>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <div className="mb-3 rounded-lg border border-emerald-200 dark:border-emerald-900 bg-emerald-50 dark:bg-emerald-950/20 px-3 py-2 flex items-start gap-2.5">
                     <BadgeCheck size={16} className="text-emerald-600 shrink-0 mt-0.5" />
                     <div className="text-xs">
                       <p className="font-semibold text-emerald-800 dark:text-emerald-300">
-                        Filed correction — read-only
+                        {filedCorrections.length > 1
+                          ? `Viewing Correction ${filedCorrections.length - filedCorrections.findIndex(c => c.id === filedCorrection.id)} of ${filedCorrections.length} — read-only`
+                          : "Filed correction — read-only"}
                       </p>
                       <p className="text-emerald-700 dark:text-emerald-400">
-                        This is the corrected version of {ctxForm} · {ctxQuarter} {ctxFy}.
+                        This is a corrected version of {ctxForm} · {ctxQuarter} {ctxFy}.
                         The Data Entry and Validate &amp; Finalise tabs still show the original filed return.
                       </p>
                     </div>
