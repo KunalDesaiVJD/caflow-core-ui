@@ -36,7 +36,7 @@ import { NotesMismatchPanel } from "@/components/stage7/NotesMismatchPanel";
 import {
   ArrowRight, AlertTriangle, Download, FileSpreadsheet,
   Pencil, Loader2, BarChart3, Droplets, Lock, Database, CheckCircle2,
-  BookOpen, TrendingUp, RefreshCw, FileText,
+  BookOpen, TrendingUp, RefreshCw, FileText, Minus, Plus,
 } from "lucide-react";
 import { NCE_FS_ITEMS } from "@/config/nceLineItems";
 import type { FSLineItem } from "@/config/nceLineItems";
@@ -2164,6 +2164,27 @@ export default function PipelineFinancialStatements({
   const setHealthDockOpenPersist = (next: boolean) => {
     setHealthDockOpen(next);
     try { localStorage.setItem(FS_DOCK_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+  };
+
+  // ─── FS zoom (enlarge statements for working on big screens) ───────────────
+  // The BS / P&L / Notes / Ratio tables render at fixed small font sizes to
+  // mirror the exported Schedule III layout. On a 21–24" monitor that reads as
+  // "tiny" no matter how wide the container is, so give the auditor a zoom knob
+  // that scales the whole statements area (CSS zoom reflows, unlike transform).
+  // Preference persisted per browser. Bounds 0.8–1.8 in 0.1 steps.
+  const FS_ZOOM_KEY = "fs_statements_zoom";
+  const FS_ZOOM_MIN = 0.8;
+  const FS_ZOOM_MAX = 1.8;
+  const [fsZoom, setFsZoom] = useState<number>(() => {
+    try {
+      const raw = parseFloat(localStorage.getItem(FS_ZOOM_KEY) || "");
+      return Number.isFinite(raw) && raw >= FS_ZOOM_MIN && raw <= FS_ZOOM_MAX ? raw : 1;
+    } catch { return 1; }
+  });
+  const setFsZoomPersist = (next: number) => {
+    const clamped = Math.min(FS_ZOOM_MAX, Math.max(FS_ZOOM_MIN, Math.round(next * 10) / 10));
+    setFsZoom(clamped);
+    try { localStorage.setItem(FS_ZOOM_KEY, String(clamped)); } catch { /* ignore */ }
   };
 
   // ─── NCE note navigation state ────────────────────────────────────────────
@@ -8383,6 +8404,35 @@ export default function PipelineFinancialStatements({
           {FS_NCE_CONSTRAINED_NOTES && isNonCorporate && (
             <FsStatusChip blocked={exportExcelBlocked} reasons={exportExcelBlockReasons} />
           )}
+          {/* Zoom control — enlarge the BS / P&L / Notes / Ratio tables for
+              comfortable working on a big screen. Scales the statements area
+              only (not the header/controls). Persisted per browser. */}
+          <div className="flex items-center gap-0.5 rounded-md border h-8 px-0.5" title="Zoom the financial statements — persisted per browser">
+            <Button
+              variant="ghost" size="icon" className="h-6 w-6"
+              disabled={fsZoom <= FS_ZOOM_MIN}
+              onClick={() => setFsZoomPersist(fsZoom - 0.1)}
+              aria-label="Zoom out statements"
+            >
+              <Minus size={13} />
+            </Button>
+            <button
+              type="button"
+              onClick={() => setFsZoomPersist(1)}
+              className="text-xs tabular-nums w-9 text-center text-muted-foreground hover:text-foreground hover:underline"
+              title="Reset to 100%"
+            >
+              {Math.round(fsZoom * 100)}%
+            </button>
+            <Button
+              variant="ghost" size="icon" className="h-6 w-6"
+              disabled={fsZoom >= FS_ZOOM_MAX}
+              onClick={() => setFsZoomPersist(fsZoom + 0.1)}
+              aria-label="Zoom in statements"
+            >
+              <Plus size={13} />
+            </Button>
+          </div>
           <Button
             variant="outline"
             size="sm"
@@ -9140,7 +9190,13 @@ export default function PipelineFinancialStatements({
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
+        // FS zoom applies to the statements area only (tabs + all tables), so
+        // the header controls stay at normal size. CSS zoom reflows layout
+        // (unlike transform:scale, which would leave blank space). The
+        // overflow-x-auto wrapper keeps any zoomed overflow scrolling inside
+        // the statements block instead of pushing the whole page sideways.
+        <div className="overflow-x-auto">
+        <Tabs value={activeTab} onValueChange={setActiveTab} style={{ zoom: fsZoom }}>
           <TabsList>
             <TabsTrigger value="bs" className="gap-1.5">
               <BarChart3 size={14} /> Balance Sheet
@@ -9615,6 +9671,7 @@ export default function PipelineFinancialStatements({
             </TabsContent>
           )}
         </Tabs>
+        </div>
       )}
 
       {/* Manual Override LIST dialog — opens when user clicks the count card.
