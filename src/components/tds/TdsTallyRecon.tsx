@@ -1029,8 +1029,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
 
   const summary = useMemo(() => {
     const rs = results || [];
+    // Total must count what the reviewer can actually see, not the full
+    // internal reconciliation set. On 24Q, isDisplayMismatch already hides a
+    // pure ledger-surplus row (no Office Data counterpart — see its own doc:
+    // a Salary Exp. ledger routinely covers dozens of staff never filed in
+    // this return) from the Mismatched list by firm policy; Total was still
+    // counting every one of those hidden rows, so it could read e.g. 136
+    // against an 18-record Office Data / 7+11 Matched+Mismatched — a real
+    // client report ("why is Total 136 when there aren't 136 records").
+    // Same gate as isDisplayMismatch, minus the isTallyIssue check (a
+    // Matched row is always office-anchored, so this doesn't drop any).
+    const visible = rs.filter((r) => selForm !== "24Q" || isOfficeAnchored(r));
     return {
-      total: rs.length, matched: rs.filter((r) => r.result === "Matched").length,
+      total: visible.length, matched: rs.filter((r) => r.result === "Matched").length,
       issues: rs.filter((r) => isDisplayMismatch(r, selForm) && !r.overridden).length,
       mapped: rs.filter((r) => r.mapped).length, overridden: rs.filter((r) => r.overridden).length,
     };
