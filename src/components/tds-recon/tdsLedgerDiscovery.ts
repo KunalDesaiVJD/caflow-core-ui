@@ -110,6 +110,35 @@ function ledgerNameLooksLikeTds(name: string | null | undefined): boolean {
   return /\btds\b/i.test(name);
 }
 
+/** 2026-08-04 Phase 1 — hard exclusions applied AFTER Layer 1/2 caught the
+ *  name. These weed out ledgers that read like "TDS" but are NOT the
+ *  section-194 payable we want to walk:
+ *
+ *    • "TDS Receivable A/c." — income-tax REFUND we expect back, not
+ *      what we deducted from vendors.
+ *    • "CGST/SGST/IGST TDS RECEIVABLE" / "TDS CGST" etc. — GST-side TDS
+ *      u/s 51 CGST Act. Different regime; the vendors on those journals
+ *      are our CUSTOMERS (they deducted from us), NOT deductees WE paid.
+ *    • "INTEREST ON LATE PAYMENT OF TDS" — a P&L expense (Indirect
+ *      Expenses), not a payable. Its journals credit the P/L, not our
+ *      deductees.
+ *
+ *  The predicate returns TRUE when the ledger should be EXCLUDED. */
+function isNotSection194Payable(name: string, parentGroup: string | null | undefined): boolean {
+  const n = name.toLowerCase();
+  const pg = String(parentGroup ?? "").toLowerCase();
+  // "Receivable" — an income-tax refund / GST TDS receivable
+  if (/\breceivable\b|receivables?/.test(n)) return true;
+  // GST-side TDS ledgers (u/s 51 GST Act) — separate regime
+  if (/\bcgst\b|\bsgst\b|\bigst\b/.test(n))  return true;
+  // Late-payment interest expense — under Indirect Expenses / P&L
+  if (/interest/.test(n) && /(indirect|direct)\s+expenses?/.test(pg)) return true;
+  // Bare "TDS on <goods/services>" ledgers under expense groups — those
+  // are the expense account (Dr side of the entry), not the payable.
+  if (/(indirect|direct)\s+expenses?/.test(pg)) return true;
+  return false;
+}
+
 /** Extract a section code like "194J" / "194C" / "194A" from a Tally
  *  ledger name. Tolerates common variants:
  *    "TDS Payable 194J"          → 194J
@@ -167,6 +196,13 @@ export async function discoverTdsLedgers(params: {
     const l1 = isTdsParentGroup(r.parent_group);
     const l2 = !l1 && ledgerNameLooksLikeTds(name);
     if (!l1 && !l2) continue;
+    // Phase 1 hard exclusion — receivables, GST-TDS, expense-side ledgers.
+    if (isNotSection194Payable(name, r.parent_group)) continue;
+    // Phase 1 amount gate — a genuine section-194 payable will accumulate
+    // credit-side transactions across the year as TDS is deducted. Skip
+    // ledgers with zero credit_amount (never used) so downstream doesn't
+    // walk empty vouchers.
+    if (!(Number(r.credit_amount ?? 0) > 0)) continue;
     const key = name.toLowerCase();
     // Prefer Layer-1 provenance if the same ledger is caught by both.
     if (dedupe.has(key) && dedupe.get(key)!.source === "group") continue;
@@ -200,6 +236,19 @@ function isNonPartyLeg(name: string): boolean {
   // Deliberately NOT matching /tds/ here — the CALLER (extractPartiesFromTdsVouchers)
   // knows which ledger IS the discovered TDS ledger and skips it explicitly.
   return false;
+}
+
+/** Phase 2 — expense/nominal ledgers must not be misclassified as a party
+ *  when scanning Dr-side legs for the counterparty. In a booking-at-bill-
+ *  entry Journal:
+ *    Dr Labour Charges     1,42,000   ← EXPENSE (Dr), not the party
+ *    Cr Shanker Furniture  1,40,000   ← party
+ *    Cr TDS PAY                2,000
+ *  we want Shanker Furniture. Excluding expense-side names here so the
+ *  Dr-leg fallback doesn't return "Labour Charges" as the party. */
+function looksLikeExpenseOrNominal(name: string): boolean {
+  const n = name.toLowerCase();
+  return /(charges|fees|expense|salary|wages|professional|consulting|rent|freight|transport|advertisement|advertising|maintenance|commission|brokerage|interest|discount|purchase|round\s*off|rounding)/i.test(n);
 }
 
 /**
@@ -284,25 +333,43 @@ export async function extractPartiesFromTdsVouchers(params: {
 
     // Prefer the Tally-sync writer's `party_ledger` — it already resolves
     // which line is the party, based on Tally's own metadata. Fall back
-    // to walking line_items for the Cr leg that isn't a TDS ledger and
-    // isn't a bank/cash/GST leg. If both fail, skip — we don't invent a
-    // party name.
+    // to walking BOTH Cr and Dr legs — the party can be on either side
+    // depending on when TDS is booked:
+    //
+    //   Booking at bill entry (party gets Cr, TDS gets Cr, expense Dr):
+    //     Dr Labour Charges     1,42,000
+    //     Cr Shanker Furniture  1,40,000  ← party on Cr
+    //     Cr TDS PAY               2,000
+    //
+    //   Booking a standalone TDS deduction against an existing creditor
+    //   (party on Dr, TDS on Cr):
+    //     Dr Shanker Furniture     2,090  ← party on Dr (RAY WINGS case)
+    //     Cr TDS PAY               2,090
+    //
+    //   Booking at payment time (party gets Dr, TDS Cr, bank Cr):
+    //     Dr Vendor                100
+    //     Cr TDS PAY                10
+    //     Cr Bank                   90
+    //
+    // We scan Cr FIRST (the more common bill-entry pattern) then Dr, so
+    // if a voucher genuinely has both a Cr party and a Dr party we take
+    // the Cr one (bill entry — the payable being created).
     let party = String(v.party_ledger ?? "").trim();
     if (!party) {
-      // Deduction pattern (booking a purchase / expense):
-      //   Dr Expense
-      //   Cr Party  (this is the leg we want — supplier being paid net)
-      //   Cr TDS Payable
-      const crLegs = items.filter(li =>
-        String(li?.dr_cr ?? "").toLowerCase().startsWith("cr"));
-      for (const li of crLegs) {
-        const nm = String(li?.ledger_name ?? "").trim();
-        if (!nm) continue;
-        if (tdsIndex.has(nm.toLowerCase())) continue;
-        if (isNonPartyLeg(nm)) continue;
-        party = nm;
-        break;
-      }
+      const scanForParty = (side: "cr" | "dr"): string => {
+        const legs = items.filter(li =>
+          String(li?.dr_cr ?? "").toLowerCase().startsWith(side));
+        for (const li of legs) {
+          const nm = String(li?.ledger_name ?? "").trim();
+          if (!nm) continue;
+          if (tdsIndex.has(nm.toLowerCase())) continue;
+          if (isNonPartyLeg(nm)) continue;
+          if (looksLikeExpenseOrNominal(nm)) continue;
+          return nm;
+        }
+        return "";
+      };
+      party = scanForParty("cr") || scanForParty("dr");
     }
     if (!party) continue;
 

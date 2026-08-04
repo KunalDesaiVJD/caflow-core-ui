@@ -91,14 +91,11 @@ export function useTdsPartyMappings(
     else {
       const all = (data ?? []) as TbPartyMapping[];
       // ── Issue 3 (party-group filter) — same as before ─────────────────────
-      // 2026-08-04 — Deductee-only rows (placeholder rows for unmatched
-      // Form 26Q deductees) carry null tb_parent_group by design. Let them
-      // pass the party-group filter — the panel needs to surface them so
-      // the auditor can manually link a Tally ledger.
-      const partyOnly = all.filter(m =>
-        (m.match_method || "").includes("deductee_only")
-        || isPartyLedgerGroup(m.tb_parent_group)
-      );
+      // 2026-08-04 Phase 3 — the "deductee_only" placeholder scheme was
+      // reverted. Real Tally ledgers derived from voucher walks carry
+      // valid tb_parent_group; unmapped deductees are handled by a
+      // separate in-memory computation in the panel component (Phase 5).
+      const partyOnly = all.filter(m => isPartyLedgerGroup(m.tb_parent_group));
 
       // ── Issue 3 (name-match >= 70 %) ───────────────────────────────────────
       // The mapper now requires name_score ≥ 70 before storing a row, but old
@@ -111,16 +108,14 @@ export function useTdsPartyMappings(
       const nameMatched = partyOnly.filter(m => {
         if (m.mapped_by === "auditor") return true;
         const methods = (m.match_method || "").split("+");
-        // 2026-08-04 — accept "voucher_evidence" and "deductee_only" too.
-        // voucher_evidence: party derived from a Journal against the
-        // discovered TDS ledger — carries independent evidence, so a
-        // name similarity in the 60-70 % band is a valid mapping.
-        // deductee_only: placeholder row for a Form 26Q deductee we could
-        // not auto-map; the panel MUST show it so the auditor can link
-        // it to a Tally creditor manually.
+        // 2026-08-04 — accept "voucher_evidence" and "tds_amount_tie" too.
+        // Both carry independent evidence (Journal against the TDS payable /
+        // exact TDS-deducted match) so a name similarity in the 60-70 %
+        // band or lower is a valid mapping. "deductee_only" was retired
+        // (Phase 3) — those placeholders broke View Ledger.
         return methods.includes("name_similarity")
           || methods.includes("voucher_evidence")
-          || methods.includes("deductee_only");
+          || methods.includes("tds_amount_tie");
       });
 
       // 2026-07-24 — Root cause of Issues 9 & 12: this read-time dedupe was

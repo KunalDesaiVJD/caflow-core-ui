@@ -317,6 +317,60 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
   // party name in the TB Ledger column.
   const { byParty: partyExpenses } = usePartyExpenseLedgers(clientId, financialYear);
 
+  // 2026-08-04 Phase 5 — Fetch every Form 26Q deductee for this FY so we
+  // can compute an "Unmapped deductees" list below the main table.
+  // Auditor can then link each to a real Tally creditor via the picker
+  // (no fake tb_ledger_name is ever written to the DB).
+  const [allDeductees, setAllDeductees] = useState<Array<{
+    id: string;
+    deductee_name: string;
+    section_code: string | null;
+    amount_paid_credited: number | null;
+    tds_amount: number | null;
+  }>>([]);
+  useEffect(() => {
+    if (!clientId || !financialYear) { setAllDeductees([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await (supabase as any)
+          .from("tds_deductees")
+          .select("id,deductee_name,section_code,amount_paid_credited,tds_amount")
+          .eq("client_id", clientId)
+          .eq("financial_year", financialYear);
+        if (!cancelled) setAllDeductees((data as any[]) || []);
+      } catch { if (!cancelled) setAllDeductees([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [clientId, financialYear]);
+
+  // 2026-08-04 Phase 5 — Fetch every Sundry Creditor from the TB so the
+  // manual-link picker offers a real ledger list.
+  const [tbCreditors, setTbCreditors] = useState<Array<{ ledger_name: string; parent_group: string | null }>>([]);
+  useEffect(() => {
+    if (!clientId || !financialYear) { setTbCreditors([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows: Array<{ ledger_name: string; parent_group: string | null }> = [];
+        for (let from = 0; ; from += 1000) {
+          const { data } = await (supabase as any)
+            .from("tally_trial_balance")
+            .select("ledger_name,parent_group")
+            .eq("client_id", clientId)
+            .eq("financial_year", financialYear)
+            .range(from, from + 999);
+          if (!data || !data.length) break;
+          rows.push(...(data as any[]));
+          if (data.length < 1000) break;
+        }
+        if (!cancelled) {
+          setTbCreditors(rows.filter(r => /creditor/i.test(r.parent_group ?? "")));
+        }
+      } catch { if (!cancelled) setTbCreditors([]); }
+    })();
+  }, [clientId, financialYear]);
+
   const [running,     setRunning]     = useState(false);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [search,      setSearch]      = useState("");
@@ -852,6 +906,76 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
         </div>
       )}
 
+      {/* ── Unmapped deductees (Phase 5) ────────────────────────────────
+          Every Form 26Q deductee that no mapping row currently covers.
+          The auditor picks a real Sundry Creditor from the dropdown; on
+          save we upsert a normal mapping row (mapped_by="auditor",
+          match_method="manual_link") so downstream flows treat it like
+          any other confirmed pair — View Ledger works, reconciliation
+          gets the real TB balance. No fake tb_ledger_name is ever
+          written to the DB. */}
+      {!loading && (() => {
+        const covered = new Set(
+          mappings.map(m => (m.tds_deductee_name || "").trim().toLowerCase())
+            .filter(Boolean),
+        );
+        const unmapped = allDeductees.filter(d =>
+          d.deductee_name && !covered.has(d.deductee_name.trim().toLowerCase())
+        );
+        if (unmapped.length === 0) return null;
+        return (
+          <div className="mt-4 border rounded-lg border-amber-200 bg-amber-50/40">
+            <div className="px-3 py-2 border-b border-amber-200 flex items-center gap-2">
+              <AlertTriangle size={13} className="text-amber-700" />
+              <span className="text-xs font-semibold text-amber-900">
+                Unmapped deductees ({unmapped.length})
+              </span>
+              <span className="text-[10px] text-amber-800/80">
+                No Tally ledger auto-detected — pick one to link manually.
+              </span>
+            </div>
+            <div className="divide-y divide-amber-100">
+              {unmapped.map(d => (
+                <UnmappedDeducteeRow
+                  key={d.id}
+                  deductee={d}
+                  tbCreditors={tbCreditors}
+                  onLink={async (tbLedgerName) => {
+                    if (!clientId || !financialYear || !firmId) return;
+                    const chosen = tbCreditors.find(c => c.ledger_name === tbLedgerName);
+                    const { error: err } = await (supabase as any)
+                      .from("tds_tb_party_mappings")
+                      .upsert({
+                        client_id: clientId,
+                        firm_id:   firmId,
+                        financial_year: financialYear,
+                        tb_ledger_name:    tbLedgerName,
+                        tb_parent_group:   chosen?.parent_group ?? null,
+                        tb_total_debit:    null,
+                        tds_deductee_name: d.deductee_name,
+                        tds_section_code:  d.section_code,
+                        tds_total_amount:  d.amount_paid_credited,
+                        tds_tds_amount:    d.tds_amount,
+                        match_confidence:  100,
+                        match_method:      "name_similarity+manual_link",
+                        ai_reasoning:      `Manually linked by auditor: ${tbLedgerName} → ${d.deductee_name} (${d.section_code ?? "section unknown"}).`,
+                        mapping_status:    "confirmed",
+                        mapped_by:         "auditor",
+                      }, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" });
+                    if (err) {
+                      toast.error(`Link failed: ${err.message}`);
+                      return;
+                    }
+                    toast.success(`Linked ${tbLedgerName} → ${d.deductee_name}`);
+                    refresh();
+                  }}
+                />
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── Footer count ── */}
       {!loading && mappings.length > 0 && (
         <p className="text-[10px] text-muted-foreground text-right">
@@ -860,5 +984,60 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
       )}
     </div>
     </TooltipProvider>
+  );
+}
+
+// ─── Sub-component: Unmapped deductee row with Tally-ledger picker ──────────
+function UnmappedDeducteeRow({
+  deductee, tbCreditors, onLink,
+}: {
+  deductee: { id: string; deductee_name: string; section_code: string | null; amount_paid_credited: number | null; tds_amount: number | null; };
+  tbCreditors: Array<{ ledger_name: string; parent_group: string | null }>;
+  onLink: (tbLedgerName: string) => Promise<void>;
+}) {
+  const [query,   setQuery]   = useState("");
+  const [open,    setOpen]    = useState(false);
+  const [saving,  setSaving]  = useState(false);
+  const filtered = query
+    ? tbCreditors.filter(c => c.ledger_name.toLowerCase().includes(query.toLowerCase())).slice(0, 20)
+    : tbCreditors.slice(0, 20);
+  return (
+    <div className="px-3 py-2 flex items-center gap-3 text-xs">
+      <div className="flex-1 min-w-0">
+        <div className="font-semibold text-amber-900 truncate">{deductee.deductee_name}</div>
+        <div className="text-[10px] text-amber-800/70">
+          {deductee.section_code ?? "section ?"} · Gross ₹{Number(deductee.amount_paid_credited ?? 0).toLocaleString("en-IN")} · TDS ₹{Number(deductee.tds_amount ?? 0).toLocaleString("en-IN")}
+        </div>
+      </div>
+      <div className="relative">
+        <Input
+          placeholder="Search & link Tally ledger…"
+          className="h-7 text-xs w-64"
+          value={query}
+          onChange={e => { setQuery(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+        />
+        {open && filtered.length > 0 && (
+          <div className="absolute right-0 top-8 z-30 w-72 max-h-56 overflow-y-auto border rounded bg-white shadow-lg">
+            {filtered.map(c => (
+              <button
+                key={c.ledger_name}
+                type="button"
+                className="w-full text-left px-2 py-1 text-xs hover:bg-amber-50 flex flex-col"
+                onMouseDown={async () => {
+                  setSaving(true);
+                  try { await onLink(c.ledger_name); } finally { setSaving(false); setOpen(false); }
+                }}
+              >
+                <span className="font-medium text-slate-800">{c.ledger_name}</span>
+                {c.parent_group && <span className="text-[10px] text-slate-500">{c.parent_group}</span>}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      {saving && <Loader2 size={11} className="animate-spin text-amber-700" />}
+    </div>
   );
 }

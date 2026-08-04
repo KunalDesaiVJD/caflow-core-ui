@@ -307,6 +307,21 @@ export async function runAiMapper(params: {
 }): Promise<MapperResult> {
   const { client_id, financial_year, firm_id, force_rematch = false } = params;
 
+  // 2026-08-04 Phase 3 — clean up stale "(unmapped: <deductee>)" placeholder
+  // rows from the previous seeding logic. Their synthetic tb_ledger_name
+  // (starting with "(unmapped: ") broke View Ledger and created phantom
+  // TDS>Books variance flags. Deleting only rows that use the exact
+  // "deductee_only" method label so auditor-created rows are left alone.
+  try {
+    await (supabase as any)
+      .from("tds_tb_party_mappings")
+      .delete()
+      .eq("client_id", client_id)
+      .eq("financial_year", financial_year)
+      .eq("match_method", "deductee_only")
+      .eq("mapped_by", "ai");
+  } catch { /* non-fatal — cleanup only */ }
+
   // 1. Fetch Trial Balance ledgers — PAGINATE (PostgREST caps a single response
   // at 1000 rows; un-paginated, expense/creditor ledgers past row 1000 were
   // excluded from TDS mapping).
@@ -394,6 +409,12 @@ export async function runAiMapper(params: {
       __source:        "voucher",
       __voucher_section: p.section,
       __voucher_count:   p.voucher_count,
+      // 2026-08-04 Phase 4 — carry the total TDS deducted against this
+      // party through the discovered TDS payable ledger. Used by the
+      // amount-tie scorer below to link a Tally trade name to a
+      // deductee whose name looks totally different (Shanker Furniture
+      // ₹2,790 TDS ↔ SHANKARLAL ₹2,790 TDS).
+      __voucher_tds_amount: p.tds_amount,
     });
   }
 
@@ -440,44 +461,54 @@ export async function runAiMapper(params: {
     // missed in prior runs (which walked only TB creditors). Skipping them
     // would silently perpetuate the RAY WINGS gap even after this fix.
     const isVoucherDerived = (tb as any).__source === "voucher";
+    const voucherTds       = Number((tb as any).__voucher_tds_amount ?? 0);
     if (!isVoucherDerived && alreadyMapped.has(tb.ledger_name)) { skipped++; continue; }
     let best: {
       ded: AggDeductee; confidence: number; nameScore: number; amtScore: number;
       secScore: number; method: string; gstAdjusted: boolean;
+      tdsAmtTie?: boolean;
     } | null = null;
 
     for (const ded of aggDeductees) {
       if (!ded.deductee_name) continue;
       const nameScore = tokenSortRatio(tb.ledger_name, ded.deductee_name);
+      // Phase 4 — TDS AMOUNT TIE-BACK. Voucher-derived candidates carry the
+      // exact TDS amount deducted against the party in Tally. If that number
+      // matches a deductee's total_tds within ₹10 OR 2 %, we have a strong
+      // link — even if the names look nothing alike (Shanker Furniture
+      // ₹2,790 ↔ SHANKARLAL ₹2,790). Section must also agree. This bypasses
+      // the nameScore floor entirely.
+      let tdsAmtTie = false;
+      if (isVoucherDerived && voucherTds > 0 && ded.total_tds > 0) {
+        const diff    = Math.abs(voucherTds - ded.total_tds);
+        const ratio   = diff / Math.max(voucherTds, ded.total_tds);
+        const sectionOk = !(tb as any).__voucher_section
+          || !ded.section_code
+          || String((tb as any).__voucher_section).replace(/[^0-9a-z]/gi, "").toUpperCase()
+             === String(ded.section_code).replace(/[^0-9a-z]/gi, "").toUpperCase();
+        if (sectionOk && (diff <= 10 || ratio <= 0.02)) tdsAmtTie = true;
+      }
       // Issue 3: Require ≥ 70% name similarity — BUT voucher-derived candidates
-      // get 60% because they arrive with independent evidence (a Journal
-      // against the discovered TDS ledger under the party's own name).
-      // Deductee names in tds_deductees are typed by the auditor and often
-      // vary in punctuation / expansion / order ("Hardik C. Panchal" vs
-      // "HARDIK CHINUBHAI PANCHAL"), so a stricter 70% cutoff was dropping
-      // real matches. Section context + amount fuzz still gate the final
-      // confidence, so lowering the name floor here doesn't confirm noise.
+      // get 60%. And when tdsAmtTie is true, name floor is bypassed entirely.
       const nameFloor = isVoucherDerived ? 60 : 70;
-      if (nameScore < nameFloor) continue;
+      if (!tdsAmtTie && nameScore < nameFloor) continue;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
       // Use GST-normalised gross comparison to avoid spurious mismatches
       const { score: amtScore, gstAdjusted } = grossAmountScore(tbActivity, ded.total_amount_paid);
       const secScore   = sectionContextScore(tb.parent_group, ded.section_code);
-      const confidence = Math.round(nameScore * 0.50 + amtScore * 0.30 + secScore * 0.20);
+      // Base composite; overridden below when the TDS-amount tie fires
+      // because it's a much stronger signal than fuzzy name/gross scores.
+      let confidence = Math.round(nameScore * 0.50 + amtScore * 0.30 + secScore * 0.20);
+      if (tdsAmtTie) confidence = Math.max(confidence, 85);
       if (confidence < 40) continue;
       if (!best || confidence > best.confidence) {
         const methods: string[] = [];
-        // For voucher-derived candidates the name floor is 60 (see nameFloor
-        // above); mirror that here so the panel's method-filter accepts them
-        // — without this, we'd write the row to the DB but the useTdsPartyMappings
-        // hook would silently hide it because match_method wouldn't include
-        // "name_similarity" (RAY WINGS symptom: mapper reported N matched but
-        // the panel still showed 3).
         if (nameScore >= (isVoucherDerived ? 60 : 70)) methods.push("name_similarity");
         if (amtScore  >= 75) methods.push("amount_ratio");
         if (secScore  >= 80) methods.push("section_context");
         if (isVoucherDerived) methods.push("voucher_evidence");
-        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted };
+        if (tdsAmtTie) methods.push("tds_amount_tie");
+        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted, tdsAmtTie };
       }
     }
 
@@ -496,7 +527,11 @@ export async function runAiMapper(params: {
     const grossOk  = best.amtScore >= 75;
     const tdsOk    = best.ded.total_tds > 0;
     const rateOk   = tdsRateMatchesSection(best.ded.section_code, best.ded.total_amount_paid, best.ded.total_tds);
-    const bothMatch = best.nameScore >= 90 && grossOk && tdsOk && rateOk;
+    // Phase 4 — a confirmed TDS-amount tie stands in for the name-similarity
+    // 90 % floor. The amounts on both sides came from a signed accounting
+    // record + a filed 26Q; matching them within ₹10 / 2 % is stronger
+    // evidence than a fuzzy name score.
+    const bothMatch = (best.tdsAmtTie ? true : best.nameScore >= 90) && grossOk && tdsOk && rateOk;
     const mapping_status =
       bothMatch                    ? "confirmed"   :
       best.confidence >= 60        ? "pending"     :
@@ -537,47 +572,20 @@ export async function runAiMapper(params: {
     });
   }
 
-  // 2026-08-04 — RAY WINGS class of visibility gap: every deductee reported
-  // in Form 26Q must appear in the panel — including those whose Tally
-  // counterpart is booked under an unrelated name (proprietor's alias,
-  // trade name, family HUF, etc). The AI mapper cannot resolve these
-  // automatically because tokenSortRatio between "Vanraj Engineers" and
-  // "HARDIK CHINUBHAI PANCHAL" is near zero, and the auditor is the one
-  // with the trade-name / PAN mapping knowledge.
+  // 2026-08-04 Phase 3 — the "(unmapped: <deductee>)" placeholder rows
+  // previously seeded here were REMOVED: they used a synthetic
+  // tb_ledger_name that broke View Ledger (the drill returns "No
+  // vouchers found for this ledger") and made the reconciliation engine
+  // flag a phantom TDS>Books variance equal to the deductee's gross.
+  // Deductees that have no matching Tally ledger are now surfaced by the
+  // panel component as an "Unmapped deductees" section — a computed
+  // in-memory list with a manual-link picker — and are only written to
+  // tds_tb_party_mappings once the auditor picks the correct Tally
+  // creditor (as a normal mapped_by="auditor" row).
   //
-  // Seed a placeholder row for every deductee not covered by the matching
-  // loop above. tb_ledger_name uses "(unmapped: <deductee>)" so the panel
-  // renders it clearly as an action item. match_method="deductee_only"
-  // — a new label the panel filter accepts to keep these rows visible.
-  const mappedDeductees = new Set(
-    upsertRows.map((r: any) => String(r.tds_deductee_name || "").trim().toLowerCase())
-      .filter(Boolean),
-  );
-  for (const ded of aggDeductees) {
-    if (!ded.deductee_name) continue;
-    const key = ded.deductee_name.trim().toLowerCase();
-    if (mappedDeductees.has(key)) continue;
-    // Placeholder tb_ledger_name — carries the deductee so the panel's
-    // primary column stays informative. UI can render this specially
-    // (e.g. amber tint + "link to a Tally ledger" CTA).
-    const placeholder = `(unmapped: ${ded.deductee_name})`;
-    upsertRows.push({
-      client_id, firm_id, financial_year,
-      tb_ledger_name:    placeholder,
-      tb_parent_group:   null,
-      tb_total_debit:    null,
-      tds_deductee_name: ded.deductee_name,
-      tds_section_code:  ded.section_code,
-      tds_total_amount:  ded.total_amount_paid || null,
-      tds_tds_amount:    ded.total_tds || null,
-      tds_filing_ids:    ded.filing_ids,
-      match_confidence:  0,
-      match_method:      "deductee_only",
-      ai_reasoning:      `No matching Tally ledger found automatically. Reported in Form 26Q as ${ded.deductee_name} (${ded.section_code ?? "section unknown"}, gross ₹${ded.total_amount_paid.toFixed(0)}, TDS ₹${ded.total_tds.toFixed(0)}). Auditor to link to a Tally creditor manually — e.g. proprietor names booked under trade-name, HUF booked under individual, etc.`,
-      mapping_status:    "needs_review",
-      mapped_by:         "ai",
-    });
-  }
+  // Real Tally ledgers derived from Journal vouchers against the TDS
+  // payable (e.g. "Shanker Furniture" for SHANKARLAL) already flow
+  // through the main matching loop above via the voucher-union step.
 
   // 2026-07-24 — root cause of Issues 9 & 12:
   //   • Auditor needed multiple Tally ledgers → same deductee (parties whose
