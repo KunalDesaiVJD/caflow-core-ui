@@ -39,7 +39,7 @@ import {
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
-  FileEdit, Plus, ArrowLeft, Landmark, ShieldCheck, Lock, CheckCircle2, XCircle, Trash2, RotateCcw,
+  FileEdit, Plus, ArrowLeft, Landmark, ShieldCheck, Lock, CheckCircle2, XCircle, Trash2, RotateCcw, FileText,
 } from "lucide-react";
 import {
   CORRECTION_STATUS_META, isCorrectionLocked, createCorrection,
@@ -460,32 +460,61 @@ function PortalCorrectionDetail({ correctionId, clientName, actor, onBack, toast
         ))}
       </div>
 
-      <div className="space-y-4">
-        {challans.map(c => (
-          <Card key={c.id}>
-            <CardHeader className="py-3">
-              <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
-                <Landmark size={14} className="text-amber-600 shrink-0" />
-                Challan {c.challan_serial_no || "—"}
-                <span className="text-xs font-normal text-muted-foreground">{shortDate(c.deposit_date)}</span>
-                <div className="flex-1" />
-                <span className="text-xs font-normal text-muted-foreground">₹{money(c.total_challan_amount)}</span>
-                {!locked && (
-                  <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={() => setAddTo(c)}>
-                    <Plus size={12} /> Entry
-                  </Button>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <PortalEntryTable
-                rows={byChallan.get(c.id) || []} form={correction.form_type} locked={locked}
-                onEdit={setEditRow} onDelete={markDeleted} onRestore={restore}
-              />
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {challans.length === 0 && deductees.length === 0 ? (
+        <Card>
+          <CardContent className="p-10 text-center text-sm text-muted-foreground">
+            No challans or entries were captured for this correction.
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {challans.map(c => (
+            <Card key={c.id}>
+              <CardHeader className="py-3">
+                <CardTitle className="text-sm flex items-center gap-2 flex-wrap">
+                  <Landmark size={14} className="text-amber-600 shrink-0" />
+                  Challan {c.challan_serial_no || "—"}
+                  <span className="text-xs font-normal text-muted-foreground">{shortDate(c.deposit_date)}</span>
+                  <div className="flex-1" />
+                  <span className="text-xs font-normal text-muted-foreground">₹{money(c.total_challan_amount)}</span>
+                  {!locked && (
+                    <Button size="sm" variant="ghost" className="h-7 gap-1 text-xs" onClick={() => setAddTo(c)}>
+                      <Plus size={12} /> Entry
+                    </Button>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <PortalEntryTable
+                  rows={byChallan.get(c.id) || []} form={correction.form_type} locked={locked}
+                  onEdit={setEditRow} onDelete={markDeleted} onRestore={restore}
+                />
+              </CardContent>
+            </Card>
+          ))}
+
+          {/* Entries not linked to any challan in this correction — previously
+              computed into byChallan's "__unlinked__" bucket but never
+              rendered anywhere, so they existed in the Added/Modified/Deleted
+              counts above yet were invisible in the body below. */}
+          {(byChallan.get("__unlinked__") || []).length > 0 && (
+            <Card>
+              <CardHeader className="py-3">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <FileText size={14} className="text-muted-foreground" />
+                  Not linked to a challan
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <PortalEntryTable
+                  rows={byChallan.get("__unlinked__") || []} form={correction.form_type} locked={locked}
+                  onEdit={setEditRow} onDelete={markDeleted} onRestore={restore}
+                />
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
 
       {/* Signature — clients never sign; this shows the firm's */}
       <Card className={cn(locked && "border-emerald-200")}>

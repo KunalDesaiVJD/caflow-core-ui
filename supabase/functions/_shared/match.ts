@@ -228,6 +228,37 @@ const hasLegalStatusLeftover = (r: { unmatchedShort: string[]; unmatchedLong: st
   r.unmatchedShort.some((w) => NAME_LEGAL_STATUS_TOKENS.has(w)) || r.unmatchedLong.some((w) => NAME_LEGAL_STATUS_TOKENS.has(w));
 
 /**
+ * A BARE INITIAL BELONGS TO WHOEVER'S NAME IT'S STANDING NEXT TO, NOT TO
+ * WHOEVER ELSE HAPPENS TO SHARE ITS FIRST LETTER.
+ *
+ * tokenRule()'s initial rule ("S" ↔ "SURESHBHAI") exists for the SAME person's
+ * own name written two ways. It has no way to see WHOSE initial "S" actually
+ * is — it just checks the first letter — so nothing stops it aligning "J"
+ * from "Hiral J Patel" against an entirely unrelated "Jatin Patel": PATEL
+ * matches PATEL, J "matches" JATIN by first letter, and the alignment
+ * accepts on two hits — while HIRAL, this ledger row's own real, distinctive
+ * first name, sits unmatched and unconsidered. Two people who share a
+ * surname (PATEL, SHAH, MEHTA... ) and where one happens to have a middle
+ * initial starting with the other's first letter is not a coincidence this
+ * engine may treat as identity — a real 24Q filing paired Jatin Patel's
+ * office record to Hiral J Patel's Tally voucher this exact way, reporting
+ * a fabricated ₹62,230 "Taxable Income Amount Mismatch" against a total
+ * stranger's salary.
+ *
+ * Scoped narrowly: only fires when an initial rule pairing (one token of the
+ * pair is a single letter) was load-bearing for acceptance AND a REAL name
+ * token (not a suffix/stopword/legal-status word this file already treats as
+ * decoration) is left stranded on that SAME side. A harmless unconsumed
+ * initial sitting beside an otherwise-complete match (e.g. "Hiral Patel" vs
+ * "Hiral J Patel", where HIRAL and PATEL already align exactly) never
+ * triggers this — the initial there did no work, so nothing here objects to it.
+ */
+const isRealNameToken = (w: string) => w.length >= 3 && !NAME_COMPOUND_SUFFIXES.has(w) && !NAME_STOPWORDS.has(w) && !NAME_LEGAL_STATUS_TOKENS.has(w);
+const hasStrayInitialLeftover = (r: { pairs: { s: string; l: string; rule: number }[]; unmatchedShort: string[]; unmatchedLong: string[] }): boolean =>
+  r.pairs.some((p) => (p.s.length === 1 && r.unmatchedShort.some(isRealNameToken))
+    || (p.l.length === 1 && r.unmatchedLong.some(isRealNameToken)));
+
+/**
  * How strongly two names are related, as a TIER of decreasing evidence.
  *
  *   0 EXACT      normalised strings equal          KONE ... PRIVATE LIMITED / Pvt Ltd
@@ -315,7 +346,7 @@ export function nameEvidence(a: string | null | undefined, b: string | null | un
   // clear this exact acceptance clause ("KULBIR SINGH" absorbing "- LABOUR" is fine;
   // "RAMESH PATEL" absorbing "HUF" is a DIFFERENT ASSESSEE). Demoted below instead of
   // accepted here — same treatment as any other unrescuable remainder.
-  if (base.accepted && !hasLegalStatusLeftover(base)) {
+  if (base.accepted && !hasLegalStatusLeftover(base) && !hasStrayInitialLeftover(base)) {
     // Same tokens in a different order is a PERMUTATION, not a weakening — it is
     // tier 1 however the greedy pass happened to align them. Anything else leaned on
     // an abbreviation or dropped a token, which is tier 2 at best.

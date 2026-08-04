@@ -35,6 +35,25 @@ const DEDUCTEE = {
   reason_for_lower_or_nil_deduction: null,
   gross_salary: null, standard_deduction_allowed: null, net_taxable_salary: null,
 };
+// A COMBINED-PAYMENT challan: created under 24Q's Genius import (so its own
+// form_type is "24Q"), but reused for a 26Q deductee too — the exact scenario
+// TdsDataEntry.tsx's "A COMBINED PAYMENT" fetch fix handles. The plain
+// filing_id+client_id query for this filing never returns it; it only comes
+// back via the .in("id", sharedIds) lookup keyed off the deductee side.
+const SHARED_CHALLAN = {
+  id: "ch2", form_type: "24Q", bsr_code: "0510309", challan_serial_no: "00456",
+  deposit_date: "2025-07-08", total_tax_deposited: 8000, interest_deposited: 0,
+  late_fees_234e: 0, total_challan_amount: 8000, minor_head_of_challan: "200",
+  is_book_entry: false, bank_name: "HDFC Bank",
+};
+const SHARED_DEDUCTEE = {
+  id: "d2", challan_id: "ch2", form_type: "26Q", deductee_name: "Beta Supplies",
+  deductee_pan: "BBBPB5678B", pan_not_available: false, deductee_type: "Company",
+  section_code: "194J", amount_paid_credited: 400000, date_of_payment: "2025-06-20",
+  rate_of_tds: 2, tds_amount: 8000, total_tax_deducted: 8000, interest_amount: 0,
+  reason_for_lower_or_nil_deduction: null,
+  gross_salary: null, standard_deduction_allowed: null, net_taxable_salary: null,
+};
 
 // vi.mock factories are hoisted above module scope — anything they touch must
 // be created inside vi.hoisted, not as a plain top-level const.
@@ -47,13 +66,22 @@ const { channelObj, removeChannel } = vi.hoisted(() => {
 
 vi.mock("@/integrations/supabase/client", () => {
   const table = (name: string) => {
-    const rows = name === "tds_filings" ? [FILING]
-      : name === "tds_challans" ? [CHALLAN]
-      : name === "tds_deductees" ? [DEDUCTEE] : [];
+    let inFilter: string[] | null = null;
     const builder: any = {
       select: () => builder,
       eq: () => builder,
-      then: (res: any) => Promise.resolve({ data: rows, error: null }).then(res),
+      in: (_col: string, values: string[]) => { inFilter = values; return builder; },
+      then: (res: any) => {
+        let rows: any[];
+        if (name === "tds_filings") rows = [FILING];
+        else if (name === "tds_challans") {
+          // The FIRST tds_challans query (own, by filing_id+client_id) never
+          // calls .in — only the second (shared, by challan id) does.
+          rows = inFilter ? [CHALLAN, SHARED_CHALLAN].filter(c => inFilter!.includes(c.id)) : [CHALLAN];
+        } else if (name === "tds_deductees") rows = [DEDUCTEE, SHARED_DEDUCTEE];
+        else rows = [];
+        return Promise.resolve({ data: rows, error: null }).then(res);
+      },
     };
     return builder;
   };
@@ -97,6 +125,13 @@ describe("PortalTds render check", () => {
 
     // Challan header
     expect(screen.getByText(/Challan 00123/)).toBeInTheDocument();
+
+    // Combined-payment challan (own form_type "24Q", only reachable via the
+    // deductee side) still surfaces on this 26Q screen, along with its row —
+    // it must not silently vanish just because its own form_type differs and
+    // it isn't covered by the filing_id-scoped query.
+    expect(screen.getByText(/Challan 00456/)).toBeInTheDocument();
+    expect(screen.getByText("Beta Supplies")).toBeInTheDocument();
 
     // Read-only affordance is present
     expect(screen.getByText("View only")).toBeInTheDocument();
