@@ -97,6 +97,13 @@ interface VfStatus {
   s4: VfState; s4Detail: string;
   signed: boolean; signedDetail: string;
   ready: boolean;
+  // Wall-clock time this row's status was actually computed — surfaced in
+  // the badge's own tooltip (see its render below) purely as a diagnostic:
+  // when a user reports "this looks wrong", the ONE question that settles
+  // whether it's a genuinely stale read vs a real data issue is "how old is
+  // this number", and there was previously no way to answer that without
+  // reproducing the report firsthand from the database.
+  computedAt: number;
 }
 
 // Aggregate status groups driven by Dashboard KPI card clicks — these don't
@@ -966,6 +973,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     }
 
     const map = new Map<string, VfStatus>();
+    const computedAt = Date.now(); // one timestamp for the whole batch — see VfStatus's own doc
     for (const id of filingIds) {
       const s1c = s1ByFiling.get(id);
       const s1: VfState = !s1c ? "none" : s1c.issues > 0 ? "warn" : "done";
