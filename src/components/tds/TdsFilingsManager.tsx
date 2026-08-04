@@ -1002,7 +1002,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
       const ready = s1 === "done" && s2 === "done" && s3 === "done" && s4 === "done" && signed;
 
-      map.set(id, { s1, s1Detail, s2, s2Detail, s3, s3Detail, s4, s4Detail, signed, signedDetail, ready });
+      map.set(id, { s1, s1Detail, s2, s2Detail, s3, s3Detail, s4, s4Detail, signed, signedDetail, ready, computedAt });
     }
     // Re-checked here too: the sequence could have been superseded by a
     // newer call while the loop above ran (synchronous, so unlikely, but
@@ -1982,14 +1982,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         // hover, without having to open Stage 4 · Checker Review to
                         // find out which of Stage 1/2/3 or the signature is actually
                         // the blocker.
+                        const lastChecked = `Last checked: ${new Date(vf.computedAt).toLocaleTimeString()}`;
                         const detailTitle = vf.ready
-                          ? "Ready to file — click to open Stage 1"
+                          ? `Ready to file — click to open Stage 1\n${lastChecked}`
                           : [
                               `Not ready — click to open Stage 1`,
                               `Stage 1: ${vf.s1Detail}`,
                               `Stage 2: ${vf.s2Detail}`,
                               `Stage 3: ${vf.s3Detail}`,
                               `Signature: ${vf.signedDetail}`,
+                              lastChecked,
                             ].join("\n");
                         // ALWAYS-VISIBLE blocker line, not just on hover — naming every
                         // stage/signature that isn't "done" yet, so "why is this red"
