@@ -211,6 +211,61 @@ function bandText(band: PdfTextItem[]): string {
   return band.map((i) => i.str.trim()).filter(Boolean).join(" ");
 }
 
+// ─── The Protean template's column tables (fallback for extractLabelledValue) ─
+//
+// Two separate tables on the same receipt, both read the same way as
+// findAckNumberByColumn above:
+//
+//   Table 1 (Name):  "Name of Deductor" header, wrapped like "Tax Invoice cum
+//                     Token / Number" is — the value sits several bands below.
+//   Table 2 (TAN/Form No/Periodicity/Tax Year): "Date | TAN | AO Code | Form
+//                     No | Periodicity | Type of Statement | Tax Year" prints
+//                     as ONE clean header band, immediately followed by ONE
+//                     clean value band — no wrapping, so no lookahead needed.
+//
+// "TAN" anchors Table 2: a bare, exact "TAN" text run only ever appears in
+// this table (the older templates' PAN/TAN row is always ONE combined string
+// like "PAN/TAN" or "PAN/TAN/Other ID", never a standalone "TAN" run), so it
+// can't collide with the label-based extraction above even though both are
+// tried on every page.
+const NAME_OF_DEDUCTOR_RE = /Name\s+of\s+Deductor/i;
+const NAME_COLUMN_LOOKAHEAD = 5;
+
+function extractNameOfDeductorColumn(bands: PdfTextItem[][]): string | null {
+  const labelBandIdx = bands.findIndex((b) => NAME_OF_DEDUCTOR_RE.test(b.map((i) => i.str).join(" ")));
+  if (labelBandIdx === -1) return null;
+  const headerItem = bands[labelBandIdx].find((it) => NAME_OF_DEDUCTOR_RE.test(it.str));
+  if (!headerItem) return null;
+  for (let i = labelBandIdx + 1; i <= labelBandIdx + NAME_COLUMN_LOOKAHEAD && i < bands.length; i++) {
+    const val = valueUnderColumn(bands[i], headerItem.x);
+    if (val && val.length >= 2) return val;
+  }
+  return null;
+}
+
+const IDENTITY_ROW_TAN_RE = /^TAN$/i;
+const IDENTITY_COLUMN_HEADERS = {
+  tan: /^TAN$/i,
+  formNo: /^Form\s*No\.?$/i,
+  quarter: /^Periodicity$/i,
+  taxYear: /^Tax\s+Year$/i,
+} as const;
+
+function extractIdentityColumnTable(bands: PdfTextItem[][]): Record<keyof typeof IDENTITY_COLUMN_HEADERS, string | null> | null {
+  for (let i = 0; i < bands.length - 1; i++) {
+    const header = bands[i];
+    if (!header.some((it) => IDENTITY_ROW_TAN_RE.test(it.str.trim()))) continue;
+    const values = bands[i + 1];
+    const out = { tan: null, formNo: null, quarter: null, taxYear: null } as Record<keyof typeof IDENTITY_COLUMN_HEADERS, string | null>;
+    for (const key of Object.keys(IDENTITY_COLUMN_HEADERS) as (keyof typeof IDENTITY_COLUMN_HEADERS)[]) {
+      const headerItem = header.find((it) => IDENTITY_COLUMN_HEADERS[key].test(it.str.trim()));
+      if (headerItem) out[key] = valueUnderColumn(values, headerItem.x);
+    }
+    return out;
+  }
+  return null;
+}
+
 /** Pull the value out of a "Label : Value" row. Returns null if the label
  * isn't found on this page, OR if it is but the printed value is blank/"-"
  * (several fields — Assessment Year, Month — are legitimately "-" on a
@@ -250,6 +305,21 @@ export function extractAckFields(pages: PdfTextItem[][]): AckFields {
     quarter ??= extractLabelledValue(bands, QUARTER_LABEL_RE, QUARTER_VALUE_RE);
     formNo ??= extractLabelledValue(bands, FORM_NO_LABEL_RE);
     tan ??= extractLabelledValue(bands, PAN_TAN_LABEL_RE);
+
+    // Fallback: the Protean "Tax Invoice cum Token Number" template has no
+    // "Label : Value" row for any of these — see extractIdentityColumnTable's
+    // own doc. Only tried once something above is still unresolved, so it
+    // costs nothing on the templates the label-based reader already handles.
+    if (name == null || financialYear == null || quarter == null || formNo == null || tan == null) {
+      name ??= extractNameOfDeductorColumn(bands);
+      const cols = extractIdentityColumnTable(bands);
+      if (cols) {
+        tan ??= cols.tan;
+        formNo ??= cols.formNo;
+        if (cols.quarter && QUARTER_VALUE_RE.test(cols.quarter)) quarter ??= cols.quarter;
+        financialYear ??= cols.taxYear;
+      }
+    }
   }
   return {
     ackNumber: extractAckNumber(pages),

@@ -91,6 +91,27 @@ describe("extractAckNumber", () => {
     ];
     expect(extractAckNumber([items])).toBeNull();
   });
+
+  // The Protean "Tax Invoice cum Token Number" receipt (Income-tax Act, 2025,
+  // seen from FY2026-27 Q1) — a THIRD template, distinct from both the
+  // e-filing-portal ones above. Byte-faithful reproduction of a real
+  // receipt's pdf.js coordinates (PRINCIPAL COMMISSIONER OF INCOME TAX
+  // (REAC) AHMEDABAD, 334899600554750, 24Q Q1 FY2026-27). It never prints
+  // "Acknowledgement Number" anywhere — the value is a plain column entry,
+  // left-aligned under the wrapped "Tax Invoice cum Token / Number" header,
+  // three bands below it (the header itself wraps across three lines before
+  // the value row starts).
+  it("reads the acknowledgement number from the Protean 'Tax Invoice cum Token Number' column, with no 'Acknowledgement Number' label anywhere", () => {
+    const items: PdfTextItem[] = [
+      cell(24, 751, "Tax Invoice cum Token"), cell(411, 751, "GSTIN of"), cell(485, 751, "Receipt no.(note i) (to"),
+      cell(120, 746, "Name of Deductor"),
+      cell(51, 742, "Number"), cell(485, 742, "be quoted on TDS"),
+      cell(393, 741, "Deductor/Collector"),
+      cell(120, 722, "PRINCIPAL COMMISSIONER OF INCOMETAX REAC AHMEDABAD 01"),
+      cell(20, 721, "334899600554750"), cell(385, 721, "NA"), cell(485, 721, "QWIMJVUD"),
+    ];
+    expect(extractAckNumber([items])).toBe("334899600554750");
+  });
 });
 
 describe("extractAckFields", () => {
@@ -238,5 +259,55 @@ describe("extractAckFields — the newer 'Acknowledgement Receipt of Income Tax 
       formNo: "140",
       tan: "AHMA14484B",
     });
+  });
+});
+
+describe("extractAckFields — the Protean 'Tax Invoice cum Token Number' template", () => {
+  // Byte-faithful reproduction of a real receipt's pdf.js coordinates
+  // (PRINCIPAL COMMISSIONER OF INCOME TAX (REAC) AHMEDABAD, 334899600554750,
+  // 24Q Q1 FY2026-27 — "Form No" prints the bare portal code "138", already
+  // mapped to 24Q in ackMismatch.ts's FORM_NO_PORTAL_ALIASES). No field here
+  // is a "Label : Value" row — every one is a column value, left-aligned
+  // under its own header, on the row(s) directly below it.
+  const items: PdfTextItem[] = [
+    cell(24, 751, "Tax Invoice cum Token"), cell(411, 751, "GSTIN of"), cell(485, 751, "Receipt no.(note i) (to"),
+    cell(120, 746, "Name of Deductor"),
+    cell(51, 742, "Number"), cell(485, 742, "be quoted on TDS"),
+    cell(393, 741, "Deductor/Collector"),
+    cell(120, 722, "PRINCIPAL COMMISSIONER OF INCOMETAX REAC AHMEDABAD 01"),
+    cell(20, 721, "334899600554750"), cell(385, 721, "NA"), cell(485, 721, "QWIMJVUD"),
+    cell(20, 699, "Date"), cell(120, 699, "TAN"), cell(205, 699, "AO Code"), cell(270, 699, "Form No"),
+    cell(320, 699, "Periodicity"), cell(380, 699, "Type of Statement"), cell(485, 699, "Tax Year"),
+    cell(20, 679, "31 July 2026"), cell(120, 679, "AHMP14665A"), cell(205, 679, "GUJWT1471"), cell(270, 679, "138"),
+    cell(320, 679, "Q1"), cell(380, 679, "Regular"), cell(485, 679, "2026-27"),
+  ];
+
+  it("extracts Ack No./Name/TAN/Form No./Quarter/Tax Year purely from column position, with zero 'Label : Value' rows on the page", () => {
+    expect(extractAckFields([items])).toEqual({
+      ackNumber: "334899600554750",
+      name: "PRINCIPAL COMMISSIONER OF INCOMETAX REAC AHMEDABAD 01",
+      financialYear: "2026-27",
+      quarter: "Q1",
+      formNo: "138",
+      tan: "AHMP14665A",
+    });
+  });
+
+  it("never lets the identity-table fallback fire on the older 'PAN/TAN :' template (no bare 'TAN' run to anchor on)", () => {
+    // Regression guard for extractIdentityColumnTable's own safety claim: the
+    // older templates' PAN/TAN row is always ONE combined string, never a
+    // standalone "TAN" text run, so the fallback must stay silent here and
+    // the label-based reader's own real answer must come through unchanged.
+    const older: PdfTextItem[] = [
+      cell(40, 700, "Name"), cell(70, 700, ":"), cell(90, 700, "Some"), cell(140, 700, "Client"),
+      cell(40, 670, "PAN/TAN"), cell(100, 670, ":"), cell(120, 670, "AAAPA1111A"),
+      cell(40, 640, "Financial"), cell(100, 640, "Year"), cell(150, 640, ":"), cell(170, 640, "2025-26"),
+      cell(40, 610, "Quarter"), cell(70, 610, ":"), cell(90, 610, "Q2"),
+      cell(40, 580, "Form"), cell(75, 580, "No."), cell(100, 580, ":"), cell(120, 580, "24Q"),
+    ];
+    const fields = extractAckFields([older]);
+    expect(fields.tan).toBe("AAAPA1111A");
+    expect(fields.quarter).toBe("Q2");
+    expect(fields.formNo).toBe("24Q");
   });
 });
