@@ -423,6 +423,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
         const diag: string[] = [];
         if (typeof r.discovered_tds_ledgers === "number") diag.push(`${r.discovered_tds_ledgers} TDS ledger${r.discovered_tds_ledgers === 1 ? "" : "s"} discovered`);
         if (typeof r.voucher_parties_added  === "number") diag.push(`${r.voucher_parties_added} party${r.voucher_parties_added === 1 ? "" : "ies"} from vouchers`);
+        if (typeof r.books_only_written     === "number") diag.push(`${r.books_only_written} books-only`);
         toast.success(
           `Mapper complete: ${r.mapped} matched ` +
           `(${r.confirmed} auto-confirmed, ${r.pending} pending, ${r.needs_review} needs review)` +
@@ -1001,6 +1002,30 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                       toast.error(`Link failed: ${err.message}`);
                       return;
                     }
+                    // Stage-1 follow-up (2026-08-04) — kill orphan books_only
+                    // rows for the same TB ledger so the panel stops showing
+                    // Shanker Furniture twice after a manual link. Cascade
+                    // through tds_recon_flags first for the FK constraint.
+                    try {
+                      const { data: orphans } = await (supabase as any)
+                        .from("tds_tb_party_mappings")
+                        .select("id")
+                        .eq("client_id", clientId)
+                        .eq("financial_year", financialYear)
+                        .eq("tb_ledger_name", tbLedgerName)
+                        .like("match_method", "%books_only%");
+                      const orphanIds = ((orphans as any[]) || []).map(o => o.id);
+                      if (orphanIds.length > 0) {
+                        await (supabase as any)
+                          .from("tds_recon_flags")
+                          .delete()
+                          .in("mapping_id", orphanIds);
+                        await (supabase as any)
+                          .from("tds_tb_party_mappings")
+                          .delete()
+                          .in("id", orphanIds);
+                      }
+                    } catch { /* non-fatal */ }
                     toast.success(`Linked ${tbLedgerName} → ${d.deductee_name}`);
                     refresh();
                   }}

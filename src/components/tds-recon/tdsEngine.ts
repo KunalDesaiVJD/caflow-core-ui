@@ -59,7 +59,18 @@ function isExpenseGroup(pg: string | null): boolean {
  * can manually Reject any they want gone.
  */
 export function isPartyLedgerGroup(parentGroup: string | null | undefined): boolean {
-  return isExpenseGroup(parentGroup ?? null);
+  // Stage-1 hotfix (2026-08-04) — the panel READ path was rejecting parent
+  // groups the manual-link picker (P1-A) now accepts. Jayshreeben was
+  // linked successfully but her mapping row was hidden because her
+  // parent_group is "Unsecured Loans" — outside the old creditor-only
+  // filter. Widened to the same rule the picker uses so linked rows
+  // become visible.
+  const p = String(parentGroup ?? "").toLowerCase();
+  if (!p) return false;
+  const KEEP = /(creditor|debtor|loan|advance|deposit|payable|receivable|current liabilit|other liabilit|other asset)/;
+  const SKIP = /(bank|cash-in-hand|cash in hand|capital|reserve|fixed asset|investment|duties|inventory|stock|purchase|expense|income|indirect|direct|misc|suspense|branch|statutory)/;
+  if (SKIP.test(p)) return false;
+  return KEEP.test(p);
 }
 
 // ─── Section-prescribed TDS rates (Income Tax Act, FY 2025-26) ───────────────
@@ -269,10 +280,15 @@ interface AggDeductee {
 function aggregateDeducteesForMapper(rows: any[]): AggDeductee[] {
   const map = new Map<string, AggDeductee>();
   for (const r of rows) {
-    const key = `${(r.deductee_name || "").trim()}|${r.section_code ?? ""}`;
+    // P2-C (2026-08-04) — dedupe key uses trim+lowercase so 26Q entries
+    // typed with different casing ("SHANKARLAL" Q2 vs "Shankarlal" Q3)
+    // aggregate into a single deductee. The DISPLAY name still uses
+    // the first non-empty original casing.
+    const rawName = (r.deductee_name || "").trim();
+    const key = `${rawName.toLowerCase()}|${(r.section_code ?? "").toString().toLowerCase()}`;
     if (!map.has(key)) {
       map.set(key, {
-        deductee_name:     (r.deductee_name || "").trim(),
+        deductee_name:     rawName,
         section_code:      r.section_code,
         nature_of_payment: r.nature_of_payment,
         total_amount_paid: 0, total_tds: 0,
@@ -300,6 +316,10 @@ export interface MapperResult {
    *  run. If N here + N in the toast for mapped tell us how many of the
    *  Journal-derived parties actually tied to a Form 26Q deductee. */
   voucher_parties_added?:  number;
+  /** P1-F (2026-08-04) — TB ledgers that ended up in the "Books > TDS"
+   *  bucket this run (voucher evidence + no matching deductee).
+   *  Sulochana Manish Pandey lives here on Ray Wings. */
+  books_only_written?:     number;
 }
 
 export async function runAiMapper(params: {
@@ -307,11 +327,18 @@ export async function runAiMapper(params: {
 }): Promise<MapperResult> {
   const { client_id, financial_year, firm_id, force_rematch = false } = params;
 
-  // 2026-08-04 P1-B — kill stale books_only rows whose TB ledger now has
-  // a real (mapped_by=auditor OR any deductee-linked) row. Shanker
-  // Furniture's manual-link left the older books_only row behind, which
-  // then showed up as a duplicate in the panel.
+  // 2026-08-04 P1-B / Stage-1 hotfix — kill stale books_only rows whose
+  // TB ledger now has a real row (Shanker Furniture manual-link left the
+  // older books_only row behind). Also delete books_only rows whose
+  // tb_ledger_name matches a discovered TDS payable (the "TDS PAY as
+  // a party" bug — surfaced after we started including Provisions-group
+  // TDS ledgers in the voucher walk).
   try {
+    let discoveredNames = new Set<string>();
+    try {
+      const discovered = await discoverTdsLedgers({ client_id, financial_year });
+      discoveredNames = new Set(discovered.map(t => t.ledger_name.trim().toLowerCase()));
+    } catch { /* discovery cleanup best-effort */ }
     const { data: allRows } = await (supabase as any)
       .from("tds_tb_party_mappings")
       .select("id,tb_ledger_name,tds_deductee_name,match_method")
@@ -324,8 +351,13 @@ export async function runAiMapper(params: {
         .map(r => String(r.tb_ledger_name || "").trim().toLowerCase()),
     );
     const staleBooksOnlyIds = rows
-      .filter(r => String(r.match_method || "").includes("books_only")
-        && claimed.has(String(r.tb_ledger_name || "").trim().toLowerCase()))
+      .filter(r => {
+        if (!String(r.match_method || "").includes("books_only")) return false;
+        const key = String(r.tb_ledger_name || "").trim().toLowerCase();
+        // Drop when a real match exists OR the row is against the TDS
+        // ledger itself (which should never have been a candidate).
+        return claimed.has(key) || discoveredNames.has(key);
+      })
       .map(r => r.id);
     if (staleBooksOnlyIds.length > 0) {
       await (supabase as any)
@@ -440,6 +472,23 @@ export async function runAiMapper(params: {
     console.warn("[tdsEngine] TDS-ledger discovery failed:", err);
   }
 
+  // Stage-1 hotfix (2026-08-04) — the discovered TDS payable ledgers
+  // themselves ("TDS PAY") were leaking into the party candidate set
+  // because they sit under parent groups like "Provisions" or "Sundry
+  // Creditors" which pass isExpenseGroup. Then the voucher walker's
+  // party fallback would name TDS PAY as the "party" of its own
+  // journals, and the mapper wrote a "TDS PAY → (not filed)" row.
+  // Exclude every discovered TDS ledger by trimmed lowercase name
+  // BEFORE the union step.
+  const tdsLedgerNamesLower = new Set<string>(
+    discoveredTdsLedgers.map(t => t.ledger_name.trim().toLowerCase()),
+  );
+  const filteredExpenseLedgers = expenseLedgers.filter((l: any) =>
+    !tdsLedgerNamesLower.has(String(l.ledger_name ?? "").trim().toLowerCase())
+  );
+  expenseLedgers.length = 0;
+  expenseLedgers.push(...filteredExpenseLedgers);
+
   // Union in voucher-derived parties that are NOT already represented in TB
   // by name (case-insensitive, trimmed) — same normalisation the FS
   // reconciliation path uses to handle CRLF/whitespace quirks.
@@ -457,6 +506,7 @@ export async function runAiMapper(params: {
     if (k) tbByNameLower.set(k, l);
   }
   let voucherPartiesAdded = 0;
+  let booksOnlyWritten    = 0;
   for (const p of voucherParties) {
     const key = p.party_ledger.trim().toLowerCase();
     if (!key) continue;
@@ -565,8 +615,14 @@ export async function runAiMapper(params: {
       // link — even if the names look nothing alike (Shanker Furniture
       // ₹2,790 ↔ SHANKARLAL ₹2,790). Section must also agree. This bypasses
       // the nameScore floor entirely.
-      let tdsAmtTie = false;
-      let tdsAmtNear = false; // relaxed: strong but not conclusive
+      // P2-D (2026-08-04) — three-tier TDS-amount tie:
+      //   • tdsAmtTie  (exact, ≤ 2 %): confidence 85 → confirmed
+      //   • tdsAmtNear (near, ≤ 10 %): confidence 60 → pending, name floor 25
+      //   • tdsAmtLoose (loose, ≤ 30 %): confidence 45 → needs_review, name floor 40
+      // Below 30 % gap the amount signal alone can't be trusted.
+      let tdsAmtTie   = false;
+      let tdsAmtNear  = false;
+      let tdsAmtLoose = false;
       if (hasVoucherEvidence && voucherTds > 0 && ded.total_tds > 0) {
         const diff    = Math.abs(voucherTds - ded.total_tds);
         const ratio   = diff / Math.max(voucherTds, ded.total_tds);
@@ -574,15 +630,9 @@ export async function runAiMapper(params: {
           || !ded.section_code
           || String((tb as any).__voucher_section).replace(/[^0-9a-z]/gi, "").toUpperCase()
              === String(ded.section_code).replace(/[^0-9a-z]/gi, "").toUpperCase();
-        // Exact tie — auto-confirm.
-        if (sectionOk && (diff <= 10 || ratio <= 0.02)) tdsAmtTie = true;
-        // "Near" tie — Tally split a vendor across multiple ledger names
-        // (Shanker Furniture ₹2,790 but SHANKARLAL was reported for ₹3,535
-        // total across 3 quarters, one of which was booked to a different
-        // Tally ledger). Allow up to 30 % relative gap with matching
-        // section; downstream still routes this through "needs_review"
-        // (not auto-confirmed) so the auditor eyeballs it.
-        else if (sectionOk && ratio <= 0.30) tdsAmtNear = true;
+        if      (sectionOk && (diff <= 10 || ratio <= 0.02)) tdsAmtTie   = true;
+        else if (sectionOk && ratio <= 0.10)                 tdsAmtNear  = true;
+        else if (sectionOk && ratio <= 0.30)                 tdsAmtLoose = true;
       }
       // Issue 3: Require ≥ 70% name similarity — voucher-derived candidates
       // get 60% (hasVoucherEvidence extends to TB rows also seen in vouchers).
@@ -598,10 +648,17 @@ export async function runAiMapper(params: {
       //     similarity blocks that failure while keeping the intended fix
       //     (Shanker Furniture ↔ SHANKARLAL — both share "SHANKA" tokens
       //     giving them ≥ 25 %).
+      // Name floors — P2-D three-tier tolerance:
+      //   • no amount signal            → nameFloor (60 voucher / 70 TB)
+      //   • tdsAmtTie (≤ 2 %)           → 0 (bypass entirely)
+      //   • tdsAmtNear (≤ 10 %)         → 25 (some kinship still required)
+      //   • tdsAmtLoose (≤ 30 %)        → 40 (stricter — the amount signal is weak)
       const nameFloor = hasVoucherEvidence ? 60 : 70;
-      const nearNameFloor = 25;
-      if (!tdsAmtTie && !tdsAmtNear && nameScore < nameFloor) continue;
-      if (tdsAmtNear && !tdsAmtTie && nameScore < nearNameFloor) continue;
+      const nearNameFloor  = 25;
+      const looseNameFloor = 40;
+      if (!tdsAmtTie && !tdsAmtNear && !tdsAmtLoose && nameScore < nameFloor)  continue;
+      if (tdsAmtNear  && !tdsAmtTie && nameScore < nearNameFloor)  continue;
+      if (tdsAmtLoose && !tdsAmtTie && nameScore < looseNameFloor) continue;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
       // Use GST-normalised gross comparison to avoid spurious mismatches
       const { score: amtScore, gstAdjusted } = grossAmountScore(tbActivity, ded.total_amount_paid);
@@ -609,10 +666,9 @@ export async function runAiMapper(params: {
       // Base composite; overridden below when the TDS-amount tie fires
       // because it's a much stronger signal than fuzzy name/gross scores.
       let confidence = Math.round(nameScore * 0.50 + amtScore * 0.30 + secScore * 0.20);
-      if (tdsAmtTie)  confidence = Math.max(confidence, 85);
-      // Near-tie is a soft signal — keep it in "pending" range so it
-      // never outranks a strong-name-and-amount match on a different party.
-      if (tdsAmtNear) confidence = Math.max(confidence, 50);
+      if (tdsAmtTie)   confidence = Math.max(confidence, 85);
+      if (tdsAmtNear)  confidence = Math.max(confidence, 60); // pending
+      if (tdsAmtLoose) confidence = Math.max(confidence, 45); // needs review
       if (confidence < 40) continue;
       if (!best || confidence > best.confidence) {
         const methods: string[] = [];
@@ -620,9 +676,10 @@ export async function runAiMapper(params: {
         if (amtScore  >= 75) methods.push("amount_ratio");
         if (secScore  >= 80) methods.push("section_context");
         if (hasVoucherEvidence) methods.push("voucher_evidence");
-        if (tdsAmtTie)  methods.push("tds_amount_tie");
-        if (tdsAmtNear) methods.push("tds_amount_near");
-        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted, tdsAmtTie: tdsAmtTie || tdsAmtNear };
+        if (tdsAmtTie)   methods.push("tds_amount_tie");
+        if (tdsAmtNear)  methods.push("tds_amount_near");
+        if (tdsAmtLoose) methods.push("tds_amount_loose");
+        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted, tdsAmtTie: tdsAmtTie /* only exact tie qualifies as tie for bothMatch */ };
       }
     }
 
@@ -636,6 +693,7 @@ export async function runAiMapper(params: {
       // works; tds_deductee_name carries a sentinel that the recon engine
       // treats as "no filed match".
       if (hasVoucherEvidence && voucherTds > 0) {
+        booksOnlyWritten++;
         upsertRows.push({
           client_id, firm_id, financial_year,
           tb_ledger_name:    tb.ledger_name,
@@ -751,17 +809,28 @@ export async function runAiMapper(params: {
   // — allowing N ledgers per deductee — we can safely upsert every row
   // the mapper produced. Deduplication now happens only within a single
   // (tb_ledger, deductee) pair (which the unique index handles).
-  // P1-B (2026-08-04) — dedupe: if the same TB ledger has BOTH a real
-  // match AND a books_only row (Shanker Furniture → SHANKARLAL manually
-  // linked, plus Shanker Furniture → "(not filed)" from books_only), drop
-  // the books_only. The auditor has already claimed the TDS journal
-  // amount against a real deductee — carrying the second row would
-  // double-count in the reconciliation engine.
+  // P1-B / Stage-1 hotfix (2026-08-04) — dedupe: drop books_only rows for
+  // TB ledgers that ALREADY have a real match, either in the current
+  // upsert batch (this run auto-matched them) or in the DB (auditor
+  // manually linked them earlier). Without the DB read, Shanker Furniture
+  // manually linked to SHANKARLAL would still get a fresh books_only row
+  // stamped on every mapper run.
   const matchedTbNames = new Set<string>(
     upsertRows
       .filter((r: any) => r.tds_deductee_name && r.tds_deductee_name !== "(not filed)")
       .map((r: any) => String(r.tb_ledger_name || "").trim().toLowerCase()),
   );
+  try {
+    const { data: existing } = await (supabase as any)
+      .from("tds_tb_party_mappings")
+      .select("tb_ledger_name,tds_deductee_name,match_method")
+      .eq("client_id", client_id)
+      .eq("financial_year", financial_year);
+    for (const r of (existing as any[]) || []) {
+      if (!r.tds_deductee_name || r.tds_deductee_name === "(not filed)") continue;
+      matchedTbNames.add(String(r.tb_ledger_name || "").trim().toLowerCase());
+    }
+  } catch { /* non-fatal */ }
   const finalRows = upsertRows.filter((r: any) => {
     if (!String(r.match_method || "").includes("books_only")) return true;
     const key = String(r.tb_ledger_name || "").trim().toLowerCase();
@@ -796,6 +865,7 @@ export async function runAiMapper(params: {
     needs_review: finalRows.filter(r => r.mapping_status === "needs_review").length,
     discovered_tds_ledgers: discoveredTdsLedgers.length,
     voucher_parties_added:  voucherPartiesAdded,
+    books_only_written:     booksOnlyWritten,
   };
 }
 
