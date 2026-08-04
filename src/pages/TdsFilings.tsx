@@ -18,6 +18,7 @@ import { TdsReports } from "@/components/tds/TdsReports";
 import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
 import { TdsOverrides } from "@/components/tds/TdsOverrides";
 import { TdsCorrectionsModule } from "@/components/tds/TdsCorrectionsModule";
+import { TdsPortalLoginButtons } from "@/components/tds/TdsPortalLoginButtons";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -456,6 +457,16 @@ const TdsFilings = () => {
                     </span>
                   </button>
                 )}
+
+                {/* Quick access to the government portals — stays visible across
+                    Data Entry / Validate & Finalise / Correction since it's scoped
+                    to the currently-selected client (ctxClient), not to any one
+                    sub-tab. See TdsPortalLoginButtons's own header for why this
+                    is deliberately NOT full login automation. */}
+                <div className="flex-1" />
+                <div className="flex items-center pr-1">
+                  <TdsPortalLoginButtons clientId={ctxClient || null} />
+                </div>
               </div>
 
               {/* Tab content — rendered but hidden so state is preserved on switch */}
