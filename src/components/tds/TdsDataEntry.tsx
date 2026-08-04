@@ -930,6 +930,49 @@ export function TdsDataEntry({
     setKasarVatavNoteInput("");
   };
 
+  /** Writes a Kasar-Vatav amount (0 = remove) to `c`, with the audit log,
+   *  toast, local-state patch, and refetch every caller needs — the ONE place
+   *  that actually persists an adjustment, so submitKasarVatav (validated
+   *  amount) and removeKasarVatav (explicit, one-click removal) can't drift
+   *  into two different "how do I clear this" behaviours. */
+  const applyKasarVatav = async (c: Challan, amt: number, note: string) => {
+    if (!user?.id || isFilingLocked) return;
+    const prevAmount = c.kasar_vatav_amount || 0;
+    setKasarVatavSaving(true);
+    const now = new Date().toISOString();
+    const { error } = await supabase.from("tds_challans")
+      .update({
+        kasar_vatav_amount: amt,
+        kasar_vatav_note: amt > 0 ? note.trim() : null,
+        kasar_vatav_by: amt > 0 ? user.id : null,
+        kasar_vatav_at: amt > 0 ? now : null,
+      } as any)
+      .eq("id", c.id);
+    if (error) {
+      toast({ title: amt > 0 ? "Adjustment failed" : "Could not remove adjustment", description: error.message, variant: "destructive" });
+      setKasarVatavSaving(false);
+      return;
+    }
+    await logReconAudit({
+      filingId: c.filing_id, firmId: c.firm_id, userId: user.id, userName: currentUserName || user.email || "Unknown",
+      actionType: amt > 0 ? "CHALLAN_KASAR_VATAV_ADJUSTED" : "CHALLAN_KASAR_VATAV_REMOVED",
+      oldValue: prevAmount > 0 ? `₹${prevAmount.toLocaleString("en-IN")}` : "none",
+      newValue: amt > 0 ? `₹${amt.toLocaleString("en-IN")}` : "none",
+      remark: amt > 0
+        ? `Kasar-Vatav adjustment of ₹${amt.toLocaleString("en-IN")} on challan ${c.bsr_code || "—"} / ${c.challan_serial_no || "—"}: ${note.trim()}`
+        : `Removed Kasar-Vatav adjustment (was ₹${prevAmount.toLocaleString("en-IN")}) on challan ${c.bsr_code || "—"} / ${c.challan_serial_no || "—"}.`,
+    });
+    const patch = { kasar_vatav_amount: amt, kasar_vatav_note: amt > 0 ? note.trim() : null, kasar_vatav_by: amt > 0 ? user.id : null, kasar_vatav_at: amt > 0 ? now : null };
+    setChallans(prev => prev.map(x => x.id === c.id ? { ...x, ...patch } : x));
+    setCarryForwardChallans(prev => prev.map(x => x.challan.id === c.id ? { ...x, challan: { ...x.challan, ...patch } } : x));
+    setSelectedChallan(prev => prev && prev.id === c.id ? { ...prev, ...patch } : prev);
+    toast({ title: amt > 0 ? "Kasar-Vatav adjustment saved" : "Adjustment removed", description: amt > 0 ? "The challan's remaining balance has been written off." : undefined });
+    if (filing?.id) await fetchChallans(filing.id);
+    if (selClient) await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
+    setKasarVatavSaving(false);
+    closeKasarVatavDialog();
+  };
+
   const submitKasarVatav = async () => {
     const c = kasarVatavDialogChallan;
     if (!c || !user?.id || isFilingLocked) return;
@@ -951,40 +994,17 @@ export function TdsDataEntry({
       toast({ title: "Reason required", description: "Add a short remark for the adjustment — it's recorded in the audit log.", variant: "destructive" });
       return;
     }
-    const prevAmount = c.kasar_vatav_amount || 0;
-    setKasarVatavSaving(true);
-    const now = new Date().toISOString();
-    const { error } = await supabase.from("tds_challans")
-      .update({
-        kasar_vatav_amount: amt,
-        kasar_vatav_note: amt > 0 ? kasarVatavNoteInput.trim() : null,
-        kasar_vatav_by: amt > 0 ? user.id : null,
-        kasar_vatav_at: amt > 0 ? now : null,
-      } as any)
-      .eq("id", c.id);
-    if (error) {
-      toast({ title: "Adjustment failed", description: error.message, variant: "destructive" });
-      setKasarVatavSaving(false);
-      return;
-    }
-    await logReconAudit({
-      filingId: c.filing_id, firmId: c.firm_id, userId: user.id, userName: currentUserName || user.email || "Unknown",
-      actionType: amt > 0 ? "CHALLAN_KASAR_VATAV_ADJUSTED" : "CHALLAN_KASAR_VATAV_REMOVED",
-      oldValue: prevAmount > 0 ? `₹${prevAmount.toLocaleString("en-IN")}` : "none",
-      newValue: amt > 0 ? `₹${amt.toLocaleString("en-IN")}` : "none",
-      remark: amt > 0
-        ? `Kasar-Vatav adjustment of ₹${amt.toLocaleString("en-IN")} on challan ${c.bsr_code || "—"} / ${c.challan_serial_no || "—"}: ${kasarVatavNoteInput.trim()}`
-        : `Removed Kasar-Vatav adjustment (was ₹${prevAmount.toLocaleString("en-IN")}) on challan ${c.bsr_code || "—"} / ${c.challan_serial_no || "—"}.`,
-    });
-    const patch = { kasar_vatav_amount: amt, kasar_vatav_note: amt > 0 ? kasarVatavNoteInput.trim() : null, kasar_vatav_by: amt > 0 ? user.id : null, kasar_vatav_at: amt > 0 ? now : null };
-    setChallans(prev => prev.map(x => x.id === c.id ? { ...x, ...patch } : x));
-    setCarryForwardChallans(prev => prev.map(x => x.challan.id === c.id ? { ...x, challan: { ...x.challan, ...patch } } : x));
-    setSelectedChallan(prev => prev && prev.id === c.id ? { ...prev, ...patch } : prev);
-    toast({ title: amt > 0 ? "Kasar-Vatav adjustment saved" : "Adjustment removed", description: amt > 0 ? "The challan's remaining balance has been written off." : undefined });
-    if (filing?.id) await fetchChallans(filing.id);
-    if (selClient) await fetchCarryForwardChallans(selClient, selFy, selQuarter, selForm);
-    setKasarVatavSaving(false);
-    closeKasarVatavDialog();
+    await applyKasarVatav(c, amt, kasarVatavNoteInput);
+  };
+
+  /** One-click, explicit reversal — the discoverable counterpart to typing 0
+   *  into the amount field. No reason re-entry required: the removal itself
+   *  is logged (CHALLAN_KASAR_VATAV_REMOVED) with the prior amount/note, so
+   *  the audit trail already explains what was undone and why it was there. */
+  const removeKasarVatav = async () => {
+    const c = kasarVatavDialogChallan;
+    if (!c || !user?.id || isFilingLocked || (c.kasar_vatav_amount || 0) <= 0) return;
+    await applyKasarVatav(c, 0, "");
   };
 
   const fetchChallans = async (filingId: string) => {
@@ -1284,12 +1304,15 @@ export function TdsDataEntry({
     if (dupRows && dupRows.length > 0) {
       const d = dupRows[0] as any;
       const sameClient = d.client_id === filing.client_id;
-      const whereMsg = sameClient
-        ? `${d.form_type} ${d.quarter} ${d.financial_year} of this client`
-        : `another client's ${d.form_type} ${d.quarter} ${d.financial_year} filing`;
+      // Deductor name — only needs a lookup for the "another client" case;
+      // the current client's own name is already in scope via `clients`.
+      const deductorName = sameClient
+        ? (clients.find(c => c.id === filing.client_id)?.name || "this client")
+        : ((await supabase.from("clients").select("name").eq("id", d.client_id).single()).data?.name || "another client");
+      const whereMsg = `${deductorName}'s ${d.form_type} ${d.quarter} FY ${d.financial_year} filing (BSR ${d.bsr_code})`;
       toast({
-        title: "Duplicate Challan Number",
-        description: `Challan Number ${challanForm.challan_serial_no} already exists in ${whereMsg} (BSR ${d.bsr_code}). Each Challan Number is globally unique — its balance flows to later quarters via Carry-Forward, don't re-add the challan.`,
+        title: "This challan already exists in the system and cannot be imported or created again.",
+        description: `Challan Number ${challanForm.challan_serial_no} already exists in ${whereMsg}. Its balance flows to later quarters via Carry-Forward — don't re-add the challan.`,
         variant: "destructive",
       });
       return;
@@ -2898,6 +2921,16 @@ export function TdsDataEntry({
                               ))}
                             </div>
                           )}
+                          {/* Explicit, always-visible error text — the small red
+                              "Over-applied" badge above is easy to miss; this states
+                              the problem outright and blocks Stage 1 Run Validation
+                              (see TdsValidateFinalise.tsx's own gate) until fixed. */}
+                          {overApplied && (
+                            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1.5 text-[11px] text-destructive mt-1.5">
+                              <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                              <span><b>Challan has been over-applied.</b> Remove or correct entries against this challan until Applied no longer exceeds Total Paid — Stage 1 validation can't run until this is fixed.</span>
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     );
@@ -3622,12 +3655,18 @@ export function TdsDataEntry({
 
                 <p className="text-[10px] text-muted-foreground">
                   Recorded separately from actual TDS/interest/surcharge, and logged to the Audit Log.
-                  Set the amount to 0 to remove an existing adjustment.
+                  {existing > 0 ? " Use “Remove Adjustment” below to reverse it." : ""}
                 </p>
               </div>
             );
           })()}
           <DialogFooter>
+            {(kasarVatavDialogChallan?.kasar_vatav_amount || 0) > 0 && (
+              <Button variant="outline" className="mr-auto border-destructive/40 text-destructive hover:bg-destructive/10" onClick={removeKasarVatav} disabled={kasarVatavSaving}>
+                {kasarVatavSaving ? <Loader2 size={14} className="animate-spin mr-1" /> : null}
+                Remove Adjustment
+              </Button>
+            )}
             <Button variant="outline" onClick={closeKasarVatavDialog} disabled={kasarVatavSaving}>Cancel</Button>
             <Button onClick={submitKasarVatav} disabled={kasarVatavSaving}>
               {kasarVatavSaving ? <Loader2 size={14} className="animate-spin mr-1" /> : null}

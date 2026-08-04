@@ -29,8 +29,22 @@ interface Props {
   entityType?:   string;            // from engagement.entity_type
   /** Called whenever the mismatch count changes — drives the KPI card. */
   onCountChange: (count: number) => void;
+  /** Called with the full mismatch list — parent uses it to gate Save on
+   *  specific note keys (R&S + Trade Receivables). Optional. */
+  onMismatchList?: (list: NoteMismatch[]) => void;
   /** Called when the user clicks a note row's navigate button. */
   onNavigate:    (noteNo: number, subTab: "bs_liab" | "bs_asset" | "pl" | "fa") => void;
+  /**
+   * 2026-08-01 — Face-side total tax (Current + Deferred) piped from
+   * PipelineFinancialStatements (same value NoteBSLiab uses). Detector
+   * subtracts it from computeFaceNpat's output so Reserves & Surplus
+   * sub-rows sum lands on NPAT not PBT even when the stage5_notes
+   * JSONB hasn't yet been re-autoPopulated with the tax stash. Without
+   * this, on any client whose notes predate commit e1b491b2 the
+   * banner shows a Δ = tax component (e.g. Mill Power's ₹37,200).
+   */
+  faceTaxCy?:    number;
+  faceTaxPy?:    number;
 }
 
 // ─── Formatting ───────────────────────────────────────────────────────────────
@@ -45,7 +59,10 @@ export function NotesMismatchPanel({
   engagementId,
   entityType,
   onCountChange,
+  onMismatchList,
   onNavigate,
+  faceTaxCy = 0,
+  faceTaxPy = 0,
 }: Props) {
   // ── Determine entity type ──────────────────────────────────────────────────
   const isNce = !isCompanyEntity(entityType ?? "");
@@ -69,14 +86,19 @@ export function NotesMismatchPanel({
 
   // ── Detect mismatches ──────────────────────────────────────────────────────
   const mismatches: NoteMismatch[] = useMemo(
-    () => detectMismatches(null, null, notesData ?? null, registry, isNce),
-    [notesData, registry, isNce],
+    () => detectMismatches(null, null, notesData ?? null, registry, isNce, { cy: faceTaxCy, py: faceTaxPy }),
+    [notesData, registry, isNce, faceTaxCy, faceTaxPy],
   );
 
   // Report count to parent (KPI card)
   useEffect(() => {
     if (!notesLoading) onCountChange(mismatches.length);
   }, [mismatches.length, notesLoading, onCountChange]);
+
+  // Report the full list to parent (used to gate Save on R&S + Trade Receivables)
+  useEffect(() => {
+    if (!notesLoading) onMismatchList?.(mismatches);
+  }, [mismatches, notesLoading, onMismatchList]);
 
   // Nothing to show while loading or when all notes are reconciled
   if (notesLoading || mismatches.length === 0) return null;

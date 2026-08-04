@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, getRateForSection, type RateEntry } from "./rateEngine";
+import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, computeChallanOverApplied, getRateForSection, type RateEntry } from "./rateEngine";
 
 /**
  * Regression: TdsDataEntry.tsx's "Unconsumed Amount" (and the underlying
@@ -225,5 +225,55 @@ describe("getRateForSection — an Individual/HUF-only section must never rate a
     expect(r.rate).toBe(1);
     expect(r.rateFound).toBe(true);
     expect(r.sectionRestrictedToIndividual).toBe(false);
+  });
+});
+
+describe("computeChallanOverApplied — the ONE definition, so TdsValidateFinalise.tsx's Stage-1 pre-flight gate agrees with TdsDataEntry.tsx's own 'Over-applied' badge", () => {
+  // Reuses the real pinned challan from the top of this file: BSR 0002271,
+  // Challan 05069, two ₹560 TDS rows deducted 2026-05-01, deposited
+  // 2026-06-08 (2 late months → ₹17 interest each), total_challan_amount
+  // ₹1,154 = 1,120 TDS + 34 interest — confirmed fully consumed, not over.
+  const challan = { total_challan_amount: 1154, late_fees_234e: 0, kasar_vatav_amount: 0, deposit_date: DEPOSIT_DATE };
+
+  it("is NOT over-applied when live-recomputed applied exactly equals allocatable (the real, fully-consumed challan)", () => {
+    const { overApplied, effectiveApplied, allocatable } = computeChallanOverApplied(challan, [TDS_ROW, TDS_ROW]);
+    expect(effectiveApplied).toBe(1154); // 1,120 TDS + 34 live-recomputed interest
+    expect(allocatable).toBe(1154);
+    expect(overApplied).toBe(false);
+  });
+
+  it("IS over-applied once one more deductee row is added beyond the challan's own total", () => {
+    const { overApplied, effectiveApplied, allocatable } = computeChallanOverApplied(challan, [TDS_ROW, TDS_ROW, TDS_ROW]);
+    expect(effectiveApplied).toBe(1731); // 3 × (560 + 17)
+    expect(allocatable).toBe(1154);
+    expect(overApplied).toBe(true);
+  });
+
+  it("uses LIVE-recomputed interest, not each row's stale stored interest_amount — matching computeApplied's own fix above", () => {
+    // Same rows as the "IS over-applied" case, but with interest_amount
+    // wrongly left at 0 (as an un-touched bulk import would have it) — if
+    // this function trusted the stored value instead of recomputing, it
+    // would under-report applied as 1,680 (still over 1,154, so the verdict
+    // happens to agree here) — the real risk is the FULLY-CONSUMED case
+    // above, where trusting 0 would wrongly report NOT over-applied only by
+    // accident of these particular numbers. Asserting the exact recomputed
+    // total (not just the boolean) proves the live recompute actually ran.
+    const staleRows = [TDS_ROW, TDS_ROW, TDS_ROW].map((d) => ({ ...d, interest_amount: 0 }));
+    const { effectiveApplied } = computeChallanOverApplied(challan, staleRows);
+    expect(effectiveApplied).toBe(1731); // NOT 1,680 — proves interest was recomputed, not trusted
+  });
+
+  it("Kasar-Vatav write-off folds into effectiveApplied, matching withKasarVatav's own rule", () => {
+    const challanWithKasar = { ...challan, kasar_vatav_amount: 10 };
+    const { overApplied, effectiveApplied } = computeChallanOverApplied(challanWithKasar, [TDS_ROW, TDS_ROW]);
+    expect(effectiveApplied).toBe(1164); // 1,154 + 10 Kasar-Vatav
+    expect(overApplied).toBe(true); // now exceeds the ₹1,154 allocatable
+  });
+
+  it("late fees (234E) are excluded from allocatable, same as computeAllocatable", () => {
+    const challanWithLateFee = { ...challan, total_challan_amount: 1200, late_fees_234e: 46 };
+    const { allocatable, overApplied } = computeChallanOverApplied(challanWithLateFee, [TDS_ROW, TDS_ROW]);
+    expect(allocatable).toBe(1154); // 1,200 - 46, same allocatable as the base fixture
+    expect(overApplied).toBe(false);
   });
 });

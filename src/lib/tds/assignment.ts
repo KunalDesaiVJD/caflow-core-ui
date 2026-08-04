@@ -48,7 +48,7 @@
 // both runtimes and the byte-identity guard in sharedSync.test.ts can hold.
 import {
   rank, nameEvidence, type NameTier, type NameEvidence,
-  normalizeName, normalizePan, amountsMatch, canonicalSection,
+  normalizeName, normalizePan, amountsMatch, canonicalSection, salaryBareCompatible,
 } from "./match.ts";
 
 // ── Inputs (already canonicalised by the adapter) ────────────────────────────
@@ -400,7 +400,7 @@ export function assign(offices: AsgOffice[], ledger: AsgLedger[], partyMap: Reco
   // Widening the candidate set this way also makes the RISKY rung LESS likely to fire,
   // not more, because a rival that a window would have hidden is now visible to compete.
 
-  const sectionEqOf = (a: string | null, b: string | null) => (a && b ? a === b : true);
+  const sectionEqOf = (a: string | null, b: string | null) => (a && b ? a === b || salaryBareCompatible(a, b) : true);
 
   const evidenceFor = (o: AsgOffice, t: AsgLedger): { ev: Evidence; ne: NameEvidence } => {
     const nev = ne(o.name, t.party);

@@ -4,6 +4,7 @@ import { uploadTdsImportFile } from "@/lib/tds/uploadImportFile";
 import { downloadStorageFile, removePublicDocumentByUrl } from "@/lib/openStorageFile";
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
+import { computeChallanOverApplied } from "@/lib/tds/rateEngine";
 import { READY_TO_FILE_STATUS } from "@/components/tds/TdsFilingsManager";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -265,6 +266,14 @@ export function TdsValidateFinalise({
   const [resolving, setResolving] = useState(false);
   const [filing, setFiling] = useState<any>(null);
   const [officeCount, setOfficeCount] = useState({ deductees: 0, challans: 0 });
+  // Challans (of THIS filing) that are over-applied — a hard pre-flight gate
+  // on Run Validation. Each challan's deductees are pulled UNFILTERED by
+  // filing_id (challan_id only) — same reason officeCount's own deductee
+  // count is scoped by filing_id and NOT this, per the comment on that fetch:
+  // a challan is often a combined payment shared across a client's 24Q and
+  // 26Q filings, so checking only this filing's own rows would miss a
+  // shortfall caused by the OTHER form's usage of the same challan.
+  const [overAppliedChallans, setOverAppliedChallans] = useState<{ id: string; challanNo: string | null; shortfall: number }[]>([]);
   const [batch, setBatch] = useState<any>(null);       // combined summary (row_count, file_count, representative id)
   const [batches, setBatches] = useState<any[]>([]);   // raw per-file batch rows (for file management)
   const [selBatchIds, setSelBatchIds] = useState<Set<string>>(new Set());
@@ -381,7 +390,9 @@ export function TdsValidateFinalise({
       setResolving(false); return;
     }
 
-    const { data: ch } = await supabase.from("tds_challans").select("id").eq("filing_id", match.id);
+    const { data: ch } = await supabase.from("tds_challans")
+      .select("id, challan_serial_no, total_challan_amount, late_fees_234e, kasar_vatav_amount, deposit_date")
+      .eq("filing_id", match.id);
     if (stale()) return;
     const chIds = (ch || []).map((c: any) => c.id);
     // Deductee count is scoped by the deductee's OWN filing_id, not by "attached
@@ -393,6 +404,30 @@ export function TdsValidateFinalise({
     const { count } = await supabase.from("tds_deductees").select("id", { count: "exact", head: true }).eq("filing_id", match.id);
     if (stale()) return;
     setOfficeCount({ deductees: count || 0, challans: chIds.length });
+
+    // Over-applied pre-flight check — see computeChallanOverApplied's own doc
+    // for why this is the ONE definition, matching the "Over-applied" badge
+    // TdsDataEntry.tsx's challan card already shows. Deductees fetched by
+    // challan_id ONLY (not filing_id) for the combined-payment reason above.
+    if (chIds.length) {
+      const { data: chDeds } = await supabase.from("tds_deductees")
+        .select("challan_id, total_tax_deducted, tds_amount, interest_amount, surcharge_amount, date_of_payment")
+        .in("challan_id", chIds);
+      if (stale()) return;
+      const byChallan = new Map<string, typeof chDeds>();
+      for (const d of chDeds || []) {
+        const g = byChallan.get(d.challan_id as string); if (g) g.push(d); else byChallan.set(d.challan_id as string, [d]);
+      }
+      const overApplied = (ch || [])
+        .map((c: any) => {
+          const { overApplied, effectiveApplied, allocatable } = computeChallanOverApplied(c, byChallan.get(c.id) || []);
+          return overApplied ? { id: c.id, challanNo: c.challan_serial_no as string | null, shortfall: effectiveApplied - allocatable } : null;
+        })
+        .filter((x): x is { id: string; challanNo: string | null; shortfall: number } => x != null);
+      setOverAppliedChallans(overApplied);
+    } else {
+      setOverAppliedChallans([]);
+    }
 
     // Load ALL import batches for the filing (a client may keep sections/months
     // in separate files) and present a COMBINED view — total records across every
@@ -669,6 +704,19 @@ export function TdsValidateFinalise({
   // file was imported. The two result sets are shown separately, never merged.
   const handleRunValidation = async () => {
     if (!filing || !batch) return;
+    // Hard pre-flight gate — never start Stage 1 while any of this filing's
+    // challans is over-applied (its deductees, plus interest/surcharge/
+    // Kasar-Vatav, exceed what the challan actually paid). Re-checked here
+    // (not just via the disabled button) in case overAppliedChallans is
+    // momentarily stale relative to a very recent edit.
+    if (overAppliedChallans.length > 0) {
+      toast({
+        title: "Challan has been over-applied.",
+        description: `${overAppliedChallans.length} challan${overAppliedChallans.length === 1 ? "" : "s"} (${overAppliedChallans.map(c => c.challanNo || "—").join(", ")}) ${overAppliedChallans.length === 1 ? "has" : "have"} more applied than the amount paid. Fix this in Data Entry before running validation.`,
+        variant: "destructive",
+      });
+      return;
+    }
     setComparing(true);
     try {
       const data = await runCompare(filing.id);
@@ -1632,7 +1680,7 @@ export function TdsValidateFinalise({
           {/* Single Run Validation */}
           <div className="flex items-center gap-3">
             <Button className="gap-2 font-semibold h-9" onClick={handleRunValidation}
-              disabled={comparing || !batch || isLocked}>
+              disabled={comparing || !batch || isLocked || overAppliedChallans.length > 0}>
               {comparing ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />}
               {comparing ? "Validating…" : "Run Validation"}
             </Button>
@@ -1640,6 +1688,17 @@ export function TdsValidateFinalise({
             <div className="flex-1" />
             {results && <TdsExportMenu build={stage1Report} meta={reportMeta} label="Export Stage 1" />}
           </div>
+          {/* Persistent, not just a toast — stays visible until the challan is
+              fixed in Data Entry, matching how the challan card's own
+              "Over-applied" badge is always-on there too. */}
+          {overAppliedChallans.length > 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span>
+                <b>Challan has been over-applied.</b> {overAppliedChallans.length} challan{overAppliedChallans.length === 1 ? "" : "s"} ({overAppliedChallans.map(c => c.challanNo || "—").join(", ")}) {overAppliedChallans.length === 1 ? "has" : "have"} more applied against{overAppliedChallans.length === 1 ? " it" : " them"} than the amount actually paid. Validation is blocked until this is fixed in Data Entry.
+              </span>
+            </div>
+          )}
 
           {/* Stage-1 results (summary + comparison) — the heading is above the inputs. */}
           {results && (

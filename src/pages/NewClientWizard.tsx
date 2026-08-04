@@ -414,6 +414,7 @@ const NewClientWizard = () => {
       const activeServicesMap: Record<string, import("@/components/client-wizard/StepServiceBilling").ServiceConfig> = {};
       for (const svc of (existingServices || []) as any[]) {
         activeServicesMap[svc.service_category_id] = {
+          id: svc.id,
           frequency: svc.frequency_override || "monthly",
           reminder_date: svc.reminder_date ?? 1,
           billing_amount: svc.billing_amount ?? 0,
@@ -423,6 +424,14 @@ const NewClientWizard = () => {
           tds_end_fy: svc.tds_end_fy || undefined,
           tds_end_quarter: svc.tds_end_quarter || undefined,
           tds_forms: svc.tds_forms_applicable && svc.tds_forms_applicable.length > 0 ? svc.tds_forms_applicable : undefined,
+          // Login IDs are plain text — safe to load with everything else.
+          // Passwords are NEVER loaded (see itd_password/traces_password's
+          // own doc); only whether one exists, for the masked placeholder.
+          itd_login_id: svc.itd_login_id || undefined,
+          traces_login_id: svc.traces_login_id || undefined,
+          itd_password_set: svc.itd_password_encrypted != null,
+          traces_password_set: svc.traces_password_encrypted != null,
+          credentials_updated_at: svc.credentials_updated_at || null,
         };
       }
 
@@ -814,12 +823,39 @@ const NewClientWizard = () => {
             tds_forms_applicable: cfg.tds_forms && cfg.tds_forms.length > 0 ? cfg.tds_forms : null,
           } : {}),
         }));
-        const { error: svcError } = await supabase.from("client_services").upsert(rows as any, {
+        const { data: upserted, error: svcError } = await supabase.from("client_services").upsert(rows as any, {
           onConflict: "client_id,service_category_id",
-        });
+        }).select("id, service_category_id");
         if (svcError) {
           console.error("[Services] upsert error:", svcError);
           throw svcError;
+        }
+
+        // ITD/TRACES credentials never travel through the upsert above —
+        // passwords need server-side encryption (see StepServiceBilling's
+        // ServiceConfig doc), so they're saved separately, per TDS row,
+        // through the tds-portal-credentials edge function once we know the
+        // row's real id. Only calls it for a row the user actually touched
+        // (typed a login id, or a NEW password) — never re-sends a blank
+        // password, which would otherwise clear a previously saved one.
+        const idByServiceCategory = new Map((upserted || []).map((r: any) => [r.service_category_id, r.id]));
+        for (const [serviceId, cfg] of serviceEntries) {
+          const touchedCreds = cfg.itd_login_id !== undefined || cfg.itd_password !== undefined
+            || cfg.traces_login_id !== undefined || cfg.traces_password !== undefined;
+          if (!touchedCreds) continue;
+          const clientServiceId = idByServiceCategory.get(serviceId);
+          if (!clientServiceId) continue;
+          const { error: credError } = await supabase.functions.invoke("tds-portal-credentials", {
+            body: {
+              action: "save", client_service_id: clientServiceId,
+              itd_login_id: cfg.itd_login_id, itd_password: cfg.itd_password,
+              traces_login_id: cfg.traces_login_id, traces_password: cfg.traces_password,
+            },
+          });
+          if (credError) {
+            console.error("[Services] credential save error:", credError);
+            toast({ title: "ITD/TRACES credentials were not saved", description: credError.message, variant: "destructive" });
+          }
         }
       }
     }

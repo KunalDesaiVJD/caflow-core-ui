@@ -25,7 +25,7 @@
 
 // (the Excel/CSV ledger parser that needed columnEngine's value sniffers is gone —
 //  Stage-3 reads Tally ledger PDFs only; see ./tallyPdf.ts)
-import { canonicalSection, rank, normalizeName } from "./match";
+import { canonicalSection, rank, normalizeName, amountsMatch, salaryBareCompatible } from "./match";
 import { assign, AUTO_MATCH_MAX_RANK, type AsgLedger, type AsgOffice, type Evidence, type Outcome } from "./assignment";
 
 export interface TallyRow {
@@ -59,6 +59,64 @@ export interface TallyRow {
   // this tag (every 26Q/27EQ row, every plain liability-ledger "By" row)
   // behaves EXACTLY as before this field existed.
   amountKind?: "taxable_income";
+  // The total tax-line amount tallyPdf.ts subtracted out of THIS row's own
+  // credit — Professional Tax, TDS Payable, Education Cess, whatever isTaxLine
+  // recognised on the voucher — 0/undefined if none was on it. Named for its
+  // original, narrower case (PT alone); see TallyPdfRow's own doc on the
+  // field. Only ever read by resolveTaxableIncomeReading() below.
+  ptExcluded?: number;
+}
+
+/**
+ * TAX LINES: NET OR GROSS? IT DEPENDS WHICH OFFICE YOU ASK.
+ *
+ * tallyPdf.ts excludes a voucher's tax-line Cr amounts (Professional Tax, and
+ * — for a high-earner crossing the TDS threshold — TDS Payable/Education Cess
+ * too) from the parsed Taxable Income by default (see isTaxLine) — confirmed
+ * against a real client whose own Office Data recorded Taxable Income NET of
+ * these, so the unexcluded (gross) reading sat above every record by exactly
+ * their sum.
+ *
+ * A second real client (Clear Quant Technologies) does the opposite: their
+ * Office Data records the GROSS voucher debit (tax lines included) as
+ * Taxable Income, so the default NET reading now sits exactly that amount
+ * BELOW every record — the same bug, mirrored.
+ *
+ * Both are real, and neither convention is "correct" — it is just how each
+ * office's own working file happens to enter the figure, and tallyPdf.ts
+ * parses one Tally PDF with no idea which office produced the Office Data it
+ * will later be reconciled against. So the choice is deferred to here, where
+ * both sides are available: for the whole ledger, count how many rows the
+ * NET reading (credit as tallyPdf.ts computed it) explains against Office
+ * Data's amount, versus how many the GROSS reading (credit + ptExcluded)
+ * explains, and use whichever reading the file's own data actually supports.
+ * A tie (including "no evidence either way") keeps the NET reading — today's
+ * behaviour, unaffected for every ledger that never subtracted a tax line.
+ *
+ * Deliberately NOT a per-row decision: the ANY-gap-is-shown promise renders
+ * elsewhere in tallyRecon.ts depends on a mismatch being real, never chased
+ * away row-by-row. Voting once for the whole ledger (exactly like
+ * assignment.ts's own per-section tds/amount vote) makes the SUBSTITUTED
+ * credit value itself accurate, so a genuine mismatch on some other row
+ * still shows in full — it is not a tolerance layered on top of the verdict.
+ */
+export function resolveTaxableIncomeReading(office: OfficeTxn[], ledger: TallyRow[]): TallyRow[] {
+  if (!ledger.some((t) => (t.ptExcluded ?? 0) > 0)) return ledger;
+
+  const byIso = new Map<string, TallyRow[]>();
+  for (const t of ledger) if (t.iso) { const a = byIso.get(t.iso) ?? []; a.push(t); byIso.set(t.iso, a); }
+
+  let netVotes = 0, grossVotes = 0;
+  for (const o of office) {
+    if (!o.date_iso || o.amount == null) continue;
+    for (const t of byIso.get(o.date_iso) ?? []) {
+      if (t.credit == null) continue;
+      if (amountsMatch(t.credit, o.amount)) netVotes++;
+      if ((t.ptExcluded ?? 0) > 0 && amountsMatch(t.credit + (t.ptExcluded ?? 0), o.amount)) grossVotes++;
+    }
+  }
+  if (grossVotes <= netVotes) return ledger;
+  return ledger.map((t) => ((t.ptExcluded ?? 0) > 0 ? { ...t, credit: (t.credit ?? 0) + (t.ptExcluded ?? 0) } : t));
 }
 
 // ── Reconciliation ───────────────────────────────────────────────────────────
@@ -228,9 +286,13 @@ export function reconcileTallyFull(
   // It is still PASSED to the engine, because it is still a deductee in this client's
   // books and the distinctness witness must see it. Ledger coverage must not erase a
   // deductee — see AsgOffice.assignable for the wrong mapping that caused.
+  // A bare-lettered covered section counts too — see salaryBareCompatible's own
+  // doc: a Tally salary ledger titled just "192" never claimed to be anything
+  // other than a lettered sub-code, so it still covers a 192A/192B/192C record.
+  const sectionCovered = (s: string) => covered.has(s) || [...covered].some((c) => salaryBareCompatible(c, s));
   const unassignable = (o: OfficeTxn): string | null => {
     const oSec = canonicalSection(o.section);
-    return sectionScoped && oSec && !covered.has(oSec) ? oSec : null;
+    return sectionScoped && oSec && !sectionCovered(oSec) ? oSec : null;
   };
 
   const asgOffice: AsgOffice[] = office.map((o) => ({

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { calcAutoInterest, withKasarVatav } from "@/lib/tds/rateEngine";
+import { calcAutoInterest, withKasarVatav, computeApplied, computeAllocatable } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,7 +23,7 @@ import { cn } from "@/lib/utils";
 import {
   FileText, Users, Receipt, BarChart3, FileSpreadsheet,
   AlertTriangle, Award, Download, Printer, ArrowLeft,
-  ClipboardList, CalendarCheck, Shield, ShieldCheck, Loader2, Info, Eye,
+  ClipboardList, CalendarCheck, Shield, ShieldCheck, Loader2, Info, Eye, Wallet,
 } from "lucide-react";
 import { exportToExcel } from "@/lib/exportUtils";
 import { generateGeniusExport } from "@/lib/genius-export";
@@ -52,12 +52,13 @@ const TDS_FORMS = ["24Q", "26Q", "27Q", "27EQ"];
 const formatINR = (n: number) => `₹${n.toLocaleString("en-IN")}`;
 const fmtDate = (d: string | null) => { if (!d) return "—"; try { return format(new Date(d), "dd/MM/yyyy"); } catch { return d; } };
 
-type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "section-summary" | "annual-summary" | "non-filer" | "lower-cert" | "cross-quarter" | "genius-export" | "overview-report" | null;
+type ReportType = "filing-status" | "deductee-wise" | "challan-register" | "unconsumed-report" | "section-summary" | "annual-summary" | "non-filer" | "lower-cert" | "cross-quarter" | "genius-export" | "overview-report" | null;
 
 const REPORT_CARDS: { key: ReportType; label: string; desc: string; icon: any; color: string }[] = [
   { key: "filing-status", label: "Filing Status Report", desc: "All clients, all forms, any period", icon: ClipboardList, color: "text-blue-600" },
   { key: "deductee-wise", label: "Deductee-wise Report", desc: "One deductee across all quarters", icon: Users, color: "text-emerald-600" },
   { key: "challan-register", label: "Challan Register", desc: "All challans for a client", icon: Receipt, color: "text-purple-600" },
+  { key: "unconsumed-report", label: "Unconsumed Report", desc: "Unconsumed challan balances, active + archived", icon: Wallet, color: "text-teal-600" },
   { key: "section-summary", label: "Section-wise Summary", desc: "TDS by section code", icon: BarChart3, color: "text-amber-600" },
   { key: "annual-summary", label: "Annual TDS Summary", desc: "Full year summary per client", icon: CalendarCheck, color: "text-emerald-500" },
   { key: "non-filer", label: "No-PAN Report", desc: "Deductees without PAN", icon: AlertTriangle, color: "text-destructive" },
@@ -84,6 +85,11 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const [exportingOverview, setExportingOverview] = useState(false);
   const [overviewViewData, setOverviewViewData] = useState<{ meta: ReportMeta; stageReports: StageReport[]; overview: OverviewReport } | null>(null);
   const [loadingOverviewView, setLoadingOverviewView] = useState(false);
+  // Challan Register — "view all challans where Kasar-Vatav has been applied".
+  const [kasarVatavOnly, setKasarVatavOnly] = useState(false);
+  // Unconsumed Report — archived challans are included by default (that's the
+  // whole point of this report); this lets a user narrow to active-only.
+  const [includeArchived, setIncludeArchived] = useState(true);
 
   const toggleQuarter = (q: string) => {
     setSelQuarters(prev => prev.includes(q) ? prev.filter(x => x !== q) : [...prev, q]);
@@ -111,7 +117,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       if (selClient !== "all") q = q.eq("client_id", selClient);
       const { data } = await q;
       setReportData((data || []).filter(isCompliant));
-    } else if (selectedReport === "challan-register" || selectedReport === "deductee-wise" || selectedReport === "section-summary" || selectedReport === "annual-summary" || selectedReport === "non-filer" || selectedReport === "lower-cert" || selectedReport === "cross-quarter" || selectedReport === "genius-export") {
+    } else if (selectedReport === "challan-register" || selectedReport === "unconsumed-report" || selectedReport === "deductee-wise" || selectedReport === "section-summary" || selectedReport === "annual-summary" || selectedReport === "non-filer" || selectedReport === "lower-cert" || selectedReport === "cross-quarter" || selectedReport === "genius-export") {
       // Get filings first
       let fq = supabase.from("tds_filings").select("id, client_id, financial_year, quarter, tds_forms, tan, work_status")
         .eq("financial_year", selFy);
@@ -309,7 +315,9 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const renderChallanRegister = () => {
     if (!reportData[0]) return <p className="text-muted-foreground">No data</p>;
     const { challans, deductees } = reportData[0];
-    const filtered = challans.filter((c: any) => selQuarters.includes(c.quarter));
+    const inQuarter = challans.filter((c: any) => selQuarters.includes(c.quarter));
+    const kasarVatavCount = inQuarter.filter((c: any) => (c.kasar_vatav_amount || 0) > 0).length;
+    const filtered = kasarVatavOnly ? inQuarter.filter((c: any) => (c.kasar_vatav_amount || 0) > 0) : inQuarter;
     const rows = filtered.map((c: any, i: number) => {
       const dCount = deductees.filter((d: any) => d.challan_id === c.id).length;
       const dTds = deductees.filter((d: any) => d.challan_id === c.id).reduce((s: number, d: any) => s + (d.total_tax_deducted || d.tds_amount || 0), 0);
@@ -326,36 +334,165 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         "Section": c.section_code || "—",
         "Deductees": dCount,
         "Matched": Math.abs(dTds - (c.total_tax_deposited || 0)) <= 5 ? "✓" : "✗",
+        "Kasar-Vatav": (c.kasar_vatav_amount || 0) > 0 ? `₹${(c.kasar_vatav_amount || 0).toLocaleString("en-IN")}` : "—",
       };
     });
 
     return (
       <>
-        <div className="flex justify-end gap-2 mb-3">
-          <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
-          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Challan_Register", rows)}><Download size={14} /> Export Excel</Button>
-          <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Challan_Register", rows)}><FileText size={14} /> Download as PDF</Button>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <Checkbox checked={kasarVatavOnly} onCheckedChange={(v) => setKasarVatavOnly(!!v)} disabled={kasarVatavCount === 0} />
+            Kasar-Vatav adjusted only ({kasarVatavCount})
+          </label>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
+            <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Challan_Register", rows)}><Download size={14} /> Export Excel</Button>
+            <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Challan_Register", rows)}><FileText size={14} /> Download as PDF</Button>
+          </div>
         </div>
         <Card><CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
-                {Object.keys(rows[0] || {}).map(k => <TableHead key={k} className={["Tax", "Surcharge", "Cess", "Interest", "Total"].includes(k) ? "text-right" : ""}>{k}</TableHead>)}
+                {Object.keys(rows[0] || {}).map(k => <TableHead key={k} className={["Tax", "Surcharge", "Cess", "Interest", "Total", "Kasar-Vatav"].includes(k) ? "text-right" : ""}>{k}</TableHead>)}
               </TableRow>
             </TableHeader>
             <TableBody>
               {rows.length === 0 ? (
-                <TableRow><TableCell colSpan={12} className="text-center text-muted-foreground py-8">No challans found</TableCell></TableRow>
-              ) : rows.map((r, i) => (
-                <TableRow key={i}>
-                  {Object.entries(r).map(([k, v], j) => {
-                    const isMoney = ["Tax", "Surcharge", "Cess", "Interest", "Total"].includes(k);
-                    return (
-                      <TableCell key={j} className={cn("text-sm", isMoney ? "text-right" : "")}>
-                        {isMoney && typeof v === "number" ? formatINR(v) : String(v)}
+                <TableRow><TableCell colSpan={13} className="text-center text-muted-foreground py-8">{kasarVatavOnly ? "No Kasar-Vatav adjusted challans in this selection" : "No challans found"}</TableCell></TableRow>
+              ) : rows.map((r, i) => {
+                const isMoneyCol = (k: string) => ["Tax", "Surcharge", "Cess", "Interest", "Total"].includes(k);
+                return (
+                  <TableRow key={i}>
+                    {Object.entries(r).map(([k, v], j) => (
+                      <TableCell key={j} className={cn("text-sm", isMoneyCol(k) || k === "Kasar-Vatav" ? "text-right" : "", k === "Kasar-Vatav" && v !== "—" ? "text-violet-700 dark:text-violet-300 font-medium" : "")}>
+                        {isMoneyCol(k) && typeof v === "number" ? formatINR(v) : String(v)}
                       </TableCell>
-                    );
-                  })}
+                    ))}
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </CardContent></Card>
+      </>
+    );
+  };
+
+  // Unconsumed Report — every challan (active AND archived, is_archived is never
+  // filtered in the shared fetch above) that still has a balance left, broken
+  // down by component. Uses the SAME canonical math as Genius Export's per-
+  // challan status table (computeApplied/computeAllocatable/withKasarVatav from
+  // rateEngine.ts — the ONE definition, see that module's own doc) rather than
+  // a fourth reimplementation.
+  //
+  // Component split (TDS / Interest / Late Fee): there's no stored per-head
+  // "unconsumed" ledger, so this is a derived allocation, not a literal one —
+  // Interest Amount = deposited interest still uncovered by deductees' live-
+  // recomputed interest (capped so it can never exceed the pool total), TDS
+  // Amount = the pool's residual (tax + surcharge + cess + others, whichever
+  // wasn't consumed), Late Fee Amount = late_fees_234e minus late_fees_used
+  // (a completely separate bucket per computeAllocatable). The three always
+  // sum exactly to Total Unconsumed Amount — no independent third figure that
+  // could drift from the other two.
+  const renderUnconsumedReport = () => {
+    if (!reportData[0]) return <p className="text-muted-foreground">No data</p>;
+    const { challans, deductees } = reportData[0];
+    const inQuarter = challans.filter((c: any) => selQuarters.includes(c.quarter));
+    const scoped = includeArchived ? inQuarter : inQuarter.filter((c: any) => !c.is_archived);
+
+    const computed = scoped.map((c: any) => {
+      const cDeductees = deductees.filter((d: any) => d.challan_id === c.id);
+      const liveInterestRows = cDeductees.map((d: any) => ({
+        ...d,
+        interest_amount: calcAutoInterest(d.total_tax_deducted || d.tds_amount || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest,
+      }));
+      const { interest: appliedInterest, applied } = computeApplied(liveInterestRows);
+      const effectiveApplied = withKasarVatav(applied, c.kasar_vatav_amount);
+      const allocatable = computeAllocatable(c.total_challan_amount || 0, c.late_fees_234e || 0);
+      const poolUnconsumed = Math.max(0, allocatable - effectiveApplied);
+      const interestUnconsumed = Math.min(poolUnconsumed, Math.max(0, (c.interest_deposited || 0) - appliedInterest));
+      const tdsUnconsumed = poolUnconsumed - interestUnconsumed;
+      const lateFeeUnconsumed = Math.max(0, (c.late_fees_234e || 0) - (c.late_fees_used || 0));
+      const totalUnconsumed = tdsUnconsumed + interestUnconsumed + lateFeeUnconsumed;
+      const client = clients.find(cl => cl.id === c.client_id);
+      return { c, client, tdsUnconsumed, interestUnconsumed, lateFeeUnconsumed, totalUnconsumed };
+    }).filter((r: any) => r.totalUnconsumed > 0.5); // paise-rounding tolerance, not a real balance
+
+    computed.sort((a: any, b: any) => b.totalUnconsumed - a.totalUnconsumed);
+
+    const rows = computed.map((r: any, i: number) => ({
+      "Sr": i + 1,
+      "Client": r.client?.name || "—",
+      "FY": r.c.financial_year || "—",
+      "Quarter": r.c.quarter || "—",
+      "Form": r.c.form_type || "—",
+      "BSR Code": r.c.bsr_code || "—",
+      "Challan Number": r.c.challan_serial_no || "—",
+      "Date": fmtDate(r.c.deposit_date),
+      "Section": r.c.section_code || "—",
+      "Status": r.c.is_archived ? "Archived" : "Active",
+      "TDS Amount": r.tdsUnconsumed,
+      "Interest Amount": r.interestUnconsumed,
+      "Late Fee Amount": r.lateFeeUnconsumed,
+      "Total Unconsumed Amount": r.totalUnconsumed,
+    }));
+
+    const grandTotal = computed.reduce((s: number, r: any) => s + r.totalUnconsumed, 0);
+    const archivedCount = computed.filter((r: any) => r.c.is_archived).length;
+    const moneyCols = ["TDS Amount", "Interest Amount", "Late Fee Amount", "Total Unconsumed Amount"];
+
+    return (
+      <>
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+            <Checkbox checked={includeArchived} onCheckedChange={(v) => setIncludeArchived(!!v)} />
+            Include archived challans {archivedCount > 0 ? `(${archivedCount} shown)` : ""}
+          </label>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" className="gap-1" onClick={handlePrint}><Printer size={14} /> Print</Button>
+            <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportExcel("Unconsumed_Report", rows)}><Download size={14} /> Export Excel</Button>
+            <Button variant="outline" size="sm" className="gap-1" onClick={() => handleExportPdf("Unconsumed_Report", rows)}><FileText size={14} /> Download as PDF</Button>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="p-3 rounded-lg bg-muted text-center">
+            <p className="text-xs text-muted-foreground">Challans with Balance</p>
+            <p className="font-semibold text-sm">{rows.length}</p>
+          </div>
+          <div className="p-3 rounded-lg bg-muted text-center">
+            <p className="text-xs text-muted-foreground">Of which Archived</p>
+            <p className="font-semibold text-sm">{archivedCount}</p>
+          </div>
+          <div className="p-3 rounded-lg bg-muted text-center">
+            <p className="text-xs text-muted-foreground">Total Unconsumed</p>
+            <p className="font-semibold text-sm text-teal-700 dark:text-teal-400">{formatINR(grandTotal)}</p>
+          </div>
+        </div>
+
+        <Card><CardContent className="p-0 overflow-x-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                {Object.keys(rows[0] || { "Sr": 0, "Client": 0, "FY": 0, "Quarter": 0, "Form": 0, "BSR Code": 0, "Challan Number": 0, "Date": 0, "Section": 0, "Status": 0, "TDS Amount": 0, "Interest Amount": 0, "Late Fee Amount": 0, "Total Unconsumed Amount": 0 }).map(k =>
+                  <TableHead key={k} className={moneyCols.includes(k) ? "text-right" : ""}>{k}</TableHead>
+                )}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.length === 0 ? (
+                <TableRow><TableCell colSpan={14} className="text-center text-muted-foreground py-8">No unconsumed balances in this selection</TableCell></TableRow>
+              ) : rows.map((r, i) => (
+                <TableRow key={i} className={r.Status === "Archived" ? "bg-muted/40" : ""}>
+                  {Object.entries(r).map(([k, v], j) => (
+                    <TableCell key={j} className={cn("text-sm", moneyCols.includes(k) ? "text-right tabular-nums" : "", k === "Total Unconsumed Amount" ? "font-semibold text-teal-700 dark:text-teal-400" : "")}>
+                      {k === "Status" ? (
+                        <Badge variant={v === "Archived" ? "secondary" : "outline"} className="text-[10px]">{String(v)}</Badge>
+                      ) : moneyCols.includes(k) && typeof v === "number" ? formatINR(v) : String(v)}
+                    </TableCell>
+                  ))}
                 </TableRow>
               ))}
             </TableBody>
@@ -1065,6 +1202,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       case "filing-status": return renderFilingStatusReport();
       case "deductee-wise": return renderDeducteeWise();
       case "challan-register": return renderChallanRegister();
+      case "unconsumed-report": return renderUnconsumedReport();
       case "section-summary": return renderSectionSummary();
       case "annual-summary": return renderAnnualSummary();
       case "non-filer": return renderNonFilerAlert();
