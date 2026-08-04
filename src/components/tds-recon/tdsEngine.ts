@@ -533,13 +533,24 @@ export async function runAiMapper(params: {
         // (not auto-confirmed) so the auditor eyeballs it.
         else if (sectionOk && ratio <= 0.30) tdsAmtNear = true;
       }
-      // Issue 3: Require ≥ 70% name similarity — BUT voucher-derived candidates
-      // get 60% (and hasVoucherEvidence extends that to TB rows also seen in
-      // vouchers). When tdsAmtTie or tdsAmtNear is true, name floor is
-      // bypassed entirely — the amount signal is enough to justify a
-      // review-quality suggestion.
+      // Issue 3: Require ≥ 70% name similarity — voucher-derived candidates
+      // get 60% (hasVoucherEvidence extends to TB rows also seen in vouchers).
+      //
+      // AMOUNT-TIE OVERRIDES:
+      //   • tdsAmtTie (exact, ≤ 2 %): bypass name floor entirely — the
+      //     amounts are close enough that names couldn't reasonably matter.
+      //   • tdsAmtNear (≤ 30 %): allow a lower floor (25 %) but STILL require
+      //     some name kinship. Without this guard, a party with the "wrong"
+      //     TDS amount (₹3,000 in vouchers vs SHANKARLAL's ₹3,535 filing)
+      //     would beat its real match by having a slightly nearer amount
+      //     even when the names have no relation. Requiring ≥ 25 % name
+      //     similarity blocks that failure while keeping the intended fix
+      //     (Shanker Furniture ↔ SHANKARLAL — both share "SHANKA" tokens
+      //     giving them ≥ 25 %).
       const nameFloor = hasVoucherEvidence ? 60 : 70;
+      const nearNameFloor = 25;
       if (!tdsAmtTie && !tdsAmtNear && nameScore < nameFloor) continue;
+      if (tdsAmtNear && !tdsAmtTie && nameScore < nearNameFloor) continue;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
       // Use GST-normalised gross comparison to avoid spurious mismatches
       const { score: amtScore, gstAdjusted } = grossAmountScore(tbActivity, ded.total_amount_paid);
@@ -548,7 +559,9 @@ export async function runAiMapper(params: {
       // because it's a much stronger signal than fuzzy name/gross scores.
       let confidence = Math.round(nameScore * 0.50 + amtScore * 0.30 + secScore * 0.20);
       if (tdsAmtTie)  confidence = Math.max(confidence, 85);
-      if (tdsAmtNear) confidence = Math.max(confidence, 60); // pending, not confirmed
+      // Near-tie is a soft signal — keep it in "pending" range so it
+      // never outranks a strong-name-and-amount match on a different party.
+      if (tdsAmtNear) confidence = Math.max(confidence, 50);
       if (confidence < 40) continue;
       if (!best || confidence > best.confidence) {
         const methods: string[] = [];
