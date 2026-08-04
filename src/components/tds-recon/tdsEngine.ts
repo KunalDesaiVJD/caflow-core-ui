@@ -307,18 +307,37 @@ export async function runAiMapper(params: {
 }): Promise<MapperResult> {
   const { client_id, financial_year, firm_id, force_rematch = false } = params;
 
-  // 2026-08-04 Phase 3c — clean up stale "(unmapped: <deductee>)" placeholder
-  // rows from the previous seeding logic. Their synthetic tb_ledger_name
-  // broke View Ledger. A straight DELETE fails with FK constraint from
-  // tds_recon_flags, so we cascade: find the stale mapping ids first,
-  // delete referencing flags, then delete the mappings.
+  // 2026-08-04 Phase 3c/3d — CLEANUP before running the mapper:
+  //   • Always: stale "(unmapped: <deductee>)" placeholder rows and any
+  //     match_method="deductee_only" left over from the previous seeding
+  //     logic. Their synthetic tb_ledger_name broke View Ledger.
+  //   • On force_rematch: also delete every AI-generated mapping so the
+  //     re-run gives a clean slate. Otherwise stale rows produced by a
+  //     looser pre-tightening iteration (e.g. B B Vyas ↔ SHANKARLAL near-
+  //     tie at 60% confidence) persist even after the tightening ships,
+  //     because upsert never deletes. Auditor-created rows (mapped_by =
+  //     "auditor") are preserved — the user explicitly picked them.
+  // DELETE fails with FK constraint from tds_recon_flags, so we cascade:
+  // find ids → delete flags → delete mappings.
   try {
-    const { data: staleRows } = await (supabase as any)
+    const filters = force_rematch
+      ? `or(match_method.eq.deductee_only,tb_ledger_name.like.(unmapped:%,mapped_by.eq.ai)`
+      : `or(match_method.eq.deductee_only,tb_ledger_name.like.(unmapped:%`;
+    const url = new URL("https://x/rest/v1/tds_tb_party_mappings");
+    // Use the supabase client's built-in filter builders to avoid manual URL construction.
+    const query = (supabase as any)
       .from("tds_tb_party_mappings")
       .select("id")
       .eq("client_id", client_id)
-      .eq("financial_year", financial_year)
-      .or("match_method.eq.deductee_only,tb_ledger_name.like.(unmapped:%");
+      .eq("financial_year", financial_year);
+    if (force_rematch) {
+      // Wipe every AI row (and the two placeholder classes) so the run is fresh.
+      query.or("match_method.eq.deductee_only,tb_ledger_name.like.(unmapped:%,mapped_by.eq.ai");
+    } else {
+      query.or("match_method.eq.deductee_only,tb_ledger_name.like.(unmapped:%");
+    }
+    void url; void filters;
+    const { data: staleRows } = await query;
     const staleIds = ((staleRows as any[]) || []).map(r => r.id);
     if (staleIds.length > 0) {
       await (supabase as any)
