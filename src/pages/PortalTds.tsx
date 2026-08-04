@@ -214,12 +214,9 @@ export default function PortalTds() {
     // Live refreshes are silent — flashing skeletons over a table the client is
     // reading, every time staff save a row, would be worse than the stale ms.
     if (!opts?.silent) setDetailLoading(true);
-    const [{ data: ch }, { data: de }] = await Promise.all([
-      supabase
-        .from("tds_challans")
-        .select("id, form_type, bsr_code, challan_serial_no, deposit_date, total_tax_deposited, interest_deposited, late_fees_234e, total_challan_amount, minor_head_of_challan, is_book_entry, bank_name")
-        .eq("filing_id", filingId)
-        .eq("client_id", clientId),
+    const CHALLAN_COLS = "id, form_type, bsr_code, challan_serial_no, deposit_date, total_tax_deposited, interest_deposited, late_fees_234e, total_challan_amount, minor_head_of_challan, is_book_entry, bank_name";
+    const [{ data: ownCh }, { data: de }] = await Promise.all([
+      supabase.from("tds_challans").select(CHALLAN_COLS).eq("filing_id", filingId).eq("client_id", clientId),
       supabase
         .from("tds_deductees")
         .select("id, challan_id, form_type, deductee_name, deductee_pan, pan_not_available, deductee_type, section_code, amount_paid_credited, date_of_payment, rate_of_tds, tds_amount, total_tax_deducted, interest_amount, reason_for_lower_or_nil_deduction, gross_salary, standard_deduction_allowed, net_taxable_salary")
@@ -228,11 +225,36 @@ export default function PortalTds() {
     ]);
     if (req !== detailReqRef.current) return;
     const forForm = (r: { form_type: string | null }) => !r.form_type || r.form_type === selForm;
+    const deducteeRows = ((de || []) as unknown as PortalDeductee[]).filter(forForm);
+
+    // A COMBINED PAYMENT — one bank challan funding deductions on more than one
+    // form (e.g. 24Q and 26Q) — keeps the form_type of whichever form's Genius
+    // import created it; it never gets relabelled for every form that later
+    // reuses it (see the identical fix + full rationale in
+    // TdsDataEntry.tsx's loadFiling, "A COMBINED PAYMENT" comment). Querying
+    // tds_challans by filing_id alone misses that challan here even though
+    // this filing's own deductees are genuinely attached to it — which is why
+    // the stat cards could show real deductee/TDS totals while the section
+    // below rendered nothing (the deductees aren't "unlinked": their
+    // challan_id is a real, non-null id, just one this query never fetched).
+    // Fetch it explicitly via the deductee side, same as the staff screen.
+    const ownIds = new Set((ownCh || []).map((c: any) => c.id as string));
+    const sharedIds = Array.from(new Set(deducteeRows.map(d => d.challan_id).filter((id): id is string => !!id && !ownIds.has(id))));
+    const sharedCh = sharedIds.length > 0
+      ? (await supabase.from("tds_challans").select(CHALLAN_COLS).in("id", sharedIds).eq("client_id", clientId)).data
+      : [];
+    if (req !== detailReqRef.current) return;
+
     // Cast through unknown: src/integrations/supabase/types.ts is stale and
     // does not know about late_fees_234e (added in 20260401090000) — it is a
     // protected file, regenerated via the Supabase CLI only.
-    setChallans(((ch || []) as unknown as PortalChallan[]).filter(forForm));
-    setDeductees(((de || []) as unknown as PortalDeductee[]).filter(forForm));
+    //
+    // NOTE: unlike deductees, challans are NOT filtered by forForm — a shared
+    // challan's own form_type may legitimately belong to a different form (see
+    // above); what makes it belong on THIS screen is that a deductee under
+    // THIS filing references it, not its own form_type label.
+    setChallans([...((ownCh || []) as unknown as PortalChallan[]), ...((sharedCh || []) as unknown as PortalChallan[])]);
+    setDeductees(deducteeRows);
     setDetailLoading(false);
   }, [filingId, clientId, selForm]);
 
