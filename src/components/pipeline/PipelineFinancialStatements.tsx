@@ -57,6 +57,7 @@ import {
 } from "@/lib/nceAutoPopulate";
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import FsHealthPanel from "@/components/pipeline/FsHealthPanel";
+import FsHealthDock from "@/components/pipeline/FsHealthDock";
 import FsStatusChip from "@/components/pipeline/FsStatusChip";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
 import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE, FS_NO_MANUAL_NOTE_ADD, FS_NCE_CONSTRAINED_NOTES } from "@/lib/nceFeatureFlags";
@@ -2149,6 +2150,21 @@ export default function PipelineFinancialStatements({
     subTabKey: "bs_liab" | "bs_asset" | "pl" | "fa";
   }>>([]);
   const [saveBlockedDialogOpen, setSaveBlockedDialogOpen] = useState(false);
+
+  // ─── FS Health dock (collapsible error/status region) ─────────────────────
+  // Every diagnostic surface (opening-balance mismatch, notes staleness,
+  // per-note drift, BS imbalance, notes-vs-face mismatch) lives inside one
+  // collapsible dock so the statements below get the full working area.
+  // Collapsed by default; the coloured summary header still flags severity at
+  // a glance. Preference persisted per browser.
+  const FS_DOCK_KEY = "fs_health_dock_open";
+  const [healthDockOpen, setHealthDockOpen] = useState<boolean>(() => {
+    try { return localStorage.getItem(FS_DOCK_KEY) === "1"; } catch { return false; }
+  });
+  const setHealthDockOpenPersist = (next: boolean) => {
+    setHealthDockOpen(next);
+    try { localStorage.setItem(FS_DOCK_KEY, next ? "1" : "0"); } catch { /* ignore */ }
+  };
 
   // ─── NCE note navigation state ────────────────────────────────────────────
   const [nceNavNote, setNceNavNote] = useState<number | null>(null);
@@ -4859,6 +4875,73 @@ export default function PipelineFinancialStatements({
     [tallyTb, pyShellTb, coaMapping, aliases],
   );
   const hasOpeningMismatch = openingReconResult.mismatches.length > 0;
+
+  // ─── FS Health dock summary ───────────────────────────────────────────────
+  // Roll every diagnostic surface up into a single severity + one-line summary
+  // that drives the collapsible FsHealthDock header. Order of severity:
+  //   error — anything that blocks a trustworthy export (opening mismatch, BS
+  //           out of balance, pre-absorber residual, severe note drift)
+  //   warn  — non-blocking issues worth a look (minor drift, notes mismatch,
+  //           stale TB after notes were built)
+  //   ok    — all clear.
+  const fsHealth = useMemo(() => {
+    const parts: string[] = [];
+    let issueCount = 0;
+    let hasError = false;
+    let hasWarn = false;
+
+    if (hasOpeningMismatch) {
+      const n = openingReconResult.mismatches.length;
+      parts.push(`${n} opening-balance mismatch${n === 1 ? "" : "es"}`);
+      issueCount += n;
+      hasError = true;
+    }
+    if (!activeBsBalanced) {
+      parts.push(`BS out by ₹${formatINR(Math.abs(activeBsDiff))} (CY)`);
+      issueCount += 1;
+      hasError = true;
+    }
+    if (!activeBsBalancedPy) {
+      parts.push(`BS out by ₹${formatINR(Math.abs(activeBsDiffPy))} (PY)`);
+      issueCount += 1;
+      hasError = true;
+    }
+    // TRUE (pre-absorber) NCE residual — surfaced even when both per-year BS
+    // checks pass, since the residual absorber can hide it in Capital.
+    const residual = Math.max(Math.abs(nceBsResidualCy), Math.abs(nceBsResidualPy));
+    if (isNonCorporate && residual > 2 && activeBsBalanced && activeBsBalancedPy) {
+      parts.push(`BS residual ₹${formatINR(residual)}`);
+      issueCount += 1;
+      hasError = true;
+    }
+    if (fsReconResult && fsReconResult.severeCount > 0) {
+      parts.push(`${fsReconResult.severeCount} note${fsReconResult.severeCount === 1 ? "" : "s"} drift >₹100`);
+      issueCount += fsReconResult.severeCount;
+      hasError = true;
+    } else if (fsReconResult && fsReconResult.minorCount > 0) {
+      parts.push(`${fsReconResult.minorCount} note${fsReconResult.minorCount === 1 ? "" : "s"} minor drift`);
+      issueCount += fsReconResult.minorCount;
+      hasWarn = true;
+    }
+    if (mismatchCount > 0) {
+      parts.push(`${mismatchCount} note mismatch${mismatchCount === 1 ? "" : "es"}`);
+      issueCount += mismatchCount;
+      hasWarn = true;
+    }
+    if (isNonCorporate && notesStaleness.isStale) {
+      parts.push("TB re-synced after notes built");
+      issueCount += 1;
+      hasWarn = true;
+    }
+
+    const severity: "ok" | "warn" | "error" = hasError ? "error" : hasWarn ? "warn" : "ok";
+    return { severity, issueCount, summary: parts.join(" · ") };
+  }, [
+    hasOpeningMismatch, openingReconResult.mismatches.length,
+    activeBsBalanced, activeBsBalancedPy, activeBsDiff, activeBsDiffPy,
+    isNonCorporate, nceBsResidualCy, nceBsResidualPy,
+    fsReconResult, mismatchCount, notesStaleness.isStale,
+  ]);
 
   // Phase 8 Step 2: persist severe drift to fs_reconciliation_log so
   // historical drift is auditable.
@@ -8269,7 +8352,7 @@ export default function PipelineFinancialStatements({
         </div>
       </div>
     )}
-    <div className="max-w-6xl space-y-4">
+    <div className="max-w-[1600px] space-y-4">
       <EngagementHeader engagement={engagement} stageNumber={7} stageLabel="Financial Statements" />
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -8641,6 +8724,18 @@ export default function PipelineFinancialStatements({
         );
       })()}
 
+      {/* ── FS Health dock ───────────────────────────────────────────────
+           Every diagnostic surface below lives inside one collapsible dock so
+           the statements get the full working area. Collapsed by default; the
+           coloured header still flags severity at a glance. */}
+      <FsHealthDock
+        severity={fsHealth.severity}
+        summary={fsHealth.summary}
+        issueCount={fsHealth.issueCount}
+        open={healthDockOpen}
+        onOpenChange={setHealthDockOpenPersist}
+      >
+
       {/* Single-PY-source gate banner — names every Balance-Sheet ledger
            whose CY Tally opening does not equal its PY-shell closing. While
            any such ledger exists, FS generation (Excel + Word) is blocked so
@@ -8785,6 +8880,52 @@ export default function PipelineFinancialStatements({
         );
       })()}
 
+      {/* Notes-vs-face mismatch panel — kept mounted so its count keeps
+           reporting to the KPI card and the dock summary even when collapsed. */}
+      <div id="notes-mismatch-panel">
+        <NotesMismatchPanel
+          engagementId={engagementId}
+          entityType={engagement?.entity_type || engagement?.clients?.entity_type}
+          onCountChange={setMismatchCount}
+          onMismatchList={(list) => {
+            // Restrict Save-gate to R&S + Trade Receivables (the two notes
+            // whose sub-rows are auditor-editable and must reconcile to
+            // their own BS headline). Other mismatches surface in the
+            // amber banner but do not block Save.
+            const blocked = list.filter(
+              (m) => m.noteKey === "reserves_surplus" || m.noteKey === "trade_receivables"
+            );
+            setSaveBlockList(blocked);
+          }}
+          // 2026-08-01 — pipe the same face-side tax total NoteBSLiab
+          // uses to reach XV. Without this the R&S banner shows a
+          // spurious Δ = tax component on any client whose notes
+          // predate the pl.eps.total_tax_cy stash (commit e1b491b2).
+          faceTaxCy={
+            (corpPlData?.currentTax?.cy ?? 0)
+            + (corpPlData?.deferredTax?.cy ?? 0)
+          }
+          faceTaxPy={
+            (corpPlData?.currentTax?.py ?? 0)
+            + (corpPlData?.deferredTax?.py ?? 0)
+          }
+          onNavigate={(noteNo, subTab) => {
+            setActiveTab("notes");
+            if (isNonCorporate) {
+              setNceNavNote(noteNo);
+            } else {
+              setCorpNavNote({ noteNo, subTab });
+            }
+            // Scroll to the notes tab content after a short delay
+            setTimeout(() => {
+              document.getElementById(`note-${noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }, 300);
+          }}
+        />
+      </div>
+
+      </FsHealthDock>
+
       {/* Summary cards */}
       <div className="grid grid-cols-7 gap-3">
         {/* CY BS Check */}
@@ -8899,9 +9040,13 @@ export default function PipelineFinancialStatements({
           )}
           onClick={() => {
             if (mismatchCount > 0) {
-              setActiveTab("notes");
-              const el = document.getElementById("notes-mismatch-panel");
-              el?.scrollIntoView({ behavior: "smooth", block: "start" });
+              // The mismatch panel now lives inside the FS Health dock — open it
+              // first, then scroll once it's rendered (hidden → visible).
+              setHealthDockOpenPersist(true);
+              setTimeout(() => {
+                document.getElementById("notes-mismatch-panel")
+                  ?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }, 60);
             }
           }}
         >
@@ -8912,49 +9057,6 @@ export default function PipelineFinancialStatements({
             <p className="text-[10px] text-muted-foreground uppercase">Notes Mismatches</p>
           </CardContent>
         </Card>
-      </div>
-
-      {/* Phase B — Notes mismatch panel: visible on all tabs when notes reconciliation fails */}
-      <div id="notes-mismatch-panel">
-        <NotesMismatchPanel
-          engagementId={engagementId}
-          entityType={engagement?.entity_type || engagement?.clients?.entity_type}
-          onCountChange={setMismatchCount}
-          onMismatchList={(list) => {
-            // Restrict Save-gate to R&S + Trade Receivables (the two notes
-            // whose sub-rows are auditor-editable and must reconcile to
-            // their own BS headline). Other mismatches surface in the
-            // amber banner but do not block Save.
-            const blocked = list.filter(
-              (m) => m.noteKey === "reserves_surplus" || m.noteKey === "trade_receivables"
-            );
-            setSaveBlockList(blocked);
-          }}
-          // 2026-08-01 — pipe the same face-side tax total NoteBSLiab
-          // uses to reach XV. Without this the R&S banner shows a
-          // spurious Δ = tax component on any client whose notes
-          // predate the pl.eps.total_tax_cy stash (commit e1b491b2).
-          faceTaxCy={
-            (corpPlData?.currentTax?.cy ?? 0)
-            + (corpPlData?.deferredTax?.cy ?? 0)
-          }
-          faceTaxPy={
-            (corpPlData?.currentTax?.py ?? 0)
-            + (corpPlData?.deferredTax?.py ?? 0)
-          }
-          onNavigate={(noteNo, subTab) => {
-            setActiveTab("notes");
-            if (isNonCorporate) {
-              setNceNavNote(noteNo);
-            } else {
-              setCorpNavNote({ noteNo, subTab });
-            }
-            // Scroll to the notes tab content after a short delay
-            setTimeout(() => {
-              document.getElementById(`note-${noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }, 300);
-          }}
-        />
       </div>
 
       {/* Save-blocked dialog — appears when the user clicks Save while
