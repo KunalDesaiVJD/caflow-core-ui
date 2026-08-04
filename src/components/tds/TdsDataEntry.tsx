@@ -1759,13 +1759,28 @@ export function TdsDataEntry({
     const { tds, interest, surcharge, applied } = computeApplied(liveInterestRows);
     const lateFees = (challanObj as Challan | null)?.late_fees_234e || 0;
     const kasarVatav = (challanObj as Challan | null)?.kasar_vatav_amount || 0;
+    // Per-FORM bifurcation of a combined-payment (cross-form) challan — see
+    // fetchCarryForwardChallans' own comment on why a challan is never
+    // scoped to one form_type. "Applied" above already sums every form's
+    // rows together; this groups the SAME liveInterestRows by form_type
+    // first, so each form's share is computed with the identical live-
+    // interest math and the whole set always sums back to `applied` exactly
+    // (no separate/divergent calculation to drift out of sync with it).
+    const byFormMap = new Map<string, typeof liveInterestRows>();
+    for (const r of liveInterestRows) {
+      const k = r.form_type || "—";
+      const g = byFormMap.get(k); if (g) g.push(r); else byFormMap.set(k, [r]);
+    }
+    const byForm = [...byFormMap.entries()]
+      .map(([formType, rows]) => ({ formType, count: rows.length, ...computeApplied(rows) }))
+      .sort((a, b) => a.formType.localeCompare(b.formType));
     // Issue 4: Late fees are a separate govt levy — exclude from allocatable TDS amount.
     // effectiveApplied additionally folds in any Kasar-Vatav write-off (see
     // rateEngine's withKasarVatav) for Fully-Utilised/Unconsumed/Carry-Forward
     // purposes — kept SEPARATE from `applied` itself so the tds/interest/
     // surcharge breakdown shown in tooltips still sums to `applied`, not a
     // number that silently includes a write-off with nothing to point to.
-    return { tds, interest, surcharge, lateFees, applied, kasarVatav, effectiveApplied: withKasarVatav(applied, kasarVatav), count: allForChallan.length };
+    return { tds, interest, surcharge, lateFees, applied, kasarVatav, effectiveApplied: withKasarVatav(applied, kasarVatav), count: allForChallan.length, byForm };
   }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, archivedChallans, isCorrectionMode]);
 
   // Keep getChallanBreakdown as alias for backward compat
@@ -2791,6 +2806,10 @@ export function TdsDataEntry({
                     // still allocate here"), not the negative over-draw amount itself
                     // (that's what the Over-applied badge already communicates).
                     const unconsumed = Math.max(0, allocatable - challanDeducteeTds);
+                    // Combined-payment (cross-form) challan bifurcation — see
+                    // getChallanBreakdownAll's own doc. Only worth a row when
+                    // more than one form actually has entries against it.
+                    const byForm = getChallanBreakdownAll(selectedChallan.id).byForm;
                     return (
                       <Card className="bg-muted/30">
                         <CardContent className="px-3 py-1.5">
@@ -2869,6 +2888,16 @@ export function TdsDataEntry({
                               <Badge variant="secondary" className="text-[9px] gap-1"><Lock size={8} /> {lockBadgeLabel ?? "Filed"} — Read Only</Badge>
                             )}
                           </div>
+                          {byForm.length > 1 && (
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] mt-1.5 pt-1.5 border-t">
+                              <span className="text-muted-foreground">Combined payment — split by form:</span>
+                              {byForm.map((f) => (
+                                <span key={f.formType} className={cn(f.formType === selForm && "font-semibold text-foreground")}>
+                                  {f.formType}: ₹{f.applied.toLocaleString("en-IN")} ({f.count} deductee{f.count === 1 ? "" : "s"})
+                                </span>
+                              ))}
+                            </div>
+                          )}
                         </CardContent>
                       </Card>
                     );
