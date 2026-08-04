@@ -520,6 +520,28 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
     // only applied by finalizeCompoundFallback() once the whole voucher ends
     // with no Dr-side match ever found. Reset per-voucher below.
     let compoundCrFallback: { text: string } | null = null;
+    // A TDS-LIABILITY VOUCHER SHARED BY SEVERAL EMPLOYEES — one payroll run's
+    // worth of TDS booked in ONE Journal, e.g.:
+    //
+    //   By (as per details)        Journal 101   Credit 52,000.00
+    //     ZALAK P. KAPOPARA (SALARY)   30,000.00 Dr
+    //     Umang P Kapopara (Salary)     9,000.00 Dr
+    //     KARISHMA HIREN PATOLIYA      13,000.00 Dr
+    //     TDS FOR THE MONTH OF APR26
+    //
+    // 30,000 + 9,000 + 13,000 = 52,000 — the voucher's own credit — but NO
+    // single Dr line matches it alone, so the exact-amount match above never
+    // fires and the row was left as the literal, unmatchable party
+    // "(as per details)" (real Unity Organics Pvt Ltd case: every one of its
+    // 192B vouchers has this shape, so NOTHING in the ledger ever resolved a
+    // real name and every office record read as "TDS Missing from TDS
+    // Ledger"). Collected here alongside (never instead of) the existing
+    // single-line match — the moment a voucher's block ends still holding
+    // "(as per details)", finalizeMultiDeducteeSplit() checks whether the Dr
+    // lines seen SUM to the voucher's credit and, if so, explodes the one row
+    // into N real rows, one per employee. Reset per voucher below, same as
+    // extraDr/taxCr/compoundCrFallback.
+    let compoundDrBreakdown: { party: string; amount: number }[] = [];
     // True for exactly one line after the deductee's name was committed, so a
     // wrapped name can absorb its own continuation — see its use below.
     let justNamedDeductee = false;
@@ -564,6 +586,18 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         // PLUS every other Dr component on the voucher, see extraTaxableDr)
         // is copied into credit so the rest of the pipeline (which reads
         // only `credit`) treats it exactly like a normal row.
+        // Scoped to an actual employee-cost ledger — without this, the SAME
+        // shape (a compound voucher with no Cr-side match yet, and only a Dr
+        // printed) also matches a TDS-LIABILITY ledger's own CHALLAN PAYMENT
+        // voucher ("To (as per details) Payment … HDFC Bank C.C A/c … Cr"),
+        // and isDeducteeCreditLine has no way to tell a bank/cash account
+        // apart from a real employee by majority-share alone once the tax
+        // lines above it (excluded from extraDr, see isTaxLine's own note on
+        // that accumulator) leave `voucherTotal` too small — a real Unity
+        // Organics Pvt Ltd 192B ledger mistagged its own challan payment as
+        // "taxable income" this way. A challan payment has nothing to do
+        // with this branch's actual purpose in the first place.
+        isEmployeeCostLedger(ledgerName) &&
         current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
         current.credit == null && current.debit != null &&
         marker && /^cr$/i.test(marker) &&
@@ -635,6 +669,42 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       }
       compoundCrFallback = null;
     };
+    /** Explodes a still-unresolved "(as per details)" voucher into one row per
+     *  employee when its Dr breakdown lines SUM to the voucher's own credit
+     *  (compoundDrBreakdown's own doc has the real Unity Organics case this
+     *  came from). Deliberately exact-sum, not "best guess" — double-entry
+     *  bookkeeping guarantees a genuine multi-employee split sums exactly;
+     *  anything else (a stray extra Dr line, one employee's amount alone)
+     *  fails the sum check and falls through to finalizeCompoundFallback /
+     *  the unresolved-literal-party outcome exactly as before this existed.
+     *  Runs BEFORE finalizeCompoundFallback at both call sites — a confident
+     *  exact-sum match should never be pre-empted by the single Cr fallback
+     *  candidate, and mutating the (by then orphaned) `current` afterward is
+     *  harmless once it has been spliced out of `all`. */
+    const finalizeMultiDeducteeSplit = () => {
+      if (
+        current && current.party && AS_PER_DETAILS_RE.test(current.party) &&
+        current.credit != null && compoundDrBreakdown.length >= 2
+      ) {
+        const sum = compoundDrBreakdown.reduce((s, d) => s + d.amount, 0);
+        if (Math.abs(sum - current.credit) < 0.005) {
+          const pos = all.indexOf(current);
+          if (pos !== -1) {
+            // Each split-off row is its own entry from here on (matching,
+            // display, everything downstream reads row_index as if it were
+            // its own line in the ledger) — sharing the parent's row_index
+            // across all of them would make them indistinguishable wherever
+            // that's used as a key, so each gets a fresh one off the SAME
+            // counter real rows use, not a derived/fractional value.
+            const split: TallyPdfRow[] = compoundDrBreakdown.map((d) => ({
+              ...current!, party: d.party, credit: d.amount, row_index: pageNo * 100_000 + idx++,
+            }));
+            all.splice(pos, 1, ...split);
+          }
+        }
+      }
+      compoundDrBreakdown = [];
+    };
     for (const band of bands) {
       const f = readBand(band, a);
 
@@ -660,6 +730,15 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
           // nothing left to complete, and must not survive to wrongly
           // intercept the narration lines that follow it as a retry attempt.
           const stillSearching = !matched && current && current.party && AS_PER_DETAILS_RE.test(current.party);
+          // Observed alongside tryMatchBreakdown, never instead of it — every
+          // Dr line seen while the party is still unresolved is a candidate
+          // for the multi-deductee split (see compoundDrBreakdown's own doc).
+          // A voucher that DOES resolve via the single-line exact match above
+          // never needs this; finalizeMultiDeducteeSplit only acts when that
+          // path found nothing at all.
+          if (stillSearching && f.marker && /^dr$/i.test(f.marker) && f.party && breakdownAmount > 0) {
+            compoundDrBreakdown.push({ party: f.party, amount: breakdownAmount });
+          }
           pendingAmount = stillSearching ? { amount: breakdownAmount, marker: f.marker ?? null, text: f.party ?? "" } : null;
           // Another amount-bearing line means the deductee's own label is
           // finished — anything text-only after this belongs to the narration,
@@ -699,7 +778,8 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         }
         awaitingCompoundParty = false;     // anything else starts the NEXT real entry
         pendingAmount = null;               // and any unconsumed amount belonged to nothing
-        finalizeCompoundFallback();          // the ending voucher's last chance to use its Cr fallback
+        finalizeMultiDeducteeSplit();         // the ending voucher's last chance to split by Dr-sum
+        finalizeCompoundFallback();          // then its last chance to use its Cr fallback
       }
 
       if (f.onlyParticulars) {
@@ -739,6 +819,7 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       extraDr = [];
       taxCr = 0;
       compoundCrFallback = null;
+      compoundDrBreakdown = [];
       current = {
         row_index: pageNo * 100_000 + idx++,
         date: f.date ?? lastDate,          // inherit — Tally prints a date only when it changes
@@ -755,9 +836,11 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       awaitingCompoundParty = !!(current.party && AS_PER_DETAILS_RE.test(current.party));
     }
     // The page's bands can run out while the LAST voucher is still awaiting
-    // its Cr fallback (see finalizeCompoundFallback's own doc) — the real
-    // Bindra Construction case, where the target voucher was the only row on
-    // its page and so never reached the mid-loop "new row starts" call above.
+    // its split/Cr fallback (see finalizeMultiDeducteeSplit's and
+    // finalizeCompoundFallback's own docs) — the real Bindra Construction
+    // case, where the target voucher was the only row on its page and so
+    // never reached the mid-loop "new row starts" call above.
+    finalizeMultiDeducteeSplit();
     finalizeCompoundFallback();
   });
 
@@ -783,7 +866,17 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
     if (party && SKIP_PARTY_RE.test(party)) { skipped.balances++; continue; }
     if (!party) { skipped.totals++; continue; }              // totals carry figures but no party
     if (r.credit == null || r.credit === 0) {
+      // A row still literally holding "(as per details)" here means no real
+      // Cr-side deductee was EVER resolved for it (every candidate was a
+      // deduction head / tax line / bank line) — promoting the literal
+      // placeholder text to `party` would file a return with a garbage
+      // deductee name instead of correctly treating the voucher as
+      // unclaimed. Caught by the "all deduction heads, no employee at all"
+      // fixture once SALARY_HEADER made isEmployeeCostLedger genuinely true
+      // for it — this branch was unreachable before that (see this file's
+      // own test for the real case).
       const directCost = employeeCostLedger && r.debit != null && r.debit > 0
+        && !AS_PER_DETAILS_RE.test(party)
         && !NON_EMPLOYEE_PARTY_RE.test(party) && !isTaxLine(party) && !SALARY_DEDUCTION_HEAD.test(party);
       if (!directCost) { skipped.payments++; continue; }     // "To … Axis Bank" challan payment
       rows.push({ ...r, credit: r.debit, amountKind: "taxable_income" });

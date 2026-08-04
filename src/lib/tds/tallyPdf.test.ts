@@ -19,6 +19,19 @@ const HEADER: PdfTextItem[] = [
   { x: 562.8, y: 603.4, w: 28.7, str: "Credit" },
 ];
 
+// Same column geometry as HEADER, but for a genuine employee-cost ledger
+// ("Staff Salary Expense") rather than a TDS-liability one ("TDS 194 A") —
+// needed since parseTallyPdfPages now gates the salary-expense compound-Cr
+// branch on isEmployeeCostLedger(ledgerName) (Unity Organics real-data fix,
+// 2026-08-04: that branch used to fire on ANY compound voucher with a
+// debit-only header, including a TDS-liability ledger's own challan-payment
+// voucher — see tallyPdf.ts's own doc on the fix). Every test below that
+// exercises salaryExpenseVoucherRows() needs THIS header, not the shared one.
+const SALARY_HEADER: PdfTextItem[] = [
+  ...HEADER.filter((i) => i.str !== "TDS 194 A"),
+  { x: 259.0, y: 667.4, w: 106.5, str: "Staff Salary Expense" },
+];
+
 /** A simple (non-compound) "By" deduction row — party named directly in the
  *  header row, no breakdown lines. Mirrors "5-Apr-26 By Hero Fincorp Ltd…". */
 function simpleByRow(y: number, opts: { date?: string; party: string; vchNo: string; credit: number }): PdfTextItem[] {
@@ -336,10 +349,119 @@ describe("parseTallyPdfPages — TDS-liability compound Journal with NO Dr-side 
   });
 });
 
+/** A TDS-liability compound Journal shared by SEVERAL employees in one payroll
+ *  run — the shape neither compoundJournalRows (one deductee, Dr amount ==
+ *  row credit) nor worksContractVoucherRows (Cr-fallback) covers: N Dr lines
+ *  whose amounts SUM to the row's own credit, with none matching it alone.
+ *  Verbatim geometry from a real Unity Organics Pvt Ltd "TDS on Salary-92B"
+ *  ledger (192B.pdf), voucher 101. */
+function multiEmployeeTdsJournalRows(y: number, opts: {
+  date?: string; vchNo: string; credit: number;
+  employees: { party: string; amount: number }[];
+  narration?: string;
+}): PdfTextItem[] {
+  const items: PdfTextItem[] = [];
+  const fmt = (n: number) => n.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+  if (opts.date) items.push({ x: 40, y, w: 58, str: `${opts.date} By` });
+  else items.push({ x: 87, y, w: 12, str: "By" });
+  items.push({ x: 421, y, w: 15, str: opts.vchNo });
+  items.push({ x: 281, y: y - 1, w: 33, str: "Journal" });
+  items.push({ x: 547, y: y - 1, w: 44, str: fmt(opts.credit) });
+  items.push({ x: 104, y: y - 1, w: 70, str: "(as per details)" });
+  let lineY = y - 11;
+  for (const emp of opts.employees) {
+    items.push({ x: 105, y: lineY, w: emp.party.length * 4.3, str: emp.party });
+    items.push({ x: 292, y: lineY, w: 53, str: `${fmt(emp.amount)} Dr` });
+    lineY -= 11;
+  }
+  if (opts.narration) items.push({ x: 105, y: lineY, w: opts.narration.length * 4.3, str: opts.narration });
+  return items;
+}
+
+describe("parseTallyPdfPages — multi-employee TDS-liability compound Journal (real Unity Organics Pvt Ltd case)", () => {
+  // Real case: one payroll run's TDS for THREE employees booked in a single
+  // ₹52,000 Journal (30,000 + 9,000 + 13,000 = 52,000 exactly), on a "TDS on
+  // Salary-92B" ledger. Before this fix, no single Dr line matched the
+  // row's own ₹52,000 credit, so the voucher was left as the literal,
+  // unmatchable party "(as per details)" — every one of Unity's 6 real
+  // office records against this ledger read as "TDS Missing from TDS
+  // Ledger" even though the TDS totals matched exactly.
+  it("splits a voucher shared by 3 employees into 3 separate rows when their Dr amounts sum exactly to the row's credit", () => {
+    const page = [
+      ...SALARY_HEADER.map((i) => (i.str === "Staff Salary Expense" ? { ...i, str: "TDS on Salary-92B" } : i)),
+      ...multiEmployeeTdsJournalRows(478, {
+        date: "30-Apr-26", vchNo: "101", credit: 52000,
+        employees: [
+          { party: "ZALAK P. KAPOPARA (SALARY)", amount: 30000 },
+          { party: "Umang P Kapopara (Salary)", amount: 9000 },
+          { party: "KARISHMA HIREN PATOLIYA", amount: 13000 },
+        ],
+        narration: "TDS FOR THE MONTH OF APR26",
+      }),
+    ];
+    const { rows, issues } = parseTallyPdfPages([page]);
+    expect(issues).toEqual([]);
+    expect(rows).toHaveLength(3);
+    expect(rows.map((r) => ({ party: r.party, credit: r.credit, date: r.date }))).toEqual([
+      { party: "ZALAK P. KAPOPARA (SALARY)", credit: 30000, date: "30-Apr-26" },
+      { party: "Umang P Kapopara (Salary)", credit: 9000, date: "30-Apr-26" },
+      { party: "KARISHMA HIREN PATOLIYA", credit: 13000, date: "30-Apr-26" },
+    ]);
+    // Each split row is its own independent entry, not three copies of one.
+    expect(new Set(rows.map((r) => r.row_index)).size).toBe(3);
+  });
+
+  it("does NOT split when the Dr lines do not sum exactly to the row's credit — leaves it as the literal unresolved '(as per details)' row, same fail-safe the single-deductee case already relies on", () => {
+    const page = [
+      ...SALARY_HEADER.map((i) => (i.str === "Staff Salary Expense" ? { ...i, str: "TDS on Salary-92B" } : i)),
+      ...multiEmployeeTdsJournalRows(478, {
+        date: "30-Apr-26", vchNo: "101", credit: 52000,
+        employees: [
+          { party: "ZALAK P. KAPOPARA (SALARY)", amount: 30000 },
+          { party: "Umang P Kapopara (Salary)", amount: 9000 },
+          // Missing Karishma's ₹13,000 — sum is 39,000, not 52,000. A
+          // malformed/partially-read PDF must never be force-split on a
+          // guess; the exact-sum requirement is the whole safety net. The
+          // row is kept (not silently dropped — the credit column WAS
+          // printed, unlike the debit-only case above) but stays
+          // unresolvable by name, exactly as an unmatchable compound
+          // voucher already reads today.
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("(as per details)");
+    expect(rows[0].credit).toBe(52000);
+  });
+
+  // The OTHER real Unity bug, same ledger: the compound Cr-line "expense
+  // ledger" branch (meant only for a genuine Staff Salary Expense ledger)
+  // had no ledger-type gate, so it ALSO misfired on this TDS-liability
+  // ledger's own challan-payment voucher — mistaking "HDFC Bank C.C A/c" for
+  // an employee and tagging the whole payment as taxable income.
+  it("never mistakes a TDS-liability ledger's own challan-payment voucher (bank Cr line) for a taxable-income row", () => {
+    const page = [
+      ...SALARY_HEADER.map((i) => (i.str === "Staff Salary Expense" ? { ...i, str: "TDS on Salary-92B" } : i)),
+      ...salaryExpenseVoucherRows(478, {
+        date: "30-Apr-26", vchNo: "46", debit: 312780,
+        crLines: [
+          { label: "TDS on Interest - 94A", amount: 76224 },
+          { label: "TDS on Rent-94I", amount: 9585 },
+          { label: "HDFC Bank C.C A/c", amount: 547144 },
+        ],
+      }),
+    ];
+    const { rows, skipped } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(0);
+    expect(skipped.payments).toBe(1);
+  });
+});
+
 describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound rows (real Microcircuits data)", () => {
   it("identifies the Cr breakdown line containing '- Salary' as the deductee, and copies the voucher's own DEBIT total (not that line's net-payable amount) into credit", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         date: "30-Apr-26", vchNo: "1", debit: 31372,
         crLines: [
@@ -358,7 +480,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
 
   it("is unaffected by breakdown-line ORDER — the '- Salary' line still wins when PF/Professional Tax print first", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         vchNo: "2", debit: 39705,
         crLines: [
@@ -388,7 +510,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // against Office Data's 51,372 — a false mismatch of exactly the bonus.
   it("adds every taxable Dr component (Bonus Expense) to the employee's taxable income", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         vchNo: "11", debit: 31372,
         bonusDr: { label: "Bonus Expense", amount: 20000 },
@@ -423,7 +545,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // of the voucher — so naming style is irrelevant.
   it("finds the employee when the credit line is a bare name, with no '- Salary' suffix", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         date: "30-Apr-26", vchNo: "6", debit: 32261,
         crLines: [
@@ -454,7 +576,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // doc, applies here exactly as it does to Professional Tax alone).
   it("excludes a 'TDS Payable' line and a separate 'Education Cess TDS' line from Taxable Income, same as Professional Tax", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         date: "30-Apr-26", vchNo: "360", debit: 213000,
         crLines: [
@@ -483,7 +605,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // distinct, each under its own real name, none dropped or merged.
   it("keeps three same-day, same-amount vouchers for different directors fully distinct", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         date: "30-Apr-26", vchNo: "360", debit: 213000,
         crLines: [
@@ -524,7 +646,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // are the only credit lines the voucher has.
   it("still drops a voucher whose credits are ALL deduction heads", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         date: "30-Apr-26", vchNo: "6", debit: 2130,
         crLines: [
@@ -566,7 +688,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // exists to guard against).
   it("never adds a contra debit posted to the deductee's OWN account", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         vchNo: "30", debit: 200000,
         bonusDr: { label: "Madhukant Kanjibhai Patel - Salary", amount: 19800 },
@@ -590,7 +712,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
 
   it("never adds an explicitly TDS-labelled debit either", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         vchNo: "7", debit: 200000,
         bonusDr: { label: "TDS 192 B", amount: 19800 },
@@ -613,7 +735,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // office data shows for his own tax lines) would actually get restored.
   it("a genuine taxable component is still added when a TDS line sits beside it", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         vchNo: "8", debit: 31372,
         bonusDr: { label: "Bonus Expense", amount: 20000 },
@@ -632,7 +754,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // their own figure even when a bonus voucher printed immediately above.
   it("a bonus on one voucher never inflates the next employee's figure", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         date: "30-Apr-26", vchNo: "11", debit: 31372,
         bonusDr: { label: "Bonus Expense", amount: 20000 },
@@ -660,7 +782,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     // named employee "- Salary" line — must stay a dropped "payment" row, the
     // same guarantee the pre-existing challan/payment tests rely on.
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         vchNo: "4", debit: 2000,
         crLines: [
@@ -676,7 +798,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
 
   it("processes multiple employees' vouchers on one page independently, no cross-contamination", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         date: "30-Apr-26", vchNo: "1", debit: 31372,
         crLines: [
@@ -709,7 +831,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // amount or the "- Salary" word.
   it("reassembles a wrapped employee name whose amount sits with the FIRST half, not the half containing '- Salary'", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         date: "30-Apr-26", vchNo: "18", debit: 25000,
         crLines: [
@@ -727,7 +849,7 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
 
   it("does the same across two consecutive wrapped-name vouchers with no cross-contamination (real Devansiben/Uttamkumar case)", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         vchNo: "22", debit: 73038,
         crLines: [
@@ -765,7 +887,10 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
 describe("parseTallyPdfPages — a Date/Particulars anchor tie never swallows breakdown text as a date (real MICROCIRCUITS page-2+ geometry)", () => {
   const TIE_HEADER: PdfTextItem[] = [
     { x: 39, y: 795, w: 224.8, str: "MICROCIRCUITS INNOVATIONS PRIVATE LIMITED" },
-    { x: 39, y: 782, w: 86.8, str: "Staff Salary Expense" },
+    // Strictly above "Ledger Account" (not the same y) — findLedgerName only
+    // considers a candidate whose y is > the caption's; real Tally PDFs print
+    // the ledger name a line above the caption, never on the same baseline.
+    { x: 39, y: 783, w: 86.8, str: "Staff Salary Expense" },
     { x: 143, y: 782, w: 65.1, str: "Ledger Account" },
     { x: 232, y: 782, w: 91.0, str: "1-Apr-26 to 30-Jun-26" },
     { x: 66, y: 767, w: 19.6, str: "Date" },
@@ -885,7 +1010,7 @@ describe("parseTallyPdfPages → resolveTaxableIncomeReading → reconcileTallyF
   ];
   it("parses and resolves all three to Matched, with the gross reading reconstructing the real voucher debit exactly", () => {
     const page = [
-      ...HEADER,
+      ...SALARY_HEADER,
       ...salaryExpenseVoucherRows(485.5, {
         date: "30-Jun-26", vchNo: "365", debit: 123000,
         crLines: [
