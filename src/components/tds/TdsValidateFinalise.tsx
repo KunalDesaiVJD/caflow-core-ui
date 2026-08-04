@@ -5,6 +5,7 @@ import { downloadStorageFile, removePublicDocumentByUrl } from "@/lib/openStorag
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
 import { computeChallanOverApplied } from "@/lib/tds/rateEngine";
+import { getEffectiveClientLedger } from "@/lib/tdsCorrections";
 import { READY_TO_FILE_STATUS } from "@/components/tds/TdsFilingsManager";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -390,35 +391,55 @@ export function TdsValidateFinalise({
       setResolving(false); return;
     }
 
-    const { data: ch } = await supabase.from("tds_challans")
-      .select("id, challan_serial_no, total_challan_amount, late_fees_234e, kasar_vatav_amount, deposit_date")
-      .eq("filing_id", match.id);
+    // Correction-aware: a filed correction never rewrites tds_challans /
+    // tds_deductees (see tdsCorrections.ts's own header invariant), so these
+    // pre-flight counts and the over-applied check must read through the SAME
+    // latest-correction-substituted view every TDS Reports screen and
+    // TdsDataEntry's carry-forward math already use — not the originally-filed
+    // tables directly, or a correction filed for this period would leave this
+    // screen validating stale, pre-correction numbers. Both archived states
+    // merged in since the original raw query here had no is_archived filter.
+    //
+    // Known gap: a REVISED challan's copy only carries CHALLAN_COPY_COLS
+    // (tdsCorrections.ts) — kasar_vatav_amount falls outside that list, so a
+    // corrected challan's over-applied check treats it as 0 rather than
+    // whatever the original write-off was. Unrevised challans (the vast
+    // majority) are unaffected.
+    const [activeLedger, archivedLedger] = await Promise.all([
+      getEffectiveClientLedger(selClient, { archived: false }),
+      getEffectiveClientLedger(selClient, { archived: true }),
+    ]);
     if (stale()) return;
-    const chIds = (ch || []).map((c: any) => c.id);
-    // Deductee count is scoped by the deductee's OWN filing_id, not by "attached
-    // to one of this filing's challans" — a challan is often reused across a
-    // client's 24Q and 26Q filings for the same combined bank deposit, so
-    // scoping by challan_id alone double-counted the OTHER filing's deductees
-    // into this card too. See the matching fix in supabase/functions/
-    // tds-recon-compare/index.ts for the full explanation.
-    const { count } = await supabase.from("tds_deductees").select("id", { count: "exact", head: true }).eq("filing_id", match.id);
-    if (stale()) return;
-    setOfficeCount({ deductees: count || 0, challans: chIds.length });
+    const effChallans = [...activeLedger.challans, ...archivedLedger.challans];
+    const effDeductees = [...activeLedger.deductees, ...archivedLedger.deductees] as any[];
+
+    const inPeriod = (r: { financial_year: string | null; quarter: string | null; form_type?: string }) =>
+      r.financial_year === selFy && r.quarter === selQuarter && (r as any).form_type === selForm;
+    const ch = effChallans.filter(inPeriod) as any[];
+    const chIds = ch.map((c: any) => c.id);
+    const chIdSet = new Set(chIds);
+
+    // Deductee count is scoped by PERIOD (matching the filing's own
+    // financial_year/quarter/form_type), not by "attached to one of this
+    // filing's challans" — a challan is often reused across a client's 24Q
+    // and 26Q filings for the same combined bank deposit, so scoping by
+    // challan_id alone double-counted the OTHER filing's deductees into this
+    // card too. See the matching fix in supabase/functions/tds-recon-compare/
+    // index.ts for the full explanation.
+    setOfficeCount({ deductees: effDeductees.filter(inPeriod).length, challans: chIds.length });
 
     // Over-applied pre-flight check — see computeChallanOverApplied's own doc
     // for why this is the ONE definition, matching the "Over-applied" badge
-    // TdsDataEntry.tsx's challan card already shows. Deductees fetched by
-    // challan_id ONLY (not filing_id) for the combined-payment reason above.
+    // TdsDataEntry.tsx's challan card already shows. Deductees matched by
+    // challan_id ONLY (not period) for the combined-payment reason above — a
+    // carry-forward challan can legitimately hold deductees from other periods.
     if (chIds.length) {
-      const { data: chDeds } = await supabase.from("tds_deductees")
-        .select("challan_id, total_tax_deducted, tds_amount, interest_amount, surcharge_amount, date_of_payment")
-        .in("challan_id", chIds);
-      if (stale()) return;
+      const chDeds = effDeductees.filter((d: any) => d.challan_id && chIdSet.has(d.challan_id));
       const byChallan = new Map<string, typeof chDeds>();
-      for (const d of chDeds || []) {
+      for (const d of chDeds) {
         const g = byChallan.get(d.challan_id as string); if (g) g.push(d); else byChallan.set(d.challan_id as string, [d]);
       }
-      const overApplied = (ch || [])
+      const overApplied = ch
         .map((c: any) => {
           const { overApplied, effectiveApplied, allocatable } = computeChallanOverApplied(c, byChallan.get(c.id) || []);
           return overApplied ? { id: c.id, challanNo: c.challan_serial_no as string | null, shortfall: effectiveApplied - allocatable } : null;

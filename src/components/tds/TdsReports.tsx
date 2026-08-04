@@ -32,6 +32,7 @@ import { reportFileName, type ReportMeta, type StageReport, type OverviewReport 
 import { buildOverviewWorkbook, downloadWorkbook } from "@/lib/tds/tdsReportExcel";
 import { exportOverviewPdf } from "@/lib/tds/tdsReportPdf";
 import { fetchFilingReport, mergeQuarterlyReports, type QuarterReportInput } from "@/lib/tds/tdsOverviewFetch";
+import { getEffectiveClientLedger } from "@/lib/tdsCorrections";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -129,19 +130,44 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
 
       if (filingIds.length === 0) { setReportData([]); setLoading(false); return; }
 
-      // Challans
-      const { data: challans } = await supabase.from("tds_challans").select("*").in("filing_id", filingIds);
+      // Correction-aware: a filed correction NEVER rewrites tds_challans /
+      // tds_deductees (see tdsCorrections.ts's own header invariant) — every
+      // report must reflect the LATEST filed correction's numbers, exactly
+      // like getEffectiveClientLedger() already does for carry-forward math
+      // in TdsDataEntry, not the originally-filed figures. The ledger is
+      // scoped per client, so fetch once per distinct client in scope and
+      // union — in BOTH archived states, since these reports (Challan
+      // Register, the Unconsumed Report) intentionally include archived
+      // challans and the ledger excludes them unless asked.
+      //
+      // Known gap: a REVISED challan/deductee returns the correction's copy,
+      // which only carries CHALLAN_COPY_COLS/DEDUCTEE_COPY_COLS — fields
+      // outside that list (is_archived, kasar_vatav_amount, late_fees_used)
+      // come back undefined for a corrected row, not the pre-correction
+      // value. Unrevised rows (the vast majority) are unaffected.
+      const clientIds = Array.from(new Set(filings.map((f: any) => f.client_id)));
+      const ledgers = await Promise.all(clientIds.flatMap((cid: string) => [
+        getEffectiveClientLedger(cid, { archived: false }),
+        getEffectiveClientLedger(cid, { archived: true }),
+      ]));
+      const allChallans = ledgers.flatMap(l => l.challans);
+      const allDeductees = ledgers.flatMap(l => l.deductees);
 
-      // Deductees — scoped by the deductee's OWN filing_id, not by "attached to
-      // one of these filings' challans": a challan is routinely reused across a
-      // client's 24Q and 26Q filings (one combined bank deposit, allocated
-      // across both returns), so a challan_id-only join pulls in deductees that
-      // belong to a filing outside this report's own filingIds set. Same fix as
-      // Stage 1/2/3 of Validate & Finalise.
-      const { data: dd } = await supabase.from("tds_deductees").select("*").in("filing_id", filingIds);
-      const deductees = dd || [];
+      // Match by period (client+FY+quarter+form), not filing_id — a
+      // correction's copy of a challan/deductee doesn't carry the original
+      // filing_id (corrections key by period; see tdsCorrections.ts), so
+      // filing_id-based filtering would silently drop every corrected row.
+      const periodKeys = new Set<string>();
+      for (const f of filings as any[]) {
+        for (const form of (f.tds_forms || [])) {
+          periodKeys.add(`${f.client_id}|${f.financial_year}|${f.quarter}|${form}`);
+        }
+      }
+      const inScope = (r: any) => periodKeys.has(`${r.client_id}|${r.financial_year}|${r.quarter}|${r.form_type}`);
+      const challans = allChallans.filter(inScope);
+      const deductees = allDeductees.filter(inScope);
 
-      setReportData([{ filings: filings || [], challans: challans || [], deductees }]);
+      setReportData([{ filings: filings || [], challans, deductees }]);
     }
     setLoading(false);
   };
