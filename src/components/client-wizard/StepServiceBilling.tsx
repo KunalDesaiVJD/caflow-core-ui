@@ -360,6 +360,15 @@ export const StepServiceBilling = ({
                   <Label className="text-xs">ITD (e-Filing) Login ID</Label>
                   <Input
                     className="h-8 text-xs"
+                    // This is the CLIENT's portal login, entered by staff — not
+                    // the staff member's own credentials. Without these,
+                    // browsers treat this text+password pair as a login form
+                    // and silently overwrite the correctly-loaded client value
+                    // with the staff member's own saved autofill entry.
+                    name="itd-login-id-no-autofill"
+                    autoComplete="off"
+                    data-lpignore="true"
+                    data-1p-ignore=""
                     value={cfg.itd_login_id ?? ""}
                     onChange={(e) => updateServiceConfig(catId, { itd_login_id: e.target.value })}
                     placeholder="e.g. the TAN"
@@ -371,6 +380,14 @@ export const StepServiceBilling = ({
                     <Input
                       className="h-8 text-xs font-mono"
                       type={revealedPasswords[`${catId}-itd`] !== undefined ? "text" : "password"}
+                      // "new-password" (not "off") is the one value Chrome/Firefox
+                      // reliably honour to mean "do not offer or inject a saved
+                      // credential here" — this field holds the CLIENT's stored
+                      // portal password, never the signed-in staff member's own.
+                      name="itd-password-no-autofill"
+                      autoComplete="new-password"
+                      data-lpignore="true"
+                      data-1p-ignore=""
                       value={
                         revealedPasswords[`${catId}-itd`] !== undefined
                           ? revealedPasswords[`${catId}-itd`]
@@ -392,6 +409,10 @@ export const StepServiceBilling = ({
                   <Label className="text-xs">TRACES Login ID</Label>
                   <Input
                     className="h-8 text-xs"
+                    name="traces-login-id-no-autofill"
+                    autoComplete="off"
+                    data-lpignore="true"
+                    data-1p-ignore=""
                     value={cfg.traces_login_id ?? ""}
                     onChange={(e) => updateServiceConfig(catId, { traces_login_id: e.target.value })}
                     placeholder="e.g. the TAN"
@@ -403,6 +424,10 @@ export const StepServiceBilling = ({
                     <Input
                       className="h-8 text-xs font-mono"
                       type={revealedPasswords[`${catId}-traces`] !== undefined ? "text" : "password"}
+                      name="traces-password-no-autofill"
+                      autoComplete="new-password"
+                      data-lpignore="true"
+                      data-1p-ignore=""
                       value={
                         revealedPasswords[`${catId}-traces`] !== undefined
                           ? revealedPasswords[`${catId}-traces`]
