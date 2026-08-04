@@ -537,6 +537,48 @@ export async function runAiMapper(params: {
     });
   }
 
+  // 2026-08-04 — RAY WINGS class of visibility gap: every deductee reported
+  // in Form 26Q must appear in the panel — including those whose Tally
+  // counterpart is booked under an unrelated name (proprietor's alias,
+  // trade name, family HUF, etc). The AI mapper cannot resolve these
+  // automatically because tokenSortRatio between "Vanraj Engineers" and
+  // "HARDIK CHINUBHAI PANCHAL" is near zero, and the auditor is the one
+  // with the trade-name / PAN mapping knowledge.
+  //
+  // Seed a placeholder row for every deductee not covered by the matching
+  // loop above. tb_ledger_name uses "(unmapped: <deductee>)" so the panel
+  // renders it clearly as an action item. match_method="deductee_only"
+  // — a new label the panel filter accepts to keep these rows visible.
+  const mappedDeductees = new Set(
+    upsertRows.map((r: any) => String(r.tds_deductee_name || "").trim().toLowerCase())
+      .filter(Boolean),
+  );
+  for (const ded of aggDeductees) {
+    if (!ded.deductee_name) continue;
+    const key = ded.deductee_name.trim().toLowerCase();
+    if (mappedDeductees.has(key)) continue;
+    // Placeholder tb_ledger_name — carries the deductee so the panel's
+    // primary column stays informative. UI can render this specially
+    // (e.g. amber tint + "link to a Tally ledger" CTA).
+    const placeholder = `(unmapped: ${ded.deductee_name})`;
+    upsertRows.push({
+      client_id, firm_id, financial_year,
+      tb_ledger_name:    placeholder,
+      tb_parent_group:   null,
+      tb_total_debit:    null,
+      tds_deductee_name: ded.deductee_name,
+      tds_section_code:  ded.section_code,
+      tds_total_amount:  ded.total_amount_paid || null,
+      tds_tds_amount:    ded.total_tds || null,
+      tds_filing_ids:    ded.filing_ids,
+      match_confidence:  0,
+      match_method:      "deductee_only",
+      ai_reasoning:      `No matching Tally ledger found automatically. Reported in Form 26Q as ${ded.deductee_name} (${ded.section_code ?? "section unknown"}, gross ₹${ded.total_amount_paid.toFixed(0)}, TDS ₹${ded.total_tds.toFixed(0)}). Auditor to link to a Tally creditor manually — e.g. proprietor names booked under trade-name, HUF booked under individual, etc.`,
+      mapping_status:    "needs_review",
+      mapped_by:         "ai",
+    });
+  }
+
   // 2026-07-24 — root cause of Issues 9 & 12:
   //   • Auditor needed multiple Tally ledgers → same deductee (parties whose
   //     transactions are recorded under different names in Tally).
