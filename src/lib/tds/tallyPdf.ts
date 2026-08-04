@@ -120,17 +120,19 @@ export interface TallyPdfRow {
   // before this field existed (see tallyRecon.ts's use of it for why a
   // SEPARATE reconciliation pass, not a section guess, is what this enables).
   amountKind?: "taxable_income";
-  // The Professional Tax Cr amount actually subtracted out of THIS row's own
-  // `credit` (0/undefined if none was seen on the voucher). Only ever set
-  // alongside amountKind:"taxable_income" — see PROFESSIONAL_TAX_RE's own doc
-  // for why PT is excluded from credit by default. Kept as its own field
-  // (rather than folded silently into credit) because whether that exclusion
-  // is the right reading is a per-CLIENT convention, not a universal fact —
-  // some offices report Taxable Income net of PT (matches credit as-is),
-  // others report it gross (credit + ptExcluded). tallyRecon.ts's
-  // resolveTaxableIncomeReading() decides which reading a given file's own
-  // Office Data actually supports, instead of this parser guessing once for
-  // every client.
+  // The total tax-line Cr amount (Professional Tax, TDS Payable, Education
+  // Cess — see isTaxLine) actually subtracted out of THIS row's own `credit`
+  // (0/undefined if none was seen on the voucher). Named for its original,
+  // narrower case (Professional Tax alone); kept rather than renamed since
+  // every caller already reads it by this name — see the taxCr accumulator's
+  // own doc in parseTallyPdfPages for the full exclusion set. Only ever set
+  // alongside amountKind:"taxable_income". Kept as its own field (rather than
+  // folded silently into credit) because whether that exclusion is the right
+  // reading is a per-CLIENT convention, not a universal fact — some offices
+  // report Taxable Income net of it (matches credit as-is), others report it
+  // gross (credit + ptExcluded). tallyRecon.ts's resolveTaxableIncomeReading()
+  // decides which reading a given file's own Office Data actually supports,
+  // instead of this parser guessing once for every client.
   ptExcluded?: number;
 }
 
@@ -481,16 +483,29 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
     // counts depends on WHOSE account it is — and the deciding line (the
     // employee's own "- Salary" credit) is printed AFTER them.
     let extraDr: { label: string; amount: number }[] = [];
-    // PROFESSIONAL TAX ON THE VOUCHER'S CREDIT SIDE. The taxable total below is
-    // computed from the Dr side (current.debit + extraDr) and, by double-entry,
-    // that always equals the FULL Cr side — net pay + PF + PT + … — so a Cr
-    // line naming Professional Tax bakes its amount straight into the figure
-    // even though nothing ever reads that line directly. Held separately from
-    // extraDr (which is Dr-only) and subtracted explicitly wherever the
-    // taxable credit is set — see the two subtraction sites below. Accumulated
-    // rather than applied immediately because the PT line can print BEFORE the
-    // employee's own "- Salary" line, i.e. before `current.credit` exists yet.
-    let ptCr = 0;
+    // STATUTORY/TAX LINES ON THE VOUCHER'S CREDIT SIDE. The taxable total below
+    // is computed from the Dr side (current.debit + extraDr) and, by double-
+    // entry, that always equals the FULL Cr side — net pay + PF + PT + TDS +
+    // Cess + … — so a Cr line naming any of these bakes its amount straight
+    // into the figure even though nothing ever reads that line directly.
+    //
+    // Originally tracked Professional Tax alone. A real Accurate PMS Pvt Ltd
+    // voucher (a high-earner crossing the TDS threshold) showed the SAME bug
+    // one line wider: the voucher also credits "192B - TDS Payable" and
+    // "Education Cess TDS" alongside PT, and neither was being excluded —
+    // Taxable Income came out ₹8,525 (TDS + Cess) above the employee's own
+    // salary line, for the exact reason PT was already excluded (TAX IS NOT
+    // INCOME — see isTaxLine's own doc). isTaxLine() already recognised both
+    // as tax lines (it gates isDeducteeCreditLine so neither is ever mistaken
+    // for the employee), so this now excludes anything isTaxLine agrees is a
+    // tax line, not just the Professional Tax subset of it.
+    //
+    // Held separately from extraDr (which is Dr-only) and subtracted
+    // explicitly wherever the taxable credit is set — see the two subtraction
+    // sites below. Accumulated rather than applied immediately because a tax
+    // line can print BEFORE the employee's own "- Salary" line, i.e. before
+    // `current.credit` exists yet.
+    let taxCr = 0;
     // TDS-LIABILITY VOUCHER, NO Dr-SIDE RESTATEMENT OF THE TDS AMOUNT — some
     // works-contract-style vouchers never repeat the TDS figure on the Dr
     // side at all (unlike the "interest"/"director remuneration" shape the
@@ -511,12 +526,12 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
     const norm = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
     const tryMatchBreakdown = (amount: number, marker: string | null | undefined, partyText: string): boolean => {
       if (
-        current && marker && /^cr$/i.test(marker) && amount > 0 && PROFESSIONAL_TAX_RE.test(partyText)
+        current && marker && /^cr$/i.test(marker) && amount > 0 && isTaxLine(partyText)
       ) {
         if (current.amountKind === "taxable_income" && current.credit != null) {
           current.credit -= amount;
           current.ptExcluded = (current.ptExcluded ?? 0) + amount;
-        } else ptCr += amount;
+        } else taxCr += amount;
         // Not "the deductee" and never the start of a wrapped name — see
         // justNamedDeductee's own doc for why this must stay false here.
         return false;
@@ -560,14 +575,15 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
         // employee's own "- Salary" account with the TDS, then credits
         // "TDS 192 B" with the same figure). It is not additional income, so
         // it is excluded here; only debits to OTHER heads (Bonus Expense,
-        // arrears, incentive) are further taxable components. Professional
-        // Tax (ptCr — subtracted here) is excluded for the opposite reason: it
-        // IS a real Cr-side component of this voucher, just never taxable.
+        // arrears, incentive) are further taxable components. Every tax line
+        // (Professional Tax, TDS Payable, Education Cess — taxCr, subtracted
+        // here) is excluded for the opposite reason: each IS a real Cr-side
+        // component of this voucher, just never taxable.
         current.credit = current.debit + extraDr
           .filter((d) => norm(d.label) !== norm(partyText))
-          .reduce((sum, d) => sum + d.amount, 0) - ptCr;
+          .reduce((sum, d) => sum + d.amount, 0) - taxCr;
         current.amountKind = "taxable_income";
-        current.ptExcluded = ptCr;
+        current.ptExcluded = taxCr;
         return true;
       }
       // Any OTHER Dr line on a still-unresolved expense voucher is a further
@@ -718,10 +734,10 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       }
       if (f.date) lastDate = f.date;
       // A NEW voucher starts here — its taxable components are its own, so
-      // the previous voucher's extra Dr lines (and any Professional Tax seen
-      // on it) must never leak into it.
+      // the previous voucher's extra Dr lines (and any tax lines seen on it)
+      // must never leak into it.
       extraDr = [];
-      ptCr = 0;
+      taxCr = 0;
       compoundCrFallback = null;
       current = {
         row_index: pageNo * 100_000 + idx++,

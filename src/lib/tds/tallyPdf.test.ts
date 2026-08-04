@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseTallyPdfPages, type PdfTextItem } from "./tallyPdf";
+import { reconcileTallyFull, resolveTaxableIncomeReading, type OfficeTxn } from "./tallyRecon";
 
 // Column header, identical across every fixture below — geometry lifted
 // verbatim (x/y) from a real pdfjs dump of a Skylark Corporation 194A ledger
@@ -444,11 +445,14 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
   // not the usual two or three — "192B - TDS Payable" AND a separate
   // "Education Cess TDS" line alongside Professional Tax and the employee's
   // own "- Salary" line. Both TDS-named lines contain the word "TDS", so
-  // isTaxLine() (and therefore isDeducteeCreditLine's exclusion of it)
-  // recognises both — neither is a candidate for the employee line, and
-  // neither is Professional Tax so neither is subtracted from the taxable
-  // figure either; only the true Professional Tax line is.
-  it("ignores BOTH a 'TDS Payable' line and a separate 'Education Cess TDS' line, taxing neither", () => {
+  // isTaxLine() recognises both, the same as it already recognised
+  // Professional Tax — neither is a candidate for the employee line, AND
+  // neither inflates the taxable figure, matching the employee's own "-
+  // Salary" Cr line exactly (real Accurate PMS Pvt Ltd voucher: leaving TDS
+  // Payable/Education Cess untaxed-but-uncounted put Taxable Income ₹28,850
+  // above the employee's own line — TAX IS NOT INCOME, see isTaxLine's own
+  // doc, applies here exactly as it does to Professional Tax alone).
+  it("excludes a 'TDS Payable' line and a separate 'Education Cess TDS' line from Taxable Income, same as Professional Tax", () => {
     const page = [
       ...HEADER,
       ...salaryExpenseVoucherRows(485.5, {
@@ -464,8 +468,8 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     const { rows } = parseTallyPdfPages([page]);
     expect(rows).toHaveLength(1);
     expect(rows[0].party).toBe("Dushyant Prajapati - Salary");
-    expect(rows[0].credit).toBe(212800);   // 213,000 debit, minus ONLY the 200 Professional Tax
-    expect(rows[0].ptExcluded).toBe(200);
+    expect(rows[0].credit).toBe(183950);   // matches the employee's own Cr line exactly
+    expect(rows[0].ptExcluded).toBe(29050);  // 27,740 + 1,110 + 200
     expect(rows[0].amountKind).toBe("taxable_income");
   });
 
@@ -510,9 +514,9 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     ];
     const { rows } = parseTallyPdfPages([page]);
     expect(rows.map((r) => ({ party: r.party, credit: r.credit, date: r.date, ptExcluded: r.ptExcluded }))).toEqual([
-      { party: "Dineshkumar V Padsala - Salary", credit: 212800, date: "30-Apr-26", ptExcluded: 200 },
-      { party: "Dushyant Prajapati - Salary", credit: 212800, date: "30-Apr-26", ptExcluded: 200 },
-      { party: "Pinnag Rathod - Salary", credit: 212800, date: "30-Apr-26", ptExcluded: 200 },
+      { party: "Dineshkumar V Padsala - Salary", credit: 183950, date: "30-Apr-26", ptExcluded: 29050 },
+      { party: "Dushyant Prajapati - Salary", credit: 183950, date: "30-Apr-26", ptExcluded: 29050 },
+      { party: "Pinnag Rathod - Salary", credit: 183950, date: "30-Apr-26", ptExcluded: 29050 },
     ]);
   });
 
@@ -835,5 +839,67 @@ describe("parseTallyPdfPages — a full multi-entry page, mixing every row shape
       { party: "Hansaben Nikhilbhai Patel (UK)", credit: 7397, date: "20-May-26" },
     ]);
     expect(skipped.payments).toBe(1);
+  });
+});
+
+// REAL DATA, END TO END: three real Accurate PMS Pvt Ltd employees' June-2026
+// vouchers (byte-for-byte from the client's own "Salary Exp." ledger PDF),
+// reconciled against their REAL stored Office Data (tds_deductees.
+// amount_paid_credited, pulled from production for this exact filing).
+// Confirmed independently across three unrelated employees before this fix
+// shipped: Office Data's "Taxable Income" for THIS client equals the
+// voucher's FULL debit — Professional Tax, TDS Payable and Education Cess
+// all INCLUDED — so parsing must exclude all three (isTaxLine, not
+// PROFESSIONAL_TAX_RE alone) AND resolveTaxableIncomeReading must pick the
+// GROSS reading back up, not merely avoid a crash.
+describe("parseTallyPdfPages → resolveTaxableIncomeReading → reconcileTallyFull — real Accurate PMS Pvt Ltd June vouchers", () => {
+  const office: OfficeTxn[] = [
+    { deductee_id: "e1", name: "SHEETALBEN DUSHYANTKUMAR PRAJAPATI", date_iso: "2026-06-30", amount: 123000, tds: null, section: null },
+    { deductee_id: "e2", name: "Dharmesh Gohil", date_iso: "2026-06-30", amount: 121000, tds: null, section: null },
+    { deductee_id: "e3", name: "SNEHAL DINESHBHAI PADSALA", date_iso: "2026-06-30", amount: 121500, tds: null, section: null },
+  ];
+  it("parses and resolves all three to Matched, with the gross reading reconstructing the real voucher debit exactly", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        date: "30-Jun-26", vchNo: "365", debit: 123000,
+        crLines: [
+          { label: "Professional Tax - Employ", amount: 200 },
+          { label: "192B - TDS Payable", amount: 8197 },
+          { label: "Education Cess TDS", amount: 328 },
+          { label: "Sheetalben D Prajapati", amount: 114275 },
+        ],
+      }),
+      ...salaryExpenseVoucherRows(340.9, {
+        vchNo: "366", debit: 121000,
+        crLines: [
+          { label: "Professional Tax - Employ", amount: 200 },
+          { label: "192B - TDS Payable", amount: 7870 },
+          { label: "Education Cess TDS", amount: 315 },
+          { label: "Dharmesh Gohil - Salary", amount: 112615 },
+        ],
+      }),
+      ...salaryExpenseVoucherRows(196.3, {
+        vchNo: "364", debit: 121500,
+        crLines: [
+          { label: "Professional Tax - Employ", amount: 200 },
+          { label: "192B - TDS Payable", amount: 7952 },
+          { label: "Education Cess TDS", amount: 328 },
+          { label: "Snehal Padsala", amount: 113030 },
+        ],
+      }),
+    ];
+    const { rows: parsed } = parseTallyPdfPages([page]);
+    expect(parsed.map((r) => ({ credit: r.credit, ptExcluded: r.ptExcluded }))).toEqual([
+      { credit: 114275, ptExcluded: 8725 },  // 123,000 - (200 + 8,197 + 328)
+      { credit: 112615, ptExcluded: 8385 },  // 121,000 - (200 + 7,870 + 315)
+      { credit: 113030, ptExcluded: 8480 },  // 121,500 - (200 + 7,952 + 328)
+    ]);
+
+    const resolved = resolveTaxableIncomeReading(office, parsed);
+    expect(resolved.map((r) => r.credit)).toEqual([123000, 121000, 121500]);
+
+    const { rows } = reconcileTallyFull(office, resolved, null, {});
+    for (const r of rows) expect(r.result).toBe("Matched");
   });
 });

@@ -369,7 +369,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       // Same free ride — set only for the expense-ledger "taxable income"
       // case (tallyPdf.ts), undefined for every other row (unaffected).
       amountKind: t.raw?.amountKind ?? undefined,
-      // Same free ride again — the Professional Tax amount tallyPdf.ts
+      // Same free ride again — the total tax-line amount tallyPdf.ts
       // excluded from THIS row's own credit (see TallyRow's own doc).
       // Dropping this here silently disabled resolveTaxableIncomeReading
       // for every ledger reconciled through the normal Import → Run
