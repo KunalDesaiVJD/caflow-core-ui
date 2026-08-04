@@ -8850,6 +8850,18 @@ export default function PipelineFinancialStatements({
           engagementId={engagementId}
           entityType={engagement?.entity_type || engagement?.clients?.entity_type}
           onCountChange={setMismatchCount}
+          // 2026-08-01 — pipe the same face-side tax total NoteBSLiab
+          // uses to reach XV. Without this the R&S banner shows a
+          // spurious Δ = tax component on any client whose notes
+          // predate the pl.eps.total_tax_cy stash (commit e1b491b2).
+          faceTaxCy={
+            (corpPlData?.currentTax?.cy ?? 0)
+            + (corpPlData?.deferredTax?.cy ?? 0)
+          }
+          faceTaxPy={
+            (corpPlData?.currentTax?.py ?? 0)
+            + (corpPlData?.deferredTax?.py ?? 0)
+          }
           onNavigate={(noteNo, subTab) => {
             setActiveTab("notes");
             if (isNonCorporate) {

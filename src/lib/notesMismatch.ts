@@ -63,6 +63,7 @@ function sumReservesSurplus(
   noteRow: Record<string, any>,
   plData:  any,
   column:  "cy" | "py",
+  faceTax?: { cy?: number; py?: number } | null,
 ): number {
   const v = (k: string) => {
     const n = Number(noteRow?.[`${k}_${column}`] ?? 0);
@@ -80,9 +81,24 @@ function sumReservesSurplus(
   // a spurious "note doesn't reconcile" banner.
   //
   // Fix: read profit via computeFaceNpat, which mirrors the same math
-  // NoteBSLiab uses to render the row. Zero clients hit this banner
-  // any more unless the note actually is out of balance.
-  const profit = computeFaceNpat({ pl: plData } as any, column);
+  // NoteBSLiab uses to render the row.
+  //
+  // Also (2026-08-01 pass 2): computeFaceNpat subtracts
+  // pl.eps.total_tax_* from PBT, but that field is only stashed on
+  // autoPopulate runs that shipped after commit e1b491b2. For any
+  // client whose stage5_notes JSONB was persisted before that fix,
+  // the tax component is zero and computeFaceNpat returns PBT, not
+  // NPAT. Subtract the piped-in face tax (Current + Deferred, same
+  // as what NoteBSLiab uses) as a fallback so the banner reconciles
+  // on the very first render — no autoPopulate re-run required.
+  let profit = computeFaceNpat({ pl: plData } as any, column);
+  const epsRow = (plData?.eps ?? {}) as Record<string, any>;
+  const storedTaxKey = column === "cy" ? "total_tax_cy" : "total_tax_py";
+  const alreadySubtractedTax = Math.abs(Number(epsRow[storedTaxKey] ?? 0));
+  if (alreadySubtractedTax < 0.005 && faceTax) {
+    const t = Number((column === "cy" ? faceTax.cy : faceTax.py) ?? 0);
+    if (Number.isFinite(t)) profit -= t;
+  }
 
   // Issue 3 (today) — Opening balance fallback mirrors NoteBSLiab.tsx:
   //   CY opening: surplus_opening_cy ?? abs(reserves_surplus.py)
@@ -227,6 +243,16 @@ export function detectMismatches(
   notesData: Stage5Notes | null | undefined,
   registry:  Map<string, number>,
   isNce:     boolean,
+  // 2026-08-01 — Optional face-side tax total piped from
+  // PipelineFinancialStatements (currentTax + deferredTax straight off
+  // cyOf / pyOf, the same numbers the P&L face uses to reach XV.
+  // Profit / (Loss) for the period). Enables sumReservesSurplus to
+  // convert computeFaceNpat's PBT into NPAT even before the tax
+  // stashed by autoPopulate (pl.eps.total_tax_*) is present on the
+  // stored notes. Without this, on a fresh client the detector shows
+  // Sub-rows sum = Opening + PBT (leaves the ₹37,200 kind of gap the
+  // auditor keeps seeing on Mill Power).
+  faceTax?: { cy?: number; py?: number } | null,
 ): NoteMismatch[] {
   const mismatches: NoteMismatch[] = [];
   if (!notesData) return mismatches;
@@ -269,7 +295,7 @@ export function detectMismatches(
       // Securities Premium, Surplus opening + profit + adjustments).  A
       // mismatch is real when components don't sum to the BS face value.
       const plData = (notesData as any)?.pl;
-      notesSum = sumReservesSurplus(noteRow, plData, "cy");
+      notesSum = sumReservesSurplus(noteRow, plData, "cy", faceTax);
       hasUserData = isReservesSurplusPopulated(noteRow, plData);
       // ALWAYS compare against the stored BS face — overrides Phase E parity
       // because there is no breakup to swap in for the face value.
