@@ -893,7 +893,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
    *  Stage 3 = a tds_tally_batches row makes it applicable, result !== "Matched"
    *  on tds_tally_results marks an issue (TdsTallyRecon.tsx). A stage that
    *  isn't applicable counts as satisfied (matches each stage's own
-   *  `!applicable || issues === 0` gate), not as an open issue. */
+   *  `!applicable || issues === 0` gate), not as an open issue.
+   *
+   *  s1/s2/s3/s4 below are kept for reference/diagnostics only — they do NOT
+   *  drive the "Ready" badge. `ready` is the signature alone (see its own
+   *  doc further down): TdsValidateFinalise already refuses to sign unless
+   *  every one of these is clean, so re-deriving them a second time here
+   *  only risked this component's own copy disagreeing with that gate. */
   const fetchVfStatuses = async (filingIds: string[], stale: () => boolean) => {
     if (filingIds.length === 0) { if (!stale()) setVfStatuses(new Map()); return; }
     const [s1Res, panBatchRes, panResRes, tallyBatchRes, tallyResRes, sigRes, tallyBypassRes] = await Promise.all([
@@ -1005,7 +1011,18 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       const signed = !!sig?.signed;
       const signedDetail = signed ? `Signed by ${sig?.name || "—"}` : "Not signed";
 
-      const ready = s1 === "done" && s2 === "done" && s3 === "done" && s4 === "done" && signed;
+      // Ready = signed, full stop. TdsValidateFinalise's handleSign already
+      // refuses to sign unless canFile is true (every Stage 1-3 issue
+      // resolved) — so a signature is itself proof the stages were clean at
+      // sign time. Re-deriving s1/s2/s3 "done"-ness HERE, a second time, in a
+      // separately maintained copy of that logic, is exactly the kind of
+      // drift this codebase has been burned by before (two independent
+      // readings of "is this stage done" disagreeing) — and is the likely
+      // explanation for a badge staying red after a real, confirmed
+      // signature despite the underlying stage data checking out clean by
+      // every direct query. Firm-explicit instruction (2026-08-04): the
+      // badge must track the signature alone, not re-litigate the stages.
+      const ready = signed;
 
       map.set(id, { s1, s1Detail, s2, s2Detail, s3, s3Detail, s4, s4Detail, signed, signedDetail, ready, computedAt });
     }
@@ -1402,9 +1419,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     if (oldStatus === newStatus) return;
 
     // Forward-only past Ready to File — enforced here too, not just via the
-    // dropdown's disabled items, since handleBulkAction reaches this same
-    // function through a path that never renders those SelectItems. See the
-    // SelectContent above for the full rationale.
+    // dropdown's disabled items (a defensive backstop, e.g. against a future
+    // caller of this function that bypasses the dropdown). handleBulkAction
+    // below has its OWN separate write path and needs its own copy of this
+    // same guard. See the SelectContent above for the full rationale.
     const oldIdx = FILING_STATUSES.indexOf(oldStatus as any);
     const newIdx = FILING_STATUSES.indexOf(newStatus as any);
     if (oldIdx >= 0 && oldIdx >= readyToFileIdx && newIdx >= 0 && newIdx < oldIdx) {
@@ -1519,13 +1537,19 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     if (bulkAction.startsWith("status:")) {
       const newStatus = bulkAction.replace("status:", "");
       const actingUserName = user?.name || user?.email || "Unknown";
-      // Same gate as the per-row Status dropdown — a bulk action must never be
-      // able to mark a return Filed/Processed that individually couldn't be.
+      // Same gates as the per-row Status dropdown — a bulk action must never be
+      // able to mark a return Filed/Processed that individually couldn't be,
+      // and must never be able to reverse a locked return either (see
+      // handleStatusChange's own copy of this same forward-only guard).
       let skippedNotReady = 0;
       let skippedNoAck = 0;
+      let skippedLocked = 0;
       for (const id of ids) {
         const filing = filings.find(f => f.id === id);
         if (filing) {
+          const oldIdx = FILING_STATUSES.indexOf(filing.work_status as any);
+          const newIdx = FILING_STATUSES.indexOf(newStatus as any);
+          if (oldIdx >= 0 && oldIdx >= readyToFileIdx && newIdx >= 0 && newIdx < oldIdx) { skippedLocked++; continue; }
           if (isFiledLikeStatus(newStatus) || isReadyToFileStatus(newStatus)) {
             if (!isVfReady(id)) { skippedNotReady++; continue; }
           }
@@ -1550,8 +1574,9 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           if (payload.checker_id) await logAuditEntry(id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
         }
       }
-      const updated = ids.length - skippedNotReady - skippedNoAck;
+      const updated = ids.length - skippedNotReady - skippedNoAck - skippedLocked;
       const skipParts: string[] = [];
+      if (skippedLocked) skipParts.push(`${skippedLocked} locked (request edit access in Validate & Finalise)`);
       if (skippedNotReady) skipParts.push(`${skippedNotReady} not ready to file (complete Validate & Finalise first)`);
       if (skippedNoAck) skipParts.push(`${skippedNoAck} missing ACK upload`);
       toast({
@@ -2013,32 +2038,19 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       {(() => {
                         const vf = vfStatuses.get(f.id);
                         if (!vf) return <span className="text-xs text-muted-foreground">—</span>;
-                        // The tooltip carries the full per-stage breakdown (not just
-                        // ONE word) so a "Not ready" badge is self-explanatory on
-                        // hover, without having to open Stage 4 · Checker Review to
-                        // find out which of Stage 1/2/3 or the signature is actually
-                        // the blocker.
+                        // Ready tracks the signature alone (see fetchVfStatuses's own
+                        // doc on `ready`) — so the tooltip only ever needs to explain
+                        // the signature, not re-surface a Stage 1/2/3 breakdown that
+                        // no longer decides this badge and could read as
+                        // self-contradictory (green badge next to "Stage 1: 2
+                        // mismatches" text, from the OTHER engine's own bookkeeping).
                         const lastChecked = `Last checked: ${new Date(vf.computedAt).toLocaleTimeString()}`;
                         const detailTitle = vf.ready
-                          ? `Ready to file — click to open Stage 1\n${lastChecked}`
-                          : [
-                              `Not ready — click to open Stage 1`,
-                              `Stage 1: ${vf.s1Detail}`,
-                              `Stage 2: ${vf.s2Detail}`,
-                              `Stage 3: ${vf.s3Detail}`,
-                              `Signature: ${vf.signedDetail}`,
-                              lastChecked,
-                            ].join("\n");
-                        // ALWAYS-VISIBLE blocker line, not just on hover — naming every
-                        // stage/signature that isn't "done" yet, so "why is this red"
-                        // never again requires opening Stage 4 or a browser console to
-                        // answer. Empty when ready (nothing to explain).
-                        const blockers = vf.ready ? [] : [
-                          vf.s1 !== "done" && "Stage 1",
-                          vf.s2 !== "done" && "Stage 2",
-                          vf.s3 !== "done" && "Stage 3",
-                          !vf.signed && "Signature",
-                        ].filter(Boolean) as string[];
+                          ? `Ready to file — ${vf.signedDetail} — click to open Stage 1\n${lastChecked}`
+                          : `Not ready — ${vf.signedDetail} — click to open Stage 1\n${lastChecked}`;
+                        // ALWAYS-VISIBLE blocker line, not just on hover. Empty when
+                        // ready (nothing to explain).
+                        const blockers = vf.ready ? [] : ["Signature"];
                         return (
                           <div className="space-y-0.5">
                             <button
