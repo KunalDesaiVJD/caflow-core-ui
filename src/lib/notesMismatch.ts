@@ -24,6 +24,7 @@
 
 import type { Stage5Notes } from "@/lib/notesAutoPopulate";
 import { getFAGridNetBlockTotal } from "@/lib/notesAutoPopulate";
+import { computeFaceNpat } from "@/lib/plFaceNpat";
 
 // ─── Bug 3 — Strict empty-amount check ────────────────────────────────────────
 // null / undefined / "" / whitespace strings are NOT populated.
@@ -67,8 +68,21 @@ function sumReservesSurplus(
     const n = Number(noteRow?.[`${k}_${column}`] ?? 0);
     return Number.isFinite(n) ? n : 0;
   };
-  const profitKey = column === "cy" ? "npat" : "npat_py";
-  const profit = Number(plData?.eps?.[profitKey] ?? 0);
+  // 2026-08-01 (Mill Power, R&S banner fires even when everything ties):
+  // NoteBSLiab's "Add/(Less): Profit for the year" row was moved to a
+  // live face NPAT computation in commit 37060da5 (Revenue − formula-
+  // aware Expenses − Tax via plFaceNpat.ts). This detector was still
+  // reading the STORED pl.eps.npat which autoPopulate writes as a raw
+  // COA sum (no CoM formula, no CII overrides applied). Any client
+  // whose auditor edits Cost of Materials or overrides a Changes in
+  // Inventory sub-cell drifts between the two — Sub-rows sum diverges
+  // from Note total by exactly the CoM/CII delta and the panel raises
+  // a spurious "note doesn't reconcile" banner.
+  //
+  // Fix: read profit via computeFaceNpat, which mirrors the same math
+  // NoteBSLiab uses to render the row. Zero clients hit this banner
+  // any more unless the note actually is out of balance.
+  const profit = computeFaceNpat({ pl: plData } as any, column);
 
   // Issue 3 (today) — Opening balance fallback mirrors NoteBSLiab.tsx:
   //   CY opening: surplus_opening_cy ?? abs(reserves_surplus.py)
@@ -97,8 +111,15 @@ function isReservesSurplusPopulated(
     "surplus_opening_cy", "surplus_deferred_adj_cy", "surplus_excess_short_cy",
   ];
   if (fields.some(f => isNonEmptyAmount(noteRow?.[f]))) return true;
-  const npat = Number(plData?.eps?.npat ?? 0);
-  return Number.isFinite(npat) && npat !== 0;
+  // 2026-08-01 — same rationale as sumReservesSurplus. If we still relied
+  // on the stored pl.eps.npat here, a client whose auditor edits CoM /
+  // CII to make live NPAT go to zero (but stored NPAT is non-zero, or
+  // vice versa) would either skip the check when they shouldn't or run
+  // it when they shouldn't. Aligning both helpers on computeFaceNpat
+  // keeps the "should we bother checking" gate consistent with the
+  // "what does it sum to" number.
+  const npat = computeFaceNpat({ pl: plData } as any, "cy");
+  return Number.isFinite(npat) && Math.abs(npat) > 0.005;
 }
 
 // ─── Public types ──────────────────────────────────────────────────────────────
