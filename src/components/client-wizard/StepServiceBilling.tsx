@@ -16,7 +16,8 @@ import {
 import {
   Tooltip, TooltipContent, TooltipTrigger, TooltipProvider,
 } from "@/components/ui/tooltip";
-import { AlertTriangle, Info } from "lucide-react";
+import { AlertTriangle, Info, Eye, EyeOff, Loader2 } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import { DEFAULT_TDS_START_FY, DEFAULT_TDS_START_QUARTER, getQuarterPeriodNumber } from "@/lib/tdsQuarter";
 
 /* ───── Types ───── */
@@ -26,6 +27,13 @@ export interface ServiceConfig {
   reminder_date: number;
   billing_amount: number;
   invoice_gen_type: "auto" | "reminder";
+  /** The underlying client_services row's own id — only set once the row
+   *  actually exists (edit mode, after the first save). ITD/TRACES
+   *  credentials are stored against THIS id via the tds-portal-credentials
+   *  edge function (see StepServiceBilling's own credentials block), not in
+   *  this form's own upsert payload — a new client has no row yet, so
+   *  credentials can only be entered after the wizard's first save. */
+  id?: string;
   /** TDS Compliance only — mandatory start of the compliance period. */
   tds_start_fy?: string;
   tds_start_quarter?: string;
@@ -34,6 +42,19 @@ export interface ServiceConfig {
   tds_end_quarter?: string;
   /** TDS Compliance only — one or more forms the client is required to file. */
   tds_forms?: string[];
+  /** TDS Compliance only — ITD/TRACES login credentials. Login IDs load
+   *  from the server as plain text (see the "status" edge-function call);
+   *  passwords are NEVER loaded in plaintext — a password field here means
+   *  "the user just typed a NEW one to save", left undefined otherwise so
+   *  saving never overwrites an existing stored password with blank. See
+   *  tds_password_set/traces_password_set for whether one is already saved. */
+  itd_login_id?: string;
+  itd_password?: string;
+  traces_login_id?: string;
+  traces_password?: string;
+  itd_password_set?: boolean;
+  traces_password_set?: boolean;
+  credentials_updated_at?: string | null;
 }
 
 export interface PackageConfig {
@@ -127,13 +148,32 @@ export const StepServiceBilling = ({
   data, onChange, errors, gstins, tanNumber, workGroupType, warnings, onGoToStep, firmId: propFirmId,
 }: Props) => {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [categories, setCategories] = useState<ServiceCategory[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModeDialog, setShowModeDialog] = useState(false);
   const [pendingMode, setPendingMode] = useState<BillingMode | null>(null);
+  // ITD/TRACES password reveal — fetched on demand only (never on load), see
+  // ServiceConfig's own doc on why. Keyed by `${catId}-itd`/`${catId}-traces`.
+  const [revealedPasswords, setRevealedPasswords] = useState<Record<string, string>>({});
+  const [revealingKey, setRevealingKey] = useState<string | null>(null);
 
   const set = <K extends keyof ServiceBillingData>(key: K, val: ServiceBillingData[K]) =>
     onChange({ ...data, [key]: val });
+
+  const revealCredential = async (catId: string, cfg: ServiceConfig, which: "itd" | "traces") => {
+    if (!cfg.id) return;
+    const key = `${catId}-${which}`;
+    if (revealedPasswords[key] !== undefined) { setRevealedPasswords(prev => { const n = { ...prev }; delete n[key]; return n; }); return; }
+    setRevealingKey(key);
+    const { data: res, error } = await supabase.functions.invoke("tds-portal-credentials", {
+      body: { action: "read", client_service_id: cfg.id },
+    });
+    setRevealingKey(null);
+    if (error) { toast({ title: "Could not retrieve the password", description: error.message, variant: "destructive" }); return; }
+    const pw = which === "itd" ? res?.itd_password : res?.traces_password;
+    setRevealedPasswords(prev => ({ ...prev, [key]: pw || "" }));
+  };
 
   // Use the explicit firmId prop (for superadmin editing a client) or fall back to user's firm
   const effectiveFirmId = propFirmId || user?.firm_id;
@@ -304,6 +344,90 @@ export const StepServiceBilling = ({
           End Quarter is optional — leave blank to keep TDS compliance active indefinitely.
         </p>
         {rangeError && <p className="text-xs text-destructive">{rangeError}</p>}
+
+        {/* ITD / TRACES portal credentials — encrypted at rest, see
+            ServiceConfig's own doc. A brand-new client has no client_services
+            row yet, so credentials can only be entered once the wizard has
+            been saved at least once. */}
+        <div className="pt-3 border-t border-border space-y-3">
+          <Label className="text-xs font-medium">Portal Login Credentials</Label>
+          {!cfg.id ? (
+            <p className="text-[11px] text-muted-foreground">Save this client first to add ITD/TRACES login credentials.</p>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">ITD (e-Filing) Login ID</Label>
+                  <Input
+                    className="h-8 text-xs"
+                    value={cfg.itd_login_id ?? ""}
+                    onChange={(e) => updateServiceConfig(catId, { itd_login_id: e.target.value })}
+                    placeholder="e.g. the TAN"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">ITD (e-Filing) Password</Label>
+                  <div className="flex gap-1">
+                    <Input
+                      className="h-8 text-xs font-mono"
+                      type={revealedPasswords[`${catId}-itd`] !== undefined ? "text" : "password"}
+                      value={
+                        revealedPasswords[`${catId}-itd`] !== undefined
+                          ? revealedPasswords[`${catId}-itd`]
+                          : cfg.itd_password ?? (cfg.itd_password_set ? "········" : "")
+                      }
+                      onChange={(e) => updateServiceConfig(catId, { itd_password: e.target.value })}
+                      onFocus={(e) => { if (cfg.itd_password === undefined && cfg.itd_password_set) e.currentTarget.select(); }}
+                      placeholder={cfg.itd_password_set ? "" : "Enter password"}
+                    />
+                    {cfg.itd_password_set && cfg.itd_password === undefined && (
+                      <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0"
+                        onClick={() => revealCredential(catId, cfg, "itd")} disabled={revealingKey === `${catId}-itd`}>
+                        {revealingKey === `${catId}-itd` ? <Loader2 size={12} className="animate-spin" /> : revealedPasswords[`${catId}-itd`] !== undefined ? <EyeOff size={12} /> : <Eye size={12} />}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">TRACES Login ID</Label>
+                  <Input
+                    className="h-8 text-xs"
+                    value={cfg.traces_login_id ?? ""}
+                    onChange={(e) => updateServiceConfig(catId, { traces_login_id: e.target.value })}
+                    placeholder="e.g. the TAN"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">TRACES Password</Label>
+                  <div className="flex gap-1">
+                    <Input
+                      className="h-8 text-xs font-mono"
+                      type={revealedPasswords[`${catId}-traces`] !== undefined ? "text" : "password"}
+                      value={
+                        revealedPasswords[`${catId}-traces`] !== undefined
+                          ? revealedPasswords[`${catId}-traces`]
+                          : cfg.traces_password ?? (cfg.traces_password_set ? "········" : "")
+                      }
+                      onChange={(e) => updateServiceConfig(catId, { traces_password: e.target.value })}
+                      onFocus={(e) => { if (cfg.traces_password === undefined && cfg.traces_password_set) e.currentTarget.select(); }}
+                      placeholder={cfg.traces_password_set ? "" : "Enter password"}
+                    />
+                    {cfg.traces_password_set && cfg.traces_password === undefined && (
+                      <Button type="button" variant="outline" size="sm" className="h-8 px-2 shrink-0"
+                        onClick={() => revealCredential(catId, cfg, "traces")} disabled={revealingKey === `${catId}-traces`}>
+                        {revealingKey === `${catId}-traces` ? <Loader2 size={12} className="animate-spin" /> : revealedPasswords[`${catId}-traces`] !== undefined ? <EyeOff size={12} /> : <Eye size={12} />}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Passwords are encrypted at rest and never shown automatically — click <Eye size={10} className="inline" /> to reveal a saved one, or just start typing to replace it.
+                {cfg.credentials_updated_at && ` Last updated ${new Date(cfg.credentials_updated_at).toLocaleDateString("en-IN")}.`}
+              </p>
+            </>
+          )}
+        </div>
       </div>
     );
   };
