@@ -350,10 +350,17 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
       if (r.message && r.mapped === 0) {
         toast.info(r.message);
       } else {
+        // 2026-08-04 — Extended toast: include TDS-ledger discovery + voucher-
+        // derived party counts so a "3 matched, 604 skipped" result reveals
+        // whether discovery or the voucher walk was the bottleneck.
+        const diag: string[] = [];
+        if (typeof r.discovered_tds_ledgers === "number") diag.push(`${r.discovered_tds_ledgers} TDS ledger${r.discovered_tds_ledgers === 1 ? "" : "s"} discovered`);
+        if (typeof r.voucher_parties_added  === "number") diag.push(`${r.voucher_parties_added} party${r.voucher_parties_added === 1 ? "" : "ies"} from vouchers`);
         toast.success(
           `Mapper complete: ${r.mapped} matched ` +
           `(${r.confirmed} auto-confirmed, ${r.pending} pending, ${r.needs_review} needs review)` +
-          (r.skipped ? ` · ${r.skipped} ledgers skipped (already mapped)` : ""),
+          (r.skipped ? ` · ${r.skipped} skipped` : "") +
+          (diag.length ? ` · ${diag.join(" · ")}` : ""),
         );
       }
       refresh();

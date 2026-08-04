@@ -291,6 +291,15 @@ function aggregateDeducteesForMapper(rows: any[]): AggDeductee[] {
 export interface MapperResult {
   mapped: number; skipped: number; confirmed: number; pending: number; needs_review: number;
   message?: string;
+  /** 2026-08-04 — diagnostic: how many TDS-payable ledgers Layer 1+2
+   *  discovery surfaced on the engagement. If 0 on a client that filed
+   *  Form 26Q, we know discovery missed the TDS ledger (likely under a
+   *  non-standard parent group). */
+  discovered_tds_ledgers?: number;
+  /** Voucher-derived party candidates union'd into expenseLedgers this
+   *  run. If N here + N in the toast for mapped tell us how many of the
+   *  Journal-derived parties actually tied to a Form 26Q deductee. */
+  voucher_parties_added?:  number;
 }
 
 export async function runAiMapper(params: {
@@ -361,10 +370,12 @@ export async function runAiMapper(params: {
   const tbNamesLower = new Set<string>(
     expenseLedgers.map((l: any) => String(l.ledger_name ?? "").trim().toLowerCase()),
   );
+  let voucherPartiesAdded = 0;
   for (const p of voucherParties) {
     const key = p.party_ledger.trim().toLowerCase();
     if (!key || tbNamesLower.has(key)) continue;
     tbNamesLower.add(key);
+    voucherPartiesAdded++;
     expenseLedgers.push({
       ledger_name:     p.party_ledger,
       // Synthetic group carries the "creditor" token so sectionContextScore
@@ -424,7 +435,12 @@ export async function runAiMapper(params: {
   let skipped = 0;
 
   for (const tb of expenseLedgers) {
-    if (alreadyMapped.has(tb.ledger_name)) { skipped++; continue; }
+    // 2026-08-04 — voucher-derived candidates ALWAYS bypass the alreadyMapped
+    // skip: they represent Journal-vs-TDS evidence the AI mapper may have
+    // missed in prior runs (which walked only TB creditors). Skipping them
+    // would silently perpetuate the RAY WINGS gap even after this fix.
+    const isVoucherDerived = (tb as any).__source === "voucher";
+    if (!isVoucherDerived && alreadyMapped.has(tb.ledger_name)) { skipped++; continue; }
     let best: {
       ded: AggDeductee; confidence: number; nameScore: number; amtScore: number;
       secScore: number; method: string; gstAdjusted: boolean;
@@ -433,8 +449,16 @@ export async function runAiMapper(params: {
     for (const ded of aggDeductees) {
       if (!ded.deductee_name) continue;
       const nameScore = tokenSortRatio(tb.ledger_name, ded.deductee_name);
-      // Issue 3: Require ≥ 70% name similarity
-      if (nameScore < 70) continue;
+      // Issue 3: Require ≥ 70% name similarity — BUT voucher-derived candidates
+      // get 60% because they arrive with independent evidence (a Journal
+      // against the discovered TDS ledger under the party's own name).
+      // Deductee names in tds_deductees are typed by the auditor and often
+      // vary in punctuation / expansion / order ("Hardik C. Panchal" vs
+      // "HARDIK CHINUBHAI PANCHAL"), so a stricter 70% cutoff was dropping
+      // real matches. Section context + amount fuzz still gate the final
+      // confidence, so lowering the name floor here doesn't confirm noise.
+      const nameFloor = isVoucherDerived ? 60 : 70;
+      if (nameScore < nameFloor) continue;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
       // Use GST-normalised gross comparison to avoid spurious mismatches
       const { score: amtScore, gstAdjusted } = grossAmountScore(tbActivity, ded.total_amount_paid);
@@ -544,6 +568,8 @@ export async function runAiMapper(params: {
     confirmed:    finalRows.filter(r => r.mapping_status === "confirmed").length,
     pending:      finalRows.filter(r => r.mapping_status === "pending").length,
     needs_review: finalRows.filter(r => r.mapping_status === "needs_review").length,
+    discovered_tds_ledgers: discoveredTdsLedgers.length,
+    voucher_parties_added:  voucherPartiesAdded,
   };
 }
 
