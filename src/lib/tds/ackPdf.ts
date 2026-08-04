@@ -59,18 +59,71 @@ function mergeDigitRuns(band: PdfTextItem[]): string[] {
   return tokens;
 }
 
+// ─── The Protean "Tax Invoice cum Token Number" template ────────────────────
+//
+// A THIRD real receipt shape, distinct from both the e-filing-portal
+// templates above: the TDS return-FILING utility's own upload receipt
+// (Protean eGov Technologies, formerly NSDL — "Statement of TDS under
+// section 397(3) of the Income-tax Act, 2025", seen from FY2026-27 Q1), not
+// the income-tax e-filing PORTAL's own acknowledgement. It never prints the
+// words "Acknowledgement Number" (or any "Label : Value" row at all) — every
+// field this module cross-checks is a plain COLUMN VALUE, left-aligned under
+// its own column header on the row(s) directly below, the same shape
+// tallyPdf.ts already reads a Tally ledger's Debit/Credit columns by.
+// Confirmed against a real receipt (334899600554750, PRINCIPAL COMMISSIONER
+// OF INCOME TAX (REAC) AHMEDABAD, 24Q Q1 FY2026-27 — "Form No" prints the
+// bare portal code "138", already mapped to 24Q in ackMismatch.ts's
+// FORM_NO_PORTAL_ALIASES).
+const COLUMN_X_TOL = 15; // px: how close a value's own left edge must sit to its header's
+
+/** The item in `band` whose left edge sits closest to `headerX`, within
+ *  COLUMN_X_TOL — or null if nothing in the row qualifies as that column's
+ *  value. */
+function valueUnderColumn(band: PdfTextItem[], headerX: number): string | null {
+  let best: PdfTextItem | null = null, bestDist = Infinity;
+  for (const it of band) {
+    const d = Math.abs(it.x - headerX);
+    if (d <= COLUMN_X_TOL && d < bestDist) { best = it; bestDist = d; }
+  }
+  const s = best?.str.trim();
+  return s || null;
+}
+
+// "Tax Invoice cum Token" prints on its own line, with "Number" wrapping to a
+// SECOND line that (by y-proximity) merges into the NEXT row's own band —
+// so, unlike every label above, the value sits several bands below the line
+// this regex matches, not one. Anchored on "Tax Invoice cum Token" alone: it
+// is distinctive enough on the page that the wrapped "Number" fragment adds
+// nothing worth also matching for.
+const TOKEN_NUMBER_LABEL_RE = /Tax\s+Invoice\s+cum\s+Token/i;
+const TOKEN_NUMBER_LOOKAHEAD = 5; // bands: label row → header-wrap rows → the value row
+
+function findAckNumberByColumn(bands: PdfTextItem[][]): string | null {
+  const labelBandIdx = bands.findIndex((b) => TOKEN_NUMBER_LABEL_RE.test(b.map((i) => i.str).join(" ")));
+  if (labelBandIdx === -1) return null;
+  const headerX = Math.min(...bands[labelBandIdx].map((i) => i.x));
+  for (let i = labelBandIdx + 1; i <= labelBandIdx + TOKEN_NUMBER_LOOKAHEAD && i < bands.length; i++) {
+    const val = valueUnderColumn(bands[i], headerX);
+    if (val && DIGIT_RE.test(val) && val.length >= 9 && val.length <= 20) return val;
+  }
+  return null;
+}
+
 /** Pure parse: find the acknowledgement number in already-extracted text runs. */
 export function extractAckNumber(pages: PdfTextItem[][]): string | null {
   for (const items of pages) {
     const bands = toBands(items);
     const labelBandIdx = bands.findIndex((b) => ACK_LABEL_RE.test(b.map((i) => i.str).join(" ")));
-    if (labelBandIdx === -1) continue;
-
-    for (let i = labelBandIdx; i < bands.length && i <= labelBandIdx + MAX_BAND_LOOKAHEAD; i++) {
-      if (i > labelBandIdx && RRR_LABEL_RE.test(bands[i].map((it) => it.str).join(" "))) return null; // hit RRR's row first
-      const hit = mergeDigitRuns(bands[i]).find((t) => DIGIT_RE.test(t) && t.length >= 9 && t.length <= 20);
-      if (hit) return hit;
+    if (labelBandIdx !== -1) {
+      for (let i = labelBandIdx; i < bands.length && i <= labelBandIdx + MAX_BAND_LOOKAHEAD; i++) {
+        if (i > labelBandIdx && RRR_LABEL_RE.test(bands[i].map((it) => it.str).join(" "))) return null; // hit RRR's row first
+        const hit = mergeDigitRuns(bands[i]).find((t) => DIGIT_RE.test(t) && t.length >= 9 && t.length <= 20);
+        if (hit) return hit;
+      }
+      continue; // label found but nothing qualified within lookahead — try the next page
     }
+    const byColumn = findAckNumberByColumn(bands);
+    if (byColumn) return byColumn;
   }
   return null;
 }
