@@ -59,24 +59,28 @@ export interface TallyRow {
   // this tag (every 26Q/27EQ row, every plain liability-ledger "By" row)
   // behaves EXACTLY as before this field existed.
   amountKind?: "taxable_income";
-  // The Professional Tax amount tallyPdf.ts subtracted out of THIS row's own
-  // credit, 0/undefined if none was on the voucher — see TallyPdfRow's own
-  // doc on the field. Only ever read by resolveTaxableIncomeReading() below.
+  // The total tax-line amount tallyPdf.ts subtracted out of THIS row's own
+  // credit — Professional Tax, TDS Payable, Education Cess, whatever isTaxLine
+  // recognised on the voucher — 0/undefined if none was on it. Named for its
+  // original, narrower case (PT alone); see TallyPdfRow's own doc on the
+  // field. Only ever read by resolveTaxableIncomeReading() below.
   ptExcluded?: number;
 }
 
 /**
- * PROFESSIONAL TAX: NET OR GROSS? IT DEPENDS WHICH OFFICE YOU ASK.
+ * TAX LINES: NET OR GROSS? IT DEPENDS WHICH OFFICE YOU ASK.
  *
- * tallyPdf.ts excludes a voucher's Professional Tax Cr line from the parsed
- * Taxable Income by default (see PROFESSIONAL_TAX_RE) — confirmed against a
- * real client whose own Office Data recorded Taxable Income NET of PT, so the
- * unexcluded (gross) reading sat exactly ₹200 above every record.
+ * tallyPdf.ts excludes a voucher's tax-line Cr amounts (Professional Tax, and
+ * — for a high-earner crossing the TDS threshold — TDS Payable/Education Cess
+ * too) from the parsed Taxable Income by default (see isTaxLine) — confirmed
+ * against a real client whose own Office Data recorded Taxable Income NET of
+ * these, so the unexcluded (gross) reading sat above every record by exactly
+ * their sum.
  *
  * A second real client (Clear Quant Technologies) does the opposite: their
- * Office Data records the GROSS voucher debit (PT included) as Taxable
- * Income, so the default NET reading now sits exactly the PT amount BELOW
- * every record — the same bug, mirrored.
+ * Office Data records the GROSS voucher debit (tax lines included) as
+ * Taxable Income, so the default NET reading now sits exactly that amount
+ * BELOW every record — the same bug, mirrored.
  *
  * Both are real, and neither convention is "correct" — it is just how each
  * office's own working file happens to enter the figure, and tallyPdf.ts
@@ -87,7 +91,7 @@ export interface TallyRow {
  * Data's amount, versus how many the GROSS reading (credit + ptExcluded)
  * explains, and use whichever reading the file's own data actually supports.
  * A tie (including "no evidence either way") keeps the NET reading — today's
- * behaviour, unaffected for every ledger that never subtracted a PT line.
+ * behaviour, unaffected for every ledger that never subtracted a tax line.
  *
  * Deliberately NOT a per-row decision: the ANY-gap-is-shown promise renders
  * elsewhere in tallyRecon.ts depends on a mismatch being real, never chased

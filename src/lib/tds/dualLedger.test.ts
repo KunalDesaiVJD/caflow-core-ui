@@ -436,34 +436,41 @@ describe("aggregateTaxableByEmployeeMonth — one taxable figure per employee pe
   });
 });
 
-// Real client: three directors paid IDENTICAL gross remuneration on the same
-// day (₹2,13,000, broken down 27,740 TDS Payable / 1,110 Education Cess /
-// 200 Professional Tax / 1,83,950 net) — only the employee's own name tells
-// their vouchers apart. Reproduces the full Stage-3 pipeline (PT-reading
-// resolution, then the exclusivity engine itself) to prove tied amounts
-// don't cause a mis-pairing or a dropped match — party name is exclusivity's
-// OWN job (see assignment.ts), this is not asking it to do anything new,
-// only confirming it still does it once resolveTaxableIncomeReading has
-// bumped every tied row by the same +200.
+// Real client (Accurate PMS Pvt Ltd): three directors paid IDENTICAL gross
+// remuneration on the same day (₹2,13,000, broken down 27,740 TDS Payable /
+// 1,110 Education Cess / 200 Professional Tax / 1,83,950 net) — only the
+// employee's own name tells their vouchers apart. Reproduces the full
+// Stage-3 pipeline (tax-reading resolution, then the exclusivity engine
+// itself) to prove tied amounts don't cause a mis-pairing or a dropped
+// match — party name is exclusivity's OWN job (see assignment.ts), this is
+// not asking it to do anything new, only confirming it still does it once
+// resolveTaxableIncomeReading has bumped every tied row back up by the same
+// ₹29,050 (the real, verified figure — see tallyPdf.test.ts's pinned case
+// against the real Sheetalben/Dharmesh/Snehal June vouchers for where this
+// exact amount comes from).
 describe("dual-ledger — tied amounts across different employees on the same day", () => {
   const office: OfficeTxn[] = [
     { deductee_id: "d1", name: "DINESHKUMAR V PADSALA", date_iso: "2026-04-30", amount: 213000, tds: null, section: null },
     { deductee_id: "d2", name: "DUSHYANT JASHVANTBHAI PRAJAPATI", date_iso: "2026-04-30", amount: 213000, tds: null, section: null },
     { deductee_id: "d3", name: "PINNAG BIPINBHAI RATHOD", date_iso: "2026-04-30", amount: 213000, tds: null, section: null },
+    // A fourth employee whose voucher has ONLY Professional Tax (no TDS
+    // Payable/Education Cess — below the TDS threshold that month), proving
+    // the mechanism handles a MIX of tax-line combinations within one file,
+    // not just the uniform 4-line shape the other three share.
     { deductee_id: "d4", name: "JATINBHAI PATEL", date_iso: "2026-04-30", amount: 153500, tds: null, section: null },
   ];
-  const voucher = (row_index: number, vch_no: string, party: string, netPay: number, credit: number): TallyRow => ({
+  const voucher = (row_index: number, vch_no: string, party: string, credit: number, ptExcluded: number): TallyRow => ({
     row_index, date: "30-Apr-26", iso: "2026-04-30", party, debit: null, credit,
-    vch_no, vch_type: "Journal", section: null, amountKind: "taxable_income", ptExcluded: 200,
+    vch_no, vch_type: "Journal", section: null, amountKind: "taxable_income", ptExcluded,
   });
   const ledger: TallyRow[] = [
-    voucher(0, "360", "Dineshkumar V Padsala - Salary", 183950, 212800),
-    voucher(1, "361", "Dushyant Prajapati - Salary", 183950, 212800),
-    voucher(2, "363", "Pinnag Rathod - Salary", 183950, 212800),
-    voucher(3, "362", "Jatinbhai Patel - Salary", 139950, 153300),
+    voucher(0, "360", "Dineshkumar V Padsala - Salary", 183950, 29050),   // 27,740 TDS + 1,110 Cess + 200 PT
+    voucher(1, "361", "Dushyant Prajapati - Salary", 183950, 29050),
+    voucher(2, "363", "Pinnag Rathod - Salary", 183950, 29050),
+    voucher(3, "362", "Jatinbhai Patel - Salary", 153300, 200),           // 200 PT only
   ];
 
-  it("resolves the PT reading to gross (matches every office figure exactly) rather than leaving a universal ₹200 gap", () => {
+  it("resolves the tax-line reading to gross (matches every office figure exactly) rather than leaving a universal gap", () => {
     const resolved = resolveTaxableIncomeReading(office, ledger);
     expect(resolved.map((r) => r.credit)).toEqual([213000, 213000, 213000, 153500]);
   });
