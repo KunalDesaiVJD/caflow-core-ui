@@ -369,6 +369,19 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       // Same free ride — set only for the expense-ledger "taxable income"
       // case (tallyPdf.ts), undefined for every other row (unaffected).
       amountKind: t.raw?.amountKind ?? undefined,
+      // Same free ride again — the Professional Tax amount tallyPdf.ts
+      // excluded from THIS row's own credit (see TallyRow's own doc).
+      // Dropping this here silently disabled resolveTaxableIncomeReading
+      // for every ledger reconciled through the normal Import → Run
+      // Validation flow: the parse itself carried ptExcluded correctly (it
+      // rides inside `raw`, stored as-is by handleImport below), but every
+      // later "Run Validation" reloads rows through fetchTallyRows, and a
+      // field missing here is invisible to the rest of the app no matter
+      // how many times reconciliation re-runs — only a fresh re-parse
+      // (never triggered by Run Validation, only by re-importing the file)
+      // would have carried it, and even that ultimately funnels back
+      // through this same read path once persisted.
+      ptExcluded: t.raw?.ptExcluded ?? undefined,
     }));
   }, []);
 
