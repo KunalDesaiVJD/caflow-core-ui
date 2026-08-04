@@ -327,17 +327,30 @@ export async function createCorrection(args: {
   }
   const correction = header as unknown as Correction;
 
-  // ── Snapshot the filed data ───────────────────────────────────────────────
+  // ── Snapshot the CURRENT data ─────────────────────────────────────────────
+  // "Current" means the originally filed data — UNLESS a PRIOR correction for
+  // this exact period (client + FY + quarter + form) was already filed, in
+  // which case ITS values are the real baseline. Corrections never write back
+  // to tds_challans/tds_deductees (see this file's own header invariant), so
+  // reading those tables directly here — as this used to do — silently
+  // re-based every second correction on the PRE-correction-#1 data, discarding
+  // correction #1's changes the instant someone opened correction #2.
+  // getEffectiveClientLedger() already solves exactly this (it's what
+  // cross-quarter carry-forward math trusts for the same reason); reusing it
+  // here means "what a new correction starts from" and "what carry-forward
+  // sees" can never disagree. Filtered by financial_year/quarter/form_type
+  // (not filing_id, which isn't reliably carried on a corrected deductee row
+  // across generations — see DEDUCTEE_COPY_COLS) and NOT by challan_id
+  // membership, since a deductee legitimately entered against an EARLIER
+  // period's carry-forward challan must still count as belonging to THIS
+  // period.
   if (args.filingId) {
-    const [{ data: challans }, { data: deductees }] = await Promise.all([
-      supabase.from("tds_challans").select("*")
-        .eq("filing_id", args.filingId).eq("client_id", args.clientId),
-      supabase.from("tds_deductees").select("*")
-        .eq("filing_id", args.filingId).eq("client_id", args.clientId),
-    ]);
+    const { challans: effChallans, deductees: effDeductees } = await getEffectiveClientLedger(args.clientId);
+    const inPeriod = (r: { financial_year: string | null; quarter: string | null; form_type?: string }) =>
+      r.financial_year === args.financialYear && r.quarter === args.quarter && (r as any).form_type === args.formType;
 
-    const filedChallans = (challans || []) as any[];
-    const filedDeductees = (deductees || []) as any[];
+    const filedChallans = effChallans.filter(inPeriod) as any[];
+    const filedDeductees = effDeductees.filter(inPeriod) as any[];
 
     // Map original challan id -> new correction challan id, so the deductee
     // copies stay attached to the right challan (workflow step 5).
