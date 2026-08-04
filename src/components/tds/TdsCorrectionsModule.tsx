@@ -436,6 +436,7 @@ function NewCorrectionDialog({
   const [form, setForm] = useState("");
   const [reason, setReason] = useState("");
   const [filing, setFiling] = useState<any | null>(null);
+  const [openCorrection, setOpenCorrection] = useState<any | null>(null);
   const [preview, setPreview] = useState<{ challans: number; deductees: number } | null>(null);
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -443,21 +444,35 @@ function NewCorrectionDialog({
   useEffect(() => {
     if (!open) {
       setClient(""); setFy(""); setQuarter(""); setForm("");
-      setReason(""); setFiling(null); setPreview(null);
+      setReason(""); setFiling(null); setOpenCorrection(null); setPreview(null);
     }
   }, [open]);
 
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
-      if (!client || !fy || !quarter || !form) { setFiling(null); setPreview(null); return; }
+      if (!client || !fy || !quarter || !form) { setFiling(null); setOpenCorrection(null); setPreview(null); return; }
       setChecking(true);
-      const { data: filings } = await supabase.from("tds_filings")
-        .select("id, client_id, financial_year, quarter, tds_forms, work_status")
-        .eq("client_id", client).eq("financial_year", fy).eq("quarter", quarter);
+      const [{ data: filings }, { data: openCorrections }] = await Promise.all([
+        supabase.from("tds_filings")
+          .select("id, client_id, financial_year, quarter, tds_forms, work_status")
+          .eq("client_id", client).eq("financial_year", fy).eq("quarter", quarter),
+        // Sequencing gate (firm instruction, 2026-08-04): a second correction
+        // for the same period can't start while an earlier one is still open
+        // (any status besides filed/rejected — rejected is dead and doesn't
+        // block a fresh attempt). Same rule enforced in the DB by
+        // trg_tds_corrections_sequencing_guard (20260804180500) — this is the
+        // UI-side half, so the reason is explained before the user even hits
+        // the trigger's generic error.
+        supabase.from("tds_corrections" as any)
+          .select("id, status, raised_by_name")
+          .eq("client_id", client).eq("financial_year", fy).eq("quarter", quarter).eq("form_type", form)
+          .not("status", "in", "(filed,rejected)"),
+      ]);
       const match = ((filings || []) as any[]).find(f => (f.tds_forms || []).includes(form)) || null;
       if (cancelled) return;
       setFiling(match);
+      setOpenCorrection(((openCorrections || []) as any[])[0] || null);
       if (match) {
         const [{ count: cc }, { count: dc }] = await Promise.all([
           supabase.from("tds_challans").select("id", { count: "exact", head: true })
@@ -479,7 +494,11 @@ function NewCorrectionDialog({
   const compliant = !clientObj || !fy || !quarter || isFilingTdsCompliant(
     { client_id: client, financial_year: fy, quarter, tds_forms: [form] }, clientObj as any,
   );
-  const canCreate = !!(client && fy && quarter && form && filing && compliant);
+  // Sequencing gate (firm instruction, 2026-08-04): the original return must
+  // be "Processed" — the most-advanced work_status, not just "Filed" — and no
+  // other correction may currently be open for this period.
+  const notProcessed = !!filing && filing.work_status !== "Processed";
+  const canCreate = !!(client && fy && quarter && form && filing && compliant && !notProcessed && !openCorrection);
 
   const handleCreate = async () => {
     const firmId = await resolveFirmId();
@@ -568,6 +587,27 @@ function NewCorrectionDialog({
             <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">
               <AlertTriangle size={14} className="shrink-0 mt-0.5" />
               <span>This period is outside the client's TDS Compliance range.</span>
+            </div>
+          )}
+
+          {!checking && filing && notProcessed && (
+            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span>
+                This return is currently "{filing.work_status}". A correction can only be started
+                once it is marked Processed.
+              </span>
+            </div>
+          )}
+
+          {!checking && openCorrection && (
+            <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-xs text-red-700">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span>
+                A correction for this period is already {CORRECTION_STATUS_META[openCorrection.status as CorrectionStatus]?.label ?? openCorrection.status}
+                {openCorrection.raised_by_name ? ` (raised by ${openCorrection.raised_by_name})` : ""}. Resolve it — file
+                or reject it — before starting another.
+              </span>
             </div>
           )}
 
