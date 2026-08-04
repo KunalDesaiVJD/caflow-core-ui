@@ -310,17 +310,30 @@ export async function runAiMapper(params: {
   // 2026-08-04 Phase 3 — clean up stale "(unmapped: <deductee>)" placeholder
   // rows from the previous seeding logic. Their synthetic tb_ledger_name
   // (starting with "(unmapped: ") broke View Ledger and created phantom
-  // TDS>Books variance flags. Deleting only rows that use the exact
-  // "deductee_only" method label so auditor-created rows are left alone.
+  // TDS>Books variance flags. Delete ALL rows with match_method="deductee_only"
+  // — even ones the auditor previously confirmed, because their tb_ledger_name
+  // is synthetic and will always fail View Ledger. The new flow re-links each
+  // deductee via the manual Tally-ledger picker (Phase 5), which creates
+  // proper mapped_by="auditor" rows with real tb_ledger_name.
   try {
     await (supabase as any)
       .from("tds_tb_party_mappings")
       .delete()
       .eq("client_id", client_id)
       .eq("financial_year", financial_year)
-      .eq("match_method", "deductee_only")
-      .eq("mapped_by", "ai");
+      .eq("match_method", "deductee_only");
   } catch { /* non-fatal — cleanup only */ }
+  // Also delete rows whose tb_ledger_name still carries the "(unmapped: "
+  // prefix (belt-and-braces — the match_method column MIGHT have been
+  // overwritten by a subsequent edit but the synthetic name persists).
+  try {
+    await (supabase as any)
+      .from("tds_tb_party_mappings")
+      .delete()
+      .eq("client_id", client_id)
+      .eq("financial_year", financial_year)
+      .like("tb_ledger_name", "(unmapped:%");
+  } catch { /* non-fatal */ }
 
   // 1. Fetch Trial Balance ledgers — PAGINATE (PostgREST caps a single response
   // at 1000 rows; un-paginated, expense/creditor ledgers past row 1000 were
@@ -382,14 +395,36 @@ export async function runAiMapper(params: {
   // Union in voucher-derived parties that are NOT already represented in TB
   // by name (case-insensitive, trimmed) — same normalisation the FS
   // reconciliation path uses to handle CRLF/whitespace quirks.
-  const tbNamesLower = new Set<string>(
-    expenseLedgers.map((l: any) => String(l.ledger_name ?? "").trim().toLowerCase()),
-  );
+  //
+  // 2026-08-04 Phase 4b — when a party from the voucher walk DOES already
+  // appear in TB (Shanker Furniture under "Creditors Exp.", Vanraj
+  // Engineers under "Sundry Creditors"), we don't add a duplicate row —
+  // but we ATTACH the voucher_tds_amount + voucher_section to the
+  // existing TB row so the amount-tie scorer downstream fires against
+  // it. Without this, TB-visible parties whose Tally name doesn't
+  // resemble their 26Q deductee name stayed forever unmapped.
+  const tbByNameLower = new Map<string, any>();
+  for (const l of expenseLedgers) {
+    const k = String(l.ledger_name ?? "").trim().toLowerCase();
+    if (k) tbByNameLower.set(k, l);
+  }
   let voucherPartiesAdded = 0;
   for (const p of voucherParties) {
     const key = p.party_ledger.trim().toLowerCase();
-    if (!key || tbNamesLower.has(key)) continue;
-    tbNamesLower.add(key);
+    if (!key) continue;
+    // Party already visible in TB → decorate that row with voucher evidence.
+    const existing = tbByNameLower.get(key);
+    if (existing) {
+      existing.__voucher_tds_amount = (existing.__voucher_tds_amount ?? 0) + p.tds_amount;
+      existing.__voucher_section    = existing.__voucher_section ?? p.section;
+      existing.__voucher_count      = (existing.__voucher_count ?? 0) + p.voucher_count;
+      // Keep __source unset so the alreadyMapped skip still applies normally
+      // (this is a real TB ledger, not a synthetic voucher-only candidate).
+      // But mark that the amount tie may fire:
+      existing.__voucher_evidence   = true;
+      continue;
+    }
+    tbByNameLower.set(key, null); // reserve the key
     voucherPartiesAdded++;
     expenseLedgers.push({
       ledger_name:     p.party_ledger,
@@ -460,8 +495,12 @@ export async function runAiMapper(params: {
     // skip: they represent Journal-vs-TDS evidence the AI mapper may have
     // missed in prior runs (which walked only TB creditors). Skipping them
     // would silently perpetuate the RAY WINGS gap even after this fix.
-    const isVoucherDerived = (tb as any).__source === "voucher";
-    const voucherTds       = Number((tb as any).__voucher_tds_amount ?? 0);
+    const isVoucherDerived   = (tb as any).__source === "voucher";
+    // Phase 4b — a TB row can carry voucher evidence too when its Tally
+    // name matched a party found during the voucher walk. Amount tie
+    // fires for either signal.
+    const hasVoucherEvidence = isVoucherDerived || (tb as any).__voucher_evidence === true;
+    const voucherTds         = Number((tb as any).__voucher_tds_amount ?? 0);
     if (!isVoucherDerived && alreadyMapped.has(tb.ledger_name)) { skipped++; continue; }
     let best: {
       ded: AggDeductee; confidence: number; nameScore: number; amtScore: number;
@@ -479,7 +518,7 @@ export async function runAiMapper(params: {
       // ₹2,790 ↔ SHANKARLAL ₹2,790). Section must also agree. This bypasses
       // the nameScore floor entirely.
       let tdsAmtTie = false;
-      if (isVoucherDerived && voucherTds > 0 && ded.total_tds > 0) {
+      if (hasVoucherEvidence && voucherTds > 0 && ded.total_tds > 0) {
         const diff    = Math.abs(voucherTds - ded.total_tds);
         const ratio   = diff / Math.max(voucherTds, ded.total_tds);
         const sectionOk = !(tb as any).__voucher_section
@@ -489,8 +528,9 @@ export async function runAiMapper(params: {
         if (sectionOk && (diff <= 10 || ratio <= 0.02)) tdsAmtTie = true;
       }
       // Issue 3: Require ≥ 70% name similarity — BUT voucher-derived candidates
-      // get 60%. And when tdsAmtTie is true, name floor is bypassed entirely.
-      const nameFloor = isVoucherDerived ? 60 : 70;
+      // get 60% (and hasVoucherEvidence extends that to TB rows also seen in
+      // vouchers). When tdsAmtTie is true, name floor is bypassed entirely.
+      const nameFloor = hasVoucherEvidence ? 60 : 70;
       if (!tdsAmtTie && nameScore < nameFloor) continue;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
       // Use GST-normalised gross comparison to avoid spurious mismatches
@@ -506,7 +546,7 @@ export async function runAiMapper(params: {
         if (nameScore >= (isVoucherDerived ? 60 : 70)) methods.push("name_similarity");
         if (amtScore  >= 75) methods.push("amount_ratio");
         if (secScore  >= 80) methods.push("section_context");
-        if (isVoucherDerived) methods.push("voucher_evidence");
+        if (hasVoucherEvidence) methods.push("voucher_evidence");
         if (tdsAmtTie) methods.push("tds_amount_tie");
         best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted, tdsAmtTie };
       }
