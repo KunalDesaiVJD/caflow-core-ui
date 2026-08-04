@@ -594,7 +594,36 @@ export async function runAiMapper(params: {
       }
     }
 
-    if (!best) { skipped++; continue; }
+    if (!best) {
+      // 2026-08-04 Phase 6 — voucher-only party (RAY WINGS "Sulochana Manish
+      // Pandey"): a Tally ledger against which TDS was deducted (₹1,570 in
+      // a Journal against TDS PAY) but NO Form 26Q filing was made for
+      // that deductee. Instead of silently skipping, write a placeholder
+      // "books-only" row so the reconciliation engine surfaces this as a
+      // Books > TDS (Books-only) flag. Real tb_ledger_name → View Ledger
+      // works; tds_deductee_name carries a sentinel that the recon engine
+      // treats as "no filed match".
+      if (hasVoucherEvidence && voucherTds > 0) {
+        upsertRows.push({
+          client_id, firm_id, financial_year,
+          tb_ledger_name:    tb.ledger_name,
+          tb_parent_group:   tb.parent_group,
+          tb_total_debit:    Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0) || null,
+          tds_deductee_name: "(not filed)",
+          tds_section_code:  (tb as any).__voucher_section ?? null,
+          tds_total_amount:  null,
+          tds_tds_amount:    null,
+          tds_filing_ids:    null,
+          match_confidence:  0,
+          match_method:      "voucher_evidence+books_only",
+          ai_reasoning:      `Tally shows TDS ₹${voucherTds.toFixed(0)} deducted against ${tb.ledger_name} across ${(tb as any).__voucher_count ?? 0} voucher(s), but no matching deductee found in Form 26Q filings. Books > TDS gap — auditor to reconcile.`,
+          mapping_status:    "needs_review",
+          mapped_by:         "ai",
+        });
+      }
+      skipped++;
+      continue;
+    }
 
     const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
 

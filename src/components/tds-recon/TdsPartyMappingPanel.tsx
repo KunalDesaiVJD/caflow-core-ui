@@ -943,25 +943,39 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                   onLink={async (tbLedgerName) => {
                     if (!clientId || !financialYear || !firmId) return;
                     const chosen = tbCreditors.find(c => c.ledger_name === tbLedgerName);
-                    const { error: err } = await (supabase as any)
+                    const fullRow = {
+                      client_id: clientId,
+                      firm_id:   firmId,
+                      financial_year: financialYear,
+                      tb_ledger_name:    tbLedgerName,
+                      tb_parent_group:   chosen?.parent_group ?? null,
+                      tb_total_debit:    null,
+                      tds_deductee_name: d.deductee_name,
+                      tds_section_code:  d.section_code,
+                      tds_total_amount:  d.amount_paid_credited,
+                      tds_tds_amount:    d.tds_amount,
+                      match_confidence:  100,
+                      match_method:      "name_similarity+manual_link",
+                      ai_reasoning:      `Manually linked by auditor: ${tbLedgerName} → ${d.deductee_name} (${d.section_code ?? "section unknown"}).`,
+                      mapping_status:    "confirmed",
+                      mapped_by:         "auditor",
+                    };
+                    // 2026-08-04 — same graceful fallback runAiMapper uses:
+                    // migration 20260501000002 adds tds_tds_amount but may
+                    // not have shipped to every project yet. On a PostgREST
+                    // "column not found" error, retry without that field.
+                    let err: any;
+                    ({ error: err } = await (supabase as any)
                       .from("tds_tb_party_mappings")
-                      .upsert({
-                        client_id: clientId,
-                        firm_id:   firmId,
-                        financial_year: financialYear,
-                        tb_ledger_name:    tbLedgerName,
-                        tb_parent_group:   chosen?.parent_group ?? null,
-                        tb_total_debit:    null,
-                        tds_deductee_name: d.deductee_name,
-                        tds_section_code:  d.section_code,
-                        tds_total_amount:  d.amount_paid_credited,
-                        tds_tds_amount:    d.tds_amount,
-                        match_confidence:  100,
-                        match_method:      "name_similarity+manual_link",
-                        ai_reasoning:      `Manually linked by auditor: ${tbLedgerName} → ${d.deductee_name} (${d.section_code ?? "section unknown"}).`,
-                        mapping_status:    "confirmed",
-                        mapped_by:         "auditor",
-                      }, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" });
+                      .upsert(fullRow, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" }));
+                    if (err && String(err.message || "").includes("tds_tds_amount")) {
+                      const { tds_tds_amount: _omit, ...fallback } = fullRow;
+                      void _omit;
+                      const retry = await (supabase as any)
+                        .from("tds_tb_party_mappings")
+                        .upsert(fallback, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" });
+                      err = retry.error;
+                    }
                     if (err) {
                       toast.error(`Link failed: ${err.message}`);
                       return;

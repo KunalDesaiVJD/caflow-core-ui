@@ -116,7 +116,8 @@ export function useTdsPartyMappings(
         return methods.includes("name_similarity")
           || methods.includes("voucher_evidence")
           || methods.includes("tds_amount_tie")
-          || methods.includes("tds_amount_near");
+          || methods.includes("tds_amount_near")
+          || methods.includes("books_only");
       });
 
       // 2026-07-24 — Root cause of Issues 9 & 12: this read-time dedupe was
