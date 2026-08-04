@@ -104,7 +104,12 @@ export function useTdsPartyMappings(
       const nameMatched = partyOnly.filter(m => {
         if (m.mapped_by === "auditor") return true;
         const methods = (m.match_method || "").split("+");
-        return methods.includes("name_similarity");
+        // 2026-08-04 — accept "voucher_evidence" too (RAY WINGS fix): a
+        // party derived from a Journal voucher against the discovered TDS
+        // ledger already carries independent evidence, so even a name
+        // similarity in the 60-70 % band is a valid mapping. Without this,
+        // the mapper wrote the rows but the panel filtered them back out.
+        return methods.includes("name_similarity") || methods.includes("voucher_evidence");
       });
 
       // 2026-07-24 — Root cause of Issues 9 & 12: this read-time dedupe was

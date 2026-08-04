@@ -467,9 +467,16 @@ export async function runAiMapper(params: {
       if (confidence < 40) continue;
       if (!best || confidence > best.confidence) {
         const methods: string[] = [];
-        if (nameScore >= 70) methods.push("name_similarity");
+        // For voucher-derived candidates the name floor is 60 (see nameFloor
+        // above); mirror that here so the panel's method-filter accepts them
+        // — without this, we'd write the row to the DB but the useTdsPartyMappings
+        // hook would silently hide it because match_method wouldn't include
+        // "name_similarity" (RAY WINGS symptom: mapper reported N matched but
+        // the panel still showed 3).
+        if (nameScore >= (isVoucherDerived ? 60 : 70)) methods.push("name_similarity");
         if (amtScore  >= 75) methods.push("amount_ratio");
         if (secScore  >= 80) methods.push("section_context");
+        if (isVoucherDerived) methods.push("voucher_evidence");
         best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted };
       }
     }
