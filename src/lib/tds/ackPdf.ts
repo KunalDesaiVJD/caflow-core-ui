@@ -89,17 +89,47 @@ function valueUnderColumn(band: PdfTextItem[], headerX: number): string | null {
   return s || null;
 }
 
-// "Tax Invoice cum Token" prints on its own line, with "Number" wrapping to a
-// SECOND line that (by y-proximity) merges into the NEXT row's own band —
-// so, unlike every label above, the value sits several bands below the line
-// this regex matches, not one. Anchored on "Tax Invoice cum Token" alone: it
-// is distinctive enough on the page that the wrapped "Number" fragment adds
-// nothing worth also matching for.
-const TOKEN_NUMBER_LABEL_RE = /Tax\s+Invoice\s+cum\s+Token/i;
+// "Tax Invoice cum Token Number" wraps across TWO lines — but WHERE it wraps
+// is not fixed. Confirmed against two different real receipts: one prints
+// "Tax Invoice cum Token" / "Number", the other "Tax Invoice cum" / "Token
+// Number" — the break point moves with the printed Name of Deductor's own
+// length, which pushes the page's column layout around. A regex requiring
+// "Token" on the SAME line as "Tax Invoice cum" (the first shape) silently
+// found nothing on the second real receipt — same bug this whole module
+// exists to guard against, just one line up. So the header is found in TWO
+// steps: locate a band that starts the phrase ("Tax Invoice cum", the part
+// that never moves), confirmed by "Token" appearing SOMEWHERE within a
+// short lookahead (not necessarily the same band).
+//
+// "Tax Invoice cum Provisional Receipt" — a genuinely different heading a
+// few lines ABOVE the real one, sharing the same opening words — is
+// explicitly excluded by name, not merely by the lookahead failing to find
+// "Token" near it: on the first real receipt, "Token" prints on the SAME
+// line as "Tax Invoice cum" (the first wrap shape above), which sits close
+// enough below "Provisional Receipt" to fall inside ITS OWN lookahead
+// window too — so without this explicit exclusion, "Provisional Receipt"
+// wins first and the real header, one line below, is never reached at all.
+// Caught by a synthetic regression test reproducing the real geometry
+// (see ackPdf.test.ts) before this ever reached production.
+const TAX_INVOICE_CUM_RE = /Tax\s+Invoice\s+cum\b/i;
+const PROVISIONAL_RECEIPT_RE = /Provisional\s+Receipt/i;
+const TOKEN_WORD_RE = /\bToken\b/i;
+const TOKEN_HEADER_WRAP_LOOKAHEAD = 2; // bands: how far "Token" may have wrapped from "Tax Invoice cum"
 const TOKEN_NUMBER_LOOKAHEAD = 5; // bands: label row → header-wrap rows → the value row
 
+function findTokenNumberHeaderBandIdx(bands: PdfTextItem[][]): number {
+  for (let i = 0; i < bands.length; i++) {
+    const text = bandText(bands[i]);
+    if (!TAX_INVOICE_CUM_RE.test(text) || PROVISIONAL_RECEIPT_RE.test(text)) continue;
+    for (let j = i; j <= i + TOKEN_HEADER_WRAP_LOOKAHEAD && j < bands.length; j++) {
+      if (TOKEN_WORD_RE.test(bandText(bands[j]))) return i;
+    }
+  }
+  return -1;
+}
+
 function findAckNumberByColumn(bands: PdfTextItem[][]): string | null {
-  const labelBandIdx = bands.findIndex((b) => TOKEN_NUMBER_LABEL_RE.test(b.map((i) => i.str).join(" ")));
+  const labelBandIdx = findTokenNumberHeaderBandIdx(bands);
   if (labelBandIdx === -1) return null;
   const headerX = Math.min(...bands[labelBandIdx].map((i) => i.x));
   for (let i = labelBandIdx + 1; i <= labelBandIdx + TOKEN_NUMBER_LOOKAHEAD && i < bands.length; i++) {
