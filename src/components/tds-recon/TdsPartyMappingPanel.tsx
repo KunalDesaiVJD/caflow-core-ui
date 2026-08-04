@@ -423,6 +423,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
         const diag: string[] = [];
         if (typeof r.discovered_tds_ledgers === "number") diag.push(`${r.discovered_tds_ledgers} TDS ledger${r.discovered_tds_ledgers === 1 ? "" : "s"} discovered`);
         if (typeof r.voucher_parties_added  === "number") diag.push(`${r.voucher_parties_added} party${r.voucher_parties_added === 1 ? "" : "ies"} from vouchers`);
+        if (typeof r.books_only_written     === "number") diag.push(`${r.books_only_written} books-only`);
         toast.success(
           `Mapper complete: ${r.mapped} matched ` +
           `(${r.confirmed} auto-confirmed, ${r.pending} pending, ${r.needs_review} needs review)` +

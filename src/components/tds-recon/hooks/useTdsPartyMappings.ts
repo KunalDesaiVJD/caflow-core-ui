@@ -117,6 +117,7 @@ export function useTdsPartyMappings(
           || methods.includes("voucher_evidence")
           || methods.includes("tds_amount_tie")
           || methods.includes("tds_amount_near")
+          || methods.includes("tds_amount_loose")
           || methods.includes("books_only")
           || methods.includes("manual_link");
       });

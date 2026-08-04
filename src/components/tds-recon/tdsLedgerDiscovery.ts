@@ -251,6 +251,40 @@ function looksLikeExpenseOrNominal(name: string): boolean {
   return /(charges|fees|expense|salary|wages|professional|consulting|rent|freight|transport|advertisement|advertising|maintenance|commission|brokerage|interest|discount|purchase|round\s*off|rounding)/i.test(n);
 }
 
+/** P2-A (2026-08-04) — infer the TDS section from the paired expense
+ *  ledger name in a Journal. Ray Wings uses a single "TDS PAY" ledger
+ *  for all sections — walking it can't tell 194C from 194J. But the
+ *  Journal itself always debits a specific expense head:
+ *
+ *      Dr Labour Charges       67,000  ← section 194C
+ *      Cr Shanker Furniture    67,000
+ *      Cr TDS PAY                 700
+ *
+ *  Mapping the expense-ledger name to a section closes that gap. Order
+ *  matters: check "interest on loan" before "loan" so 194A wins over a
+ *  generic "loan" match, and "professional fees" before generic "fees".
+ *  Returns null when nothing recognisable in the name — caller falls
+ *  back to name-inference on the party or leaves section null. */
+function inferSectionFromExpenseName(name: string): string | null {
+  const n = String(name || "").toLowerCase();
+  if (!n) return null;
+  // 194C — contractors, transporters, works, labour, freight
+  if (/\bcontract\b|contractor|labour|freight|transport|advertisement|advertising|works\s+contract|catering/.test(n)) return "194C";
+  // 194J(b) — technical services / royalty
+  if (/\btechnical\b|royalty|call\s*centre/.test(n)) return "194J";
+  // 194J — professional / consultancy / directors
+  if (/professional|consult|consultancy|directors?\s*fees?|attorney|advocate|audit\s*fees?|legal\s*fees?/.test(n)) return "194J";
+  // 194H — commission & brokerage
+  if (/commission|brokerage/.test(n)) return "194H";
+  // 194I / 194IB — rent
+  if (/\brent\b|hire\s+charges/.test(n)) return "194I";
+  // 194A — interest (non-securities): interest on loan/borrowing/FD
+  if (/interest\s+on|interest\s+paid|\binterest\b/.test(n)) return "194A";
+  // 194Q — purchase of goods (contract check)
+  if (/purchase|goods|materials?|stock/.test(n)) return "194Q";
+  return null;
+}
+
 /**
  * Walk every voucher that references a discovered TDS ledger and extract
  * the party. Only Journal-style vouchers are considered — Payment /
@@ -330,6 +364,23 @@ export async function extractPartiesFromTdsVouchers(params: {
       if (sectionHit == null && dsc.section) sectionHit = dsc.section;
     }
     if (tdsCrTotal <= 0) continue; // no TDS deduction leg → not a deduction voucher
+
+    // P2-A (2026-08-04) — when the discovered TDS ledger didn't carry a
+    // section in its name (Ray Wings' "TDS PAY" is bare), infer the
+    // section from the Dr expense leg of this Journal. First expense
+    // hit wins — mixed-section Journals are rare in practice.
+    if (sectionHit == null) {
+      for (const li of items) {
+        const dr = String(li?.dr_cr ?? "").toLowerCase();
+        if (!dr.startsWith("dr")) continue;
+        const nm = String(li?.ledger_name ?? "").trim();
+        if (!nm) continue;
+        if (tdsIndex.has(nm.toLowerCase())) continue;
+        if (isNonPartyLeg(nm))               continue;
+        const inferred = inferSectionFromExpenseName(nm);
+        if (inferred) { sectionHit = inferred; break; }
+      }
+    }
 
     // Prefer the Tally-sync writer's `party_ledger` — it already resolves
     // which line is the party, based on Tally's own metadata. Fall back
