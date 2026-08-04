@@ -242,6 +242,19 @@ export const CORP_CODE_TO_NOTE: Record<string, { section: "bs_liab" | "bs_asset"
   PL_EXP_OTH:  { section: "pl",       key: "other_expenses",       label: "Other Expenses" },
 };
 
+/** Corporate Cr-natural code set — equity, liabilities, revenue & other
+ *  income. `computedAmounts` in PipelineFinancialStatements sums raw Tally
+ *  `acct.balance` values (Cr accounts carry a NEGATIVE sign), while
+ *  `sumNotesSubRowsCY/PY` returns POSITIVE breakup sums. Before comparing
+ *  the two the face for these codes must be sign-flipped — mirrors what
+ *  NCE_LIAB_CODE_SET does on the NCE path. Without this, every liability
+ *  and revenue row reports drift = 2 × amount on Mill Power etc. */
+export const CORP_LIAB_CODE_SET: Set<string> = new Set(
+  Object.entries(CORP_CODE_TO_NOTE)
+    .filter(([code, m]) => m.section === "bs_liab" || code.startsWith("PL_REV_"))
+    .map(([code]) => code),
+);
+
 interface ValidateCorporateArgs {
   corporateNotes:    Stage5Notes | null | undefined;
   bsFaceCy:          Record<string, number>;
@@ -261,11 +274,15 @@ export function validateCorporateFSReconciliation(args: ValidateCorporateArgs): 
   for (const [code, meta] of Object.entries(CORP_CODE_TO_NOTE)) {
     const ntCy = sumNotesSubRowsCY(args.corporateNotes ?? null, meta.section, meta.key);
     const ntPy = sumNotesSubRowsPY(args.corporateNotes ?? null, meta.section, meta.key);
-    // Corporate face is stored on the natural side (already positive); no
-    // liab-flip needed. Skip codes whose note is unpopulated AND whose face
-    // is also zero — silent unused notes shouldn't clutter the panel.
-    const faceCy = args.bsFaceCy[code] ?? 0;
-    const facePy = args.bsFacePy[code] ?? 0;
+    // Corporate face is `computedAmounts[code]` — sum of raw Tally acct.balance
+    // (Cr = negative). Note sums are always positive after breakup aggregation.
+    // Flip sign on Cr-natural codes so both sides land on the same axis. Skip
+    // codes whose note is unpopulated AND whose face is also zero — silent
+    // unused notes shouldn't clutter the panel.
+    const rawCy = args.bsFaceCy[code] ?? 0;
+    const rawPy = args.bsFacePy[code] ?? 0;
+    const faceCy = CORP_LIAB_CODE_SET.has(code) ? -rawCy : rawCy;
+    const facePy = CORP_LIAB_CODE_SET.has(code) ? -rawPy : rawPy;
     if (ntCy == null && ntPy == null && Math.abs(faceCy) < 0.005 && Math.abs(facePy) < 0.005) continue;
 
     const noteCy = ntCy ?? 0;
