@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
-  reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, oneSidedLabel, SPLIT_FOLD_CONFIDENCE,
+  reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, resolveTaxableIncomeReading,
+  oneSidedLabel, SPLIT_FOLD_CONFIDENCE,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap,
 } from "./tallyRecon";
 import { normalizeName } from "./match";
@@ -29,7 +30,7 @@ function dualRecon(office: OfficeTxn[], tally: TallyRow[], maps: PartyMap = {}) 
   const tdsLedgerRows = tally.filter((t) => t.amountKind !== "taxable_income");
   const officeForAmount: OfficeTxn[] = office.map((o) => ({ ...o, tds: null, section: null }));
   const tdsResult = reconcileTallyFull(office, tdsLedgerRows, null, maps);
-  const salaryResult = reconcileTallyFull(officeForAmount, salaryLedgerRows, null, maps);
+  const salaryResult = reconcileTallyFull(officeForAmount, resolveTaxableIncomeReading(officeForAmount, salaryLedgerRows), null, maps);
   return {
     rows: mergeDualLedgerResults(tdsResult.rows, salaryResult.rows),
     surplus: [...tdsResult.surplusLedger, ...salaryResult.surplusLedger],
@@ -335,14 +336,29 @@ describe("dual-ledger — adversarial-review regressions", () => {
   });
 
   it("'No Ledger for Section' escalates instead of masquerading as a missing entry", () => {
-    // The office records are 192B; the TDS ledger was titled without the
-    // sub-letter and canonicalises to 192, so its section was never imported.
-    const tdsRows = FULL_TDS.map((t) => ({ ...t, section: "192" }));
+    // The office records are 192B; the imported "TDS ledger" is titled for an
+    // unrelated section (194C, not merely the sub-letter-less "192" — see the
+    // salaryBareCompatible test below for why bare "192" no longer triggers
+    // this at all), so its section was genuinely never imported.
+    const tdsRows = FULL_TDS.map((t) => ({ ...t, section: "194C" }));
     const { rows } = dualRecon(OFFICE, [...FULL_SALARY, ...tdsRows]);
     const madhukant = byName(rows)["Madhukant Kanjibhai Patel"];
 
     expect(madhukant.result).toBe("No Ledger for Section");
     expect(madhukant.reason).toContain("Import that section's ledger");
+  });
+
+  // Real 24Q client: TDS ledger hand-titled "TDS On Salary - 192" (no sub-
+  // letter) against Office Data's 192B. Before salaryBareCompatible, this
+  // read as "No Ledger for Section 192B" for every single director — the
+  // ledger the CA had already imported was the only salary-TDS ledger this
+  // client has; it just never spelled out the sub-code.
+  it("a bare '192' TDS ledger still covers a 192B office record", () => {
+    const tdsRows = FULL_TDS.map((t) => ({ ...t, section: "192" }));
+    const { rows } = dualRecon(OFFICE, [...FULL_SALARY, ...tdsRows]);
+    const madhukant = byName(rows)["Madhukant Kanjibhai Patel"];
+
+    expect(madhukant.result).toBe("Matched");
   });
 });
 
@@ -417,6 +433,52 @@ describe("aggregateTaxableByEmployeeMonth — one taxable figure per employee pe
     expect(out).toHaveLength(1);
     expect(out[0]).toBe(only);          // same object — no rewrite at all
     expect(out[0].narration).toBeUndefined();
+  });
+});
+
+// Real client: three directors paid IDENTICAL gross remuneration on the same
+// day (₹2,13,000, broken down 27,740 TDS Payable / 1,110 Education Cess /
+// 200 Professional Tax / 1,83,950 net) — only the employee's own name tells
+// their vouchers apart. Reproduces the full Stage-3 pipeline (PT-reading
+// resolution, then the exclusivity engine itself) to prove tied amounts
+// don't cause a mis-pairing or a dropped match — party name is exclusivity's
+// OWN job (see assignment.ts), this is not asking it to do anything new,
+// only confirming it still does it once resolveTaxableIncomeReading has
+// bumped every tied row by the same +200.
+describe("dual-ledger — tied amounts across different employees on the same day", () => {
+  const office: OfficeTxn[] = [
+    { deductee_id: "d1", name: "DINESHKUMAR V PADSALA", date_iso: "2026-04-30", amount: 213000, tds: null, section: null },
+    { deductee_id: "d2", name: "DUSHYANT JASHVANTBHAI PRAJAPATI", date_iso: "2026-04-30", amount: 213000, tds: null, section: null },
+    { deductee_id: "d3", name: "PINNAG BIPINBHAI RATHOD", date_iso: "2026-04-30", amount: 213000, tds: null, section: null },
+    { deductee_id: "d4", name: "JATINBHAI PATEL", date_iso: "2026-04-30", amount: 153500, tds: null, section: null },
+  ];
+  const voucher = (row_index: number, vch_no: string, party: string, netPay: number, credit: number): TallyRow => ({
+    row_index, date: "30-Apr-26", iso: "2026-04-30", party, debit: null, credit,
+    vch_no, vch_type: "Journal", section: null, amountKind: "taxable_income", ptExcluded: 200,
+  });
+  const ledger: TallyRow[] = [
+    voucher(0, "360", "Dineshkumar V Padsala - Salary", 183950, 212800),
+    voucher(1, "361", "Dushyant Prajapati - Salary", 183950, 212800),
+    voucher(2, "363", "Pinnag Rathod - Salary", 183950, 212800),
+    voucher(3, "362", "Jatinbhai Patel - Salary", 139950, 153300),
+  ];
+
+  it("resolves the PT reading to gross (matches every office figure exactly) rather than leaving a universal ₹200 gap", () => {
+    const resolved = resolveTaxableIncomeReading(office, ledger);
+    expect(resolved.map((r) => r.credit)).toEqual([213000, 213000, 213000, 153500]);
+  });
+
+  it("pairs all four directors correctly by name despite three having byte-identical amounts", () => {
+    const resolved = resolveTaxableIncomeReading(office, ledger);
+    const { rows } = reconcileTallyFull(office, resolved, null, {});
+    const byName = Object.fromEntries(rows.map((r) => [r.office_name!, r]));
+    expect(byName["DINESHKUMAR V PADSALA"].result).toBe("Matched");
+    expect(byName["DINESHKUMAR V PADSALA"].tally_party).toBe("Dineshkumar V Padsala - Salary");
+    expect(byName["DUSHYANT JASHVANTBHAI PRAJAPATI"].result).toBe("Matched");
+    expect(byName["DUSHYANT JASHVANTBHAI PRAJAPATI"].tally_party).toBe("Dushyant Prajapati - Salary");
+    expect(byName["PINNAG BIPINBHAI RATHOD"].result).toBe("Matched");
+    expect(byName["PINNAG BIPINBHAI RATHOD"].tally_party).toBe("Pinnag Rathod - Salary");
+    expect(byName["JATINBHAI PATEL"].result).toBe("Matched");
   });
 });
 

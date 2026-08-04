@@ -522,5 +522,29 @@ export function sectionsMatch(a: string | null | undefined, b: string | null | u
   return true; // if either is unrecognisable, don't manufacture a mismatch
 }
 
+/**
+ * A BARE "192" NEVER CLAIMED A SUB-CODE, SO IT CANNOT CONTRADICT ONE.
+ *
+ * "still reports a genuinely different section as a mismatch" (sectionsMatch's
+ * own pinned test) is correct and must stay true for 192A vs 192B — the Act
+ * treats them as different sections, and if a ledger's title genuinely says
+ * "192A" that is real evidence pointing away from a 192B office record.
+ *
+ * A hand-typed Tally salary-ledger title almost never carries the sub-letter
+ * at all ("TDS On Salary - 192", "Salary Expense") — it isn't a claim of
+ * "192, definitely not 192B", it is simply silent on the sub-code. Treating
+ * that silence as a mismatch against Office Data's own (structured, and so
+ * far more often correct) 192B/192A/192C sent a real 24Q client's "No Ledger
+ * for Section 192B" for every director, although the correct ledger — the
+ * only salary-TDS ledger the client has — was already imported.
+ *
+ * Deliberately narrow: only fires when one side is the bare, LETTER-LESS base
+ * "192" (never for two different lettered codes, which stays a hard
+ * mismatch — see the "genuinely different" test above).
+ */
+export function salaryBareCompatible(a: string | null, b: string | null): boolean {
+  return (a === "192" && !!b && /^192[ABC]$/.test(b)) || (b === "192" && !!a && /^192[ABC]$/.test(a));
+}
+
 // looksLikePan is exported at its definition above (previously re-exported here from
 // columnEngine). Existing importers of it from "./match" are unaffected.

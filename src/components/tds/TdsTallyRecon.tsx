@@ -25,7 +25,8 @@ import { ErrorTypeBreakdown, filterByErrorType } from "./ErrorTypeBreakdown";
 import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
-  reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, SPLIT_FOLD_CONFIDENCE, oneSidedLabel,
+  reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, resolveTaxableIncomeReading,
+  SPLIT_FOLD_CONFIDENCE, oneSidedLabel,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
 } from "@/lib/tds/tallyRecon";
 
@@ -648,12 +649,16 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const perMonth = selForm === "24Q";
     const agg = (rows: TallyRow[]) => (perMonth ? aggregateTaxableByEmployeeMonth(rows) : rows);
     const untagged = tally.filter((t) => t.amountKind !== "taxable_income");
-    const salaryLedgerRows = isRealExpenseLedger ? agg(taggedRows) : [];
+    const partiesForAmount: OfficeTxn[] = parties.map((o) => ({ ...o, tds: null, section: null }));
+    // Resolve the PT-inclusion reading (tallyRecon.ts's resolveTaxableIncomeReading)
+    // BEFORE aggregation — the vote needs per-voucher dates, which per-employee-per-
+    // month summing would otherwise blur together.
+    const salaryLedgerRows = isRealExpenseLedger
+      ? agg(resolveTaxableIncomeReading(partiesForAmount, taggedRows)) : [];
     const tdsLedgerRows = isRealExpenseLedger ? agg(untagged) : agg(tally);
     const dualLedgerMode = salaryLedgerRows.length > 0;
     let audited: TallyReconRow[]; let surplusLedger: TallyRow[];
     if (dualLedgerMode) {
-      const partiesForAmount: OfficeTxn[] = parties.map((o) => ({ ...o, tds: null, section: null }));
       const tdsResult = reconcileTallyFull(parties, tdsLedgerRows, null, maps);
       const salaryResult = reconcileTallyFull(partiesForAmount, salaryLedgerRows, null, maps);
       audited = mergeDualLedgerResults(tdsResult.rows, salaryResult.rows);

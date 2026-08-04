@@ -440,6 +440,82 @@ describe("parseTallyPdfPages — expense-ledger 'Staff Salary Expense' compound 
     expect(rows[0].amountKind).toBe("taxable_income");
   });
 
+  // Real client (24Q Director's Remuneration ledger): FOUR Cr breakdown lines,
+  // not the usual two or three — "192B - TDS Payable" AND a separate
+  // "Education Cess TDS" line alongside Professional Tax and the employee's
+  // own "- Salary" line. Both TDS-named lines contain the word "TDS", so
+  // isTaxLine() (and therefore isDeducteeCreditLine's exclusion of it)
+  // recognises both — neither is a candidate for the employee line, and
+  // neither is Professional Tax so neither is subtracted from the taxable
+  // figure either; only the true Professional Tax line is.
+  it("ignores BOTH a 'TDS Payable' line and a separate 'Education Cess TDS' line, taxing neither", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        date: "30-Apr-26", vchNo: "360", debit: 213000,
+        crLines: [
+          { label: "192B - TDS Payable", amount: 27740 },
+          { label: "Education Cess TDS", amount: 1110 },
+          { label: "Professional Tax - Employ", amount: 200 },
+          { label: "Dushyant Prajapati - Salary", amount: 183950 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].party).toBe("Dushyant Prajapati - Salary");
+    expect(rows[0].credit).toBe(212800);   // 213,000 debit, minus ONLY the 200 Professional Tax
+    expect(rows[0].ptExcluded).toBe(200);
+    expect(rows[0].amountKind).toBe("taxable_income");
+  });
+
+  // Real client: THREE directors on the SAME DAY whose vouchers are byte-for-
+  // byte identical in every figure (debit 2,13,000; breakdown 27,740/1,110/
+  // 200/1,83,950) — only the employee's own name differs. Tied amounts are
+  // exactly the shape that could confuse a matcher that leans on amount to
+  // break ties; this file's job is only PARSING (Stage-3's separate exclusivity
+  // engine does the pairing — see tallyRecon.test.ts/dualLedger.test.ts), so
+  // the one thing that MUST hold here is that parsing keeps all three rows
+  // distinct, each under its own real name, none dropped or merged.
+  it("keeps three same-day, same-amount vouchers for different directors fully distinct", () => {
+    const page = [
+      ...HEADER,
+      ...salaryExpenseVoucherRows(485.5, {
+        date: "30-Apr-26", vchNo: "360", debit: 213000,
+        crLines: [
+          { label: "192B - TDS Payable", amount: 27740 },
+          { label: "Education Cess TDS", amount: 1110 },
+          { label: "Professional Tax - Employ", amount: 200 },
+          { label: "Dineshkumar V Padsala - Salary", amount: 183950 },
+        ],
+      }),
+      ...salaryExpenseVoucherRows(340.9, {
+        vchNo: "361", debit: 213000,
+        crLines: [
+          { label: "192B - TDS Payable", amount: 27740 },
+          { label: "Education Cess TDS", amount: 1110 },
+          { label: "Professional Tax - Employ", amount: 200 },
+          { label: "Dushyant Prajapati - Salary", amount: 183950 },
+        ],
+      }),
+      ...salaryExpenseVoucherRows(196.3, {
+        vchNo: "363", debit: 213000,
+        crLines: [
+          { label: "192B - TDS Payable", amount: 27740 },
+          { label: "Education Cess TDS", amount: 1110 },
+          { label: "Professional Tax - Employ", amount: 200 },
+          { label: "Pinnag Rathod - Salary", amount: 183950 },
+        ],
+      }),
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows.map((r) => ({ party: r.party, credit: r.credit, date: r.date, ptExcluded: r.ptExcluded }))).toEqual([
+      { party: "Dineshkumar V Padsala - Salary", credit: 212800, date: "30-Apr-26", ptExcluded: 200 },
+      { party: "Dushyant Prajapati - Salary", credit: 212800, date: "30-Apr-26", ptExcluded: 200 },
+      { party: "Pinnag Rathod - Salary", credit: 212800, date: "30-Apr-26", ptExcluded: 200 },
+    ]);
+  });
+
   // The deduction heads must never stand in for the employee, even when they
   // are the only credit lines the voucher has.
   it("still drops a voucher whose credits are ALL deduction heads", () => {

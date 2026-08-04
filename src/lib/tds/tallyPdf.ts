@@ -120,6 +120,18 @@ export interface TallyPdfRow {
   // before this field existed (see tallyRecon.ts's use of it for why a
   // SEPARATE reconciliation pass, not a section guess, is what this enables).
   amountKind?: "taxable_income";
+  // The Professional Tax Cr amount actually subtracted out of THIS row's own
+  // `credit` (0/undefined if none was seen on the voucher). Only ever set
+  // alongside amountKind:"taxable_income" — see PROFESSIONAL_TAX_RE's own doc
+  // for why PT is excluded from credit by default. Kept as its own field
+  // (rather than folded silently into credit) because whether that exclusion
+  // is the right reading is a per-CLIENT convention, not a universal fact —
+  // some offices report Taxable Income net of PT (matches credit as-is),
+  // others report it gross (credit + ptExcluded). tallyRecon.ts's
+  // resolveTaxableIncomeReading() decides which reading a given file's own
+  // Office Data actually supports, instead of this parser guessing once for
+  // every client.
+  ptExcluded?: number;
 }
 
 export interface TallyPdfParse {
@@ -501,8 +513,10 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
       if (
         current && marker && /^cr$/i.test(marker) && amount > 0 && PROFESSIONAL_TAX_RE.test(partyText)
       ) {
-        if (current.amountKind === "taxable_income" && current.credit != null) current.credit -= amount;
-        else ptCr += amount;
+        if (current.amountKind === "taxable_income" && current.credit != null) {
+          current.credit -= amount;
+          current.ptExcluded = (current.ptExcluded ?? 0) + amount;
+        } else ptCr += amount;
         // Not "the deductee" and never the start of a wrapped name — see
         // justNamedDeductee's own doc for why this must stay false here.
         return false;
@@ -553,6 +567,7 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
           .filter((d) => norm(d.label) !== norm(partyText))
           .reduce((sum, d) => sum + d.amount, 0) - ptCr;
         current.amountKind = "taxable_income";
+        current.ptExcluded = ptCr;
         return true;
       }
       // Any OTHER Dr line on a still-unresolved expense voucher is a further
