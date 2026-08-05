@@ -47,7 +47,7 @@ const NAV_ITEMS = [
   { key: "activity",   label: "Audit & Overrides", icon: ClipboardList },
   // Revises data already FILED for an earlier period. Distinct from Overrides,
   // which records manual verdict overrides during validation.
-  { key: "corrections",label: "Corrections",    icon: FileEdit },
+  { key: "corrections",label: "Recommendations & Corrections",    icon: FileEdit },
   { key: "rate-master",label: "Rate Master",    icon: Settings },
   // Reports sits last — everything above it is data entry/compliance
   // workflow (Dashboard through Rate Master); Reports is the read-only

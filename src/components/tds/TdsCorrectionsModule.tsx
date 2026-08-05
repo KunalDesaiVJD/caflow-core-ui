@@ -487,7 +487,7 @@ function CorrectionDashboard({
       {/* Title row */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-xl font-bold text-foreground">Corrections</h2>
+          <h2 className="text-xl font-bold text-foreground">Recommendations & Corrections</h2>
           <p className="text-sm text-muted-foreground">
             Revise TDS data already filed for an earlier period. The original filing is never changed —
             each correction is kept as a separate version.
