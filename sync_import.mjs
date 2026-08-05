@@ -12,7 +12,19 @@ import http from 'http';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = 'https://hubyywmodekfdzhwiumb.supabase.co';
-const SERVICE_KEY  = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh1Ynl5d21vZGVrZmR6aHdpdW1iIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mjc4OTI3OCwiZXhwIjoyMDg4MzY1Mjc4fQ.PmVYktsuUJDweOgP7J_209hlrV_xQl2qUOi7Uc7yeHc';
+// SECURITY: this used to be a service_role key hardcoded in plain text —
+// full, unrestricted database access, bypassing every RLS policy — checked
+// into and pushed to git. It's now read from the environment instead. This
+// does NOT undo the exposure: the old key value is still present in this
+// file's git history and must be treated as compromised. Rotate it from the
+// Supabase dashboard (Project Settings → API → service_role → regenerate),
+// then set the new value as SUPABASE_SERVICE_ROLE_KEY before running this
+// script — never paste it back into this file.
+const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!SERVICE_KEY) {
+  console.error('[Sync] SUPABASE_SERVICE_ROLE_KEY environment variable is not set. Aborting.');
+  process.exit(1);
+}
 const API_URL      = 'https://eofficeportal.com/Company/SmartService.asmx/FillCustomerlist?customerGroupid=nullksd9ow34e9w0sdmoaskjof8w0eur0wejfomasdojo9auwerwjrowejmfojaspf';
 
 const ENTITY_MAP = {
@@ -157,13 +169,33 @@ async function main() {
   }
 
   // ── UPDATE existing ────────────────────────────────────────────────────────
+  // 2026-08-06: eOffice is a billing/practice-management source, not the
+  // TDS/compliance system of record — it commonly has no TAN (or PAN/email/
+  // mobile/address) on file for a client CAFlow already has one for.
+  // buildPayload() maps an empty eOffice field to `null` unconditionally, and
+  // this UPDATE re-processes EVERY already-matched existing client on every
+  // run, not just new ones — so an empty eOffice value was silently erasing
+  // a manually-entered CAFlow value. Same class of bug as the multi-GSTIN
+  // protection in src/components/client-sync/useCustomerSync.ts, extended
+  // here to the fields that actually hit it. An empty API value now never
+  // overwrites an existing non-empty one; a genuinely different non-empty
+  // API value still updates as before.
+  const PRESERVE_IF_EMPTY = ['tan_number', 'pan', 'email', 'mobile', 'address'];
   for (let i = 0; i < toUpdate.length; i += BATCH) {
     const chunk = toUpdate.slice(i, i + BATCH);
     await Promise.all(chunk.map(async r => {
       const customer_id = String(r.CustomerId);
       const clientDbId  = existingMap.get(customer_id);
+      const payload = buildPayload(r);
+      const { data: existingRow } = await supabase.from('clients')
+        .select(PRESERVE_IF_EMPTY.join(','))
+        .eq('customer_id', customer_id)
+        .maybeSingle();
+      for (const f of PRESERVE_IF_EMPTY) {
+        if (payload[f] == null && existingRow?.[f]) delete payload[f];
+      }
       const { error } = await supabase.from('clients')
-        .update(buildPayload(r))
+        .update(payload)
         .eq('customer_id', customer_id)
         .is('deleted_at', null);
       if (error) { console.error(`  UPDATE FAIL ${customer_id}: ${error.message}`); failed++; }
