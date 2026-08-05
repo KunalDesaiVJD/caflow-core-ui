@@ -26,7 +26,15 @@
  *            BEING THE TDS 7906.25@1%
  *            B NO. 17                                       2,891.00C
  *
- * Four things about this format bite, and all four are handled here:
+ * A fifth real print (M J Surgical's "Provision Ledger") is the SAME column
+ * layout but interleaves SEVERAL sections in one file — "UNPAID TDS-26/27-194
+ * A" opens a block, entries follow, a "*** CLOSING BALANCE ***" row closes
+ * it, then "…194 C" opens the next block, possibly pages later. See
+ * bandSectionMarker's own doc for how a row's section is now resolved from
+ * whichever block it actually falls under, not one title per file.
+ *
+ * Four things about the original single-section format bite, and all four
+ * are handled here:
  *
  *  1. pdfjs GLUES the Date and the whole Particulars text into ONE run when
  *     they sit close together on the same baseline — "09/04/2026" +
@@ -92,7 +100,11 @@ export interface ExpertPdfRow {
   credit: number | null;      // the TDS credit for a real deduction row
   vch_no: string | null;      // "B NO. ####" bill reference, if present — display only, NEVER reconciled on
   vch_type: string | null;    // Expert has no such column — always null; kept so the shape lines up with Tally's row for the shared adapter
-  section: string | null;     // from this ledger's own page title
+  // From this row's OWN section block — a real client print (M J Surgical)
+  // interleaves SEVERAL sections in one file ("UNPAID TDS-26/27-194 A" then,
+  // pages later, "...194 C"), each its own mid-body marker, not one section
+  // per file the way every earlier sample was. See findSectionMarkers below.
+  section: string | null;
   // The narration line(s) below an entry ("BEING THE TDS 7906.25@1%",
   // "36260@2%", the 194Q purchase-total formula, etc.), joined across
   // however many continuation lines it wraps to. Display only, same as
@@ -101,6 +113,15 @@ export interface ExpertPdfRow {
   // exists purely so a reviewer can read the rate/bill reference without
   // reopening the source PDF. null when no narration line was printed.
   narration: string | null;
+  // The gross/taxable figure, when the narration spells it out as "…ON
+  // RS:<amount>/-" (M J Surgical's own print convention) — a single,
+  // unambiguous token, unlike 194Q's word-wrapped purchase-total formula
+  // this class comment already warns against parsing narration numbers for
+  // (point 2) — that warning does not apply to this one fixed, never-wrapped
+  // shape. Display only, same as narration itself: Stage 3 still matches
+  // purely on credit (the TDS figure) against Office Data, unchanged. null
+  // when no "ON RS:" clause was printed.
+  amount: number | null;
 }
 
 export interface ExpertPdfParse {
@@ -118,6 +139,11 @@ const BAND_TOL = 4;             // px: lines this close vertically are one entry
 const SKIP_PARTY_RE = /^\*{3}\s*(opening|closing)\s*balance\s*\*{3}$/i;
 const DATE_LEAD_RE = /^(\d{2}\/\d{2}\/\d{4})(?:\s+(.*))?$/;
 const BILL_REF_RE = /\bB\s*NO\.?\s*([\w./-]+)/i;
+// "…BEING THE TDS @ 10 % DEDUCTED ON RS:22112/-" — a single, fixed-shape
+// token (never word-wrapped, unlike 194Q's purchase-total formula), see
+// ExpertPdfRow.amount's own doc for why this one narration shape is safe to
+// parse for a figure when the general rule is not to.
+const TAXABLE_RE = /\bON\s+RS\s*:?\s*([\d,]+(?:\.\d+)?)\s*\/-/i;
 // Expert right-aligns Dr.Amount/Cr.Amount EXACTLY under their header's own
 // right edge in every real sample (zero variance across four files) — a
 // tight tolerance is what tells a genuine amount apart from an unrelated
@@ -148,9 +174,12 @@ function findAnchors(items: ExpertPdfTextItem[]): Anchors | null {
   };
 }
 
-/** The TDS section lives on its own short line above the column header
- *  ("TDS 194 C") — scanned top-down so the company name line (which matches
- *  nothing) is skipped and the first real hit wins. */
+/** The TDS section usually lives on its own short line above the column
+ *  header ("TDS 194 C") — scanned top-down so the company name line (which
+ *  matches nothing) is skipped and the first real hit wins. Real title-only
+ *  files (every sample this parser was first built against) never reach the
+ *  per-band fallback in bandSectionMarker below; this stays the primary path
+ *  for them. */
 function findSection(items: ExpertPdfTextItem[], headerY: number): string | null {
   const above = items.filter((i) => i.y > headerY).sort((a, b) => b.y - a.y);
   for (const i of above) {
@@ -158,6 +187,35 @@ function findSection(items: ExpertPdfTextItem[], headerY: number): string | null
     if (sec) return sec;
   }
   return null;
+}
+
+/**
+ * A MID-BODY section-transition marker ("UNPAID TDS-26/27-194 A", then pages
+ * later "…194 C") — a real M J Surgical print interleaves several sections in
+ * one file, each block opening with its own such line below the table's own
+ * closing-balance row, not above the column header the way every earlier
+ * single-section sample's title was.
+ *
+ * MUST test the whole BAND's joined text, not each item individually — pdfjs
+ * splits "TDS-26/27-194" and "A" into separate runs on the same baseline
+ * (confirmed real geometry), so canonicalSection() on either alone finds only
+ * the bare base "194", never "194A" — exactly the "194 vs 194C" false
+ * mismatch canonicalSection's OWN class doc already describes for a Tally
+ * ledger title, just triggered by run-splitting instead of a hand-typed gap.
+ *
+ * A real ledger ROW must never be misread as one: guarded on having no date
+ * (every real row leads with one, see DATE_LEAD_RE) and no standalone numeric
+ * token (an amount/rate) in any of its items — a narration figure like
+ * "22112" can still satisfy SECTION_RE's \b(19[2-9]|20[0-9]) test in
+ * principle, but never AS A PREFIX of a longer digit run (word boundaries
+ * don't fall between digits), so a real amount can't false-positive here
+ * regardless.
+ */
+function bandSectionMarker(band: ExpertPdfTextItem[]): string | null {
+  const raw = band.map((i) => i.str.trim()).filter(Boolean).join(" ");
+  if (!raw || DATE_LEAD_RE.test(raw)) return null;
+  if (band.some((i) => { const t = i.str.trim(); return /\d/.test(t) && /^[\d,.\s()-]+$/.test(t); })) return null;
+  return canonicalSection(raw);
 }
 
 const findPeriod = (items: ExpertPdfTextItem[], headerY: number): string | null =>
@@ -248,11 +306,18 @@ export function parseExpertPdfPages(pages: ExpertPdfTextItem[][]): ExpertPdfPars
   let period: string | null = null;
   let company: string | null = null;
   let idx = 0;
+  // The section a NEW row is stamped with — starts from the title-line
+  // findSection() below (the single-section-per-file case every earlier
+  // sample was), then updates whenever bandSectionMarker finds a mid-body
+  // transition. Persists ACROSS pages (declared outside pages.forEach), so a
+  // continuation page's rows keep the last section seen even when that page
+  // never reprints its own marker.
+  let currentSection: string | null = null;
 
   pages.forEach((items, pageNo) => {
     const a = findAnchors(items);
     if (!a) { issues.push(`Page ${pageNo + 1}: no Expert ledger column header (Particulars / Dr.Amount / Cr.Amount) — skipped.`); return; }
-    if (!section) section = findSection(items, a.headerY);
+    if (!section) { section = findSection(items, a.headerY); if (section) currentSection = section; }
     if (!period) period = findPeriod(items, a.headerY);
     if (!company) {
       const top = items.filter((i) => i.y > a.headerY).sort((x, y2) => y2.y - x.y)[0];
@@ -262,6 +327,8 @@ export function parseExpertPdfPages(pages: ExpertPdfTextItem[][]): ExpertPdfPars
     const bands = toBands(items.filter((i) => i.y < a.headerY - 1));
     let current: ExpertPdfRow | null = null;
     for (const band of bands) {
+      const marker = bandSectionMarker(band);
+      if (marker) { currentSection = marker; continue; }
       const f = readBand(band, a);
       if (f.date == null) {
         // Continuation line — captured as narration on the entry it belongs
@@ -282,16 +349,23 @@ export function parseExpertPdfPages(pages: ExpertPdfTextItem[][]): ExpertPdfPars
         credit: f.credit ?? null,
         vch_no: null,
         vch_type: null,
-        section: null,
+        section: currentSection,
         narration: null,
+        amount: null,
       };
       all.push(current);
     }
   });
 
-  // Normalise every date with ONE convention inferred from the whole ledger.
+  // Normalise every date with ONE convention inferred from the whole ledger,
+  // and lift the taxable amount out of "…ON RS:<n>/-" now that narration is
+  // fully joined across every continuation line it wraps to.
   const toIso = makeDateNormaliser(all.map((r) => r.date));
-  for (const r of all) { r.iso = toIso(r.date); r.section = section; }
+  for (const r of all) {
+    r.iso = toIso(r.date);
+    const m = r.narration ? TAXABLE_RE.exec(r.narration) : null;
+    r.amount = m ? Number(m[1].replace(/,/g, "")) : null;
+  }
 
   // Keep only the DEDUCTIONS: a named party and a non-zero Cr.Amount. Rows
   // with no Cr.Amount at all (challan payments booked as "Journal", bank
