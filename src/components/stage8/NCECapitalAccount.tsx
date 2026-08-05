@@ -90,6 +90,13 @@ const EMPTY_PY: PyRow = {
   interest: 0, withdrawals: 0, profit_share: 0,
 };
 
+// Intentionally entity-agnostic: for a Proprietorship the UI hides the
+// Remuneration/Interest inputs (they default to 0 and stay 0 since nothing
+// can edit them), so this formula doesn't need its own Proprietorship
+// variant — the same sum ties to the COA-locked NCE_CAP anchor either way.
+// (A row carrying legacy non-zero remuneration/interest from before an
+// entity was reclassified to Proprietorship still contributes correctly;
+// those values just aren't editable from this UI anymore.)
 function calcClosing(p: PartnerRow): number {
   return p.opening_balance_cy
     + p.introduced_cy
@@ -164,6 +171,15 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   const cyYear  = fy ? parseInt(fy.split("-")[1]) + 2000 : new Date().getFullYear();
   const pyYear  = cyYear - 1;
   const clientName: string = eng?.clients?.name || "";
+  // Phase 2 — Proprietorship entities have no partners, so Share %,
+  // Remuneration, and Interest on capital don't apply (those concepts only
+  // exist for Partnership/LLP). calcClosing()/calcPyClosing() are unchanged:
+  // the hidden fields simply stay at their default 0, so the Closing total
+  // still ties to the same COA-locked NCE_CAP anchor either way.
+  // Single source of truth (matches PipelineFinancialStatements.tsx): engagement-
+  // level entity_type first, falling back to the client record.
+  const entityType: string = (eng?.entity_type || eng?.clients?.entity_type || "").trim();
+  const isProprietorship = entityType.toLowerCase() === "proprietorship";
 
   // ── Load saved rows ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -176,7 +192,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
       // 1. Fetch engagement — get FY, client name, firm, partner, coa_mapping
       const { data: engRow } = await supabase
         .from("audit_engagements")
-        .select("financial_year, client_id, coa_mapping, clients(name), firms(*), partner:users!partner_id(name)")
+        .select("financial_year, client_id, coa_mapping, entity_type, clients(name, entity_type), firms(*), partner:users!partner_id(name)")
         .eq("id", engagementId)
         .single();
       if (cancelled) return;
@@ -635,7 +651,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           Notes to Balance Sheet as at 31st March, {cyYear}
         </p>
         <p className="text-sm font-semibold text-foreground mt-1">
-          Note: Owners Capital Account
+          Note: {isProprietorship ? "Capital Account" : "Owners Capital Account"}
         </p>
       </div>
 
@@ -699,20 +715,28 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           <TableHeader>
             <TableRow className="bg-muted/50">
               <TableHead className="w-12 text-center">Sr. No.</TableHead>
-              <TableHead className="min-w-[150px]">Name of Partner</TableHead>
-              <TableHead className="text-right w-20">
-                Share of profit/ (loss)%
+              <TableHead className="min-w-[150px]">
+                {isProprietorship ? "Proprietor's Name" : "Name of Partner"}
               </TableHead>
+              {!isProprietorship && (
+                <TableHead className="text-right w-20">
+                  Share of profit/ (loss)%
+                </TableHead>
+              )}
               <TableHead className="text-right w-28">Opening Balance</TableHead>
               <TableHead className="text-right w-28">
                 Introduced/ Contributed
               </TableHead>
-              <TableHead className="text-right w-28">
-                Remuneration for the year
-              </TableHead>
-              <TableHead className="text-right w-24">
-                Interest for the year
-              </TableHead>
+              {!isProprietorship && (
+                <TableHead className="text-right w-28">
+                  Remuneration for the year
+                </TableHead>
+              )}
+              {!isProprietorship && (
+                <TableHead className="text-right w-24">
+                  Interest for the year
+                </TableHead>
+              )}
               <TableHead className="text-right w-28">
                 Withdrawals during the year
               </TableHead>
@@ -750,15 +774,17 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     }
                   </TableCell>
 
-                  {/* Share % */}
-                  <TableCell className="text-right">
-                    <NumInput
-                      value={p.profit_share_pct}
-                      onChange={v => setPartnerField(i, "profit_share_pct", v)}
-                      className="w-16"
-                      readOnly={readOnly}
-                    />
-                  </TableCell>
+                  {/* Share % — Partnership/LLP only */}
+                  {!isProprietorship && (
+                    <TableCell className="text-right">
+                      <NumInput
+                        value={p.profit_share_pct}
+                        onChange={v => setPartnerField(i, "profit_share_pct", v)}
+                        className="w-16"
+                        readOnly={readOnly}
+                      />
+                    </TableCell>
+                  )}
 
                   {/* Opening */}
                   <TableCell className="text-right">
@@ -778,23 +804,27 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     />
                   </TableCell>
 
-                  {/* Remuneration */}
-                  <TableCell className="text-right">
-                    <NumInput
-                      value={p.remuneration_cy}
-                      onChange={v => setPartnerField(i, "remuneration_cy", v)}
-                      readOnly={readOnly}
-                    />
-                  </TableCell>
+                  {/* Remuneration — Partnership/LLP only */}
+                  {!isProprietorship && (
+                    <TableCell className="text-right">
+                      <NumInput
+                        value={p.remuneration_cy}
+                        onChange={v => setPartnerField(i, "remuneration_cy", v)}
+                        readOnly={readOnly}
+                      />
+                    </TableCell>
+                  )}
 
-                  {/* Interest */}
-                  <TableCell className="text-right">
-                    <NumInput
-                      value={p.interest_cy}
-                      onChange={v => setPartnerField(i, "interest_cy", v)}
-                      readOnly={readOnly}
-                    />
-                  </TableCell>
+                  {/* Interest — Partnership/LLP only */}
+                  {!isProprietorship && (
+                    <TableCell className="text-right">
+                      <NumInput
+                        value={p.interest_cy}
+                        onChange={v => setPartnerField(i, "interest_cy", v)}
+                        readOnly={readOnly}
+                      />
+                    </TableCell>
+                  )}
 
                   {/* Withdrawals */}
                   <TableCell className="text-right">
@@ -854,27 +884,33 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
               <TableCell className="text-xs uppercase tracking-wide">
                 Total
               </TableCell>
-              <TableCell className="text-right text-xs">
-                {totals.pct > 0 ? (
-                  <span
-                    className={cn(
-                      profitShareWarning && "text-destructive"
-                    )}
-                  >
-                    {totals.pct.toFixed(2)}%
-                  </span>
-                ) : (
-                  "—"
-                )}
-              </TableCell>
+              {!isProprietorship && (
+                <TableCell className="text-right text-xs">
+                  {totals.pct > 0 ? (
+                    <span
+                      className={cn(
+                        profitShareWarning && "text-destructive"
+                      )}
+                    >
+                      {totals.pct.toFixed(2)}%
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </TableCell>
+              )}
               <TableCell className="text-right">{fmt(totals.opening)}</TableCell>
               <TableCell className="text-right">
                 {fmt(totals.introduced)}
               </TableCell>
-              <TableCell className="text-right">
-                {fmt(totals.remuneration)}
-              </TableCell>
-              <TableCell className="text-right">{fmt(totals.interest)}</TableCell>
+              {!isProprietorship && (
+                <TableCell className="text-right">
+                  {fmt(totals.remuneration)}
+                </TableCell>
+              )}
+              {!isProprietorship && (
+                <TableCell className="text-right">{fmt(totals.interest)}</TableCell>
+              )}
               <TableCell className="text-right">
                 {fmt(totals.withdrawals)}
               </TableCell>
@@ -914,19 +950,23 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                             />
                         }
                       </TableCell>
-                      <TableCell />
+                      {!isProprietorship && <TableCell />}
                       <TableCell className="text-right">
                         <NumInput value={p.opening}      onChange={v => setPyPartnerField(i, "opening", v)}      readOnly={readOnly} />
                       </TableCell>
                       <TableCell className="text-right">
                         <NumInput value={p.introduced}   onChange={v => setPyPartnerField(i, "introduced", v)}   readOnly={readOnly} />
                       </TableCell>
-                      <TableCell className="text-right">
-                        <NumInput value={p.remuneration} onChange={v => setPyPartnerField(i, "remuneration", v)} readOnly={readOnly} />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <NumInput value={p.interest}     onChange={v => setPyPartnerField(i, "interest", v)}     readOnly={readOnly} />
-                      </TableCell>
+                      {!isProprietorship && (
+                        <TableCell className="text-right">
+                          <NumInput value={p.remuneration} onChange={v => setPyPartnerField(i, "remuneration", v)} readOnly={readOnly} />
+                        </TableCell>
+                      )}
+                      {!isProprietorship && (
+                        <TableCell className="text-right">
+                          <NumInput value={p.interest}     onChange={v => setPyPartnerField(i, "interest", v)}     readOnly={readOnly} />
+                        </TableCell>
+                      )}
                       <TableCell className="text-right">
                         <NumInput value={p.withdrawals}  onChange={v => setPyPartnerField(i, "withdrawals", v)}  readOnly={readOnly} />
                       </TableCell>
@@ -966,11 +1006,11 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                     <TableRow className="bg-blue-100/40 border-t font-semibold text-muted-foreground">
                       <TableCell />
                       <TableCell className="text-xs uppercase tracking-wide italic">PY Total ({pyYear})</TableCell>
-                      <TableCell />
+                      {!isProprietorship && <TableCell />}
                       <TableCell className="text-right text-xs">{fmt(pyTotals.opening)}</TableCell>
                       <TableCell className="text-right text-xs">{fmt(pyTotals.introduced)}</TableCell>
-                      <TableCell className="text-right text-xs">{fmt(pyTotals.remuneration)}</TableCell>
-                      <TableCell className="text-right text-xs">{fmt(pyTotals.interest)}</TableCell>
+                      {!isProprietorship && <TableCell className="text-right text-xs">{fmt(pyTotals.remuneration)}</TableCell>}
+                      {!isProprietorship && <TableCell className="text-right text-xs">{fmt(pyTotals.interest)}</TableCell>}
                       <TableCell className="text-right text-xs">{fmt(pyTotals.withdrawals)}</TableCell>
                       <TableCell className="text-right text-xs">{fmt(pyTotals.profit_share)}</TableCell>
                       <TableCell className={cn("text-right bg-primary/10 font-bold text-xs", pyTotals.closing < 0 && "text-destructive")}>
@@ -989,19 +1029,23 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
                 <TableCell className="text-xs font-medium text-foreground italic">
                   Previous Year ({pyYear})
                 </TableCell>
-                <TableCell />
+                {!isProprietorship && <TableCell />}
                 <TableCell className="text-right">
                   <NumInput value={pyRow.opening}      onChange={v => setPyField("opening", v)}      readOnly={readOnly} />
                 </TableCell>
                 <TableCell className="text-right">
                   <NumInput value={pyRow.introduced}   onChange={v => setPyField("introduced", v)}   readOnly={readOnly} />
                 </TableCell>
-                <TableCell className="text-right">
-                  <NumInput value={pyRow.remuneration} onChange={v => setPyField("remuneration", v)} readOnly={readOnly} />
-                </TableCell>
-                <TableCell className="text-right">
-                  <NumInput value={pyRow.interest}     onChange={v => setPyField("interest", v)}     readOnly={readOnly} />
-                </TableCell>
+                {!isProprietorship && (
+                  <TableCell className="text-right">
+                    <NumInput value={pyRow.remuneration} onChange={v => setPyField("remuneration", v)} readOnly={readOnly} />
+                  </TableCell>
+                )}
+                {!isProprietorship && (
+                  <TableCell className="text-right">
+                    <NumInput value={pyRow.interest}     onChange={v => setPyField("interest", v)}     readOnly={readOnly} />
+                  </TableCell>
+                )}
                 <TableCell className="text-right">
                   <NumInput value={pyRow.withdrawals}  onChange={v => setPyField("withdrawals", v)}  readOnly={readOnly} />
                 </TableCell>
@@ -1022,18 +1066,23 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
       {/* ── Actions — hidden in readOnly / preview mode ── */}
       {!readOnly && <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            onClick={addPartner}
-            size="sm"
-            variant="outline"
-            className="gap-1.5"
-          >
-            <Plus size={13} />
-            Add Partner
-          </Button>
+          {/* A Proprietorship has exactly one capital account — no "partners" to add. */}
+          {!isProprietorship && (
+            <Button
+              type="button"
+              onClick={addPartner}
+              size="sm"
+              variant="outline"
+              className="gap-1.5"
+            >
+              <Plus size={13} />
+              Add Partner
+            </Button>
+          )}
           <p className="text-[10px] text-muted-foreground">
-            Closing Balance = Opening + Introduced + Remuneration + Interest − Withdrawals + Profit Share
+            {isProprietorship
+              ? "Closing Balance = Opening + Introduced − Withdrawals + Profit Share"
+              : "Closing Balance = Opening + Introduced + Remuneration + Interest − Withdrawals + Profit Share"}
           </p>
         </div>
         <Button onClick={save} disabled={saving || !capTied} size="sm" className="gap-1.5">
