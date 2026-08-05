@@ -177,6 +177,12 @@ export interface Correction {
   processed_by: string | null;
   processed_by_name: string | null;
   processed_at: string | null;
+  // Why this correction's own outcome is "Processed with Default" — mirrors
+  // tds_filings.default_reason, which trg_tds_corrections_sync_filing_status
+  // (20260805170000) copies this into whenever this correction's outcome
+  // becomes the original return's new work_status. NULL whenever the
+  // outcome is "Processed without Default" (nothing to explain).
+  default_reason: string | null;
 }
 
 export interface CorrectionChallan {
