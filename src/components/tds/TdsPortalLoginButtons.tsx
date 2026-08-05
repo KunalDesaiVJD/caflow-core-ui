@@ -242,6 +242,10 @@ export function TdsPortalLoginButtons({ clientId }: Props) {
           toast({ title: "Extension didn't respond", description: "The portal is open, but the extension may not have received the credentials — log in manually if it wasn't filled.", variant: "destructive" });
         } else {
           console.log("[CAFlow][ITD autofill] extension acknowledged the credential handoff");
+          // Previously silent on success — left users unable to tell "it
+          // worked" from "it's stuck," which is exactly the ambiguity that
+          // made this bug hard to report precisely. Always say something now.
+          toast({ title: "Credentials sent", description: "Check the new tab — if it didn't open, your browser likely blocked the popup (look for a blocked-popup icon in the address bar)." });
         }
       } catch (err: any) {
         console.error("[CAFlow][ITD autofill] unexpected error", err);
