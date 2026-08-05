@@ -189,38 +189,67 @@ export function TdsPortalLoginButtons({ clientId }: Props) {
    * fetch once as a safety net (see that file's own comment) for when it
    * doesn't.
    */
-  const autofillItd = async () => {
-    if (!status) return;
-    window.open(ITD_LOGIN_URL, "_blank", "noopener,noreferrer");
-    setAutofillingItd(true);
-    const { data, error } = await supabase.functions.invoke("tds-portal-credentials", {
-      body: { action: "read", client_service_id: status.clientServiceId },
-    });
-    if (error || !data?.itd_password || !status.itdLoginId) {
-      setAutofillingItd(false);
-      toast({ title: "Could not auto-fill", description: error?.message || "No ITD password saved. The portal is open — log in manually this time.", variant: "destructive" });
+  const autofillItd = () => {
+    // Fires the INSTANT this is clicked, before anything else — including the
+    // `if (!status)` guard below. If this toast doesn't appear, the click
+    // never reached this function at all (a DOM/dropdown issue, not
+    // anything in the async logic further down); if it does but nothing
+    // else happens, the failure is somewhere in the try block below, which
+    // now can't fail silently either.
+    console.log("[CAFlow][ITD autofill] button clicked");
+    toast({ title: "Auto-filling ITD login…" });
+
+    if (!status) {
+      console.warn("[CAFlow][ITD autofill] aborted: no portal status loaded yet for this client");
+      toast({ title: "Not ready yet", description: "Portal credentials haven't loaded for this client — wait a moment and try again.", variant: "destructive" });
       return;
     }
-    const acked = await new Promise<boolean>((resolve) => {
-      const onAck = (event: MessageEvent) => {
-        if (event.source !== window) return;
-        const msg = event.data;
-        if (msg?.source === "caflow-extension" && msg?.type === "ITD_LOGIN_CREDENTIALS_ACK") {
-          window.removeEventListener("message", onAck);
-          resolve(!!msg.ok);
+
+    // window.open() MUST be the first thing this function does — see the
+    // JSDoc above. Everything after it runs inside a try/catch so a genuine
+    // JS error (a real bug, not just "nothing saved") shows up as a toast
+    // and in the console instead of vanishing.
+    window.open(ITD_LOGIN_URL, "_blank", "noopener,noreferrer");
+    setAutofillingItd(true);
+
+    (async () => {
+      try {
+        const { data, error } = await supabase.functions.invoke("tds-portal-credentials", {
+          body: { action: "read", client_service_id: status.clientServiceId },
+        });
+        if (error || !data?.itd_password || !status.itdLoginId) {
+          toast({ title: "Could not auto-fill", description: error?.message || "No ITD password saved. The portal is open — log in manually this time.", variant: "destructive" });
+          return;
         }
-      };
-      window.addEventListener("message", onAck);
-      window.postMessage(
-        { source: "caflow-web", type: "ITD_LOGIN_CREDENTIALS", loginId: status.itdLoginId, password: data.itd_password },
-        window.location.origin,
-      );
-      setTimeout(() => { window.removeEventListener("message", onAck); resolve(false); }, 3000);
-    });
-    setAutofillingItd(false);
-    if (!acked) {
-      toast({ title: "Extension didn't respond", description: "The portal is open, but the extension may not have received the credentials — log in manually if it wasn't filled.", variant: "destructive" });
-    }
+        const acked = await new Promise<boolean>((resolve) => {
+          const onAck = (event: MessageEvent) => {
+            if (event.source !== window) return;
+            const msg = event.data;
+            if (msg?.source === "caflow-extension" && msg?.type === "ITD_LOGIN_CREDENTIALS_ACK") {
+              window.removeEventListener("message", onAck);
+              resolve(!!msg.ok);
+            }
+          };
+          window.addEventListener("message", onAck);
+          window.postMessage(
+            { source: "caflow-web", type: "ITD_LOGIN_CREDENTIALS", loginId: status.itdLoginId, password: data.itd_password },
+            window.location.origin,
+          );
+          setTimeout(() => { window.removeEventListener("message", onAck); resolve(false); }, 3000);
+        });
+        if (!acked) {
+          console.warn("[CAFlow][ITD autofill] no ACK from the extension within 3s — is it installed and enabled?");
+          toast({ title: "Extension didn't respond", description: "The portal is open, but the extension may not have received the credentials — log in manually if it wasn't filled.", variant: "destructive" });
+        } else {
+          console.log("[CAFlow][ITD autofill] extension acknowledged the credential handoff");
+        }
+      } catch (err: any) {
+        console.error("[CAFlow][ITD autofill] unexpected error", err);
+        toast({ title: "Auto-fill failed unexpectedly", description: err?.message || String(err), variant: "destructive" });
+      } finally {
+        setAutofillingItd(false);
+      }
+    })();
   };
 
   if (!clientId) return null;
