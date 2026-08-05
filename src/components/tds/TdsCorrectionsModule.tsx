@@ -48,6 +48,7 @@ import {
   AlertTriangle, Send, Upload, Eye,
 } from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
+import { isProcessedWorkStatus } from "./TdsFilingsManager";
 import { TdsDataEntry, CORRECTION_TDS_SOURCE } from "./TdsDataEntry";
 import {
   CORRECTION_STATUS_META, isCorrectionLocked, isCorrectionEditable,
@@ -497,7 +498,7 @@ function NewCorrectionDialog({
   // Sequencing gate (firm instruction, 2026-08-04): the original return must
   // be "Processed" — the most-advanced work_status, not just "Filed" — and no
   // other correction may currently be open for this period.
-  const notProcessed = !!filing && filing.work_status !== "Processed";
+  const notProcessed = !!filing && !isProcessedWorkStatus(filing.work_status);
   const canCreate = !!(client && fy && quarter && form && filing && compliant && !notProcessed && !openCorrection);
 
   const handleCreate = async () => {
@@ -595,7 +596,7 @@ function NewCorrectionDialog({
               <AlertTriangle size={14} className="shrink-0 mt-0.5" />
               <span>
                 This return is currently "{filing.work_status}". A correction can only be started
-                once it is marked Processed.
+                once it is marked Processed with Default or Processed without Default.
               </span>
             </div>
           )}

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { TdsFilingsManager, READY_TO_FILE_STATUS, type KpiStatusGroup, type FilingsPreset, getDueDate, getDueDateColor } from "@/components/tds/TdsFilingsManager";
+import { TdsFilingsManager, READY_TO_FILE_STATUS, type KpiStatusGroup, type FilingsPreset, getDueDate, getDueDateColor, isProcessedWorkStatus } from "@/components/tds/TdsFilingsManager";
 import { getDefaultTdsQuarter, isClientTdsEligible, clientHasTdsForm, isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -57,8 +57,10 @@ const ALL_FORMS = ["26Q", "24Q", "27Q", "27EQ"];
 // signed but has NOT gone to the portal yet, so it is still a return that is
 // due. Adding it here would make the Returns Due count under-report real
 // outstanding work — the opposite of what the card is for.
+// "Processed" (with/without Default) is checked separately via
+// isProcessedWorkStatus at this Set's one call site, not listed here.
 const TERMINAL_STATUSES = new Set([
-  "Filed", "Submitted", "Processed", "Accepted", "NIL",
+  "Filed", "Submitted", "Accepted", "NIL",
 ]);
 
 // TDS Compliance Start/End Quarter — single source of truth for whether a
@@ -189,11 +191,14 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
   // ═══ KPI Stats ═══
   const stats = useMemo(() => {
     const activeClientIds = new Set(filteredFilings.map(f => f.client_id));
-    const notTerminal = filteredFilings.filter(f => !TERMINAL_STATUSES.has(f.work_status));
+    const notTerminal = filteredFilings.filter(f => !TERMINAL_STATUSES.has(f.work_status) && !isProcessedWorkStatus(f.work_status));
     const reviewed = filteredFilings.filter(f => f.work_status === "Reviewed");
     const readyToFile = filteredFilings.filter(f => f.work_status === READY_TO_FILE_STATUS);
     const filed = filteredFilings.filter(f => ["Filed", "Submitted"].includes(f.work_status));
-    const processed = filteredFilings.filter(f => ["Processed", "Accepted"].includes(f.work_status));
+    // Consolidated "Processed / Accepted" KPI card — Processed with/without
+    // Default both roll into this ONE count (firm instruction, 2026-08-05);
+    // only the status dropdown/filter elsewhere distinguishes them.
+    const processed = filteredFilings.filter(f => isProcessedWorkStatus(f.work_status) || f.work_status === "Accepted");
     const nil = filteredFilings.filter(f => f.work_status === "NIL");
     return {
       activeClients: activeClientIds.size,

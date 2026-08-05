@@ -20,6 +20,7 @@ import { usePortalClient } from "@/contexts/PortalClientContext";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { isProcessedWorkStatus } from "@/components/tds/TdsFilingsManager";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -249,7 +250,7 @@ function RaiseCorrectionDialog({
   // only for a Processed return, and only when no correction is already open
   // for that exact period (see the fetch above).
   const options = useMemo(() => filings.flatMap(f =>
-    f.work_status === "Processed" ? ((f.tds_forms || []) as string[]).map(form => ({
+    isProcessedWorkStatus(f.work_status) ? ((f.tds_forms || []) as string[]).map(form => ({
       key: `${f.id}::${form}`,
       filingId: f.id, form,
       fy: f.financial_year, quarter: f.quarter,

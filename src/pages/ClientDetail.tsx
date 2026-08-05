@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { reconcileEngagementAuditType } from "@/lib/auditEngagementSync";
+import { isProcessedWorkStatus } from "@/components/tds/TdsFilingsManager";
 import { useAuth } from "@/hooks/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -692,7 +693,7 @@ const ClientDetail = () => {
       let affected = 0;
       if (filings) {
         const toUpdate = filings.filter(f => {
-          if (f.work_status === 'Filed' || f.work_status === 'Processed') return false;
+          if (f.work_status === 'Filed' || isProcessedWorkStatus(f.work_status)) return false;
           if (f.financial_year > tdsDeactivateFY) return true;
           if (f.financial_year === tdsDeactivateFY) {
             const fqIdx = QUARTERS.indexOf(f.quarter);

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, Fragment } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
+import { isProcessedWorkStatus } from "./TdsFilingsManager";
 import {
   PAN_4TH_CHAR_MAP, isValidPan, isIndividualRateType, getRateForSection as getRateForSectionPure,
   calcAutoInterest, isChallanOverApplied, isChallanFullyUtilised, computeApplied, balanceColorClass,
@@ -1975,10 +1976,11 @@ export function TdsDataEntry({
   // them, with no way to re-run validation. (Before "Ready to File" existed,
   // finalising wrote "Filed", so this lock is what used to engage.) Nothing
   // invalidates tds_recon_results on an edit, so the freeze is the control.
-  // "Processed" is included for the same reason — it is strictly past Filed.
-  // Escape hatch: Revoke Signature sends the return back to Reviewed.
-  const LOCKED_WORK_STATUSES = ["Filed", "Processed", "Ready to File"];
-  const isFilingLocked = forceReadOnly || LOCKED_WORK_STATUSES.includes(filing?.work_status ?? "");
+  // "Processed with/without Default" is included for the same reason — it is
+  // strictly past Filed. Escape hatch: Revoke Signature sends the return back
+  // to Reviewed.
+  const LOCKED_WORK_STATUSES = ["Filed", "Ready to File"];
+  const isFilingLocked = forceReadOnly || LOCKED_WORK_STATUSES.includes(filing?.work_status ?? "") || isProcessedWorkStatus(filing?.work_status);
 
   // Issue 1: Row-level read-only check
   const isRowReadOnly = (d: Deductee) => isFilingLocked || (filing ? d.filing_id !== filing.id : false);
@@ -2258,7 +2260,7 @@ export function TdsDataEntry({
                 // Sky, never emerald — "Ready to File" must not read as filed.
                 "bg-sky-100 text-sky-700": filing.work_status === "Ready to File",
                 "bg-emerald-100 text-emerald-700": filing.work_status === "Filed",
-                "bg-emerald-200 text-emerald-800": filing.work_status === "Processed",
+                "bg-emerald-200 text-emerald-800": isProcessedWorkStatus(filing.work_status),
               })}>{filing.work_status}</Badge>
               {isFilingLocked && (
                 <Badge className="text-xs bg-amber-100 text-amber-800 border border-amber-300 gap-1">

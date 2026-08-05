@@ -181,6 +181,21 @@ interface Props {
  *  plain TEXT column with no DB-level CHECK constraint). */
 export const READY_TO_FILE_STATUS = "Ready to File";
 
+// The two real CPC/TRACES outcomes a processed return comes back with —
+// firm instruction (2026-08-05): replaces the single generic "Processed"
+// value going forward, but the dashboard's own "Processed / Accepted" KPI
+// card stays ONE consolidated count of both (see TdsDashboard.tsx) — only
+// the status dropdown/classification/filtering distinguishes them.
+export const PROCESSED_WITH_DEFAULT_STATUS = "Processed with Default";
+export const PROCESSED_WITHOUT_DEFAULT_STATUS = "Processed without Default";
+// "Processed" (no longer offered in the dropdown) is kept recognised here
+// so filings already sitting at that legacy value from before this split
+// still count as processed everywhere — locked, terminal, KPI, correction
+// gate — instead of silently falling out of every one of those checks.
+export const PROCESSED_WORK_STATUSES = ["Processed", PROCESSED_WITH_DEFAULT_STATUS, PROCESSED_WITHOUT_DEFAULT_STATUS] as const;
+export const isProcessedWorkStatus = (s: string | null | undefined): boolean =>
+  !!s && (PROCESSED_WORK_STATUSES as readonly string[]).includes(s);
+
 const FILING_STATUSES = [
   "Not Started",
   "NIL",
@@ -194,7 +209,8 @@ const FILING_STATUSES = [
   // as due until an ACK proves they were actually filed.
   READY_TO_FILE_STATUS,
   "Filed",
-  "Processed",
+  PROCESSED_WITH_DEFAULT_STATUS,
+  PROCESSED_WITHOUT_DEFAULT_STATUS,
 ] as const;
 
 /** Index of Ready to File within FILING_STATUSES — the point past which the
@@ -214,6 +230,8 @@ const FILING_STATUS_COLORS: Record<string, string> = {
   [READY_TO_FILE_STATUS]: "bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-300",
   "Filed": "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
   "Processed": "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
+  [PROCESSED_WITH_DEFAULT_STATUS]: "bg-amber-200 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200",
+  [PROCESSED_WITHOUT_DEFAULT_STATUS]: "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
 };
 
 // Display-only rename: the STORED/compared work_status value stays "Reviewed"
@@ -233,7 +251,7 @@ export const getDueDate = (fy: string, quarter: string): Date => {
 };
 
 export const getDueDateColor = (fy: string, quarter: string, status: string) => {
-  if (["Filed", "Processed", "NIL"].includes(status)) return "text-emerald-600";
+  if (status === "Filed" || status === "NIL" || isProcessedWorkStatus(status)) return "text-emerald-600";
   const due = getDueDate(fy, quarter);
   const days = differenceInDays(due, new Date());
   if (days < 0) return "text-destructive font-bold";
@@ -655,12 +673,16 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       // KPI-card-driven aggregate status group — these don't map to a single
       // FILING_STATUSES value, so they're checked independently of the exact
       // work_status.
-      const isTerminal = ["Filed", "Submitted", "Processed", "Accepted", "NIL"].includes(f.work_status);
+      const isTerminal = ["Filed", "Submitted", "Accepted", "NIL"].includes(f.work_status) || isProcessedWorkStatus(f.work_status);
       if (statusGroup === "returns-due" && isTerminal) return false;
       if (statusGroup === "reviewed" && f.work_status !== "Reviewed") return false;
       if (statusGroup === "ready-to-file" && f.work_status !== READY_TO_FILE_STATUS) return false;
       if (statusGroup === "filed" && !["Filed", "Submitted"].includes(f.work_status)) return false;
-      if (statusGroup === "processed" && !["Processed", "Accepted"].includes(f.work_status)) return false;
+      // Consolidated "Processed / Accepted" KPI group — both new statuses
+      // (Processed with/without Default) plus the legacy bare "Processed"
+      // count as one group here; only the status dropdown/filter elsewhere
+      // distinguishes them (firm instruction, 2026-08-05).
+      if (statusGroup === "processed" && !(isProcessedWorkStatus(f.work_status) || f.work_status === "Accepted")) return false;
       if (statusGroup === "nil" && f.work_status !== "NIL") return false;
 
       // Deleted client filtering
@@ -669,7 +691,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
         const periodEnd = getQuarterEndDate(f.financial_year, f.quarter);
         const deletionDate = new Date(deletedInfo.deleted_at);
         // If period is after deletion and filing wasn't already filed/processed → hide
-        if (periodEnd >= deletionDate && !["Filed", "Processed"].includes(f.work_status)) {
+        if (periodEnd >= deletionDate && f.work_status !== "Filed" && !isProcessedWorkStatus(f.work_status)) {
           return false;
         }
       }
@@ -1398,7 +1420,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // (Stage 1-3 clean AND the checker's Digital Signature), not just "someone
   // picked it from a dropdown". NIL and every other status are never gated —
   // a NIL return has no deductee records to run Stage 1-4 against at all.
-  const isFiledLikeStatus = (s: string) => s === "Filed" || s === "Processed";
+  const isFiledLikeStatus = (s: string) => s === "Filed" || isProcessedWorkStatus(s);
   // "Ready to File" asserts the SAME validation gate as Filed/Processed
   // (Stage 1-3 clean + the checker's Digital Signature) but deliberately NOT
   // the ACK gate: an ACK only exists AFTER the return has actually been filed
@@ -1476,8 +1498,8 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
     // Auto-clear filing date when reverting out of the Filed/Processed workflow,
     // so the next time it re-enters Filed, the auto-set above gives a fresh date
     // instead of leaving a stale one from a prior filing attempt.
-    const wasFiledGroup = oldStatus === "Filed" || oldStatus === "Processed";
-    const isFiledGroup = newStatus === "Filed" || newStatus === "Processed";
+    const wasFiledGroup = oldStatus === "Filed" || isProcessedWorkStatus(oldStatus);
+    const isFiledGroup = newStatus === "Filed" || isProcessedWorkStatus(newStatus);
     if (wasFiledGroup && !isFiledGroup && filing.date_of_filing) {
       updatePayload.date_of_filing = null;
     }
