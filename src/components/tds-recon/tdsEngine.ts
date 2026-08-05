@@ -362,8 +362,17 @@ export async function runAiMapper(params: {
     const tdsPayableRowIds = rows
       .filter(r => discoveredNames.has(String(r.tb_ledger_name || "").trim().toLowerCase()))
       .map(r => r.id);
+    // Stage-4 hotfix (2026-08-05) — P4-C ("zero_tds") shipped a false-
+    // positive-prone heuristic (any creditor with >= ₹1L TB activity, no
+    // service-nature check) and was reverted. Any row it already wrote
+    // gets deleted on every subsequent mapper run so engagements that hit
+    // Re-run All before this fix landed get cleaned up automatically.
+    const zeroTdsRowIds = rows
+      .filter(r => String(r.match_method || "").includes("zero_tds"))
+      .map(r => r.id);
     const staleBooksOnlyIds = [...new Set([
       ...tdsPayableRowIds,
+      ...zeroTdsRowIds,
       ...rows
         .filter(r => {
           if (!String(r.match_method || "").includes("books_only")) return false;
@@ -739,34 +748,19 @@ export async function runAiMapper(params: {
           mapping_status:    "needs_review",
           mapped_by:         "ai",
         });
-      } else {
-        // P4-C (2026-08-05) — high-value creditor with NO voucher-derived
-        // TDS AND no 26Q filing. Might be a short-deduction scenario
-        // (auditor should have deducted TDS but didn't). Surface only
-        // when the TB activity is material (> ₹1,00,000 combined
-        // debit/credit) so we don't clutter with tiny operational
-        // vendors. Section stays null since we have no signal.
-        const material = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0) >= 100_000;
-        if (material && !alreadyMapped.has(tb.ledger_name)) {
-          booksOnlyWritten++;
-          upsertRows.push({
-            client_id, firm_id, financial_year,
-            tb_ledger_name:    tb.ledger_name,
-            tb_parent_group:   tb.parent_group,
-            tb_total_debit:    Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0) || null,
-            tds_deductee_name: "(not filed)",
-            tds_section_code:  null,
-            tds_total_amount:  null,
-            tds_tds_amount:    null,
-            tds_filing_ids:    null,
-            match_confidence:  0,
-            match_method:      "zero_tds+books_only",
-            ai_reasoning:      `High-value creditor ${tb.ledger_name} shows ₹${Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0).toLocaleString("en-IN")} activity in Tally, but no TDS journal found and no matching 26Q filing. Potential short-deduction — auditor to verify whether TDS was applicable.`,
-            mapping_status:    "needs_review",
-            mapped_by:         "ai",
-          });
-        }
       }
+      // P4-C (2026-08-05) — REMOVED. The original implementation flagged
+      // any creditor with >= ₹1,00,000 combined TB activity, with zero
+      // check for whether TDS could even apply. This caught goods-trading
+      // parties (J N V Healthcare — GST Purchase / Sales vouchers, a pure
+      // trading relationship) and any other high-value non-service vendor
+      // (capital purchases, loan/deposit ledgers, etc.), producing a wall
+      // of false "Books > TDS" flags with no real evidence behind them.
+      // "TB activity size" is not a TDS-applicability signal — only a
+      // paired service-expense Journal or an explicit 26Q filing is.
+      // Re-introduce only when there is a real signal (e.g. the ledger's
+      // parent_group or a paired expense leg indicates a services nature
+      // AND the amount crosses the section's own threshold) — not before.
       skipped++;
       continue;
     }
