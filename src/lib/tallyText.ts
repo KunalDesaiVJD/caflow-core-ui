@@ -35,3 +35,38 @@ export function cleanTallyRow<T extends { parent_group?: string | null; ledger_n
     ledger_name:  cleanTallyName(row.ledger_name  as any),
   };
 }
+
+/**
+ * Build a ledger-name → COA-mapping lookup that agrees with how coa_mapping
+ * keys are actually persisted (PipelineStage3.tsx / notesAutoPopulate.ts key
+ * by cleanTallyName(ledger_name)). Falls back exact → trimmed → case-
+ * insensitive → cleanTallyName-normalized, so a raw TB ledger_name carrying
+ * Tally control chars / numeric HTML entities (e.g. "&#13;&#10;") still
+ * resolves to its mapping instead of silently reading as unmapped.
+ *
+ * Every consumer that matches a raw TB ledger_name against coa_mapping
+ * should go through this — a hand-rolled matcher that skips the
+ * cleanTallyName fallback is how RC-21 (VADIWALA "The District TB Centre")
+ * happened: computeCOATotals and unmappedNonZero each had their own trim/
+ * case-only matcher that silently disagreed with the COA Mapping screen.
+ */
+export function buildLedgerMapMatcher<T extends { code: string }>(
+  mapping: Record<string, T | undefined>,
+): (name: string | null | undefined) => T | undefined {
+  const ciIndex: Record<string, T> = {};
+  const cleanIndex: Record<string, T> = {};
+  for (const [k, v] of Object.entries(mapping)) {
+    if (!v?.code) continue;
+    const kk = String(k).trim().toLowerCase();
+    if (!(kk in ciIndex)) ciIndex[kk] = v;
+    const ck = cleanTallyName(k).toLowerCase();
+    if (ck && !(ck in cleanIndex)) cleanIndex[ck] = v;
+  }
+  return (name: string | null | undefined) => {
+    if (!name) return undefined;
+    return mapping[name]
+        ?? mapping[name.trim()]
+        ?? ciIndex[String(name).trim().toLowerCase()]
+        ?? cleanIndex[cleanTallyName(name).toLowerCase()];
+  };
+}

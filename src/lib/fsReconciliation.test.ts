@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("@/integrations/supabase/client", () => ({ supabase: {} }));
 
-import { validateCorporateFSReconciliation, CANONICAL_NCE_CODE } from "@/lib/fsReconciliation";
+import { validateCorporateFSReconciliation, CANONICAL_NCE_CODE, computeCOATotals } from "@/lib/fsReconciliation";
 
 describe("validateCorporateFSReconciliation — BUG-024/D2.8 COA anchor keying + corporate manualVerified", () => {
   it("looks up coaTotals via the canonical NCE fold (not the raw corporate code), so the COA anchor is real", () => {
@@ -62,5 +62,36 @@ describe("validateCorporateFSReconciliation — BUG-024/D2.8 COA anchor keying +
     const tp = res.rows.find((r) => r.code === "BS_CL_TP");
     expect(tp).toBeTruthy();
     expect(tp!.manualVerified).toBe(false);
+  });
+});
+
+describe("computeCOATotals — RC-21 regression (VADIWALA / RAY WINGS TECHNOLOGY)", () => {
+  it("includes a control-char/entity-corrupted TB ledger name the same as its clean equivalent", () => {
+    // coa_mapping is always persisted keyed by cleanTallyName() output
+    // (PipelineStage3.tsx), but a raw TB row can carry a Tally-exported
+    // artifact like "&#13;&#10;". Before the fix, computeCOATotals's
+    // lookupMapping only trimmed + lowercased -- never stripped control
+    // chars / numeric entities -- so this ledger silently vanished from the
+    // anchor total, producing a false "unmapped ledger" + false note drift
+    // on the FsHealthPanel, and (via nceAutoPopulate's PY safety-reconcile)
+    // a spurious "Other (prior year)" plug row.
+    const coaMapping = { "The District TB Centre": { code: "NCE_TR" } };
+    const cleanTb = [{ ledger_name: "The District TB Centre", closing_balance: 120960, balance_type: "Dr" }];
+    const corruptedTb = [{ ledger_name: "The District TB Centre&#13;&#10;", closing_balance: 120960, balance_type: "Dr" }];
+
+    const cleanResult = computeCOATotals(cleanTb, [], coaMapping);
+    const corruptedResult = computeCOATotals(corruptedTb, [], coaMapping);
+
+    expect(corruptedResult["NCE_TR"]).toBeDefined();
+    expect(corruptedResult["NCE_TR"].cy).toBe(cleanResult["NCE_TR"].cy);
+  });
+
+  it("still resolves via cleanTallyName when the PY-shell TB carries the corrupted name", () => {
+    const coaMapping = { "Vehical Expenses": { code: "NCE_OTH_EXP" } };
+    const pyTb = [{ ledger_name: "Vehical Expenses&#13;&#10;", closing_balance: 8240, balance_type: "Dr" }];
+
+    const result = computeCOATotals([], pyTb, coaMapping);
+    expect(result["NCE_OTH_EXP"]).toBeDefined();
+    expect(result["NCE_OTH_EXP"].py).not.toBe(0);
   });
 });

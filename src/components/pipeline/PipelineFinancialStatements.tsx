@@ -62,6 +62,7 @@ import FsStatusChip from "@/components/pipeline/FsStatusChip";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
 import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE, FS_NO_MANUAL_NOTE_ADD, FS_NCE_CONSTRAINED_NOTES } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, validateCorporateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
+import { buildLedgerMapMatcher } from "@/lib/tallyText";
 import { computeNceCoaAnchoredFace } from "@/lib/nceFaceAnchor";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
@@ -268,7 +269,7 @@ function formatINR(n: number | null | undefined): string {
 // Smart note: only show a note number when at least one year has non-zero data.
 // Pass the RAW (pre-negation) cy/py values — the zero-check is sign-agnostic.
 // Module-level so both buildBSRows and buildPLRows can reference it.
-function sn(
+export function sn(
   noteNo: number | null | undefined,
   rawCy:  number | null | undefined,
   rawPy:  number | null | undefined,
@@ -543,7 +544,7 @@ const NCE_CODE_TO_NOTE_KEY: Readonly<Record<string, string>> = {
  * (which is keyed by static noteRef).  Keeping both BS and Notes tab using the
  * same nceDynamicNoteMap ensures note numbers are always in sync.
  */
-const NCE_CODE_TO_STATIC_REF: Readonly<Record<string, number>> = {
+export const NCE_CODE_TO_STATIC_REF: Readonly<Record<string, number>> = {
   NCE_CAP: 2,
   NCE_LTB: 3, NCE_OLTL: 4, NCE_LTP: 5,
   NCE_STB: 6, NCE_TP: 7, NCE_OCL: 8, NCE_STP: 9,
@@ -1070,7 +1071,7 @@ const NCE_INCOME_CODES = new Set(["NCE_REV_OPS", "NCE_REV_OTH"]);
 // restore the legacy editable-face behaviour.
 const FS_FACE_FIGURES_READONLY = true;
 
-function buildNCEBSRows(
+export function buildNCEBSRows(
   cy: Record<string, number>,
   py: Record<string, number>,
 ): BSDisplayRow[] {
@@ -1119,8 +1120,7 @@ function buildNCEBSRows(
     { kind: "item", label: "(b) Inventories",                           noteNo: sn(17, cy["NCE_STCK"],  py["NCE_STCK"]),  cy: pos("NCE_STCK"),  py: pospy("NCE_STCK"),  indent: 1, code: "NCE_STCK" },
     { kind: "item", label: "(c) Trade receivables",                     noteNo: sn(18, cy["NCE_TR"],    py["NCE_TR"]),    cy: pos("NCE_TR"),    py: pospy("NCE_TR"),    indent: 1, code: "NCE_TR" },
     { kind: "item", label: "(d) Cash and bank balances",                noteNo: sn(19, cy["NCE_CASH"],  py["NCE_CASH"]),  cy: pos("NCE_CASH"),  py: pospy("NCE_CASH"),  indent: 1, code: "NCE_CASH" },
-    // NCE: short-term loans share Note 14 with long-term loans (combined LT/ST in NCENotesConfig)
-    { kind: "item", label: "(e) Short-term loans and advances",         noteNo: sn(14, cy["NCE_STLA"],  py["NCE_STLA"]),  cy: pos("NCE_STLA"),  py: pospy("NCE_STLA"),  indent: 1, code: "NCE_STLA" },
+    { kind: "item", label: "(e) Short-term loans and advances",         noteNo: sn(20, cy["NCE_STLA"],  py["NCE_STLA"]),  cy: pos("NCE_STLA"),  py: pospy("NCE_STLA"),  indent: 1, code: "NCE_STLA" },
     { kind: "item", label: "(f) Other current assets",                  noteNo: sn(21, cy["NCE_OCA"],   py["NCE_OCA"]),   cy: pos("NCE_OCA"),   py: pospy("NCE_OCA"),   indent: 1, code: "NCE_OCA" },
     { kind: "spacer" },
     // Task 6: shortened to "TOTAL"; Task 9: right-align label
@@ -1130,7 +1130,7 @@ function buildNCEBSRows(
   ];
 }
 
-function buildNCEPLRows(
+export function buildNCEPLRows(
   cy:  Record<string, number>,
   py:  Record<string, number>,
 ): PLDisplayRow[] {
@@ -4408,15 +4408,14 @@ export default function PipelineFinancialStatements({
   // ledger that exists ONLY in the prior year (CY=0, PY material) blocks
   // export — previously only CY closing was checked.
   const unmappedNonZero = useMemo(() => {
-    const mapping = (coaMapping ?? {}) as Record<string, any>;
-    const ci: Record<string, any> = {};
-    for (const [k, v] of Object.entries(mapping)) {
-      if (!v?.code) continue;
-      const kk = String(k).trim().toLowerCase();
-      if (!(kk in ci)) ci[kk] = v;
-    }
-    const lookup = (nm: string) =>
-      !nm ? undefined : (mapping[nm] ?? mapping[nm.trim()] ?? ci[String(nm).trim().toLowerCase()]);
+    const mapping = (coaMapping ?? {}) as Record<string, { code: string } | undefined>;
+    // RC-21 — this used to be a hand-rolled trim/lowercase-only matcher that
+    // silently disagreed with computeCOATotals and the COA Mapping screen for
+    // any ledger name carrying Tally control chars / numeric HTML entities
+    // (e.g. "&#13;&#10;"), producing a false "unmapped ledger" export block.
+    // Use the single shared matcher (src/lib/tallyText.ts) so this can never
+    // drift out of sync with the rest of the mapping consumers again.
+    const lookup = buildLedgerMapMatcher(mapping);
     // Aggregate CY + PY closing per ledger name so a row that exists in only
     // one year still surfaces. Sign convention matches computeCOATotals.
     type Agg = { cy: number; py: number; cyDr: boolean; pyDr: boolean };
