@@ -449,24 +449,34 @@ const NewInvoice = () => {
     })();
   }, [isSuperadmin, user?.firm_id]);
 
-  // Fetch clients — INCLUDE archived (is_active = false) clients so the
-  // user can still raise invoices against them (e.g. carried-over work
-  // for a client who was archived after year-end). Root-cause fix: the
-  // previous `.neq("is_active", false)` filter silently dropped every
-  // archived client from the dropdown. Archived clients now surface with
-  // an "(Archived)" tag next to their name and sort to the bottom so the
-  // active list stays on top.
+  // Fetch clients — INCLUDE archived clients so the user can still raise
+  // invoices against them (e.g. carried-over work for a client who was
+  // archived after year-end).
+  //
+  // ROOT-CAUSE FIX: this codebase archives a client by setting
+  // `deleted_at` (a soft-delete timestamp) — NOT by flipping `is_active`.
+  // Confirmed by Clients.tsx#fetchArchivedClients which queries
+  // `.not("deleted_at", "is", null)` to list the Archived tab. The old
+  // NewInvoice fetch had `.is("deleted_at", null)` AND `.neq("is_active",
+  // false)`, so every archived client was silently dropped from the
+  // dropdown. Both filters are removed here. Draft records
+  // (is_draft = true) stay excluded — those are incomplete stubs, not
+  // real clients yet.
+  //
+  // Archived rows are sorted to the bottom and tagged " — Archived" in
+  // the dropdown label so the active list stays on top and the auditor
+  // sees at a glance which clients are inactive.
   useEffect(() => {
     (async () => {
       const { data: clientData } = await supabase
         .from("clients")
-        .select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office, is_active")
+        .select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office, is_active, deleted_at")
         .eq("is_draft", false)
-        .is("deleted_at", null)
         .order("name");
+      const isArchived = (c: any) => c.deleted_at != null || c.is_active === false;
       const rows = (clientData || []).slice().sort((a: any, b: any) => {
-        const aa = a.is_active === false ? 1 : 0;
-        const bb = b.is_active === false ? 1 : 0;
+        const aa = isArchived(a) ? 1 : 0;
+        const bb = isArchived(b) ? 1 : 0;
         if (aa !== bb) return aa - bb;
         return String(a.name || "").localeCompare(String(b.name || ""));
       });
@@ -1264,7 +1274,7 @@ const NewInvoice = () => {
             <SearchableSelect
               options={clients.map(c => ({
                 value: c.id,
-                label: `${c.name} (${c.pan})${(c as any).is_active === false ? " — Archived" : ""}`,
+                label: `${c.name} (${c.pan})${((c as any).deleted_at != null || (c as any).is_active === false) ? " — Archived" : ""}`,
               }))}
               value={clientId}
               onValueChange={setClientId}
