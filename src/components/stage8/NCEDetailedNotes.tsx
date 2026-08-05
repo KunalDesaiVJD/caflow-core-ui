@@ -1275,17 +1275,17 @@ function PatternBTable({
                       ) : (
                         <div className="w-5 shrink-0" />
                       )}
-                      {/* Template caption — LOCKED for editing (2026-06-17).
-                          Only Tally-derived rows (custom rows + sub-ledger
-                          names) are renameable; the statutory note captions are
-                          read-only so the audit-report structure cannot drift. */}
+                      {/* Row caption — editable (2026-08-05): only the FIGURES
+                          are locked (COA/Tally-sourced); the row/ledger/group
+                          name can always be renamed. Display-only override —
+                          row.id (and every total/export keyed off it) is unchanged. */}
                       <Input
                         value={displayLabel}
-                        readOnly
-                        tabIndex={-1}
-                        title="Statutory caption — locked. Rename the Tally-derived ledger rows instead."
-                        className="h-6 text-xs px-1.5 border-transparent bg-transparent cursor-default focus-visible:ring-0 focus-visible:ring-offset-0"
+                        onChange={e => onChangeStaticLabel(row.id, e.target.value)}
+                        title="Row caption — rename freely. Figures are locked and come from COA mapping."
+                        className="h-6 text-xs px-1.5"
                       />
+                      <SpellFix value={displayLabel} onApply={fixed => onChangeStaticLabel(row.id, fixed)} />
                     </div>
                   </TableCell>
                   <TableCell className="p-1">
@@ -1833,17 +1833,17 @@ function PatternATable({
                       ) : (
                         <div className="w-5 shrink-0" />
                       )}
-                      {/* Template caption — LOCKED for editing (2026-06-17).
-                          Only Tally-derived rows (custom rows + sub-ledger
-                          names) are renameable; the statutory note captions are
-                          read-only so the audit-report structure cannot drift. */}
+                      {/* Row caption — editable (2026-08-05): only the FIGURES
+                          are locked (COA/Tally-sourced); the row/ledger/group
+                          name can always be renamed. Display-only override —
+                          row.id (and every total/export keyed off it) is unchanged. */}
                       <Input
                         value={displayLabel}
-                        readOnly
-                        tabIndex={-1}
-                        title="Statutory caption — locked. Rename the Tally-derived ledger rows instead."
-                        className="h-6 text-xs px-1.5 border-transparent bg-transparent cursor-default focus-visible:ring-0 focus-visible:ring-offset-0"
+                        onChange={e => onChangeStaticLabel(row.id, e.target.value)}
+                        title="Row caption — rename freely. Figures are locked and come from COA mapping."
+                        className="h-6 text-xs px-1.5"
                       />
+                      <SpellFix value={displayLabel} onApply={fixed => onChangeStaticLabel(row.id, fixed)} />
                     </div>
                   </TableCell>
                   {/* When collapsed with children: show aggregate as read-only.
@@ -3099,13 +3099,22 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     });
   }, [scheduleSave]);
 
-  const handleChangeStaticLabel = useCallback((_noteType: string, _id: string, _label: string) => {
-    // BUG-060 / Rule 8: template (Schedule-III / NCE) note-row HEADINGS are LOCKED — only the
-    // caption of a ledger/group line (a custom row, via handleChangeLabel) is editable. This
-    // handler previously wrote a labelOverride for a STATIC row, which would rewrite a template
-    // heading; it is now a no-op (defence-in-depth; the static-label UI is already read-only).
-    // Existing overrides are untouched — this only prevents new static-heading edits.
-  }, []);
+  const handleChangeStaticLabel = useCallback((noteType: string, id: string, label: string) => {
+    // 2026-08-05 (user request): template (Schedule-III / NCE) note-row captions
+    // — e.g. "Trade Receivables" — must stay renameable like any other ledger/
+    // group row; only the FIGURES are locked (COA/Tally-sourced, edited at the
+    // COA mapping screen). Renaming here is display-only — it writes a
+    // labelOverride (same mechanism as the custom-row rename path above) and
+    // never touches the row's id/key, so BS/PL totals, note numbering, and
+    // DOCX/Excel export — which all key off row.id — are unaffected.
+    if (readOnly || notesFinalizedRef.current) return;
+    setNoteData(prev => {
+      const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
+      const overrides = { ...(cur.labelOverrides ?? {}), [id]: label };
+      return { ...prev, [noteType]: { ...cur, labelOverrides: overrides } };
+    });
+    scheduleLabelPersist(noteType);
+  }, [readOnly, scheduleLabelPersist]);
 
   const handleChangeSourceLabel = useCallback((noteType: string, rowId: string, ledger: string, newLabel: string) => {
     if (readOnly || notesFinalizedRef.current) return;
