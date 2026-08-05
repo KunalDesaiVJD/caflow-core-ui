@@ -1889,13 +1889,26 @@ export function TdsDataEntry({
     // measurement, which would otherwise flash the columns down to a sliver
     // right before the real data arrives and grows them back.
     if (rows.length === 0) return;
+    // Copy font sub-properties individually rather than the `font` shorthand —
+    // getComputedStyle().font can come back as an empty string when not every
+    // shorthand sub-value is explicitly resolvable, which would silently no-op
+    // the assignment and leave the span on its own (smaller) text-xs class,
+    // under-measuring every value exactly like the bug this was meant to fix.
+    const copyFont = (el: HTMLSpanElement, src: Element) => {
+      const cs = getComputedStyle(src);
+      el.style.fontSize = cs.fontSize;
+      el.style.fontFamily = cs.fontFamily;
+      el.style.fontWeight = cs.fontWeight;
+      el.style.fontStyle = cs.fontStyle;
+      el.style.letterSpacing = cs.letterSpacing;
+    };
     const sampleNameInput = document.querySelector('[data-autofit="name"]');
     const samplePanInput = document.querySelector('[data-autofit="pan"]');
-    if (sampleNameInput) nameEl.style.font = getComputedStyle(sampleNameInput).font;
-    if (samplePanInput) panEl.style.font = getComputedStyle(samplePanInput).font;
+    if (sampleNameInput) copyFont(nameEl, sampleNameInput);
+    if (samplePanInput) copyFont(panEl, samplePanInput);
     const nameHeaderLabel = selForm === "24Q" ? "Employee Name" : selForm === "27EQ" ? "Collectee" : "Name";
     // TableCell padding (16px × 2) + Input's own padding (12px × 2) + border (1px × 2) + slack
-    const CELL_PADDING = 70;
+    const CELL_PADDING = 84;
 
     let maxName = 0;
     for (const text of [nameHeaderLabel, ...rows.map(d => d.deductee_name || "")]) {
@@ -1908,7 +1921,7 @@ export function TdsDataEntry({
       maxPan = Math.max(maxPan, panEl.getBoundingClientRect().width);
     }
 
-    setNameColWidth(Math.max(NAME_COL_MIN, Math.min(560, Math.ceil(maxName) + CELL_PADDING)));
+    setNameColWidth(Math.max(NAME_COL_MIN, Math.min(640, Math.ceil(maxName) + CELL_PADDING)));
     setPanColWidth(Math.max(PAN_COL_MIN, Math.min(220, Math.ceil(maxPan) + CELL_PADDING)));
   }, [deductees, prevEntries, selForm]);
 
@@ -3092,8 +3105,8 @@ export function TdsDataEntry({
                                   </TableCell>
                                   {selForm === "24Q" ? (
                                     <>
-                                      <TableCell><Input className="h-7 text-xs bg-muted cursor-not-allowed" disabled title={d.deductee_name} defaultValue={d.deductee_name} /></TableCell>
-                                      <TableCell><Input className="h-7 text-xs font-mono bg-muted cursor-not-allowed" disabled title={d.deductee_pan || ""} defaultValue={d.deductee_pan || ""} /></TableCell>
+                                      <TableCell><Input className="h-7 text-xs bg-muted cursor-not-allowed" style={{ width: nameColWidth, minWidth: nameColWidth }} disabled title={d.deductee_name} defaultValue={d.deductee_name} /></TableCell>
+                                      <TableCell><Input className="h-7 text-xs font-mono bg-muted cursor-not-allowed" style={{ width: panColWidth, minWidth: panColWidth }} disabled title={d.deductee_pan || ""} defaultValue={d.deductee_pan || ""} /></TableCell>
                                       <TableCell className="text-xs">{d.date_of_payment || "—"}</TableCell>
                                       <TableCell className="text-right text-xs">{(d.gross_salary || 0).toLocaleString("en-IN")}</TableCell>
                                       <TableCell className="text-right text-xs">{(d.standard_deduction_allowed || 0).toLocaleString("en-IN")}</TableCell>
@@ -3182,7 +3195,15 @@ export function TdsDataEntry({
                                   {selForm === "24Q" ? (
                                     <>
                                       <TableCell>
+                                        {/* Explicit pixel width on the INPUT itself, not just the
+                                            TableHead — table-layout:fixed derives column widths from
+                                            the header row's cells, but the Input's own w-full (100%-
+                                            of-td) can still end up narrower than the computed content
+                                            width depending on how the browser resolves that cascade.
+                                            Setting width/minWidth directly here makes the input's
+                                            rendered width unambiguous regardless of that. */}
                                         <Input className={cn("h-7 text-xs", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked}
+                                          style={{ width: nameColWidth, minWidth: nameColWidth }}
                                           title={d.deductee_name}
                                           data-autofit="name"
                                           defaultValue={d.deductee_name}
@@ -3195,6 +3216,7 @@ export function TdsDataEntry({
                                             <TooltipTrigger asChild>
                                               <Input className={cn("h-7 text-xs font-mono", locked && "bg-muted cursor-not-allowed opacity-75", d.pan_not_available && "border-destructive text-destructive")}
                                                 disabled={locked}
+                                                style={{ width: panColWidth, minWidth: panColWidth }}
                                                 title={d.deductee_pan || ""}
                                                 data-autofit="pan"
                                                 defaultValue={d.deductee_pan || ""}

@@ -119,10 +119,9 @@ describe("staff module", () => {
 
   it("mounts the dashboard and lists the correction", async () => {
     render(<TdsCorrectionsModule {...staffProps} />);
-    // Recommendations is the default landing tab (2026-08-05) — switch to
-    // the Corrections tab to reach the dashboard this test actually checks.
-    const correctionsTab = await screen.findByRole("button", { name: /Corrections/i });
-    fireEvent.click(correctionsTab);
+    // Corrections is the single primary workspace (2026-08-06: Recommendations
+    // folded into a collapsible section above it, not a separate tab) — the
+    // dashboard is visible immediately, no navigation needed.
     await waitFor(() => expect(screen.getAllByText("Acme Pvt Ltd").length).toBeGreaterThan(0));
     // All six lifecycle tiles render, in workflow order
     for (const tile of ["Draft", "Awaiting Employee", "Awaiting Senior", "Ready to File", "Filed", "Rejected"]) {
@@ -188,9 +187,7 @@ describe("correction detail is the Data Entry engine", () => {
 
   const openDetail = async () => {
     render(<TdsCorrectionsModule {...staffProps} />);
-    // Recommendations is the default landing tab (2026-08-05) — switch to
-    // Corrections first, same as a real user reaching the detail screen.
-    fireEvent.click(await screen.findByRole("button", { name: /Corrections/i }));
+    // Corrections is the single primary workspace — no tab to switch to first.
     await waitFor(() => expect(screen.getAllByText("Acme Pvt Ltd").length).toBeGreaterThan(0));
     fireEvent.click(screen.getAllByTitle("Open correction")[0]);
     await waitFor(() => expect(screen.getByText("All corrections")).toBeInTheDocument());

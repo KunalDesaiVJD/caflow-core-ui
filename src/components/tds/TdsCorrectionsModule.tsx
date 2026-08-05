@@ -45,7 +45,7 @@ import { cn } from "@/lib/utils";
 import {
   Search, Plus, ArrowLeft, PenTool, Trash2, Pencil, RotateCcw, X, GitCompare,
   CheckCircle2, XCircle, Landmark, ShieldCheck, Lock, ChevronDown, ChevronRight,
-  AlertTriangle, Send, Upload, Eye, Lightbulb, ClipboardList,
+  AlertTriangle, Send, Upload, Eye, Lightbulb,
 } from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
 import { isProcessedWorkStatus, PROCESSED_WITH_DEFAULT_STATUS, PROCESSED_WITHOUT_DEFAULT_STATUS } from "./TdsFilingsManager";
@@ -168,67 +168,61 @@ export function TdsCorrectionsModule({ clients, users, isSuperadmin, resolveFirm
     role: user?.role ?? null,
   }), [user?.id, user?.name, user?.email, user?.role]);
 
-  const [tab, setTab] = useState<"recommendations" | "corrections">("recommendations");
   const [openId, setOpenId] = useState<string | null>(null);
-  // Handed from the Recommendations tab's "Create Correction" button down to
-  // CorrectionDashboard's own NewCorrectionDialog instance — both tabs stay
-  // mounted (rendered-but-hidden, TdsFilings.tsx's own established pattern
-  // for a local tab bar) so this doesn't need a remount to take effect.
+  // Collapsed by default (2026-08-06: Recommendations folded into the single
+  // Corrections page instead of living in its own tab) — expanding it is a
+  // deliberate "let me see what needs review" action, not the landing view.
+  const [recsOpen, setRecsOpen] = useState(false);
+  const [recsCount, setRecsCount] = useState(0);
+  // Handed from the Recommendations panel's "Create Correction" button down
+  // to CorrectionDashboard's own NewCorrectionDialog instance.
   const [newFromRecommendation, setNewFromRecommendation] = useState<CorrectionPrefill | null>(null);
 
-  // Opening a correction (from either tab) always switches to Corrections —
-  // there's nothing to look at in Recommendations once you're inside one.
-  const openCorrection = (id: string) => { setTab("corrections"); setOpenId(id); };
-
   return (
-    <div>
-      {/* Tab bar — mirrors TdsFilings.tsx's own local tab bar pattern
-          (Audit & Overrides / TDS Workspace) exactly, for visual consistency. */}
-      <div className="flex border-b mb-4">
+    <div className="space-y-3">
+      {/* Recommendations — collapsible, sits above the primary workspace
+          rather than in its own tab. Always fetches (so the count badge is
+          accurate even collapsed); only renders the row list when expanded. */}
+      <Card className="border-amber-200 dark:border-amber-900">
         <button
-          onClick={() => setTab("recommendations")}
-          className={cn(
-            "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
-            tab === "recommendations"
-              ? "border-primary text-primary"
-              : "border-transparent text-muted-foreground hover:text-foreground",
-          )}
+          type="button"
+          onClick={() => setRecsOpen(o => !o)}
+          className="w-full flex items-center justify-between gap-2 px-4 py-2.5 text-left"
         >
-          <span className="flex items-center gap-2"><Lightbulb size={14} /> Recommendations</span>
+          <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <Lightbulb size={14} className="text-amber-600" /> Recommendations
+            {recsCount > 0 && (
+              <Badge className="bg-amber-200 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200 text-[10px]">
+                {recsCount}
+              </Badge>
+            )}
+          </span>
+          {recsOpen ? <ChevronDown size={16} className="text-muted-foreground" /> : <ChevronRight size={16} className="text-muted-foreground" />}
         </button>
-        <button
-          onClick={() => setTab("corrections")}
-          className={cn(
-            "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
-            tab === "corrections"
-              ? "border-primary text-primary"
-              : "border-transparent text-muted-foreground hover:text-foreground",
-          )}
-        >
-          <span className="flex items-center gap-2"><ClipboardList size={14} /> Corrections</span>
-        </button>
-      </div>
+        {/* Always mounted (not just while open) so it keeps fetching and the
+            count badge stays accurate while collapsed — same render-but-hide
+            pattern as the rest of this codebase's local tab bars. */}
+        <div className={recsOpen ? "px-4 pb-4" : "hidden"}>
+          <RecommendationsTab
+            clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId}
+            onCountChange={setRecsCount}
+            onCreateCorrection={(prefill) => { setNewFromRecommendation(prefill); setRecsOpen(false); }}
+          />
+        </div>
+      </Card>
 
-      <div className={tab === "recommendations" ? "" : "hidden"}>
-        <RecommendationsTab
-          clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId}
-          onCreateCorrection={(prefill) => setNewFromRecommendation(prefill)}
-        />
-      </div>
-      <div className={tab === "corrections" ? "" : "hidden"}>
-        {openId
-          ? <CorrectionDetail
-              correctionId={openId} clients={clients} actor={actor}
-              onBack={() => setOpenId(null)} toast={toast}
-            />
-          : <CorrectionDashboard
-              clients={clients} users={users} isSuperadmin={isSuperadmin}
-              resolveFirmId={resolveFirmId} actor={actor} toast={toast}
-              onOpen={openCorrection}
-              externalPrefill={newFromRecommendation}
-              onExternalPrefillConsumed={() => setNewFromRecommendation(null)}
-            />}
-      </div>
+      {openId
+        ? <CorrectionDetail
+            correctionId={openId} clients={clients} actor={actor}
+            onBack={() => setOpenId(null)} toast={toast}
+          />
+        : <CorrectionDashboard
+            clients={clients} users={users} isSuperadmin={isSuperadmin}
+            resolveFirmId={resolveFirmId} actor={actor} toast={toast}
+            onOpen={setOpenId}
+            externalPrefill={newFromRecommendation}
+            onExternalPrefillConsumed={() => setNewFromRecommendation(null)}
+          />}
     </div>
   );
 }
@@ -258,10 +252,11 @@ export interface CorrectionPrefill {
  * makes that loop self-maintaining).
  */
 function RecommendationsTab({
-  clients, isSuperadmin, resolveFirmId, onCreateCorrection,
+  clients, isSuperadmin, resolveFirmId, onCreateCorrection, onCountChange,
 }: {
   clients: ClientOption[]; isSuperadmin: boolean; resolveFirmId: () => Promise<string | null>;
   onCreateCorrection: (prefill: CorrectionPrefill) => void;
+  onCountChange?: (count: number) => void;
 }) {
   const [rows, setRows] = useState<Recommendation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -275,17 +270,21 @@ function RecommendationsTab({
     setLoading(true);
     const firmId = await resolveFirmId();
     const data = await fetchRecommendations(firmId, isSuperadmin);
-    setRows(data.slice().sort((a, b) =>
+    const sorted = data.slice().sort((a, b) =>
       (clientMap[a.client_id] || "").localeCompare(clientMap[b.client_id] || "")
-      || a.financial_year.localeCompare(b.financial_year) || a.quarter.localeCompare(b.quarter)));
+      || a.financial_year.localeCompare(b.financial_year) || a.quarter.localeCompare(b.quarter));
+    setRows(sorted);
+    onCountChange?.(sorted.length);
     setLoading(false);
-  }, [isSuperadmin, resolveFirmId, clientMap]);
+  }, [isSuperadmin, resolveFirmId, clientMap, onCountChange]);
 
   useEffect(() => { fetchRows(); }, [fetchRows]);
 
   // Live: a status change on the Dashboard, or a correction's outcome being
   // recorded (which syncs into tds_filings via the trigger), both need to
-  // move a row into or out of this list without a manual refresh.
+  // move a row into or out of this list without a manual refresh — this
+  // stays subscribed even while the section is collapsed, so the count
+  // badge on the collapsed header never goes stale.
   useEffect(() => {
     const ch = supabase
       .channel("tds-recommendations")
@@ -297,12 +296,9 @@ function RecommendationsTab({
 
   return (
     <div className="space-y-3">
-      <div>
-        <h2 className="text-xl font-bold text-foreground">Recommendations</h2>
-        <p className="text-sm text-muted-foreground">
-          Returns marked Processed with Default — review the reason and raise a correction if needed.
-        </p>
-      </div>
+      <p className="text-xs text-muted-foreground">
+        Returns marked Processed with Default — review the reason and raise a correction if needed.
+      </p>
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
