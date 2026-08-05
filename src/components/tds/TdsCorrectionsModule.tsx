@@ -45,10 +45,10 @@ import { cn } from "@/lib/utils";
 import {
   Search, Plus, ArrowLeft, PenTool, Trash2, Pencil, RotateCcw, X, GitCompare,
   CheckCircle2, XCircle, Landmark, ShieldCheck, Lock, ChevronDown, ChevronRight,
-  AlertTriangle, Send, Upload, Eye,
+  AlertTriangle, Send, Upload, Eye, Lightbulb, ClipboardList,
 } from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
-import { isProcessedWorkStatus } from "./TdsFilingsManager";
+import { isProcessedWorkStatus, PROCESSED_WITH_DEFAULT_STATUS } from "./TdsFilingsManager";
 import { TdsDataEntry, CORRECTION_TDS_SOURCE } from "./TdsDataEntry";
 import {
   CORRECTION_STATUS_META, isCorrectionLocked, isCorrectionEditable,
@@ -57,6 +57,7 @@ import {
   rejectCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
   undoCorrectionRow, uploadCorrectionProof, removeCorrectionProof, canMarkFiled, effectiveCorrectionAction,
   updateCorrectionProcessedOutcome, CORRECTION_PROCESSED_OUTCOMES,
+  fetchRecommendations, type Recommendation,
   SUBMISSION_MODE_META, type SubmissionMode,
   type Correction, type CorrectionStatus, type CorrectionChallan,
   type CorrectionDeductee, type CorrectionAction, type Actor, type FieldDiff,
@@ -148,30 +149,204 @@ export function TdsCorrectionsModule({ clients, users, isSuperadmin, resolveFirm
     role: user?.role ?? null,
   }), [user?.id, user?.name, user?.email, user?.role]);
 
+  const [tab, setTab] = useState<"recommendations" | "corrections">("recommendations");
   const [openId, setOpenId] = useState<string | null>(null);
+  // Handed from the Recommendations tab's "Create Correction" button down to
+  // CorrectionDashboard's own NewCorrectionDialog instance — both tabs stay
+  // mounted (rendered-but-hidden, TdsFilings.tsx's own established pattern
+  // for a local tab bar) so this doesn't need a remount to take effect.
+  const [newFromRecommendation, setNewFromRecommendation] = useState<CorrectionPrefill | null>(null);
 
-  return openId
-    ? <CorrectionDetail
-        correctionId={openId} clients={clients} actor={actor}
-        onBack={() => setOpenId(null)} toast={toast}
-      />
-    : <CorrectionDashboard
-        clients={clients} users={users} isSuperadmin={isSuperadmin}
-        resolveFirmId={resolveFirmId} actor={actor} toast={toast}
-        onOpen={setOpenId}
-      />;
+  // Opening a correction (from either tab) always switches to Corrections —
+  // there's nothing to look at in Recommendations once you're inside one.
+  const openCorrection = (id: string) => { setTab("corrections"); setOpenId(id); };
+
+  return (
+    <div>
+      {/* Tab bar — mirrors TdsFilings.tsx's own local tab bar pattern
+          (Audit & Overrides / TDS Workspace) exactly, for visual consistency. */}
+      <div className="flex border-b mb-4">
+        <button
+          onClick={() => setTab("recommendations")}
+          className={cn(
+            "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+            tab === "recommendations"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <span className="flex items-center gap-2"><Lightbulb size={14} /> Recommendations</span>
+        </button>
+        <button
+          onClick={() => setTab("corrections")}
+          className={cn(
+            "px-5 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
+            tab === "corrections"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground",
+          )}
+        >
+          <span className="flex items-center gap-2"><ClipboardList size={14} /> Corrections</span>
+        </button>
+      </div>
+
+      <div className={tab === "recommendations" ? "" : "hidden"}>
+        <RecommendationsTab
+          clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId}
+          onCreateCorrection={(prefill) => setNewFromRecommendation(prefill)}
+        />
+      </div>
+      <div className={tab === "corrections" ? "" : "hidden"}>
+        {openId
+          ? <CorrectionDetail
+              correctionId={openId} clients={clients} actor={actor}
+              onBack={() => setOpenId(null)} toast={toast}
+            />
+          : <CorrectionDashboard
+              clients={clients} users={users} isSuperadmin={isSuperadmin}
+              resolveFirmId={resolveFirmId} actor={actor} toast={toast}
+              onOpen={openCorrection}
+              externalPrefill={newFromRecommendation}
+              onExternalPrefillConsumed={() => setNewFromRecommendation(null)}
+            />}
+      </div>
+    </div>
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Dashboard
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** What the Recommendations tab already knows about a period, handed to
+ *  NewCorrectionDialog to skip re-picking it. */
+export interface CorrectionPrefill {
+  clientId: string; fy: string; quarter: string; form: string; reason?: string;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Recommendations
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Every return currently "Processed with Default" with no correction
+ * already in progress — derived live from tds_filings.work_status
+ * (fetchRecommendations, tdsCorrections.ts), not a separate stored list.
+ * "Processed without Default" needs no correction, so it never appears
+ * here — and a period drops out the moment a correction is raised for it,
+ * reappearing automatically if THAT correction's own outcome comes back
+ * "Processed with Default" again (the sync trigger, 20260805170000, is what
+ * makes that loop self-maintaining).
+ */
+function RecommendationsTab({
+  clients, isSuperadmin, resolveFirmId, onCreateCorrection,
+}: {
+  clients: ClientOption[]; isSuperadmin: boolean; resolveFirmId: () => Promise<string | null>;
+  onCreateCorrection: (prefill: CorrectionPrefill) => void;
+}) {
+  const [rows, setRows] = useState<Recommendation[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const clientMap = useMemo(
+    () => Object.fromEntries(clients.map(c => [c.id, c.name || "—"])),
+    [clients],
+  );
+
+  const fetchRows = useCallback(async () => {
+    setLoading(true);
+    const firmId = await resolveFirmId();
+    const data = await fetchRecommendations(firmId, isSuperadmin);
+    setRows(data.slice().sort((a, b) =>
+      (clientMap[a.client_id] || "").localeCompare(clientMap[b.client_id] || "")
+      || a.financial_year.localeCompare(b.financial_year) || a.quarter.localeCompare(b.quarter)));
+    setLoading(false);
+  }, [isSuperadmin, resolveFirmId, clientMap]);
+
+  useEffect(() => { fetchRows(); }, [fetchRows]);
+
+  // Live: a status change on the Dashboard, or a correction's outcome being
+  // recorded (which syncs into tds_filings via the trigger), both need to
+  // move a row into or out of this list without a manual refresh.
+  useEffect(() => {
+    const ch = supabase
+      .channel("tds-recommendations")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_filings" }, () => fetchRows())
+      .on("postgres_changes", { event: "*", schema: "public", table: "tds_corrections" }, () => fetchRows())
+      .subscribe();
+    return () => { supabase.removeChannel(ch); };
+  }, [fetchRows]);
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <h2 className="text-xl font-bold text-foreground">Recommendations</h2>
+        <p className="text-sm text-muted-foreground">
+          Returns marked Processed with Default — review the reason and raise a correction if needed.
+        </p>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : rows.length === 0 ? (
+        <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">
+          Nothing needs review right now — no return is currently Processed with Default.
+        </CardContent></Card>
+      ) : (
+        <div className="space-y-2">
+          {rows.map((r) => (
+            <Card key={`${r.filing_id}-${r.form_type}`} className="border-amber-200 dark:border-amber-900">
+              <CardContent className="p-3 flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-foreground">
+                    {clientMap[r.client_id] || "—"}
+                    <span className="ml-2 text-xs font-normal text-muted-foreground">
+                      {r.form_type} · {r.quarter} {r.financial_year}
+                    </span>
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    {r.default_reason || "No reason was recorded for this default."}
+                  </p>
+                </div>
+                <Button
+                  size="sm" className="gap-1.5 shrink-0"
+                  onClick={() => onCreateCorrection({
+                    clientId: r.client_id, fy: r.financial_year, quarter: r.quarter,
+                    form: r.form_type, reason: r.default_reason || undefined,
+                  })}
+                >
+                  <Plus size={14} /> Create Correction
+                </Button>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CorrectionDashboard({
-  clients, users, isSuperadmin, resolveFirmId, actor, toast, onOpen,
-}: Props & { actor: Actor; toast: any; onOpen: (id: string) => void }) {
+  clients, users, isSuperadmin, resolveFirmId, actor, toast, onOpen, externalPrefill, onExternalPrefillConsumed,
+}: Props & {
+  actor: Actor; toast: any; onOpen: (id: string) => void;
+  // Set by the Recommendations tab's own "Create Correction" button — this
+  // component owns the one NewCorrectionDialog instance regardless of which
+  // tab triggered it (both tabs stay mounted, TdsFilings.tsx's own
+  // established render-but-hide pattern), so a recommendation just hands its
+  // client/period/reason down to open it pre-filled.
+  externalPrefill?: CorrectionPrefill | null; onExternalPrefillConsumed?: () => void;
+}) {
   const [rows, setRows] = useState<Correction[]>([]);
   const [loading, setLoading] = useState(true);
   const [newOpen, setNewOpen] = useState(false);
+  const [prefill, setPrefill] = useState<CorrectionPrefill | null>(null);
+
+  useEffect(() => {
+    if (!externalPrefill) return;
+    setPrefill(externalPrefill);
+    setNewOpen(true);
+    onExternalPrefillConsumed?.();
+  }, [externalPrefill, onExternalPrefillConsumed]);
 
   const [search, setSearch] = useState("");
   const [fClient, setFClient] = useState("all");
@@ -255,7 +430,7 @@ function CorrectionDashboard({
             each correction is kept as a separate version.
           </p>
         </div>
-        <Button size="sm" className="gap-1.5 shrink-0" onClick={() => setNewOpen(true)}>
+        <Button size="sm" className="gap-1.5 shrink-0" onClick={() => { setPrefill(null); setNewOpen(true); }}>
           <Plus size={14} /> New Correction
         </Button>
       </div>
@@ -413,9 +588,9 @@ function CorrectionDashboard({
       )}
 
       <NewCorrectionDialog
-        open={newOpen} onOpenChange={setNewOpen}
-        clients={clients} resolveFirmId={resolveFirmId} actor={actor} toast={toast}
-        onCreated={(id) => { setNewOpen(false); fetchRows(); onOpen(id); }}
+        open={newOpen} onOpenChange={(v) => { setNewOpen(v); if (!v) setPrefill(null); }}
+        clients={clients} resolveFirmId={resolveFirmId} actor={actor} toast={toast} prefill={prefill}
+        onCreated={(id) => { setNewOpen(false); setPrefill(null); fetchRows(); onOpen(id); }}
       />
     </div>
   );
@@ -426,11 +601,17 @@ function CorrectionDashboard({
 // ═══════════════════════════════════════════════════════════════════════════
 
 function NewCorrectionDialog({
-  open, onOpenChange, clients, resolveFirmId, actor, toast, onCreated,
+  open, onOpenChange, clients, resolveFirmId, actor, toast, onCreated, prefill,
 }: {
   open: boolean; onOpenChange: (v: boolean) => void;
   clients: ClientOption[]; resolveFirmId: () => Promise<string | null>;
   actor: Actor; toast: any; onCreated: (id: string) => void;
+  // From the Recommendations tab — client/period is already known (that's
+  // what put it there), so the pickers lock instead of asking again; only
+  // the reason stays editable (pre-seeded from the recommendation's own
+  // captured default_reason, since that's very likely the real reason for
+  // the correction too, but the user may want to phrase it differently).
+  prefill?: CorrectionPrefill | null;
 }) {
   const [client, setClient] = useState("");
   const [fy, setFy] = useState("");
@@ -442,13 +623,19 @@ function NewCorrectionDialog({
   const [preview, setPreview] = useState<{ challans: number; deductees: number } | null>(null);
   const [checking, setChecking] = useState(false);
   const [saving, setSaving] = useState(false);
+  const locked = !!prefill;
 
   useEffect(() => {
     if (!open) {
       setClient(""); setFy(""); setQuarter(""); setForm("");
       setReason(""); setFiling(null); setOpenCorrection(null); setPreview(null);
+      return;
     }
-  }, [open]);
+    if (prefill) {
+      setClient(prefill.clientId); setFy(prefill.fy); setQuarter(prefill.quarter); setForm(prefill.form);
+      setReason(prefill.reason || "");
+    }
+  }, [open, prefill]);
 
   useEffect(() => {
     let cancelled = false;
@@ -531,9 +718,14 @@ function NewCorrectionDialog({
         </DialogHeader>
 
         <div className="space-y-3">
+          {locked && (
+            <p className="text-[11px] text-muted-foreground -mb-1">
+              From a recommendation — client and period are locked to the return that needs correcting.
+            </p>
+          )}
           <div className="space-y-1">
             <Label className="text-xs">Client</Label>
-            <Select value={client} onValueChange={setClient}>
+            <Select value={client} onValueChange={setClient} disabled={locked}>
               <SelectTrigger className="h-9"><SelectValue placeholder="Select client" /></SelectTrigger>
               <SelectContent>
                 {clients.map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
@@ -543,21 +735,21 @@ function NewCorrectionDialog({
           <div className="grid grid-cols-3 gap-2">
             <div className="space-y-1">
               <Label className="text-xs">Financial Year</Label>
-              <Select value={fy} onValueChange={setFy}>
+              <Select value={fy} onValueChange={setFy} disabled={locked}>
                 <SelectTrigger className="h-9"><SelectValue placeholder="FY" /></SelectTrigger>
                 <SelectContent>{FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Quarter</Label>
-              <Select value={quarter} onValueChange={setQuarter}>
+              <Select value={quarter} onValueChange={setQuarter} disabled={locked}>
                 <SelectTrigger className="h-9"><SelectValue placeholder="Q" /></SelectTrigger>
                 <SelectContent>{QUARTERS.map(q => <SelectItem key={q} value={q}>{q}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <div className="space-y-1">
               <Label className="text-xs">Form</Label>
-              <Select value={form} onValueChange={setForm}>
+              <Select value={form} onValueChange={setForm} disabled={locked}>
                 <SelectTrigger className="h-9"><SelectValue placeholder="Form" /></SelectTrigger>
                 <SelectContent>{FORMS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}</SelectContent>
               </Select>
@@ -1409,6 +1601,8 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [settingOutcome, setSettingOutcome] = useState(false);
+  const [outcomePrompt, setOutcomePrompt] = useState(false);
+  const [outcomeReasonText, setOutcomeReasonText] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setMode(correction.submission_mode ?? null); }, [correction.submission_mode]);
@@ -1457,13 +1651,26 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
   // own carve-out in tds_correction_block_when_filed). Same two values as the
   // original return's own work_status (TdsFilingsManager.tsx), so reporting
   // reads consistently whether a period was ever corrected or not.
-  const setOutcome = async (outcome: typeof CORRECTION_PROCESSED_OUTCOMES[number]) => {
+  const setOutcome = async (outcome: typeof CORRECTION_PROCESSED_OUTCOMES[number], reason?: string) => {
     setSettingOutcome(true);
-    const err = await updateCorrectionProcessedOutcome(correction, outcome, actor);
+    const err = await updateCorrectionProcessedOutcome(correction, outcome, actor, reason);
     setSettingOutcome(false);
     if (err) { toast?.({ title: "Could not record the outcome", description: err, variant: "destructive" }); return; }
     toast?.({ title: `Marked ${outcome}` });
     onRefresh?.();
+  };
+
+  // "Processed with Default" needs a reason first (shown in the
+  // Recommendations tab) — same rule as the original return's own status
+  // dropdown (TdsFilingsManager.tsx). "Processed without Default" commits
+  // immediately; there's nothing to explain.
+  const handleOutcomeClick = (outcome: typeof CORRECTION_PROCESSED_OUTCOMES[number]) => {
+    if (outcome === PROCESSED_WITH_DEFAULT_STATUS) {
+      setOutcomeReasonText(correction.default_reason || "");
+      setOutcomePrompt(true);
+      return;
+    }
+    setOutcome(outcome);
   };
 
   return (
@@ -1507,7 +1714,7 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
                   key={o}
                   type="button"
                   disabled={settingOutcome}
-                  onClick={() => setOutcome(o)}
+                  onClick={() => handleOutcomeClick(o)}
                   aria-pressed={correction.processed_outcome === o}
                   className={cn(
                     "rounded border px-1.5 py-1 text-[11px] text-left transition-colors disabled:opacity-60",
@@ -1629,6 +1836,32 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
           </Button>
         </div>
       )}
+
+      <Dialog open={outcomePrompt} onOpenChange={(o) => { if (!o) setOutcomePrompt(false); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>What was the default?</DialogTitle>
+            <DialogDescription>
+              This correction is being marked Processed with Default. Describe the default — it
+              appears in the Recommendations tab so a further correction can be raised for it.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={outcomeReasonText} onChange={(e) => setOutcomeReasonText(e.target.value)} rows={3}
+            placeholder="e.g. Short deduction on section 194C — TDS deducted at 1% instead of 2%"
+            disabled={settingOutcome}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOutcomePrompt(false)} disabled={settingOutcome}>Cancel</Button>
+            <Button
+              disabled={settingOutcome || !outcomeReasonText.trim()}
+              onClick={async () => { await setOutcome(PROCESSED_WITH_DEFAULT_STATUS, outcomeReasonText); setOutcomePrompt(false); }}
+            >
+              {settingOutcome ? "Saving…" : "Confirm"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

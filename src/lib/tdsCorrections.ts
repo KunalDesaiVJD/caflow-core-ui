@@ -549,28 +549,92 @@ export const CORRECTION_PROCESSED_OUTCOMES = [PROCESSED_WITH_DEFAULT_STATUS, PRO
  * exception to the otherwise-permanent read-only lock, not a new stage).
  * Settable and resettable any number of times, same as correcting a typo —
  * whoever can file the correction can also record or revise this.
+ *
+ * `reason` is REQUIRED for "Processed with Default" (what the default
+ * actually was — shown in the Recommendations tab) and ignored/cleared for
+ * "Processed without Default" (nothing to explain). The DB trigger
+ * (trg_tds_corrections_sync_filing_status, 20260805170000) propagates both
+ * the outcome and the reason onto the ORIGINAL filing's own work_status/
+ * default_reason — this function only ever writes the correction's own row.
  */
 export async function updateCorrectionProcessedOutcome(
-  c: Correction, outcome: typeof CORRECTION_PROCESSED_OUTCOMES[number], actor: Actor,
+  c: Correction, outcome: typeof CORRECTION_PROCESSED_OUTCOMES[number], actor: Actor, reason?: string,
 ) {
   if (c.status !== "filed") return "This correction has not been filed yet.";
   if (!actor.id) return "You must be signed in to record this.";
+  const trimmedReason = reason?.trim() || null;
+  if (outcome === PROCESSED_WITH_DEFAULT_STATUS && !trimmedReason) {
+    return "Describe what the default was before recording this outcome.";
+  }
   const now = new Date().toISOString();
   const { error } = await supabase.from("tds_corrections" as any)
     .update({
       processed_outcome: outcome, processed_by: actor.id, processed_by_name: actor.name,
-      processed_at: now, updated_at: now,
+      processed_at: now, default_reason: outcome === PROCESSED_WITH_DEFAULT_STATUS ? trimmedReason : null,
+      updated_at: now,
     })
     .eq("id", c.id);
   if (!error) {
     await logCorrectionAction({
       correctionId: c.id, firmId: c.firm_id, clientId: c.client_id,
       actionType: "CORRECTION_PROCESSED_OUTCOME_SET",
-      detail: `Marked ${outcome} by ${actor.name || "—"}`,
+      detail: `Marked ${outcome} by ${actor.name || "—"}${trimmedReason ? ` — ${trimmedReason}` : ""}`,
       oldValue: c.processed_outcome, newValue: outcome, actor,
     });
   }
   return error?.message ?? null;
+}
+
+export interface Recommendation {
+  filing_id: string; client_id: string; financial_year: string; quarter: string;
+  form_type: string; default_reason: string | null;
+}
+
+/**
+ * Every return currently "Processed with Default" with no correction
+ * already in progress for it — the Recommendations tab's own list, derived
+ * live from tds_filings.work_status rather than a separate stored table
+ * (see 20260805170000's own doc: the sync trigger keeps work_status
+ * authoritative, so a period reappears here automatically the next time a
+ * correction's outcome puts it back at "Processed with Default", with no
+ * bookkeeping of our own to go stale). Excludes a period already being
+ * corrected via the SAME open-correction check the sequencing gate itself
+ * enforces (20260804180500) — starting a second one is already blocked
+ * there, so it would be misleading to still recommend it here.
+ */
+export async function fetchRecommendations(firmId: string | null, isSuperadmin: boolean): Promise<Recommendation[]> {
+  let fq = supabase.from("tds_filings")
+    .select("id, client_id, financial_year, quarter, tds_forms, default_reason")
+    .eq("work_status", PROCESSED_WITH_DEFAULT_STATUS);
+  if (!isSuperadmin && firmId) fq = fq.eq("firm_id", firmId);
+  const { data: filings } = await fq;
+  if (!filings || filings.length === 0) return [];
+
+  // Status filtered client-side (not .not("status","in",...)) — mirrors
+  // CorrectionDashboard's own fetchRows(), which fetches every correction
+  // and filters in JS rather than leaning on a query-builder method a
+  // simpler mock/test double may not implement.
+  let oq = supabase.from("tds_corrections" as any).select("client_id, financial_year, quarter, form_type, status");
+  if (!isSuperadmin && firmId) oq = oq.eq("firm_id", firmId);
+  const { data: allCorrections } = await oq;
+  const openKeys = new Set(
+    ((allCorrections || []) as any[])
+      .filter((c) => c.status !== "filed" && c.status !== "rejected")
+      .map((c) => `${c.client_id}|${c.financial_year}|${c.quarter}|${c.form_type}`),
+  );
+
+  const rows: Recommendation[] = [];
+  for (const f of filings as any[]) {
+    for (const form of (f.tds_forms || []) as string[]) {
+      const key = `${f.client_id}|${f.financial_year}|${f.quarter}|${form}`;
+      if (openKeys.has(key)) continue;
+      rows.push({
+        filing_id: f.id, client_id: f.client_id, financial_year: f.financial_year,
+        quarter: f.quarter, form_type: form, default_reason: f.default_reason,
+      });
+    }
+  }
+  return rows;
 }
 
 export async function rejectCorrection(c: Correction, reason: string, actor: Actor) {

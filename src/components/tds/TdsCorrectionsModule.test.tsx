@@ -10,7 +10,7 @@
  *   3. The client portal NEVER offers a signing control, at any status.
  *   4. isCorrectionLocked is the single source of truth for 1-3.
  */
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { isCorrectionLocked, summariseCorrection } from "@/lib/tdsCorrections";
 
@@ -119,7 +119,10 @@ describe("staff module", () => {
 
   it("mounts the dashboard and lists the correction", async () => {
     render(<TdsCorrectionsModule {...staffProps} />);
-    await waitFor(() => expect(screen.getByText("Corrections")).toBeInTheDocument());
+    // Recommendations is the default landing tab (2026-08-05) — switch to
+    // the Corrections tab to reach the dashboard this test actually checks.
+    const correctionsTab = await screen.findByRole("button", { name: /Corrections/i });
+    fireEvent.click(correctionsTab);
     await waitFor(() => expect(screen.getAllByText("Acme Pvt Ltd").length).toBeGreaterThan(0));
     // All six lifecycle tiles render, in workflow order
     for (const tile of ["Draft", "Awaiting Employee", "Awaiting Senior", "Ready to File", "Filed", "Rejected"]) {
@@ -180,13 +183,14 @@ describe("portal TDS module", () => {
 // The detail screen exists to FIND and fix one wrong entry among hundreds.
 // These pin the affordances that make that possible.
 
-import { fireEvent } from "@testing-library/react";
-
 describe("correction detail is the Data Entry engine", () => {
   beforeEach(() => { state.status = "draft"; });
 
   const openDetail = async () => {
     render(<TdsCorrectionsModule {...staffProps} />);
+    // Recommendations is the default landing tab (2026-08-05) — switch to
+    // Corrections first, same as a real user reaching the detail screen.
+    fireEvent.click(await screen.findByRole("button", { name: /Corrections/i }));
     await waitFor(() => expect(screen.getAllByText("Acme Pvt Ltd").length).toBeGreaterThan(0));
     fireEvent.click(screen.getAllByTitle("Open correction")[0]);
     await waitFor(() => expect(screen.getByText("All corrections")).toBeInTheDocument());

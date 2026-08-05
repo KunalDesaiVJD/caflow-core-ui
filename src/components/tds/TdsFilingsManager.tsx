@@ -25,6 +25,9 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetFooter,
 } from "@/components/ui/sheet";
 import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
+} from "@/components/ui/dialog";
+import {
   HoverCard, HoverCardContent, HoverCardTrigger,
 } from "@/components/ui/hover-card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -548,6 +551,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // SAME searchFiltered list further, they don't replace each other.
   const [clientSearchQuery, setClientSearchQuery] = useState("");
   const [statusMultiFilter, setStatusMultiFilter] = useState<string[]>([]);
+  // "Processed with Default" needs a captured reason (shown in the
+  // Corrections module's Recommendations tab) before it commits — every
+  // other status writes immediately, same as before. Holds the ROW being
+  // changed until the dialog resolves; the Select's own displayed value
+  // stays at the OLD status until then (never optimistically shows the new
+  // one), since cancelling must leave nothing changed.
+  const [defaultReasonPrompt, setDefaultReasonPrompt] = useState<TdsFiling | null>(null);
+  const [defaultReasonText, setDefaultReasonText] = useState("");
+  const [savingDefaultReason, setSavingDefaultReason] = useState(false);
   const [preparedByMultiFilter, setPreparedByMultiFilter] = useState<string[]>([]);
   // Every filterable column now owns its own filter, opened from its header.
   const [vfMultiFilter, setVfMultiFilter] = useState<string[]>([]);
@@ -1436,7 +1448,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
   // ever writes to anymore, so it can't be trusted here.
   const hasAckAttached = (filingId: string) => ackFiles.has(filingId);
 
-  const handleStatusChange = async (filing: TdsFiling, newStatus: string) => {
+  const handleStatusChange = async (filing: TdsFiling, newStatus: string, defaultReason?: string) => {
     const oldStatus = filing.work_status;
     if (oldStatus === newStatus) return;
 
@@ -1485,6 +1497,13 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
 
     const updatePayload: Record<string, any> = {
       work_status: newStatus,
+      // Only ever populated for "Processed with Default" (the Recommendations
+      // tab's own "what was the default" text) — cleared on every other
+      // status, same as the correction-outcome sync trigger clears the
+      // ORIGINAL filing's copy when a correction resolves it the other way
+      // (20260805170000) — this dropdown writes tds_filings directly, so it
+      // needs the same clearing rule applied here, not just there.
+      default_reason: newStatus === PROCESSED_WITH_DEFAULT_STATUS ? (defaultReason?.trim() || null) : null,
       last_updated_by: user?.id,
       last_updated_at: new Date().toISOString(),
     };
@@ -1535,6 +1554,7 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       }
       if (updatePayload.preparer_id) await logAuditEntry(filing.id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
       if (updatePayload.checker_id) await logAuditEntry(filing.id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
+      if (updatePayload.default_reason) await logAuditEntry(filing.id, "DEFAULT_REASON_SET", null, updatePayload.default_reason, "Marked Processed with Default");
       fetchFilings();
       onFilingsChanged?.();
     }
@@ -1755,7 +1775,12 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="__header_status" disabled>── Update Status ──</SelectItem>
-              {FILING_STATUSES.map(s => (
+              {/* Processed with Default needs its own captured reason per
+                  return (see the per-row dialog) — a single shared reason
+                  across a bulk batch would misrepresent whatever the actual
+                  default was for each one, so this status is set one return
+                  at a time only. */}
+              {FILING_STATUSES.filter(s => s !== PROCESSED_WITH_DEFAULT_STATUS).map(s => (
                 <SelectItem key={`status:${s}`} value={`status:${s}`}>{s}</SelectItem>
               ))}
             </SelectContent>
@@ -1895,7 +1920,15 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                       {archived ? (
                         <Badge className={cn("text-xs", FILING_STATUS_COLORS[f.work_status] || "bg-muted")}>{statusLabel(f.work_status)}</Badge>
                       ) : (
-                        <Select value={f.work_status} onValueChange={v => handleStatusChange(f, v)}>
+                        <Select
+                          value={f.work_status}
+                          onValueChange={v => {
+                            // Doesn't commit yet — opens the reason dialog below;
+                            // handleStatusChange only runs once that's confirmed.
+                            if (v === PROCESSED_WITH_DEFAULT_STATUS) { setDefaultReasonPrompt(f); setDefaultReasonText(""); return; }
+                            handleStatusChange(f, v);
+                          }}
+                        >
                           {/* Colour the TRIGGER itself (not a smaller badge floating
                               inside it) — FILING_STATUS_COLORS already pairs a bg-* with
                               its own text-*, so the whole dropdown reads as one uniform
@@ -2126,6 +2159,43 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           </Table>
         </CardContent>
       </Card>
+
+      {/* Processed with Default — reason required before it commits (see
+          handleStatusChange's own doc; feeds the Corrections module's
+          Recommendations tab). Cancelling leaves work_status untouched —
+          the Select's value prop never optimistically shows the new status,
+          so there's nothing to revert. */}
+      <Dialog open={!!defaultReasonPrompt} onOpenChange={(o) => { if (!o) setDefaultReasonPrompt(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>What was the default?</DialogTitle>
+            <DialogDescription>
+              This return is being marked Processed with Default. Describe the default — it appears
+              in the Corrections module's Recommendations tab so a correction can be raised for it.
+            </DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={defaultReasonText} onChange={(e) => setDefaultReasonText(e.target.value)} rows={3}
+            placeholder="e.g. Short deduction on section 194C — TDS deducted at 1% instead of 2%"
+            disabled={savingDefaultReason}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDefaultReasonPrompt(null)} disabled={savingDefaultReason}>Cancel</Button>
+            <Button
+              disabled={savingDefaultReason || !defaultReasonText.trim()}
+              onClick={async () => {
+                if (!defaultReasonPrompt) return;
+                setSavingDefaultReason(true);
+                await handleStatusChange(defaultReasonPrompt, PROCESSED_WITH_DEFAULT_STATUS, defaultReasonText);
+                setSavingDefaultReason(false);
+                setDefaultReasonPrompt(null);
+              }}
+            >
+              {savingDefaultReason ? "Saving…" : "Confirm"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* History Drawer */}
       <Sheet open={historyOpen} onOpenChange={setHistoryOpen}>
