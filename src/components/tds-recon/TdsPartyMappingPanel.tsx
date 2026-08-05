@@ -9,7 +9,7 @@
  *   • Per-row actions: Confirm ✓ / Reject ✗ / Edit (inline override)
  *   • Inline edit: change deductee name, section, add note → saved to DB
  */
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Badge }  from "@/components/ui/badge";
@@ -324,6 +324,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
   const [allDeductees, setAllDeductees] = useState<Array<{
     id: string;
     deductee_name: string;
+    deductee_pan: string | null;
     section_code: string | null;
     amount_paid_credited: number | null;
     tds_amount: number | null;
@@ -335,7 +336,8 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
       try {
         const { data } = await (supabase as any)
           .from("tds_deductees")
-          .select("id,deductee_name,section_code,amount_paid_credited,tds_amount")
+          // P3-B (2026-08-05) — include PAN for the deductee-column badge.
+          .select("id,deductee_name,deductee_pan,section_code,amount_paid_credited,tds_amount")
           .eq("client_id", clientId)
           .eq("financial_year", financialYear);
         if (!cancelled) setAllDeductees((data as any[]) || []);
@@ -477,18 +479,60 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
     rejected:     baseList.filter(m => m.mapping_status === "rejected").length,
   };
 
-  // ── Filter mappings (status + search) ────────────────────────────────────────
-  const visible = baseList.filter(m => {
+  // ── P3-B (2026-08-05) — PAN + gross lookup by lower-cased deductee name.
+  // Used by the row renderer to show a PAN pill next to the deductee and
+  // by P3-C to compute the gross-variance badge.
+  const deducteeMeta = useMemo(() => {
+    const m = new Map<string, { pan: string | null; gross: number; tds: number }>();
+    for (const d of allDeductees) {
+      const key = d.deductee_name.trim().toLowerCase();
+      const cur = m.get(key) ?? { pan: null, gross: 0, tds: 0 };
+      if (d.deductee_pan && !cur.pan) cur.pan = d.deductee_pan;
+      cur.gross += Number(d.amount_paid_credited ?? 0);
+      cur.tds   += Number(d.tds_amount ?? 0);
+      m.set(key, cur);
+    }
+    return m;
+  }, [allDeductees]);
+
+  // ── P3-A — quick filter (books_only / manual_link) chip.
+  // Composable with the status filter.
+  const [quickFilter, setQuickFilter] = useState<"none" | "books_only" | "manual_link" | "high_variance">("none");
+
+  // ── Filter mappings (status + search + quick filter) ─────────────────────────
+  const filtered = baseList.filter(m => {
     if (filterStatus !== "all" && m.mapping_status !== filterStatus) return false;
     if (search) {
       const q = search.toLowerCase();
-      return (
+      const hit = (
         m.tb_ledger_name.toLowerCase().includes(q) ||
         m.tds_deductee_name.toLowerCase().includes(q) ||
         (m.tds_section_code || "").toLowerCase().includes(q)
       );
+      if (!hit) return false;
+    }
+    const methods = (m.match_method || "").split("+");
+    if (quickFilter === "books_only")  return methods.includes("books_only");
+    if (quickFilter === "manual_link") return methods.includes("manual_link");
+    if (quickFilter === "high_variance") {
+      const tbG   = m.tb_total_debit ?? 0;
+      const dedG  = m.tds_total_amount ?? 0;
+      if (dedG <= 0 || tbG <= 0) return false;
+      const gap = Math.abs(tbG - dedG) / Math.max(tbG, dedG);
+      return gap > 0.20;
     }
     return true;
+  });
+
+  // ── P3-D — sort by (status priority × confidence desc).
+  const STATUS_PRIO: Record<string, number> = {
+    confirmed: 0, pending: 1, needs_review: 2, rejected: 3,
+  };
+  const visible = [...filtered].sort((a, b) => {
+    const sa = STATUS_PRIO[a.mapping_status] ?? 9;
+    const sb = STATUS_PRIO[b.mapping_status] ?? 9;
+    if (sa !== sb) return sa - sb;
+    return (b.match_confidence ?? 0) - (a.match_confidence ?? 0);
   });
 
   // ── Row actions ──────────────────────────────────────────────────────────────
@@ -532,6 +576,42 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
           <KpiChip label="Pending"       count={effectiveCounts.pending}      color="amber"  active={filterStatus === "pending"}      onClick={() => setFilterStatus("pending")} />
           <KpiChip label="Needs Review"  count={effectiveCounts.needs_review} color="orange" active={filterStatus === "needs_review"} onClick={() => setFilterStatus("needs_review")} />
           <KpiChip label="Rejected"      count={effectiveCounts.rejected}     color="red"    active={filterStatus === "rejected"}     onClick={() => setFilterStatus("rejected")} />
+
+          {/* P3-A — Quick-focus chips: books_only / manual_link / high_variance.
+              Independent of status chips (composable). Click again on the
+              active chip to clear. */}
+          {(() => {
+            const booksCount   = baseList.filter(m => (m.match_method || "").split("+").includes("books_only")).length;
+            const manualCount  = baseList.filter(m => (m.match_method || "").split("+").includes("manual_link")).length;
+            const varianceCount = baseList.filter(m => {
+              const tbG  = m.tb_total_debit ?? 0;
+              const dedG = m.tds_total_amount ?? 0;
+              if (tbG <= 0 || dedG <= 0) return false;
+              const gap = Math.abs(tbG - dedG) / Math.max(tbG, dedG);
+              return gap > 0.20;
+            }).length;
+            const toggle = (name: typeof quickFilter) => () =>
+              setQuickFilter(prev => prev === name ? "none" : name);
+            return (
+              <>
+                {booksCount > 0 && (
+                  <KpiChip label="Books > TDS" count={booksCount}
+                    color="orange" active={quickFilter === "books_only"}
+                    onClick={toggle("books_only")} />
+                )}
+                {manualCount > 0 && (
+                  <KpiChip label="Manual" count={manualCount}
+                    color="slate" active={quickFilter === "manual_link"}
+                    onClick={toggle("manual_link")} />
+                )}
+                {varianceCount > 0 && (
+                  <KpiChip label="Gap > 20%" count={varianceCount}
+                    color="amber" active={quickFilter === "high_variance"}
+                    onClick={toggle("high_variance")} />
+                )}
+              </>
+            );
+          })()}
         </div>
 
         <div className="flex items-center gap-2">
@@ -694,9 +774,40 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
 
                     {/* TDS Deductee — shows gross amount + TDS deducted + match indicators */}
                     <div className="space-y-0.5">
-                      <p className="text-xs truncate" title={m.tds_deductee_name}>
-                        {m.tds_deductee_name}
-                      </p>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <p className="text-xs truncate max-w-[200px]" title={m.tds_deductee_name}>
+                          {m.tds_deductee_name}
+                        </p>
+                        {/* P3-B — PAN pill (mono, uppercase) */}
+                        {(() => {
+                          const meta = deducteeMeta.get(m.tds_deductee_name.trim().toLowerCase());
+                          if (!meta?.pan) return null;
+                          return (
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-mono uppercase bg-slate-100 text-slate-700 border border-slate-200">
+                              {meta.pan}
+                            </span>
+                          );
+                        })()}
+                        {/* P3-C — gross-variance amber badge on confirmed rows only.
+                            Auditor sees at a glance which auto-confirmed rows
+                            still deserve a second look. */}
+                        {(() => {
+                          if (m.mapping_status !== "confirmed") return null;
+                          const tbG  = m.tb_total_debit ?? 0;
+                          const dedG = m.tds_total_amount ?? 0;
+                          if (tbG <= 0 || dedG <= 0) return null;
+                          const gap  = Math.abs(tbG - dedG) / Math.max(tbG, dedG);
+                          if (gap <= 0.20) return null;
+                          return (
+                            <span
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-amber-50 text-amber-800 border border-amber-200"
+                              title={`Gross gap: ${(gap * 100).toFixed(0)}% (TB ₹${tbG.toLocaleString("en-IN", { maximumFractionDigits: 0 })} vs 26Q ₹${dedG.toLocaleString("en-IN", { maximumFractionDigits: 0 })})`}
+                            >
+                              <AlertTriangle size={8} />Δ {(gap * 100).toFixed(0)}%
+                            </span>
+                          );
+                        })()}
+                      </div>
 
                       {/* Gross amount row with match indicator + GST breakup.
                           Issue 4: when mapping_status === "confirmed", always
@@ -784,8 +895,20 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                         : <span className="text-[10px] text-muted-foreground">—</span>}
                     </div>
 
-                    {/* Confidence */}
-                    <ConfidenceBar value={m.match_confidence} />
+                    {/* Confidence + P3-F tier badge (Auto / Review / Manual). */}
+                    <div className="flex items-center gap-2">
+                      <ConfidenceBar value={m.match_confidence} />
+                      {(() => {
+                        const methods = (m.match_method || "").split("+");
+                        if (methods.includes("manual_link")) {
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200 font-medium uppercase tracking-wide">Manual</span>;
+                        }
+                        if (m.mapping_status === "confirmed" && (m.match_confidence ?? 0) >= 80) {
+                          return <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium uppercase tracking-wide">Auto</span>;
+                        }
+                        return <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200 font-medium uppercase tracking-wide">Review</span>;
+                      })()}
+                    </div>
 
                     {/* Method */}
                     <MethodBadge method={m.match_method} />
