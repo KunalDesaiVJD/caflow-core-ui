@@ -449,11 +449,28 @@ const NewInvoice = () => {
     })();
   }, [isSuperadmin, user?.firm_id]);
 
-  // Fetch clients
+  // Fetch clients — INCLUDE archived (is_active = false) clients so the
+  // user can still raise invoices against them (e.g. carried-over work
+  // for a client who was archived after year-end). Root-cause fix: the
+  // previous `.neq("is_active", false)` filter silently dropped every
+  // archived client from the dropdown. Archived clients now surface with
+  // an "(Archived)" tag next to their name and sort to the bottom so the
+  // active list stays on top.
   useEffect(() => {
     (async () => {
-      const { data: clientData } = await supabase.from("clients").select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office").eq("is_draft", false).is("deleted_at", null).neq("is_active", false).order("name");
-      setClients(clientData || []);
+      const { data: clientData } = await supabase
+        .from("clients")
+        .select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office, is_active")
+        .eq("is_draft", false)
+        .is("deleted_at", null)
+        .order("name");
+      const rows = (clientData || []).slice().sort((a: any, b: any) => {
+        const aa = a.is_active === false ? 1 : 0;
+        const bb = b.is_active === false ? 1 : 0;
+        if (aa !== bb) return aa - bb;
+        return String(a.name || "").localeCompare(String(b.name || ""));
+      });
+      setClients(rows);
     })();
   }, [isSuperadmin, user?.firm_id]);
 
@@ -1245,7 +1262,10 @@ const NewInvoice = () => {
           <div>
             <Label className="text-xs font-semibold text-muted-foreground uppercase mb-2 block">Bill To (Client)</Label>
             <SearchableSelect
-              options={clients.map(c => ({ value: c.id, label: `${c.name} (${c.pan})` }))}
+              options={clients.map(c => ({
+                value: c.id,
+                label: `${c.name} (${c.pan})${(c as any).is_active === false ? " — Archived" : ""}`,
+              }))}
               value={clientId}
               onValueChange={setClientId}
               placeholder="Select client"
