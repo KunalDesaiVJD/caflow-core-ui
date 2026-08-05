@@ -35,6 +35,7 @@ import {
 import { usePartyExpenseLedgers } from "./hooks/usePartyExpenseLedgers";
 import { runAiMapper } from "./tdsEngine";
 import { SplitByVoucherPanel } from "./SplitByVoucherPanel";
+import { TdsLedgerSetupPanel } from "./TdsLedgerSetupPanel";
 
 // ─── Common TDS sections for the edit dropdown ────────────────────────────────
 const TDS_SECTIONS = [
@@ -567,6 +568,11 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
   return (
     <TooltipProvider>
     <div className="space-y-4">
+
+      {/* ── Stage 5 / P5-B — TDS Ledgers Setup ── */}
+      {clientId && firmId && financialYear && (
+        <TdsLedgerSetupPanel clientId={clientId} firmId={firmId} financialYear={financialYear} />
+      )}
 
       {/* ── Toolbar ── */}
       <div className="flex flex-wrap items-center justify-between gap-3">

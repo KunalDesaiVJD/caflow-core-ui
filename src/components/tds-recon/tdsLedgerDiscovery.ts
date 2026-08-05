@@ -164,10 +164,40 @@ function inferSectionFromName(name: string): string | null {
  * Layer 3 from the name.
  */
 export async function discoverTdsLedgers(params: {
-  client_id:       string;
-  financial_year:  string;
+  client_id:        string;
+  financial_year:   string;
+  /** P5-B (2026-08-06) — skip the confirmed-set short-circuit and always
+   *  run fresh Layer 1/2/3 discovery from the Trial Balance. Used by the
+   *  setup panel's "Re-scan" action, which needs fresh candidates to
+   *  review even when a confirmed set already exists. */
+  forceRediscover?: boolean;
 }): Promise<DiscoveredTdsLedger[]> {
-  const { client_id, financial_year } = params;
+  const { client_id, financial_year, forceRediscover = false } = params;
+
+  // P5-B (2026-08-06) — if the auditor has already confirmed a TDS-ledger
+  // set for this engagement + FY, that set is authoritative and discovery
+  // is skipped entirely. Prevents the Layer 1/2/3 heuristics from
+  // re-classifying an edge-case ledger differently on a later run (e.g.
+  // one the auditor deliberately excluded via the setup panel).
+  if (!forceRediscover) {
+    try {
+      const { data: confirmed } = await (supabase as any)
+        .from("engagement_tds_ledgers")
+        .select("ledger_name,parent_group,section_code")
+        .eq("client_id",      client_id)
+        .eq("financial_year", financial_year)
+        .eq("is_active",      true);
+      if (confirmed && confirmed.length > 0) {
+        return (confirmed as any[]).map(r => ({
+          ledger_name:  r.ledger_name,
+          parent_group: r.parent_group,
+          section:      r.section_code,
+          cr_total:     0, // not tracked for confirmed rows; not needed downstream
+          source:       "group" as const,
+        }));
+      }
+    } catch { /* fall through to auto-discovery on any error */ }
+  }
 
   // Same pagination style as runAiMapper's TB walk — PostgREST caps at
   // 1000 rows per response and we've seen large-client TBs blow past that.
