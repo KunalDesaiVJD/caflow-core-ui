@@ -53,10 +53,20 @@ unpacked extensions.
    tab or a page reload never replays the same saved password.
 3. On the ITD portal tab, the extension fills the two fields and stops.
 
-## Known limitation
+## Verified (2026-08-06)
 
-The password/CAPTCHA step (step 2 of the ITD login) was not verified against
-a real account while building this — the extension can only be fully
-confirmed working by actually testing it with a real client login. If step 2
-doesn't behave as expected, the on-page banner will say so; please report
-the exact banner text (or lack of one) so the selectors can be fixed.
+Both selectors were confirmed directly against the live portal — the User ID
+field (step 1) and the `input[type="password"]` field (step 2, which appears
+on `/login/password` after Continue) both exist and were successfully filled
+via the same technique this script uses (native value setter + `input`/
+`change` events, so the Angular form actually registers the value — plain
+`.value =` would leave the Continue/Login button disabled).
+
+Not yet verified: the extension's own end-to-end relay (CAflow tab → this
+tab) against a real account from click to a filled password field — v0.1.2
+widened the credential-poll window from ~1.2s to ~12s to remove a timing
+race that could plausibly explain "field never got filled" reports (an
+edge-function cold start taking longer than the old short retry window). If
+it's still not filling after this, the on-page banner will say so — please
+report the exact banner text (or note that no banner appeared at all, which
+narrows it down differently) so the next fix targets the right piece.
