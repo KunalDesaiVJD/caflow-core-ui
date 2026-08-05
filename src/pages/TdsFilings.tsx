@@ -40,7 +40,6 @@ interface UserOption { id: string; name: string | null; }
 const NAV_ITEMS = [
   { key: "dashboard",  label: "Dashboard",     icon: LayoutDashboard },
   { key: "workspace",  label: "TDS Workspace",  icon: Combine },
-  { key: "rate-master",label: "Rate Master",    icon: Settings },
   // Audit Log + Overrides live under ONE nav tab ("Audit & Overrides") with sub-tabs —
   // same pattern as TDS Workspace (Data Entry / Validate & Finalise). Both read
   // the same override/action history, so splitting them across two top-level
@@ -49,8 +48,9 @@ const NAV_ITEMS = [
   // Revises data already FILED for an earlier period. Distinct from Overrides,
   // which records manual verdict overrides during validation.
   { key: "corrections",label: "Corrections",    icon: FileEdit },
+  { key: "rate-master",label: "Rate Master",    icon: Settings },
   // Reports sits last — everything above it is data entry/compliance
-  // workflow (Dashboard through Corrections); Reports is the read-only
+  // workflow (Dashboard through Rate Master); Reports is the read-only
   // reporting layer over all of it.
   { key: "reports",    label: "Reports",        icon: BarChart3 },
 ] as const;

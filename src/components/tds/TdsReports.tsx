@@ -571,7 +571,10 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
   const renderChallanUtilizationReport = () => {
     if (!reportData[0]) return <p className="text-muted-foreground">No data</p>;
     const { challans, deductees, corrections = [], correctionChallans = [], correctionDeductees = [] } = reportData[0];
-    const inQuarter = challans.filter((c: any) => selQuarters.includes(c.quarter));
+    // Always the WHOLE financial year — no quarter filter for this report
+    // (its own point is a running balance across the year, not one quarter's
+    // slice). `challans` is already scoped to selFy by fetchReportData.
+    const inQuarter = challans;
 
     const computed = inQuarter.map((c: any) => {
       const cDeductees = deductees.filter((d: any) => d.challan_id === c.id);
@@ -614,9 +617,12 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     // "displaying all the activities done by the users"), clearly labelled by
     // status so they read as history/context, never as part of the balance
     // table above (which only ever reflects the latest FILED state).
-    type Activity = { kind: string; label: string; status: string | null; by: string | null; at: string | null; changes: FieldDiff[] };
+    type Activity = {
+      kind: string; target: string; action: string | null;
+      status: string | null; by: string | null; at: string | null; changes: FieldDiff[];
+    };
     const activityByChallan = new Map<string, Activity[]>();
-    for (const r of computed) activityByChallan.set(r.c.id, [{ kind: "Original", label: "Original filing", status: null, by: null, at: null, changes: [] }]);
+    for (const r of computed) activityByChallan.set(r.c.id, [{ kind: "Original", target: "Challan", action: null, status: null, by: null, at: null, changes: [] }]);
 
     // Ordinal ("Correction #1", "#2"...) is display-only — there is no stored
     // sequence field on tds_corrections (siblings, not a chain) — computed
@@ -640,7 +646,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       const corr = correctionById.get(cc.correction_id);
       if (!corr) continue;
       activityByChallan.get(cc.original_challan_id)!.push({
-        kind: `Correction #${ordinalOf.get(corr.id)}`, label: `Challan ${cc.action}`, status: corr.status,
+        kind: `Correction #${ordinalOf.get(corr.id)}`, target: "Challan", action: cc.action, status: corr.status,
         by: corr.filed_by_name || corr.raised_by_name || null, at: corr.filed_at || corr.created_at || null,
         changes: diffCorrectionRow(cc),
       });
@@ -659,7 +665,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
       const corr = correctionById.get(cd.correction_id);
       if (!corr) continue;
       activityByChallan.get(challanId)!.push({
-        kind: `Correction #${ordinalOf.get(corr.id)}`, label: `Deductee "${cd.deductee_name || "—"}" ${cd.action}`, status: corr.status,
+        kind: `Correction #${ordinalOf.get(corr.id)}`, target: cd.deductee_name || "—", action: cd.action, status: corr.status,
         by: corr.filed_by_name || corr.raised_by_name || null, at: corr.filed_at || corr.created_at || null,
         changes: diffCorrectionRow(cd),
       });
@@ -707,31 +713,74 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
         {touchedChallans.length === 0 ? (
           <p className="text-xs text-muted-foreground">No challan in this selection has been touched by any correction.</p>
         ) : (
-          <div className="space-y-3">
+          <div className="space-y-4">
             {touchedChallans.map((r: any) => (
               <Card key={r.c.id}>
-                <CardContent className="p-3">
-                  <p className="text-xs font-medium mb-2">
+                <CardContent className="p-0">
+                  <p className="text-xs font-medium px-3 pt-3 pb-2">
                     {r.client?.name || "—"} — {r.c.bsr_code} / {r.c.challan_serial_no} ({fmtDate(r.c.deposit_date)})
                   </p>
-                  <div className="space-y-2">
-                    {(activityByChallan.get(r.c.id) || []).map((a, i) => (
-                      <div key={i} className="text-xs border-l-2 border-muted pl-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium">{a.kind}</span>
-                          {a.status && (
-                            <Badge className={cn("text-[10px]", CORRECTION_STATUS_META[a.status as CorrectionStatus]?.tone)}>
-                              {CORRECTION_STATUS_META[a.status as CorrectionStatus]?.label ?? a.status}
-                            </Badge>
-                          )}
-                          {a.by && <span className="text-muted-foreground">by {a.by}{a.at ? ` · ${fmtDate(a.at)}` : ""}</span>}
-                        </div>
-                        {a.kind !== "Original" && <p className="text-muted-foreground">{a.label}</p>}
-                        {a.changes.map((d, j) => (
-                          <p key={j} className="text-muted-foreground">{d.label}: {String(d.original ?? "—")} → {String(d.corrected ?? "—")}</p>
-                        ))}
-                      </div>
-                    ))}
+                  <div className="overflow-x-auto">
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Version</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead>By</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead>Party / Deductee</TableHead>
+                          <TableHead>Action</TableHead>
+                          <TableHead>Field</TableHead>
+                          <TableHead>Original Value</TableHead>
+                          <TableHead>Corrected Value</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {(activityByChallan.get(r.c.id) || []).map((a, i) => {
+                          // One correction can touch several fields at once (see the
+                          // real screenshot this was designed against — TDS, Total
+                          // tax deducted AND Amount paid all changing together) — the
+                          // ask was "each CORRECTION is a separate row", so those
+                          // stay one row, with every field change stacked inside the
+                          // three right-hand columns rather than spawning a row each
+                          // (which would repeat Version/Status/By/Date for no reason).
+                          const rows = a.changes.length ? a.changes : null;
+                          return (
+                            <TableRow key={i}>
+                              <TableCell className="text-xs font-medium whitespace-nowrap">{a.kind}</TableCell>
+                              <TableCell className="text-xs">
+                                {a.status && (
+                                  <Badge className={cn("text-[10px]", CORRECTION_STATUS_META[a.status as CorrectionStatus]?.tone)}>
+                                    {CORRECTION_STATUS_META[a.status as CorrectionStatus]?.label ?? a.status}
+                                  </Badge>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-xs whitespace-nowrap">{a.by || "—"}</TableCell>
+                              <TableCell className="text-xs whitespace-nowrap">{a.at ? fmtDate(a.at) : "—"}</TableCell>
+                              <TableCell className="text-xs">{a.target}</TableCell>
+                              <TableCell className="text-xs capitalize">{a.action || "—"}</TableCell>
+                              <TableCell className="text-xs" colSpan={rows ? 1 : 3}>
+                                {rows ? (
+                                  <div className="space-y-1">{rows.map((d, j) => <div key={j}>{d.label}</div>)}</div>
+                                ) : (
+                                  <span className="text-muted-foreground">No field-level changes</span>
+                                )}
+                              </TableCell>
+                              {rows && (
+                                <>
+                                  <TableCell className="text-xs">
+                                    <div className="space-y-1">{rows.map((d, j) => <div key={j}>{String(d.original ?? "—")}</div>)}</div>
+                                  </TableCell>
+                                  <TableCell className="text-xs">
+                                    <div className="space-y-1">{rows.map((d, j) => <div key={j}>{String(d.corrected ?? "—")}</div>)}</div>
+                                  </TableCell>
+                                </>
+                              )}
+                            </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
                   </div>
                 </CardContent>
               </Card>
@@ -1587,16 +1636,18 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
             <SelectContent>{FY_OPTIONS.map(fy => <SelectItem key={fy} value={fy}>{fy}</SelectItem>)}</SelectContent>
           </Select>
         </div>
-        <div className="space-y-1">
-          <Label className="text-xs">Quarters</Label>
-          <div className="flex gap-1">
-            {QUARTER_OPTIONS.map(q => (
-              <Button key={q} variant={selQuarters.includes(q) ? "default" : "outline"} size="sm" className="h-8 px-3" onClick={() => toggleQuarter(q)}>
-                {q}
-              </Button>
-            ))}
+        {selectedReport !== "challan-utilization" && (
+          <div className="space-y-1">
+            <Label className="text-xs">Quarters</Label>
+            <div className="flex gap-1">
+              {QUARTER_OPTIONS.map(q => (
+                <Button key={q} variant={selQuarters.includes(q) ? "default" : "outline"} size="sm" className="h-8 px-3" onClick={() => toggleQuarter(q)}>
+                  {q}
+                </Button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
     {(selectedReport === "genius-export" || selectedReport === "cross-quarter" || selectedReport === "overview-report") && (
           <div className="space-y-1">
             <Label className="text-xs">Form</Label>
