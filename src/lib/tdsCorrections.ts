@@ -588,6 +588,17 @@ export async function updateCorrectionProcessedOutcome(
 export interface Recommendation {
   filing_id: string; client_id: string; financial_year: string; quarter: string;
   form_type: string; default_reason: string | null;
+  /** "original" — the CA marked the return itself Processed with Default on
+   *  the Dashboard. "correction" — a filed correction's own outcome was
+   *  Processed with Default, and trg_tds_corrections_sync_filing_status
+   *  (20260805170000) copied that onto the original return's work_status;
+   *  correction_id/correction_reason then identify which one. Derived here
+   *  (not stored) by checking whether the most recent filed correction for
+   *  this exact client/period/form has a matching processed_outcome — same
+   *  reasoning as the rest of this function's "no separate bookkeeping"
+   *  design, since tds_filings itself doesn't record which path set it. */
+  source: "original" | "correction";
+  correction_id: string | null;
 }
 
 /**
@@ -614,23 +625,39 @@ export async function fetchRecommendations(firmId: string | null, isSuperadmin: 
   // CorrectionDashboard's own fetchRows(), which fetches every correction
   // and filters in JS rather than leaning on a query-builder method a
   // simpler mock/test double may not implement.
-  let oq = supabase.from("tds_corrections" as any).select("client_id, financial_year, quarter, form_type, status");
+  let oq = supabase.from("tds_corrections" as any)
+    .select("id, client_id, financial_year, quarter, form_type, status, processed_outcome, processed_at");
   if (!isSuperadmin && firmId) oq = oq.eq("firm_id", firmId);
   const { data: allCorrections } = await oq;
+  const corrections = (allCorrections || []) as any[];
   const openKeys = new Set(
-    ((allCorrections || []) as any[])
+    corrections
       .filter((c) => c.status !== "filed" && c.status !== "rejected")
       .map((c) => `${c.client_id}|${c.financial_year}|${c.quarter}|${c.form_type}`),
   );
+  // The most recent FILED correction per key, whatever its outcome — only
+  // used below when that outcome is Processed with Default, i.e. exactly
+  // the one the sync trigger would have used to set work_status.
+  const latestFiledByKey = new Map<string, any>();
+  for (const c of corrections) {
+    if (c.status !== "filed") continue;
+    const key = `${c.client_id}|${c.financial_year}|${c.quarter}|${c.form_type}`;
+    const prev = latestFiledByKey.get(key);
+    if (!prev || (c.processed_at || "") > (prev.processed_at || "")) latestFiledByKey.set(key, c);
+  }
 
   const rows: Recommendation[] = [];
   for (const f of filings as any[]) {
     for (const form of (f.tds_forms || []) as string[]) {
       const key = `${f.client_id}|${f.financial_year}|${f.quarter}|${form}`;
       if (openKeys.has(key)) continue;
+      const latestFiled = latestFiledByKey.get(key);
+      const fromCorrection = latestFiled?.processed_outcome === PROCESSED_WITH_DEFAULT_STATUS;
       rows.push({
         filing_id: f.id, client_id: f.client_id, financial_year: f.financial_year,
         quarter: f.quarter, form_type: form, default_reason: f.default_reason,
+        source: fromCorrection ? "correction" : "original",
+        correction_id: fromCorrection ? latestFiled.id : null,
       });
     }
   }

@@ -207,6 +207,7 @@ export function TdsCorrectionsModule({ clients, users, isSuperadmin, resolveFirm
             clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId}
             onCountChange={setRecsCount}
             onCreateCorrection={(prefill) => { setNewFromRecommendation(prefill); setRecsOpen(false); }}
+            onOpenCorrection={(id) => { setOpenId(id); setRecsOpen(false); }}
           />
         </div>
       </Card>
@@ -252,11 +253,15 @@ export interface CorrectionPrefill {
  * makes that loop self-maintaining).
  */
 function RecommendationsTab({
-  clients, isSuperadmin, resolveFirmId, onCreateCorrection, onCountChange,
+  clients, isSuperadmin, resolveFirmId, onCreateCorrection, onCountChange, onOpenCorrection,
 }: {
   clients: ClientOption[]; isSuperadmin: boolean; resolveFirmId: () => Promise<string | null>;
   onCreateCorrection: (prefill: CorrectionPrefill) => void;
   onCountChange?: (count: number) => void;
+  /** Opens an existing correction's detail view — used by the Source column
+   *  so a "From Correction" row can jump straight to the correction whose
+   *  filed outcome is what drove this recommendation. */
+  onOpenCorrection?: (correctionId: string) => void;
 }) {
   const [rows, setRows] = useState<Recommendation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -301,40 +306,83 @@ function RecommendationsTab({
       </p>
 
       {loading ? (
-        <p className="text-sm text-muted-foreground">Loading…</p>
+        <div className="space-y-1.5">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>
       ) : rows.length === 0 ? (
         <Card><CardContent className="p-6 text-center text-sm text-muted-foreground">
           Nothing needs review right now — no return is currently Processed with Default.
         </CardContent></Card>
       ) : (
-        <div className="space-y-2">
-          {rows.map((r) => (
-            <Card key={`${r.filing_id}-${r.form_type}`} className="border-amber-200 dark:border-amber-900">
-              <CardContent className="p-3 flex items-start justify-between gap-3 flex-wrap">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-foreground">
-                    {clientMap[r.client_id] || "—"}
-                    <span className="ml-2 text-xs font-normal text-muted-foreground">
-                      {r.form_type} · {r.quarter} {r.financial_year}
-                    </span>
-                  </p>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {r.default_reason || "No reason was recorded for this default."}
-                  </p>
-                </div>
-                <Button
-                  size="sm" className="gap-1.5 shrink-0"
-                  onClick={() => onCreateCorrection({
-                    clientId: r.client_id, fy: r.financial_year, quarter: r.quarter,
-                    form: r.form_type, reason: r.default_reason || undefined,
-                  })}
-                >
-                  <Plus size={14} /> Create Correction
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        <Card className="border-amber-200 dark:border-amber-900">
+          <CardContent className="p-0">
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead className="text-xs">Client</TableHead>
+                    <TableHead className="text-xs">Period</TableHead>
+                    <TableHead className="text-xs">Reason</TableHead>
+                    <TableHead className="text-xs">Source</TableHead>
+                    <TableHead className="text-xs text-right">Action</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((r) => (
+                    <TableRow key={`${r.filing_id}-${r.form_type}`} className="h-11">
+                      <TableCell className="text-xs font-medium py-1.5">{clientMap[r.client_id] || "—"}</TableCell>
+                      <TableCell className="text-xs py-1.5 whitespace-nowrap">
+                        <span className="font-medium">{r.form_type}</span>
+                        <span className="text-muted-foreground"> · {r.quarter} {r.financial_year}</span>
+                      </TableCell>
+                      <TableCell className="text-xs py-1.5 text-muted-foreground max-w-xs">
+                        {r.default_reason || "No reason was recorded for this default."}
+                      </TableCell>
+                      <TableCell className="text-xs py-1.5">
+                        {/* Where this "Processed with Default" status actually came from —
+                            the original return being marked that way on the Dashboard, or
+                            a filed correction whose own recorded outcome was Processed with
+                            Default (synced back by trg_tds_corrections_sync_filing_status,
+                            20260805170000). Without this, the two are indistinguishable in
+                            the UI even though they need different follow-up: a fresh
+                            original-filing default vs. a correction that didn't fully
+                            resolve the issue and needs another round. */}
+                        {r.source === "correction" ? (
+                          <button
+                            type="button"
+                            title="Opens the filed correction whose recorded outcome set this status"
+                            onClick={() => r.correction_id && onOpenCorrection?.(r.correction_id)}
+                            className="inline-flex"
+                          >
+                            <Badge
+                              variant="outline"
+                              className="text-[10px] border-blue-300 text-blue-700 dark:border-blue-800 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950 cursor-pointer"
+                            >
+                              From Correction
+                            </Badge>
+                          </button>
+                        ) : (
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                            Original Filing
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right py-1.5">
+                        <Button
+                          size="sm" className="gap-1.5"
+                          onClick={() => onCreateCorrection({
+                            clientId: r.client_id, fy: r.financial_year, quarter: r.quarter,
+                            form: r.form_type, reason: r.default_reason || undefined,
+                          })}
+                        >
+                          <Plus size={14} /> Create Correction
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );
