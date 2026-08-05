@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "CAFlow — ITD Portal Autofill",
+  "version": "0.1.0",
+  "description": "Fills the Income Tax e-Filing login (PAN/User ID, then Password) from CAFlow's saved client credentials. Stops before CAPTCHA/OTP — you always complete that step yourself.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://caflow-core-ui.vercel.app/*",
+    "http://localhost:8080/*",
+    "http://localhost:5173/*",
+    "https://eportal.incometax.gov.in/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://caflow-core-ui.vercel.app/*",
+        "http://localhost:8080/*",
+        "http://localhost:5173/*"
+      ],
+      "js": ["content-caflow.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://eportal.incometax.gov.in/*"],
+      "js": ["content-itd.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
