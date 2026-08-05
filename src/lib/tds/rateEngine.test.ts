@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, computeChallanOverApplied, getRateForSection, type RateEntry } from "./rateEngine";
+import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, computeChallanOverApplied, computeChallanPooled, getRateForSection, type RateEntry } from "./rateEngine";
 
 /**
  * Regression: TdsDataEntry.tsx's "Unconsumed Amount" (and the underlying

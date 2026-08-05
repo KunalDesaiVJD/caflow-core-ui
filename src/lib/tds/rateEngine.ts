@@ -185,6 +185,53 @@ export interface InterestApplicableRow extends ApplicableRow {
   date_of_payment?: string | null;
 }
 
+/**
+ * Cross-utilization (firm instruction, 2026-08-06): TDS, Interest, and Late
+ * Fee are ONE fungible pool measured against the challan's own undiminished
+ * total_challan_amount — a component running under its own declared share is
+ * free to be offset by another running over, as long as the GRAND TOTAL
+ * never exceeds the challan. The only prior rule ("late_fees_234e is an
+ * untouchable slice, carved out of allocatable before TDS/Interest are even
+ * checked") is what produced false Over-Applied errors on challans that were
+ * genuinely within their total.
+ *
+ * Deliberately a NEW function rather than changing computeAllocatable: that
+ * one is still correct and still used as-is by the Unconsumed/Utilization
+ * Reports (TdsReports.tsx), which track late fee's own separate
+ * declared-vs-used balance (late_fees_234e / late_fees_used) as a genuinely
+ * different, report-only concept — pooling it there would double-count that
+ * column against this one. This function is the ONE definition of "is this
+ * challan over-applied" for every gate that BLOCKS on it: TdsDataEntry.tsx's
+ * Data Entry grid, the Corrections editor, TdsValidateFinalise.tsx's Stage-1
+ * pre-flight gate, and the Genius Export guard.
+ */
+export function computeChallanPooled(
+  challan: { total_challan_amount?: number | null; late_fees_234e?: number | null; kasar_vatav_amount?: number | null; deposit_date?: string | null },
+  deductees: InterestApplicableRow[],
+): {
+  tds: number; interest: number; surcharge: number; lateFees: number; kasarVatav: number;
+  effectiveApplied: number; allocatable: number; overApplied: boolean; unconsumed: number;
+} {
+  const liveInterestRows = deductees.map((d) => ({
+    ...d,
+    interest_amount: calcAutoInterest(d.total_tax_deducted || d.tds_amount || 0, d.date_of_payment ?? null, challan.deposit_date ?? null).interest,
+  }));
+  const { tds, interest, surcharge, applied } = computeApplied(liveInterestRows);
+  const lateFees = challan.late_fees_234e || 0;
+  const kasarVatav = challan.kasar_vatav_amount || 0;
+  // Late fee now ADDS into the pooled applied figure, and allocatable is the
+  // challan's raw total — not `allocatable = total - lateFees` — so all
+  // three components draw from and are checked against the SAME undiminished
+  // ceiling instead of late fee being reserved out of it first.
+  const effectiveApplied = applied + kasarVatav + lateFees;
+  const allocatable = challan.total_challan_amount || 0;
+  return {
+    tds, interest, surcharge, lateFees, kasarVatav, effectiveApplied, allocatable,
+    overApplied: isChallanOverApplied(effectiveApplied, allocatable),
+    unconsumed: Math.max(0, allocatable - effectiveApplied),
+  };
+}
+
 /** The ONE definition of "is this challan over-applied", covering everything
  *  challanDeducteeTds/getChallanBreakdownAll's per-challan detail card already
  *  covers in TdsDataEntry.tsx — live interest recompute (a row's own stored
@@ -193,19 +240,14 @@ export interface InterestApplicableRow extends ApplicableRow {
  *  caller (e.g. a Stage-1 pre-flight gate) reaches the identical verdict
  *  without re-deriving any of that logic itself. Takes plain data, no
  *  component state, so it's usable anywhere a challan + its deductees can be
- *  fetched. */
+ *  fetched. Thin wrapper over computeChallanPooled() — kept as its own named
+ *  export since existing callers only need the three fields below. */
 export function computeChallanOverApplied(
   challan: { total_challan_amount?: number | null; late_fees_234e?: number | null; kasar_vatav_amount?: number | null; deposit_date?: string | null },
   deductees: InterestApplicableRow[],
 ): { overApplied: boolean; effectiveApplied: number; allocatable: number } {
-  const liveInterestRows = deductees.map((d) => ({
-    ...d,
-    interest_amount: calcAutoInterest(d.total_tax_deducted || d.tds_amount || 0, d.date_of_payment ?? null, challan.deposit_date ?? null).interest,
-  }));
-  const { applied } = computeApplied(liveInterestRows);
-  const effectiveApplied = withKasarVatav(applied, challan.kasar_vatav_amount);
-  const allocatable = computeAllocatable(challan.total_challan_amount || 0, challan.late_fees_234e || 0);
-  return { overApplied: isChallanOverApplied(effectiveApplied, allocatable), effectiveApplied, allocatable };
+  const { overApplied, effectiveApplied, allocatable } = computeChallanPooled(challan, deductees);
+  return { overApplied, effectiveApplied, allocatable };
 }
 
 export function challanStatus(applied: number, allocatable: number): "Over-applied" | "Fully Utilised" | "Unconsumed" {
