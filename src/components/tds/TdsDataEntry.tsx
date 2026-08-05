@@ -1867,18 +1867,32 @@ export function TdsDataEntry({
   // under-measures every value.
   const nameMeasureRef = useRef<HTMLSpanElement>(null);
   const panMeasureRef = useRef<HTMLSpanElement>(null);
+  // Floors sized off KNOWN worst cases rather than the shortest plausible
+  // measurement: PAN is always exactly 10 fixed-format characters
+  // (AAAAA9999A) in a monospace font, so it never needs to go below what
+  // that takes to render in full; Name's floor is a comfortable ~12
+  // characters so a transient under-measurement (e.g. the very first paint,
+  // before real rows have loaded) never clips a real value down to a sliver
+  // — long names still grow past this via the measurement below.
+  const NAME_COL_MIN = 180;
+  const PAN_COL_MIN = 150;
   const [nameColWidth, setNameColWidth] = useState(220);
-  const [panColWidth, setPanColWidth] = useState(120);
+  const [panColWidth, setPanColWidth] = useState(PAN_COL_MIN);
 
   useLayoutEffect(() => {
     const nameEl = nameMeasureRef.current;
     const panEl = panMeasureRef.current;
     if (!nameEl || !panEl) return;
+    const rows = [...prevEntries, ...deductees];
+    // Nothing real to measure yet (e.g. mounted before the fetch resolves) —
+    // leave the width where it is instead of collapsing to the header-only
+    // measurement, which would otherwise flash the columns down to a sliver
+    // right before the real data arrives and grows them back.
+    if (rows.length === 0) return;
     const sampleNameInput = document.querySelector('[data-autofit="name"]');
     const samplePanInput = document.querySelector('[data-autofit="pan"]');
     if (sampleNameInput) nameEl.style.font = getComputedStyle(sampleNameInput).font;
     if (samplePanInput) panEl.style.font = getComputedStyle(samplePanInput).font;
-    const rows = [...prevEntries, ...deductees];
     const nameHeaderLabel = selForm === "24Q" ? "Employee Name" : selForm === "27EQ" ? "Collectee" : "Name";
     // TableCell padding (16px × 2) + Input's own padding (12px × 2) + border (1px × 2) + slack
     const CELL_PADDING = 70;
@@ -1894,8 +1908,8 @@ export function TdsDataEntry({
       maxPan = Math.max(maxPan, panEl.getBoundingClientRect().width);
     }
 
-    setNameColWidth(Math.max(120, Math.min(560, Math.ceil(maxName) + CELL_PADDING)));
-    setPanColWidth(Math.max(90, Math.min(200, Math.ceil(maxPan) + CELL_PADDING)));
+    setNameColWidth(Math.max(NAME_COL_MIN, Math.min(560, Math.ceil(maxName) + CELL_PADDING)));
+    setPanColWidth(Math.max(PAN_COL_MIN, Math.min(220, Math.ceil(maxPan) + CELL_PADDING)));
   }, [deductees, prevEntries, selForm]);
 
   const autoMatchChallans = () => {
