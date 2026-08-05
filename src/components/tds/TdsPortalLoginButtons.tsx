@@ -40,18 +40,19 @@ import { useToast } from "@/hooks/use-toast";
 import { ExternalLink, Copy, KeyRound, LogIn, Loader2, Sparkles } from "lucide-react";
 
 const ITD_PORTAL_URL = "https://www.incometax.gov.in/iec/foportal/";
-// The actual e-filing SPA, not the public landing page above. Points at the
-// DASHBOARD, not directly at /login — there's no way to skip a real login
-// without an existing valid session (that's the whole point of a login), so
-// this instead lets the portal's own auth guard decide: an already-logged-in
-// browser (a session from earlier today, say) lands straight on the
-// dashboard with nothing further to do; anyone else gets client-side
-// redirected to /login, where the auto-fill extension activates exactly as
-// before — content-caflow.js/content-itd.js match the whole
-// eportal.incometax.gov.in origin, not just the /login path, so this
-// redirect (a same-SPA hash-route change, not a real navigation) never
-// interrupts it.
-const ITD_LOGIN_URL = "https://eportal.incometax.gov.in/iec/foservices/#/dashboard";
+// The actual login SPA, not the landing page above — the auto-fill extension
+// (browser-extension/itd-autofill/) matches this exact host and needs to
+// land directly on the login step to activate.
+//
+// REVERTED 2026-08-06: briefly pointed this at /dashboard instead, on the
+// theory that the portal's own auth guard would cleanly redirect anyone
+// without a valid session to /login. Confirmed true for a browser with NO
+// session at all — but a STALE session (logged in earlier, then idle past
+// the portal's own 15-minute timeout) redirects to a DIFFERENT page,
+// #/sessionExpire, which has no Login ID field at all and isn't something
+// the extension can fill. Going straight to /login sidesteps that third
+// state entirely and is the one URL confirmed reliable across all of them.
+const ITD_LOGIN_URL = "https://eportal.incometax.gov.in/iec/foservices/#/login";
 const TRACES_PORTAL_URL = "https://www.tdscpc.gov.in/app/login.xhtml";
 
 /** Set at document_start by content-caflow.js once the extension is
