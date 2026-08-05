@@ -292,3 +292,126 @@ describe("parseExpertPdfPages — robustness", () => {
     expect(melt09?.iso).toBe("2026-04-09");
   });
 });
+
+// Real client print — M J SURGICAL "Provision Ledger", Q1 FY2026-27 — the
+// VERBATIM pdfjs token dump of the transition from its 194A block into its
+// 194C block. Unlike every fixture above (one section per file, title glued
+// into a single run), this real file interleaves several sections in ONE
+// file, and pdfjs splits "TDS-26/27-194" and its trailing letter into
+// SEPARATE runs on the same baseline — the exact shape that silently dropped
+// the letter (reading every row as bare section "194") before
+// bandSectionMarker/findSection were fixed to test the whole BAND, not each
+// item alone.
+const PAGE_MJSURGICAL_194A_TO_194C: ExpertPdfTextItem[] = [
+  { x: 36, y: 740.22, w: 38.91, str: "M.J" },
+  { x: 87.87, y: 740.22, w: 103.76, str: "SURGICAL" },
+  { x: 204.59, y: 740.22, w: 38.91, str: "NEW" },
+  { x: 36, y: 729.42, w: 32.42, str: "PHASE" },
+  { x: 74.9, y: 729.42, w: 6.48, str: "1" },
+  { x: 87.87, y: 729.42, w: 25.94, str: "PLOT" },
+  { x: 120.29, y: 729.42, w: 38.91, str: "NO.283" },
+  { x: 165.68, y: 729.42, w: 25.94, str: "GIDC" },
+  { x: 198.1, y: 729.42, w: 51.88, str: "KATHWADA" },
+  { x: 256.46, y: 729.42, w: 58.36, str: "AHMEDABAD" },
+  { x: 321.3, y: 729.42, w: 45.39, str: "382430." },
+  { x: 36, y: 707.82, w: 58.36, str: "Provision" },
+  { x: 100.84, y: 707.82, w: 38.91, str: "Ledger" },
+  { x: 36, y: 697.02, w: 25.94, str: "From" },
+  { x: 68.42, y: 697.02, w: 64.85, str: "01/04/2026" },
+  { x: 139.75, y: 697.02, w: 12.97, str: "To" },
+  { x: 159.2, y: 697.02, w: 64.85, str: "04/07/2026" },
+  { x: 489.6, y: 686.22, w: 25.94, str: "Page" },
+  { x: 522.02, y: 686.22, w: 19.45, str: "No." },
+  { x: 547.96, y: 686.22, w: 6.48, str: "1" },
+  { x: 36, y: 675.42, w: 518.48, str: "-".repeat(80) },
+  { x: 36, y: 664.62, w: 25.94, str: "Date" },
+  { x: 107.3, y: 664.62, w: 71.33, str: "Particulars" },
+  { x: 321.19, y: 664.62, w: 58.36, str: "Dr.Amount" },
+  { x: 405.48, y: 664.62, w: 58.36, str: "Cr.Amount" },
+  { x: 502.72, y: 664.62, w: 45.39, str: "Balance" },
+  { x: 36, y: 653.82, w: 518.48, str: "-".repeat(80) },
+  { x: 36, y: 643.02, w: 38.91, str: "UNPAID" },
+  { x: 81.39, y: 643.02, w: 84.3, str: "TDS-26/27-194" },
+  { x: 172.17, y: 643.02, w: 6.48, str: "A" },
+  { x: 36, y: 632.22, w: 518.48, str: "-".repeat(80) },
+  { x: 36, y: 621.42, w: 64.85, str: "30/04/2026" },
+  { x: 107.33, y: 621.42, w: 84.3, str: "MERCEDES-BENZ" },
+  { x: 198.11, y: 621.42, w: 90.79, str: "FIN.SERV-AADCD" },
+  { x: 418.5, y: 621.42, w: 45.39, str: "2211.00" },
+  { x: 502.77, y: 621.42, w: 51.88, str: "2211.00C" },
+  { x: 107.28, y: 610.62, w: 32.42, str: "BEING" },
+  { x: 146.19, y: 610.62, w: 19.45, str: "THE" },
+  { x: 172.12, y: 610.62, w: 19.45, str: "TDS" },
+  { x: 198.06, y: 610.62, w: 6.48, str: "@" },
+  { x: 211.02, y: 610.62, w: 12.97, str: "10" },
+  { x: 230.47, y: 610.62, w: 6.48, str: "%" },
+  { x: 243.44, y: 610.62, w: 51.88, str: "DEDUCTED" },
+  { x: 107.28, y: 599.82, w: 12.97, str: "ON" },
+  { x: 126.73, y: 599.82, w: 64.85, str: "RS:22112/-" },
+  { x: 36, y: 589.02, w: 64.85, str: "07/05/2026" },
+  { x: 107.33, y: 589.02, w: 32.42, str: "ICICI" },
+  { x: 146.23, y: 589.02, w: 25.94, str: "BANK" },
+  { x: 178.65, y: 589.02, w: 103.76, str: "C/A-777705786742" },
+  { x: 334.25, y: 589.02, w: 45.39, str: "2211.00" },
+  { x: 107.28, y: 578.22, w: 38.91, str: "Ch:TRF" },
+  { x: 178.59, y: 578.22, w: 19.45, str: "Dt:" },
+  { x: 211, y: 578.22, w: 6.48, str: "/" },
+  { x: 230.45, y: 578.22, w: 6.48, str: "/" },
+  { x: 107.28, y: 567.42, w: 19.45, str: "TDS" },
+  { x: 36, y: 427.01, w: 64.85, str: "04/07/2026" },
+  { x: 107.33, y: 427.01, w: 19.45, str: "***" },
+  { x: 133.26, y: 427.01, w: 45.39, str: "CLOSING" },
+  { x: 185.14, y: 427.01, w: 45.39, str: "BALANCE" },
+  { x: 237.01, y: 427.01, w: 19.45, str: "***" },
+  { x: 334.23, y: 427.01, w: 45.39, str: "6338.00" },
+  { x: 418.5, y: 427.01, w: 45.39, str: "6338.00" },
+  { x: 36, y: 416.21, w: 518.48, str: "-".repeat(80) },
+  { x: 36, y: 394.61, w: 38.91, str: "UNPAID" },
+  { x: 81.39, y: 394.61, w: 84.3, str: "TDS-26/27-194" },
+  { x: 172.17, y: 394.61, w: 6.48, str: "C" },
+  { x: 36, y: 383.81, w: 518.48, str: "-".repeat(80) },
+  { x: 36, y: 373.01, w: 64.85, str: "30/04/2026" },
+  { x: 107.33, y: 373.01, w: 38.91, str: "BHAVIN" },
+  { x: 152.72, y: 373.01, w: 97.27, str: "ENGINEERS-AMQPP" },
+  { x: 256.47, y: 373.01, w: 25.94, str: "5814" },
+  { x: 288.89, y: 373.01, w: 6.48, str: "M" },
+  { x: 424.98, y: 373.01, w: 38.91, str: "790.00" },
+  { x: 509.25, y: 373.01, w: 45.39, str: "790.00C" },
+  { x: 107.28, y: 362.21, w: 32.42, str: "BEING" },
+  { x: 146.19, y: 362.21, w: 19.45, str: "THE" },
+  { x: 172.12, y: 362.21, w: 19.41, str: "TDS" },
+  { x: 198.01, y: 362.21, w: 6.48, str: "@" },
+  { x: 210.97, y: 362.21, w: 6.48, str: "1" },
+  { x: 223.94, y: 362.21, w: 6.48, str: "%" },
+  { x: 236.88, y: 362.21, w: 51.88, str: "DEDUCTED" },
+  { x: 107.28, y: 351.41, w: 12.97, str: "ON" },
+  { x: 126.73, y: 351.41, w: 64.85, str: "RS:78992/-" },
+];
+
+describe("parseExpertPdfPages — M J SURGICAL Provision Ledger (real, multi-section-per-file)", () => {
+  const parsed = parseExpertPdfPages([PAGE_MJSURGICAL_194A_TO_194C]);
+
+  it("stamps each row with the section of the block it actually falls under, not one bare value for the whole file", () => {
+    const mercedes = parsed.rows.filter((r) => r.party?.startsWith("MERCEDES-BENZ"));
+    expect(mercedes).toHaveLength(1); // the other two MERCEDES-BENZ rows are on later pages, outside this excerpt
+    expect(mercedes[0].section).toBe("194A"); // NOT bare "194" — the split-run regression this fixture pins
+    const bhavin = parsed.rows.find((r) => r.party?.startsWith("BHAVIN"));
+    expect(bhavin?.section).toBe("194C");
+  });
+
+  it("extracts the taxable amount from the 'ON RS:<n>/-' narration, alongside the TDS credit", () => {
+    const mercedes = parsed.rows.find((r) => r.party?.startsWith("MERCEDES-BENZ"));
+    expect(mercedes?.credit).toBe(2211);
+    expect(mercedes?.amount).toBe(22112);
+    const bhavin = parsed.rows.find((r) => r.party?.startsWith("BHAVIN"));
+    expect(bhavin?.credit).toBe(790);
+    expect(bhavin?.amount).toBe(78992);
+  });
+
+  it("drops the ICICI bank-clearing payment line and the closing-balance line, never as deductions", () => {
+    expect(parsed.rows.some((r) => r.party?.includes("ICICI"))).toBe(false);
+    expect(parsed.rows.some((r) => r.party?.includes("CLOSING BALANCE"))).toBe(false);
+    expect(parsed.skipped.payments).toBeGreaterThan(0);
+    expect(parsed.skipped.balances).toBeGreaterThan(0);
+  });
+});
