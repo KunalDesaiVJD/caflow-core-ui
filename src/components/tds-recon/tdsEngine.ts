@@ -6,7 +6,7 @@
  * Replaces: tds-ai-mapper, tds-recon-engine, tds-missing-scanner, tds-demand-calculator
  */
 import { supabase } from "@/integrations/supabase/client";
-import { discoverTdsLedgers, extractPartiesFromTdsVouchers } from "./tdsLedgerDiscovery";
+import { discoverTdsLedgers, extractPartiesFromTdsVouchers, detect194QCandidates, SECTION_194Q_THRESHOLD } from "./tdsLedgerDiscovery";
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -454,7 +454,31 @@ export async function runAiMapper(params: {
     if (data.length < 1000) break;
   }
 
-  const expenseLedgers = tbRows.filter((l: any) => isExpenseGroup(l.parent_group));
+  const expenseLedgersRaw = tbRows.filter((l: any) => isExpenseGroup(l.parent_group));
+
+  // Stage 7 (2026-08-07) / P5-A — dedupe TB ledgers that differ only by
+  // trim + case ("V J Desai & Co" vs "V J DESAI & CO"). Without this, the
+  // same real-world party can appear as two separate mapper candidates —
+  // each with a fraction of the true activity — which silently weakens
+  // the amount-tie / gross-match scoring for both and can leave neither
+  // one crossing the confidence floor. Amounts are summed under the
+  // FIRST-seen casing (display name); closing_balance is summed too so
+  // downstream "closed ledger" logic still sees the true combined figure.
+  const expenseLedgerDedupe = new Map<string, any>();
+  for (const l of expenseLedgersRaw) {
+    const key = String(l.ledger_name ?? "").trim().toLowerCase();
+    if (!key) continue;
+    const existing = expenseLedgerDedupe.get(key);
+    if (!existing) {
+      expenseLedgerDedupe.set(key, { ...l });
+      continue;
+    }
+    existing.debit_amount    = (existing.debit_amount    ?? 0) + (l.debit_amount    ?? 0);
+    existing.credit_amount   = (existing.credit_amount   ?? 0) + (l.credit_amount   ?? 0);
+    existing.closing_balance = (existing.closing_balance ?? 0) + (l.closing_balance ?? 0);
+    // Keep the first-seen parent_group / balance_type / ledger_name casing.
+  }
+  const expenseLedgers = [...expenseLedgerDedupe.values()];
 
   // 2026-08-04 — RAY WINGS class of fix: TB-only party discovery misses
   // any deductee whose creditor was cleared within the year (payment
@@ -881,6 +905,40 @@ export async function runAiMapper(params: {
       matchedTbNames.add(String(r.tb_ledger_name || "").trim().toLowerCase());
     }
   } catch { /* non-fatal */ }
+  // Stage 6 — Section 194Q goods-purchase threshold candidates. Surfaced
+  // ALWAYS (regardless of the turnover-gate answer — that gate only
+  // controls whether reconciliation later computes a rate flag). Excludes
+  // any party already covered by a real mapping under any section — a
+  // party billed under BOTH goods and services shouldn't get a duplicate
+  // 194Q row when they're already tracked under 194C/194J.
+  try {
+    const candidates = await detect194QCandidates({ client_id, financial_year });
+    for (const c of candidates) {
+      const key = c.party_ledger.trim().toLowerCase();
+      if (matchedTbNames.has(key)) continue; // already mapped under a real section
+      const excess = Math.max(0, c.total_purchase - SECTION_194Q_THRESHOLD);
+      upsertRows.push({
+        client_id, firm_id, financial_year,
+        tb_ledger_name:    c.party_ledger,
+        tb_parent_group:   null,
+        tb_total_debit:    c.total_purchase,
+        tds_deductee_name: "(not filed)",
+        tds_section_code:  "194Q",
+        tds_total_amount:  c.total_purchase,
+        tds_tds_amount:    null,
+        tds_filing_ids:    null,
+        match_confidence:  0,
+        match_method:      "194q_threshold",
+        ai_reasoning:      `Combined goods purchases from ${c.party_ledger} total ₹${c.total_purchase.toLocaleString("en-IN")} across ${c.voucher_count} voucher(s), exceeding the ₹50,00,000 Section 194Q threshold. TDS @ 0.1% on the excess (₹${excess.toLocaleString("en-IN")}) may apply — subject to (a) the buyer's turnover in the immediately preceding FY exceeding ₹10 crore, and (b) the seller not already having collected TCS u/s 206C(1H) on these transactions. Confirm this mapping to include it in Section 194Q reconciliation.`,
+        mapping_status:    "needs_review",
+        mapped_by:         "ai",
+      });
+      matchedTbNames.add(key); // avoid a duplicate if the same party appears via another path this run
+    }
+  } catch (err) {
+    console.warn("[tdsEngine] 194Q candidate detection failed:", err);
+  }
+
   const finalRows = upsertRows.filter((r: any) => {
     if (!String(r.match_method || "").includes("books_only")) return true;
     const key = String(r.tb_ledger_name || "").trim().toLowerCase();
@@ -1083,6 +1141,21 @@ export async function runReconEngine(params: {
   }
   const lookupRateOverride = (tb: string, ded: string, sec: string) =>
     rateOverrideMap.get(`${String(tb || "").trim().toLowerCase()}|${String(ded || "").trim().toLowerCase()}|${sec}`);
+
+  // Stage 6 (2026-08-07) — Section 194Q applicability turnover-gate. 194Q
+  // only applies when the BUYER's turnover in the immediately preceding FY
+  // exceeded ₹10 crore — a fact the Trial Balance can't answer. Per
+  // explicit user instruction, 194Q reconciliation is skipped ENTIRELY
+  // unless the auditor has explicitly confirmed Yes via the gate modal
+  // (TdsPartyMappingPanel's caller shows that modal before invoking this
+  // function when 194Q candidates exist and no answer is stored yet).
+  const { data: turnoverSetting } = await (supabase as any)
+    .from("tds_194q_settings")
+    .select("turnover_exceeds_10cr")
+    .eq("client_id",      client_id)
+    .eq("financial_year", financial_year)
+    .maybeSingle();
+  const section194QApplies = turnoverSetting?.turnover_exceeds_10cr === true;
 
   // 4. Delete pending flags for requested goals
   await (supabase as any).from("tds_recon_flags").delete()
@@ -1331,8 +1404,15 @@ export async function runReconEngine(params: {
               mapping.tds_deductee_name, mapping.tb_ledger_name,
             );
           }
+          // Stage 6 — turnover gate. Skip 194Q entirely unless confirmed.
+          if (secBucket === "194Q" && !section194QApplies) continue;
           if (amtPaidSec <= threshSec) continue;
-          const expectedTdsSec = amtPaidSec * rateSec / 100;
+          // Stage 6 — 194Q TDS applies only on the amount EXCEEDING the
+          // ₹50L threshold, not the full amount (unlike every other
+          // section here, which is a flat-rate-on-full-amount calc).
+          const expectedTdsSec = secBucket === "194Q"
+            ? Math.max(0, amtPaidSec - SECTION_194Q_THRESHOLD) * rateSec / 100
+            : amtPaidSec * rateSec / 100;
           if (expectedTdsSec <= 0) continue;
           const varianceSec = expectedTdsSec - actualTdsSec;
           const absVarSec = Math.abs(varianceSec);
@@ -1429,8 +1509,15 @@ export async function runReconEngine(params: {
         );
         rate = closest;
       }
+      // Stage 6 — turnover gate. Skip 194Q entirely unless the auditor has
+      // confirmed the buyer's PY turnover exceeded ₹10 crore.
+      if (sectionBucket === "194Q" && !section194QApplies) continue;
       if (amtPaid <= thresh) continue;
-      const expectedTds = amtPaid * rate / 100;
+      // Stage 6 — 194Q TDS applies only on the amount EXCEEDING the ₹50L
+      // threshold, not the full amount.
+      const expectedTds = sectionBucket === "194Q"
+        ? Math.max(0, amtPaid - SECTION_194Q_THRESHOLD) * rate / 100
+        : amtPaid * rate / 100;
       if (expectedTds <= 0) continue;
       const variance = expectedTds - actualTds; const absVar = Math.abs(variance); const varPct = absVar / expectedTds;
       const actualRate = amtPaid > 0 ? (actualTds / amtPaid) * 100 : 0;

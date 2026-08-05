@@ -504,3 +504,107 @@ export async function extractPartiesFromTdsVouchers(params: {
 
   return [...agg.values()].sort((a, b) => b.tds_amount - a.tds_amount);
 }
+
+// ─── Section 194Q — goods-purchase threshold candidates (Stage 6) ───────────
+
+/** Same regex the Party Mapping panel uses to classify a paired expense
+ *  ledger as "goods" nature (isGoodsParty). Kept in sync deliberately —
+ *  both surfaces must agree on what counts as a goods purchase. */
+const GOODS_LEDGER_RE = /\b(purchase|raw\s*material|material(s)?|inventor(?:y|ies)|stock\s*item|stores|finished\s*goods|trading\s*goods|goods\s*purchase)\b/i;
+
+/** 194Q threshold per the Income Tax Act — TDS @ 0.1% applies on the
+ *  amount of goods purchased from a single seller EXCEEDING this figure
+ *  in the FY (not on the full amount). */
+export const SECTION_194Q_THRESHOLD = 50_00_000;
+
+export interface Goods194QCandidate {
+  party_ledger:   string;
+  /** Combined amount of goods-nature purchase legs against this party
+   *  across the FY, from Purchase-type vouchers only. */
+  total_purchase: number;
+  voucher_count:  number;
+}
+
+/**
+ * Walk Purchase-type vouchers and aggregate goods-nature Dr-side amounts
+ * per counterpart party. Only vouchers whose party could be resolved and
+ * whose Dr leg matches GOODS_LEDGER_RE contribute — a Purchase voucher
+ * booking a service (rare but possible) is excluded so this doesn't
+ * conflate with 194C/194J candidates.
+ *
+ * Returns every party whose combined total exceeds SECTION_194Q_THRESHOLD.
+ * Callers should further exclude parties already covered by an existing
+ * TDS mapping under a different section (194C/194J/etc.) before surfacing
+ * these as candidates — a party can legitimately supply BOTH goods and
+ * services, but this function only reasons about the goods side.
+ */
+export async function detect194QCandidates(params: {
+  client_id:      string;
+  financial_year: string;
+}): Promise<Goods194QCandidate[]> {
+  const { client_id, financial_year } = params;
+
+  interface Row {
+    voucher_type: string | null;
+    party_ledger: string | null;
+    line_items:   Array<{ ledger_name?: string; amount?: number; dr_cr?: string }> | null;
+  }
+  const vouchers: Row[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await (supabase as any)
+      .from("tally_vouchers")
+      .select("voucher_type,party_ledger,line_items")
+      .eq("client_id",      client_id)
+      .eq("financial_year", financial_year)
+      .ilike("voucher_type", "%purchase%")
+      .range(from, from + 999);
+    if (error) throw new Error(`194Q voucher fetch: ${error.message}`);
+    if (!data || !data.length) break;
+    vouchers.push(...(data as Row[]));
+    if (data.length < 1000) break;
+  }
+
+  const agg = new Map<string, { total: number; count: number }>();
+  for (const v of vouchers) {
+    const items = Array.isArray(v.line_items) ? v.line_items : [];
+    if (items.length === 0) continue;
+    const party = String(v.party_ledger ?? "").trim();
+    if (!party) continue;
+
+    let goodsAmt = 0;
+    for (const li of items) {
+      const dr = String(li?.dr_cr ?? "").toLowerCase();
+      if (!dr.startsWith("dr")) continue;
+      const nm = String(li?.ledger_name ?? "").trim();
+      if (!nm || nm.toLowerCase() === party.toLowerCase()) continue;
+      if (!GOODS_LEDGER_RE.test(nm)) continue;
+      const amt = Math.abs(Number(li?.amount ?? 0));
+      if (Number.isFinite(amt)) goodsAmt += amt;
+    }
+    if (goodsAmt <= 0) continue;
+
+    const key = party.toLowerCase();
+    const cur = agg.get(key) ?? { total: 0, count: 0 };
+    cur.total += goodsAmt;
+    cur.count += 1;
+    agg.set(key, cur);
+  }
+
+  // Second pass to recover original casing (agg keyed lower-case only).
+  const displayName = new Map<string, string>();
+  for (const v of vouchers) {
+    const party = String(v.party_ledger ?? "").trim();
+    if (party && !displayName.has(party.toLowerCase())) displayName.set(party.toLowerCase(), party);
+  }
+
+  const out: Goods194QCandidate[] = [];
+  for (const [key, val] of agg) {
+    if (val.total <= SECTION_194Q_THRESHOLD) continue;
+    out.push({
+      party_ledger:   displayName.get(key) ?? key,
+      total_purchase: val.total,
+      voucher_count:  val.count,
+    });
+  }
+  return out.sort((a, b) => b.total_purchase - a.total_purchase);
+}

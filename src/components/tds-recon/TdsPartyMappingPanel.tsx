@@ -381,7 +381,19 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
             if (SKIP.test(p)) return false;
             return KEEP.test(p);
           };
-          setTbCreditors(rows.filter(r => isPartyGroup(r.parent_group)));
+          // Stage 7 / P5-A — dedupe by trim+lowercase name so the picker
+          // doesn't show "V J Desai & Co" and "V J DESAI & CO" as two
+          // separate options for the auditor to choose between.
+          const filtered = rows.filter(r => isPartyGroup(r.parent_group));
+          const seen = new Set<string>();
+          const deduped: typeof filtered = [];
+          for (const r of filtered) {
+            const key = r.ledger_name.trim().toLowerCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            deduped.push(r);
+          }
+          setTbCreditors(deduped);
         }
       } catch { if (!cancelled) setTbCreditors([]); }
     })();

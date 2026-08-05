@@ -121,7 +121,8 @@ export function useTdsPartyMappings(
           || methods.includes("books_only")
           || methods.includes("manual_link")
           || methods.includes("pan_match")
-          || methods.includes("zero_tds");
+          || methods.includes("zero_tds")
+          || methods.includes("194q_threshold");
       });
 
       // 2026-07-24 — Root cause of Issues 9 & 12: this read-time dedupe was
