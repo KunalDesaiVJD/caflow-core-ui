@@ -16,6 +16,8 @@ import { Button }   from "@/components/ui/button";
 import { runReconEngine } from "./tdsEngine";
 import { PartyRateConfigModal, RateEligibleParty } from "./PartyRateConfigModal";
 import { usePartyRateOverrides } from "./hooks/usePartyRateOverrides";
+import { Tds194QTurnoverGateModal } from "./Tds194QTurnoverGateModal";
+import { use194QTurnoverSetting } from "./hooks/use194QTurnoverSetting";
 import { Badge }    from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -518,6 +520,15 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
   const [modalParties,  setModalParties]  = useState<RateEligibleParty[]>([]);
   const { overrides: existingOverrides } = usePartyRateOverrides(clientId, financialYear);
 
+  // Stage 6 (2026-08-07) — Section 194Q turnover gate. Shown once per
+  // engagement when confirmed/pending mappings exist under 194Q and no
+  // answer is stored yet. "No" persists false and 194Q reconciliation is
+  // skipped inside runReconEngine; every other section still runs.
+  const [turnoverModalOpen, setTurnoverModalOpen] = useState(false);
+  const [turnoverSaving,    setTurnoverSaving]    = useState(false);
+  const { setting: turnoverSetting, setAnswer: setTurnoverAnswer } =
+    use194QTurnoverSetting(clientId, firmId, financialYear);
+
   // Perform the actual recon run — extracted so it can be triggered either
   // directly (all rates already confirmed) or from the modal's onSaved.
   const performRecon = useCallback(async (goals: number[]) => {
@@ -623,9 +634,52 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
     } catch (err) {
       console.warn("[recon] rate-override check failed, proceeding to run:", err);
     }
-    // No unset overrides (or the check failed non-fatally) — run recon now.
+
+    // Stage 6 — Section 194Q turnover gate. Only prompt when the engagement
+    // actually has a confirmed/pending mapping under 194Q AND no answer is
+    // stored yet. Runs after the 194C/194J rate-modal check (that one
+    // returns early above when it fires, so we only reach here once rates
+    // are settled).
+    try {
+      if (turnoverSetting == null) {
+        const { data: q194Rows } = await (supabase as any)
+          .from("tds_tb_party_mappings")
+          .select("id")
+          .eq("client_id", clientId)
+          .eq("financial_year", financialYear)
+          .in("mapping_status", ["confirmed", "pending"])
+          .eq("tds_section_code", "194Q")
+          .limit(1);
+        if (q194Rows && q194Rows.length > 0) {
+          setPendingGoals(goals);
+          setTurnoverModalOpen(true);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn("[recon] 194Q turnover-gate check failed, proceeding to run:", err);
+    }
+
+    // No unset overrides, no pending 194Q gate (or checks failed non-fatally)
+    // — run recon now.
     await performRecon(goals);
-  }, [clientId, financialYear, firmId, existingOverrides, performRecon]);
+  }, [clientId, financialYear, firmId, existingOverrides, performRecon, turnoverSetting]);
+
+  const handleTurnoverAnswer = useCallback(async (exceeds10Cr: boolean) => {
+    setTurnoverSaving(true);
+    try {
+      await setTurnoverAnswer(exceeds10Cr);
+      toast.success(exceeds10Cr
+        ? "Confirmed: turnover exceeded ₹10 Cr — Section 194Q will be reconciled."
+        : "Confirmed: Section 194Q reconciliation will be skipped for this engagement.");
+      setTurnoverModalOpen(false);
+      await performRecon(pendingGoals);
+    } catch (err: any) {
+      toast.error(`Save failed: ${err.message ?? err}`);
+    } finally {
+      setTurnoverSaving(false);
+    }
+  }, [setTurnoverAnswer, performRecon, pendingGoals]);
 
   // ── Filter flags ─────────────────────────────────────────────────────────────
   const visible = flags.filter(f => {
@@ -899,6 +953,13 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
           onSaved={() => { void performRecon(pendingGoals); }}
         />
       )}
+      {/* Stage 6 — Section 194Q turnover applicability gate */}
+      <Tds194QTurnoverGateModal
+        open={turnoverModalOpen}
+        onOpenChange={setTurnoverModalOpen}
+        onAnswer={handleTurnoverAnswer}
+        saving={turnoverSaving}
+      />
     </div>
     </TooltipProvider>
   );
