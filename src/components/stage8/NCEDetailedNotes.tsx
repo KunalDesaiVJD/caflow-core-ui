@@ -3068,7 +3068,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   }, [scheduleSave]);
 
   const handleChangeLabel = useCallback((noteType: string, id: string, label: string) => {
-    if (readOnly || notesFinalizedRef.current) return;
+    if (readOnly) return;
+    if (notesFinalizedRef.current) { toast.error("Notes are finalized — editing is locked."); return; }
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       if (NCE_RESYNC_DELETE_FIRST) {
@@ -3107,7 +3108,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     // labelOverride (same mechanism as the custom-row rename path above) and
     // never touches the row's id/key, so BS/PL totals, note numbering, and
     // DOCX/Excel export — which all key off row.id — are unaffected.
-    if (readOnly || notesFinalizedRef.current) return;
+    if (readOnly) return;
+    if (notesFinalizedRef.current) { toast.error("Notes are finalized — editing is locked."); return; }
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const overrides = { ...(cur.labelOverrides ?? {}), [id]: label };
@@ -3117,7 +3119,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   }, [readOnly, scheduleLabelPersist]);
 
   const handleChangeSourceLabel = useCallback((noteType: string, rowId: string, ledger: string, newLabel: string) => {
-    if (readOnly || notesFinalizedRef.current) return;
+    if (readOnly) return;
+    if (notesFinalizedRef.current) { toast.error("Notes are finalized — editing is locked."); return; }
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const key = `${rowId}::${ledger}`;

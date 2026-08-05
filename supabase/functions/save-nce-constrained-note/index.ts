@@ -47,15 +47,46 @@ function signed(amount: unknown, side: unknown, nature: Nature): number {
 }
 type TBRow = { ledger_name?: string | null; closing_balance?: number | null; balance_type?: string | null; opening_balance?: number | null; opening_type?: string | null };
 type Mapping = Record<string, { code?: string } | undefined>;
+
+// Mirrors src/lib/tallyText.ts cleanTallyName — Tally uses ASCII control chars
+// (notably \x04 on root group names) and numeric HTML entities that survive
+// into raw TB ledger_name, but coa_mapping keys are persisted CLEAN (see
+// PipelineStage3.tsx / notesAutoPopulate.ts). A resolver that only trims +
+// lowercases the raw name (as this one did before) never matches those keys,
+// so this edge function's independently re-derived COA total silently comes
+// out LOWER than the client's (computeCOATotals, which already runs every
+// candidate through cleanTallyName) whenever a mapped ledger's raw name
+// carries such artifacts — causing the tie check below to reject a save the
+// UI showed as tied. This is the same class of bug as RC-21 (VADIWALA "The
+// District TB Centre"): a hand-rolled matcher that skips the cleanTallyName
+// fallback. Keep this in sync with tallyText.ts if that function changes.
+function cleanTallyName(value: string | null | undefined): string {
+  if (!value) return "";
+  return String(value)
+    .replace(/[\x00-\x1F\x7F]/g, "")
+    .replace(/&#\d+;/g, "")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
+}
 function makeResolver(mapping: Mapping) {
   const ci: Record<string, { code?: string }> = {};
+  const clean: Record<string, { code?: string }> = {};
   for (const [k, v] of Object.entries(mapping || {})) {
     if (!v?.code) continue;
     const kk = String(k).trim().toLowerCase();
     if (!(kk in ci)) ci[kk] = v;
+    const ck = cleanTallyName(k).toLowerCase();
+    if (ck && !(ck in clean)) clean[ck] = v;
   }
   return (name: string) =>
-    mapping[name] ?? mapping[String(name).trim()] ?? ci[String(name).trim().toLowerCase()];
+    mapping[name]
+    ?? mapping[String(name).trim()]
+    ?? ci[String(name).trim().toLowerCase()]
+    ?? clean[cleanTallyName(name).toLowerCase()];
 }
 function dedupeLast(rows: TBRow[]): TBRow[] {
   const m = new Map<string, TBRow>();

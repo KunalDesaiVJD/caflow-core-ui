@@ -24,8 +24,10 @@ vi.mock("@/lib/nceAutoPopulate", async () => {
   const actual: any = await vi.importActual("@/lib/nceAutoPopulate");
   return { ...actual, nceAutoPopulate: vi.fn(async (_engagementId: string, built: any) => built) };
 });
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 import { NCEDetailedNotes } from "@/components/stage8/NCEDetailedNotes";
 
 function makeChain(dataIfSingle: any, dataIfArray: any) {
@@ -112,5 +114,30 @@ describe("NCEDetailedNotes — static caption is renameable, figures stay locked
       const calls = (supabase.from as any).mock.calls.filter((c: any[]) => c[0] === "nce_financial_notes");
       expect(calls.length).toBeGreaterThan(1); // initial load select + the label-persist round-trip
     }, { timeout: 2000 });
+  });
+
+  it("shows a clear error (instead of silently doing nothing) when a caption rename is attempted on a finalized engagement", async () => {
+    (supabase.from as any).mockImplementation((table: string) => {
+      if (table === "audit_engagements") return makeChain({ ...engRow, notes_finalized: true }, []);
+      if (table === "nce_financial_notes") return makeChain({ id: "note-1", cy_data: tradeReceivablesRow.cy_data }, [tradeReceivablesRow]);
+      return makeChain(null, []);
+    });
+    const { container } = renderNotes("e1");
+
+    await waitFor(() => expect(container.textContent || "").toContain("Trade Receivables"));
+    fireEvent.click(screen.getByTitle(/Expand all note cards/i));
+    await waitFor(() => expect(screen.getAllByDisplayValue("Unsecured, considered good").length).toBeGreaterThan(0), { timeout: 5000 });
+    const captionInput = screen.getAllByDisplayValue("Unsecured, considered good")[0] as HTMLInputElement;
+
+    fireEvent.change(captionInput, { target: { value: "Should not persist" } });
+
+    // Root cause of the reported "team members can't edit any ledger names"
+    // bug: this guard used to `return;` with zero feedback, so a rename on a
+    // finalized engagement looked like the input was simply broken. It must
+    // now surface a toast so the user understands editing is intentionally
+    // locked, not malfunctioning.
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Notes are finalized — editing is locked."));
+    // And the value must not have been accepted into local state either.
+    expect(captionInput.value).toBe("Unsecured, considered good");
   });
 });
