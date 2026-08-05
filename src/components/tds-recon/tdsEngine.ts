@@ -454,7 +454,31 @@ export async function runAiMapper(params: {
     if (data.length < 1000) break;
   }
 
-  const expenseLedgers = tbRows.filter((l: any) => isExpenseGroup(l.parent_group));
+  const expenseLedgersRaw = tbRows.filter((l: any) => isExpenseGroup(l.parent_group));
+
+  // Stage 7 (2026-08-07) / P5-A — dedupe TB ledgers that differ only by
+  // trim + case ("V J Desai & Co" vs "V J DESAI & CO"). Without this, the
+  // same real-world party can appear as two separate mapper candidates —
+  // each with a fraction of the true activity — which silently weakens
+  // the amount-tie / gross-match scoring for both and can leave neither
+  // one crossing the confidence floor. Amounts are summed under the
+  // FIRST-seen casing (display name); closing_balance is summed too so
+  // downstream "closed ledger" logic still sees the true combined figure.
+  const expenseLedgerDedupe = new Map<string, any>();
+  for (const l of expenseLedgersRaw) {
+    const key = String(l.ledger_name ?? "").trim().toLowerCase();
+    if (!key) continue;
+    const existing = expenseLedgerDedupe.get(key);
+    if (!existing) {
+      expenseLedgerDedupe.set(key, { ...l });
+      continue;
+    }
+    existing.debit_amount    = (existing.debit_amount    ?? 0) + (l.debit_amount    ?? 0);
+    existing.credit_amount   = (existing.credit_amount   ?? 0) + (l.credit_amount   ?? 0);
+    existing.closing_balance = (existing.closing_balance ?? 0) + (l.closing_balance ?? 0);
+    // Keep the first-seen parent_group / balance_type / ledger_name casing.
+  }
+  const expenseLedgers = [...expenseLedgerDedupe.values()];
 
   // 2026-08-04 — RAY WINGS class of fix: TB-only party discovery misses
   // any deductee whose creditor was cleared within the year (payment
