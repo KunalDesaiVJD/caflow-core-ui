@@ -11,8 +11,11 @@
  *   • Per-row actions: Raise Query (dialog) | Accept | Disregard
  */
 import { useState, useCallback } from "react";
+import { supabase } from "@/integrations/supabase/client";
 import { Button }   from "@/components/ui/button";
 import { runReconEngine } from "./tdsEngine";
+import { PartyRateConfigModal, RateEligibleParty } from "./PartyRateConfigModal";
+import { usePartyRateOverrides } from "./hooks/usePartyRateOverrides";
 import { Badge }    from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -507,8 +510,17 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
   const [queryFlag,    setQueryFlag]    = useState<TdsReconFlag | null>(null);
   const [queryNote,    setQueryNote]    = useState("");
 
-  // ── Run reconciliation engine ────────────────────────────────────────────────
-  const runRecon = useCallback(async (goals: number[] = [1, 2]) => {
+  // Stage 2.5 (2026-08-05) — before every recon run, prompt the auditor to
+  // confirm applicable rates for every 194C / 194J party that doesn't yet
+  // have a stored override. Modal state + pending-run tracking.
+  const [rateModalOpen, setRateModalOpen] = useState(false);
+  const [pendingGoals,  setPendingGoals]  = useState<number[]>([1, 2]);
+  const [modalParties,  setModalParties]  = useState<RateEligibleParty[]>([]);
+  const { overrides: existingOverrides } = usePartyRateOverrides(clientId, financialYear);
+
+  // Perform the actual recon run — extracted so it can be triggered either
+  // directly (all rates already confirmed) or from the modal's onSaved.
+  const performRecon = useCallback(async (goals: number[]) => {
     if (!clientId || !financialYear || !firmId) {
       toast.error("Cannot run — missing client, FY, or firm context");
       return;
@@ -533,6 +545,87 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
       setRunning(false);
     }
   }, [clientId, financialYear, firmId, refresh]);
+
+  // ── Run reconciliation engine ────────────────────────────────────────────────
+  const runRecon = useCallback(async (goals: number[] = [1, 2]) => {
+    if (!clientId || !financialYear || !firmId) {
+      toast.error("Cannot run — missing client, FY, or firm context");
+      return;
+    }
+    // Fetch every confirmed / pending mapping for this engagement and pick
+    // the ones under 194C / 194J. Cross-check against tds_deductees to get
+    // the gross + TDS for the pre-fill.
+    try {
+      const { data: mappings } = await (supabase as any)
+        .from("tds_tb_party_mappings")
+        .select("tb_ledger_name,tds_deductee_name,tds_section_code,tds_total_amount,tds_tds_amount")
+        .eq("client_id", clientId)
+        .eq("financial_year", financialYear)
+        .in("mapping_status", ["confirmed", "pending"])
+        .in("tds_section_code", ["194C", "194J", "194J(b)"]);
+      const { data: dedRows } = await (supabase as any)
+        .from("tds_deductees")
+        .select("deductee_name,section_code,amount_paid_credited,tds_amount")
+        .eq("client_id", clientId)
+        .eq("financial_year", financialYear);
+
+      // Aggregate deductee totals by (name, section) — mirrors recon engine
+      const dedAgg = new Map<string, { amt: number; tds: number }>();
+      for (const d of (dedRows as any[]) ?? []) {
+        const secKey = String(d.section_code || "").replace(/[^0-9a-z]/gi, "").toUpperCase();
+        const k = `${String(d.deductee_name || "").trim().toLowerCase()}|${secKey}`;
+        const cur = dedAgg.get(k) ?? { amt: 0, tds: 0 };
+        cur.amt += Number(d.amount_paid_credited || 0);
+        cur.tds += Number(d.tds_amount || 0);
+        dedAgg.set(k, cur);
+      }
+
+      const parties: RateEligibleParty[] = [];
+      const seen = new Set<string>();
+      for (const m of (mappings as any[]) ?? []) {
+        const rawSec = String(m.tds_section_code || "").toUpperCase();
+        const bucketSec = rawSec.startsWith("194C") ? "194C"
+                        : rawSec.startsWith("194J") ? "194J"
+                        : null;
+        if (!bucketSec) continue;
+        const key = `${m.tb_ledger_name}|${m.tds_deductee_name}|${bucketSec}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const dedKey = `${String(m.tds_deductee_name || "").trim().toLowerCase()}|${bucketSec}`;
+        const agg    = dedAgg.get(dedKey);
+        const amt    = agg?.amt ?? m.tds_total_amount ?? 0;
+        const tds    = agg?.tds ?? m.tds_tds_amount   ?? 0;
+        if (amt <= 0) continue; // nothing to reconcile
+        parties.push({
+          tb_ledger_name:    m.tb_ledger_name,
+          tds_deductee_name: m.tds_deductee_name,
+          section_code:      bucketSec,
+          gross_amount:      Number(amt),
+          tds_amount:        Number(tds),
+        });
+      }
+
+      // Filter to those NOT already confirmed in overrides.
+      const missing = parties.filter(p =>
+        !existingOverrides.some(o =>
+          o.tb_ledger_name    === p.tb_ledger_name
+          && o.tds_deductee_name === p.tds_deductee_name
+          && o.section_code      === p.section_code
+        )
+      );
+
+      if (missing.length > 0) {
+        setModalParties(parties);      // show all so auditor can review/edit
+        setPendingGoals(goals);
+        setRateModalOpen(true);
+        return;
+      }
+    } catch (err) {
+      console.warn("[recon] rate-override check failed, proceeding to run:", err);
+    }
+    // No unset overrides (or the check failed non-fatally) — run recon now.
+    await performRecon(goals);
+  }, [clientId, financialYear, firmId, existingOverrides, performRecon]);
 
   // ── Filter flags ─────────────────────────────────────────────────────────────
   const visible = flags.filter(f => {
@@ -794,6 +887,18 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
         onConfirm={handleRaiseQuery}
         saving={!!savingId}
       />
+      {/* Stage 2.5 — auditor rate confirmation before recon */}
+      {clientId && firmId && financialYear && (
+        <PartyRateConfigModal
+          open={rateModalOpen}
+          onOpenChange={setRateModalOpen}
+          clientId={clientId}
+          firmId={firmId}
+          financialYear={financialYear}
+          parties={modalParties}
+          onSaved={() => { void performRecon(pendingGoals); }}
+        />
+      )}
     </div>
     </TooltipProvider>
   );

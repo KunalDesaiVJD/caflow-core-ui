@@ -350,15 +350,25 @@ export async function runAiMapper(params: {
         .filter(r => r.tds_deductee_name && r.tds_deductee_name !== "(not filed)")
         .map(r => String(r.tb_ledger_name || "").trim().toLowerCase()),
     );
-    const staleBooksOnlyIds = rows
-      .filter(r => {
-        if (!String(r.match_method || "").includes("books_only")) return false;
-        const key = String(r.tb_ledger_name || "").trim().toLowerCase();
-        // Drop when a real match exists OR the row is against the TDS
-        // ledger itself (which should never have been a candidate).
-        return claimed.has(key) || discoveredNames.has(key);
-      })
+    // Stage-2 hotfix (2026-08-04) — a mapping row whose tb_ledger_name is
+    // itself a discovered TDS payable (Ray Wings' "TDS PAY") must be
+    // deleted regardless of match_method OR mapped_by. Auditors sometimes
+    // confirm-then-reject those rows, which leaves mapped_by="auditor"
+    // and slips past the books_only-only filter. This is always wrong —
+    // TDS PAY is the payable ledger, never a party — so nuke it hard.
+    const tdsPayableRowIds = rows
+      .filter(r => discoveredNames.has(String(r.tb_ledger_name || "").trim().toLowerCase()))
       .map(r => r.id);
+    const staleBooksOnlyIds = [...new Set([
+      ...tdsPayableRowIds,
+      ...rows
+        .filter(r => {
+          if (!String(r.match_method || "").includes("books_only")) return false;
+          const key = String(r.tb_ledger_name || "").trim().toLowerCase();
+          return claimed.has(key);
+        })
+        .map(r => r.id),
+    ])];
     if (staleBooksOnlyIds.length > 0) {
       await (supabase as any)
         .from("tds_recon_flags")
@@ -1001,6 +1011,24 @@ export async function runReconEngine(params: {
     return FALLBACK_RATE_TABLE[sec] ?? null;
   }
 
+  // Stage 2.5 (2026-08-05) — auditor-confirmed rate overrides for 194C /
+  // 194J parties. Consulted BEFORE any auto-detection (deductee_type,
+  // refined194JRate, actual-rate self-correction), so the auditor's
+  // judgement on Individual vs Company / Professional vs Technical is
+  // authoritative. Keyed by tb_ledger_name + tds_deductee_name + section.
+  const { data: overrideRows } = await (supabase as any)
+    .from("tds_party_rate_overrides")
+    .select("tb_ledger_name,tds_deductee_name,section_code,applicable_rate,applicable_nature")
+    .eq("client_id",      client_id)
+    .eq("financial_year", financial_year);
+  const rateOverrideMap = new Map<string, { rate: number; nature: string | null }>();
+  for (const r of (overrideRows as any[] | null) ?? []) {
+    const key = `${String(r.tb_ledger_name || "").trim().toLowerCase()}|${String(r.tds_deductee_name || "").trim().toLowerCase()}|${r.section_code}`;
+    rateOverrideMap.set(key, { rate: Number(r.applicable_rate) || 0, nature: r.applicable_nature ?? null });
+  }
+  const lookupRateOverride = (tb: string, ded: string, sec: string) =>
+    rateOverrideMap.get(`${String(tb || "").trim().toLowerCase()}|${String(ded || "").trim().toLowerCase()}|${sec}`);
+
   // 4. Delete pending flags for requested goals
   await (supabase as any).from("tds_recon_flags").delete()
     .eq("client_id", client_id).eq("financial_year", financial_year)
@@ -1217,7 +1245,28 @@ export async function runReconEngine(params: {
           const isCompSec = isCompany(dedSec?.primary_deductee_type ?? null);
           let rateSec = isCompSec ? rateEntrySec.rate_company : rateEntrySec.rate_individual;
           const threshSec = isCompSec ? rateEntrySec.threshold_company : rateEntrySec.threshold_individual;
-          if (sec === "194J") {
+          // Stage 2.5 — auditor override wins first.
+          const overrideSec = lookupRateOverride(mapping.tb_ledger_name, mapping.tds_deductee_name, sec);
+          if (overrideSec) {
+            rateSec = overrideSec.rate;
+          }
+          // Stage-2 hotfix — same actual-rate self-correction as the
+          // non-split path below. If actualRate matches any legit rate
+          // for the section, re-align expected `rateSec` to it.
+          const actualRateSec_pre = amtPaidSec > 0 ? (actualTdsSec / amtPaidSec) * 100 : 0;
+          const VALID_RATE_MAP_S: Record<string, number[]> = {
+            "192":   [], "192A": [10], "193": [10], "194":  [10],
+            "194A":  [10], "194C": [1, 2], "194H": [2], "194I": [2, 10],
+            "194IB": [5], "194J": [2, 10], "194M": [5], "194Q": [0.1],
+            "194R":  [10], "195": [20],
+          };
+          const validForSecS = VALID_RATE_MAP_S[sec] ?? [];
+          const rateMatchesAnyS = validForSecS.some(r => Math.abs(actualRateSec_pre - r) <= 0.30);
+          if (!overrideSec && rateMatchesAnyS) {
+            rateSec = validForSecS.reduce((a, b) =>
+              Math.abs(actualRateSec_pre - a) < Math.abs(actualRateSec_pre - b) ? a : b
+            );
+          } else if (sec === "194J") {
             rateSec = refined194JRate(
               (mapping as any).nature_of_payment ?? null,
               mapping.tds_deductee_name, mapping.tb_ledger_name,
@@ -1268,16 +1317,52 @@ export async function runReconEngine(params: {
       const isComp = isCompany(ded?.primary_deductee_type ?? null);
       let rate     = isComp ? rateEntry.rate_company : rateEntry.rate_individual;
       const thresh = isComp ? rateEntry.threshold_company : rateEntry.threshold_individual;
+
+      // Stage 2.5 — auditor override wins. If the auditor confirmed a
+      // rate for this party+section, use it directly and skip auto-
+      // detection (refined194JRate, actual-rate self-correction). The
+      // auditor's judgement is authoritative.
+      const override = lookupRateOverride(mapping.tb_ledger_name, mapping.tds_deductee_name, mapping.tds_section_code);
+      if (override) {
+        rate = override.rate;
+      }
       // 2026-07-24 — 194J splits into professional (10%) and technical (2%).
       // Section code alone is ambiguous; consult the deductee's nature/name
       // and the TB ledger name for technical/software/call-centre hints so
       // "Professional Fees" isn't wrongly benchmarked at 2% and vice versa.
-      if (mapping.tds_section_code === "194J") {
+      if (!override && mapping.tds_section_code === "194J") {
         rate = refined194JRate(
           (mapping as any).nature_of_payment ?? null,
           mapping.tds_deductee_name,
           mapping.tb_ledger_name,
         );
+      }
+      // Stage-2 hotfix (2026-08-04) — the FILED nature/type is often wrong
+      // (auditor typed "Technical Services" for a CA firm, or "Company" for
+      // an individual). Rate-match against the ACTUAL implied rate as the
+      // tie-breaker BEFORE flagging: if actual rate lands ≤ 0.30 pp from a
+      // legitimate valid rate at this section, treat that as the intended
+      // rate and skip the flag. Only genuine short/over-deduction stays.
+      // 194J: {2, 10}. 194C: {1, 2}. 194H: {2}. 194I: {2, 10}. 194A: {10}.
+      // 194Q: {0.1}. 195: {20}. Add more as sections come in scope.
+      const actualRateForCheck = amtPaid > 0 ? (actualTds / amtPaid) * 100 : 0;
+      const VALID_RATE_MAP: Record<string, number[]> = {
+        "192":   [], "192A": [10], "193": [10], "194":  [10],
+        "194A":  [10], "194C": [1, 2], "194H": [2], "194I": [2, 10],
+        "194IB": [5], "194J": [2, 10], "194M": [5], "194Q": [0.1],
+        "194R":  [10], "195": [20],
+      };
+      const validForSec = VALID_RATE_MAP[mapping.tds_section_code ?? ""] ?? [];
+      const rateMatchesAny = validForSec.some(r => Math.abs(actualRateForCheck - r) <= 0.30);
+      // Skip self-correction when auditor override is set (their choice wins).
+      if (!override && rateMatchesAny) {
+        // The auditor actually deducted at one of the section's legitimate
+        // rates. Re-align `rate` to that actual rate so the "expected"
+        // computation below matches — no false variance.
+        const closest = validForSec.reduce((a, b) =>
+          Math.abs(actualRateForCheck - a) < Math.abs(actualRateForCheck - b) ? a : b
+        );
+        rate = closest;
       }
       if (amtPaid <= thresh) continue;
       const expectedTds = amtPaid * rate / 100;
