@@ -17,7 +17,7 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ChevronDown, ChevronRight, Loader2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, X, ZoomIn, ZoomOut } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useTdsVoucherClassifications } from "./hooks/useTdsVoucherClassifications";
 
@@ -65,6 +65,10 @@ export function SplitByVoucherPanel({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkSection, setBulkSection] = useState<string>(defaultSection ?? "194C");
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(100);
+  const zoomIn    = () => setZoom(z => Math.min(150, z + 10));
+  const zoomOut   = () => setZoom(z => Math.max(70, z - 10));
+  const zoomReset = () => setZoom(100);
 
   // Rows arrive pre-sorted by voucher_date/voucher_number from the RPC — walk
   // them in that order, accumulating Dr(+)/Cr(-) on top of the ledger's
@@ -142,6 +146,34 @@ export function SplitByVoucherPanel({
               <span>₹{fmtINR(amt)}</span>
             </span>
           ))}
+          <div className="flex items-center gap-0.5 border border-slate-200 bg-white rounded ml-1">
+            <button
+              type="button"
+              className="p-1 text-slate-500 hover:text-slate-800 disabled:opacity-30"
+              title="Zoom out"
+              onClick={zoomOut}
+              disabled={zoom <= 70}
+            >
+              <ZoomOut size={12} />
+            </button>
+            <button
+              type="button"
+              className="px-1 text-[10px] font-medium text-slate-600 hover:text-slate-900 tabular-nums w-9 text-center"
+              title="Reset zoom"
+              onClick={zoomReset}
+            >
+              {zoom}%
+            </button>
+            <button
+              type="button"
+              className="p-1 text-slate-500 hover:text-slate-800 disabled:opacity-30"
+              title="Zoom in"
+              onClick={zoomIn}
+              disabled={zoom >= 150}
+            >
+              <ZoomIn size={12} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -183,7 +215,10 @@ export function SplitByVoucherPanel({
           No vouchers found under &quot;{tbLedgerName}&quot; for FY {financialYear ?? "—"}.
         </div>
       ) : (
-        <div className="overflow-auto max-h-[460px] border border-slate-200 rounded">
+        <div
+          className="overflow-auto max-h-[460px] border border-slate-200 rounded"
+          style={{ zoom: zoom / 100 }}
+        >
           <table className="w-full text-[10px]">
             <thead className="sticky top-0 bg-slate-100 z-10">
               <tr>
@@ -214,21 +249,20 @@ export function SplitByVoucherPanel({
                 const lineItems = Array.isArray(v.line_items) ? v.line_items : [];
                 return (
                   <>
-                    <tr key={v.id} className={cn(
-                      "border-t border-slate-100 hover:bg-slate-50/60",
-                      selected.has(v.id) && "bg-blue-50/40",
-                    )}>
+                    <tr
+                      key={v.id}
+                      className={cn(
+                        "border-t border-slate-100 hover:bg-slate-50/60 cursor-pointer",
+                        selected.has(v.id) && "bg-blue-50/40",
+                        isExpanded && "bg-blue-50/50",
+                      )}
+                      onClick={() => setExpandedId(isExpanded ? null : v.id)}
+                      title="Click to show narration & voucher detail"
+                    >
                       <td className="p-1.5">
-                        <button
-                          type="button"
-                          className="text-slate-400 hover:text-slate-600"
-                          title="Show narration & voucher detail"
-                          onClick={() => setExpandedId(isExpanded ? null : v.id)}
-                        >
-                          {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
-                        </button>
+                        {isExpanded ? <ChevronDown size={11} className="text-slate-400" /> : <ChevronRight size={11} className="text-slate-400" />}
                       </td>
-                      <td className="p-1.5">
+                      <td className="p-1.5" onClick={(e) => e.stopPropagation()}>
                         <Checkbox
                           checked={selected.has(v.id)}
                           onCheckedChange={() => toggle(v.id)}
@@ -252,7 +286,7 @@ export function SplitByVoucherPanel({
                       <td className="p-1.5 text-right tabular-nums">
                         ₹{fmtINR(balance)} <span className="text-muted-foreground">{balanceType}</span>
                       </td>
-                      <td className="p-1.5">
+                      <td className="p-1.5" onClick={(e) => e.stopPropagation()}>
                         <Select
                           value={value}
                           onValueChange={(v2) => {
@@ -275,7 +309,7 @@ export function SplitByVoucherPanel({
                           </SelectContent>
                         </Select>
                       </td>
-                      <td className="p-1.5">
+                      <td className="p-1.5" onClick={(e) => e.stopPropagation()}>
                         {r.classification && (
                           <button
                             type="button"
