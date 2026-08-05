@@ -29,6 +29,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { NOTES_CONFIG } from "@/config/nceNotesConfig";
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import { buildNoteFsMap } from "@/lib/nceNoteRegistry";
+import { buildLedgerMapMatcher } from "@/lib/tallyText";
 
 // ── FS-code map ──────────────────────────────────────────────────────────────
 //
@@ -1518,31 +1519,23 @@ export async function nceAutoPopulate(
       // ── Pattern B ──────────────────────────────────────────────────────
       const codeSet    = new Set(noteFs.all);
       const smartRules = NOTE_SMART_MAP[noteType] ?? [];
-      // 2026-08-04 — Ledger-name normalisation index (RAY WINGS TECHNOLOGY fix).
-      // A Tally-exported ledger like "The District TB Centre\r\n" has invisible
-      // CR/LF characters embedded in its name. computeCOATotals (which drives
-      // the BS/P&L FACE) already resolves this via a trim+lowercase fallback
-      // index, so the ledger contributes to the face. This CY walk previously
-      // used ONLY the raw `coaMapping[row.ledger_name]` lookup, which requires
-      // an exact string match — so the CRLF ledger silently dropped out of the
+      // 2026-08-04 — Ledger-name normalisation index (RAY WINGS TECHNOLOGY fix,
+      // partial). A Tally-exported ledger like "The District TB Centre\r\n"
+      // has invisible CR/LF characters (or numeric HTML entities like
+      // "&#13;&#10;") embedded in its name. This CY walk previously used
+      // ONLY the raw `coaMapping[row.ledger_name]` lookup, which requires an
+      // exact string match — so the CRLF ledger silently dropped out of the
       // note breakup and produced a face-note gap equal to that ledger's
-      // balance (₹1,20,960 on RAY WINGS). Build the same trim+CI index here
-      // and use it as a fallback so BS face and Note total resolve the same
-      // ledger set. Also fixes any legacy engagements whose COA mapping keys
-      // include stray leading/trailing whitespace.
-      const coaMappingCI: Record<string, { code: string }> = {};
-      for (const [k, v] of Object.entries(coaMapping || {})) {
-        if (!v?.code) continue;
-        const kk = String(k).trim().toLowerCase();
-        if (!(kk in coaMappingCI)) coaMappingCI[kk] = v;
-      }
-      const lookupCoa = (name: string | null | undefined): { code: string } | undefined => {
-        if (!name) return undefined;
-        const raw = String(name);
-        return (coaMapping as any)[raw]
-            ?? (coaMapping as any)[raw.trim()]
-            ?? coaMappingCI[raw.trim().toLowerCase()];
-      };
+      // balance (₹1,20,960 on RAY WINGS).
+      // 2026-08-05 — RC-21 follow-up: the trim+CI index added above was still
+      // not enough — it never stripped control chars / numeric entities, so
+      // a corrupted-name ledger still failed to match and the residual
+      // "Other (prior year)" plug in the PY safety-reconcile pass kept
+      // firing for this exact client. Use the single shared matcher
+      // (buildLedgerMapMatcher, src/lib/tallyText.ts) — exact → trim → CI →
+      // cleanTallyName — so this walk, computeCOATotals, and every other
+      // mapping consumer resolve the same ledger set for good.
+      const lookupCoa = buildLedgerMapMatcher(coaMapping || {});
       // Stage 1: split each ledger into "matched-static" or "unmatched"
       // pyAmt is optional so PY-only ledgers (no CY balance) can still flow
       // through Stage 2 as their own customRow with amt = 0 and pyAmt set.
@@ -1619,14 +1612,11 @@ export async function nceAutoPopulate(
       // CY ledger sharing the same Tally parent_group. This way ledgers
       // renamed between years (Tally export quirk) still classify.
       if (pyTb.length > 0) {
-        const cyMappingLower: Record<string, { code: string }> = {};
-        for (const [k, v] of Object.entries(coaMapping || {})) {
-          if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
-        }
-        const pyMappingLower: Record<string, { code: string }> = {};
-        for (const [k, v] of Object.entries(pyCoaMap || {})) {
-          if (v?.code) pyMappingLower[k.toLowerCase().trim()] = v;
-        }
+        // RC-21 — shared matcher (exact → trim → CI → cleanTallyName) so a
+        // control-char/entity-corrupted ledger name still resolves here the
+        // same way it does in computeCOATotals and the Pattern B CY walk above.
+        const lookupCyForPy = buildLedgerMapMatcher(coaMapping || {});
+        const lookupPyForPy = buildLedgerMapMatcher(pyCoaMap || {});
         // parent_group → FS code map (precomputed once at fn scope — avoids
         // the previous O(ledgers²) tb.find per note that hung large engagements).
         const groupToCode = groupToCodeGlobal;
@@ -1649,15 +1639,12 @@ export async function nceAutoPopulate(
           if (cySeenLedger.has(nmLower)) continue;
           // Note 4 fix: skip PY-only ledgers already claimed by a manual row.
           if (isClaimedByManual(nm)) continue;
-          // Resolution order: PY-shell exact → PY-shell lower → CY exact →
-          // CY lower → parent_group inheritance. Mirrors how the variance
-          // drill resolves PY ledgers, so what the auditor sees in the
-          // drill always reaches the expanded note breakdown.
+          // Resolution order: PY-shell mapping (exact/trim/CI/clean) → CY
+          // mapping (exact/trim/CI/clean) → parent_group inheritance. Mirrors
+          // how the variance drill resolves PY ledgers, so what the auditor
+          // sees in the drill always reaches the expanded note breakdown.
           let mapped: { code: string } | undefined =
-            (pyCoaMap as any)[nm] ||
-            pyMappingLower[nmLower] ||
-            (coaMapping as any)[nm] ||
-            cyMappingLower[nmLower];
+            lookupPyForPy(nm) ?? lookupCyForPy(nm);
           if (!mapped?.code) {
             const grp = String((row as any).parent_group || "").toLowerCase().trim();
             if (grp && groupToCode[grp]) mapped = { code: groupToCode[grp] };
@@ -2295,14 +2282,10 @@ export async function nceAutoPopulate(
       // the authoritative content and must always survive.
       if (pyTb.length > 0) {
         try {
-          const cyMappingLowerA: Record<string, { code: string }> = {};
-          for (const [k, v] of Object.entries(coaMapping || {})) {
-            if (v?.code) cyMappingLowerA[k.toLowerCase().trim()] = v;
-          }
-          const pyMappingLowerA: Record<string, { code: string }> = {};
-          for (const [k, v] of Object.entries(pyCoaMap || {})) {
-            if (v?.code) pyMappingLowerA[k.toLowerCase().trim()] = v;
-          }
+          // RC-21 — shared matcher (exact → trim → CI → cleanTallyName), same
+          // rationale as the Pattern B PY-only walk above.
+          const lookupCyForPyA = buildLedgerMapMatcher(coaMapping || {});
+          const lookupPyForPyA = buildLedgerMapMatcher(pyCoaMap || {});
           // parent_group → FS code inheritance (precomputed once at fn scope)
           const groupToCodeA = groupToCodeGlobal;
           const cySeen = new Set(tb.map(r => r.ledger_name.toLowerCase().trim()));
@@ -2317,8 +2300,7 @@ export async function nceAutoPopulate(
             // Note 4 fix: skip PY-only ledgers already claimed by a manual row.
             if (isClaimedByManual(nm)) continue;
             let mapped: { code: string } | undefined =
-              (pyCoaMap as any)[nm] || pyMappingLowerA[nmLower] ||
-              (coaMapping as any)[nm] || cyMappingLowerA[nmLower];
+              lookupPyForPyA(nm) ?? lookupCyForPyA(nm);
             if (!mapped?.code) {
               const grp = String((row as any).parent_group || "").toLowerCase().trim();
               if (grp && groupToCodeA[grp]) mapped = { code: groupToCodeA[grp] };

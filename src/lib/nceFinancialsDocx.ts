@@ -116,6 +116,15 @@ const CAP_PCT  = 850;
 const CAP_NUM  = 980;   // × 6 (Opening … Profit Share)
 const CAP_LAST = 986;   // 450+2300+850+6×980+986 = 10466 ✓
 
+// Proprietorship variant (7 cols): Sr No | Proprietor | Opening | Introduced |
+// Withdrawals | Profit Share | Closing — no Share %, Remuneration, Interest
+// (those only apply to Partnership/LLP). Widths redistributed to still span
+// the full page width.
+const CAP_SR_P    = 450;
+const CAP_NAME_P  = 2500;
+const CAP_NUM_P   = 1502;  // × 4 (Opening, Introduced, Withdrawals, Profit Share)
+const CAP_LAST_P  = 1508;  // 450+2500+4×1502+1508 = 10466 ✓
+
 // Landscape (PPE Schedule) — same punch margin on the (left) binding edge
 const TW_LS   = A4_H - MARG_L - MARG_R; // 16838 - 864 - 576 = 15398 DXA
 // PPE cols — 9 cols: Asset Name | Rate | Opening | Add-pre | Add-post |
@@ -1532,11 +1541,12 @@ function buildNote1Section(
   ];
 }
 
-/** Note 2 — Partners' Capital Account tables (CY + PY) */
+/** Note 2 — Partners'/Proprietor's Capital Account tables (CY + PY) */
 function buildCapitalAccountSection(
   capitalData: any[],
   cyYear: string,
   pyYear: string,
+  isProprietorship = false,
 ): Table[] {
   const PY_SENTINEL    = 99;
   const PY_PARTNER_BASE = 100;
@@ -1564,7 +1574,16 @@ function buildCapitalAccountSection(
 
   // KD5/KD6/KD7: 10 cols — Sr No | Partner | Share % | Opening | Introduced |
   // Remuneration | Interest | Withdrawals | Profit Share | Closing.
-  const cw = [CAP_SR, CAP_NAME, CAP_PCT, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_LAST];
+  // Proprietorship (Phase 2): 7 cols — Share %, Remuneration, Interest dropped
+  // (a sole proprietor has no partners to share profit with, and no
+  // remuneration/interest-on-capital concept).
+  const numW  = isProprietorship ? CAP_NUM_P  : CAP_NUM;
+  const cw = isProprietorship
+    ? [CAP_SR_P, CAP_NAME_P, numW, numW, numW, numW, CAP_LAST_P]
+    : [CAP_SR, CAP_NAME, CAP_PCT, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_NUM, CAP_LAST];
+  const srW   = isProprietorship ? CAP_SR_P   : CAP_SR;
+  const nameW = isProprietorship ? CAP_NAME_P : CAP_NAME;
+  const lastW = isProprietorship ? CAP_LAST_P : CAP_LAST;
 
   const makeHdrRow = (): TableRow => {
     const h = (text: string, w: number) =>
@@ -1572,16 +1591,15 @@ function buildCapitalAccountSection(
     return new TableRow({
       tableHeader: true,
       children: [
-        h("Sr.\nNo.",                    CAP_SR),
-        h("Partner",                     CAP_NAME),
-        h("Share of Profit /\n(Loss) %", CAP_PCT),
-        h(hdr("Opening Balance"),        CAP_NUM),
-        h(hdr("Introduced"),             CAP_NUM),
-        h(hdr("Remuneration"),           CAP_NUM),
-        h(hdr("Interest"),               CAP_NUM),
-        h(hdr("Withdrawals"),            CAP_NUM),
-        h(hdr("Profit Share"),           CAP_NUM),
-        h(hdr("Closing Balance"),        CAP_LAST),
+        h("Sr.\nNo.",                    srW),
+        h(isProprietorship ? "Proprietor" : "Partner", nameW),
+        ...(isProprietorship ? [] : [h("Share of Profit /\n(Loss) %", CAP_PCT)]),
+        h(hdr("Opening Balance"),        numW),
+        h(hdr("Introduced"),             numW),
+        ...(isProprietorship ? [] : [h(hdr("Remuneration"), CAP_NUM), h(hdr("Interest"), CAP_NUM)]),
+        h(hdr("Withdrawals"),            numW),
+        h(hdr("Profit Share"),           numW),
+        h(hdr("Closing Balance"),        lastW),
       ],
     });
   };
@@ -1596,16 +1614,15 @@ function buildCapitalAccountSection(
   const cyDataRows = cyPartners.map((p: any, idx: number) =>
     new TableRow({
       children: [
-        cell({ text: String(idx + 1), w: CAP_SR, sz: SZ_BODY, align: AlignmentType.CENTER }),
-        cell({ text: p.partner_name || "Partner", w: CAP_NAME, sz: SZ_BODY }),
-        cell({ text: pctText(p.profit_share_pct), w: CAP_PCT, sz: SZ_BODY, align: AlignmentType.CENTER }),
-        nc(p.opening_balance_cy ?? 0, CAP_NUM),
-        nc(p.introduced_cy      ?? 0, CAP_NUM),
-        nc(p.remuneration_cy    ?? 0, CAP_NUM),
-        nc(p.interest_cy        ?? 0, CAP_NUM),
-        nc(p.withdrawals_cy     ?? 0, CAP_NUM),
-        nc(p.profit_share_cy    ?? 0, CAP_NUM),
-        nc(calcClosingCy(p),          CAP_LAST),
+        cell({ text: String(idx + 1), w: srW, sz: SZ_BODY, align: AlignmentType.CENTER }),
+        cell({ text: p.partner_name || (isProprietorship ? "Proprietor" : "Partner"), w: nameW, sz: SZ_BODY }),
+        ...(isProprietorship ? [] : [cell({ text: pctText(p.profit_share_pct), w: CAP_PCT, sz: SZ_BODY, align: AlignmentType.CENTER })]),
+        nc(p.opening_balance_cy ?? 0, numW),
+        nc(p.introduced_cy      ?? 0, numW),
+        ...(isProprietorship ? [] : [nc(p.remuneration_cy ?? 0, CAP_NUM), nc(p.interest_cy ?? 0, CAP_NUM)]),
+        nc(p.withdrawals_cy     ?? 0, numW),
+        nc(p.profit_share_cy    ?? 0, numW),
+        nc(calcClosingCy(p),          lastW),
       ],
     }),
   );
@@ -1621,16 +1638,15 @@ function buildCapitalAccountSection(
 
   const cyTotalRow = new TableRow({
     children: [
-      ec(CAP_SR, BG_GRAN, BDR_GRAND),
-      cell({ text: "Total", w: CAP_NAME, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
-      cell({ text: totCyPct ? `${+totCyPct.toFixed(2)}%` : "", w: CAP_PCT, bold: true, bg: BG_GRAN, borders: BDR_GRAND, align: AlignmentType.CENTER }),
-      nc(totCyOpening,  CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-      nc(totCyIntro,    CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-      nc(totCyRem,      CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-      nc(totCyInt,      CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-      nc(totCyWith,     CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-      nc(totCyPS,       CAP_NUM,  true, BG_GRAN, BDR_GRAND),
-      nc(totCyClosing,  CAP_LAST, true, BG_GRAN, BDR_GRAND),
+      ec(srW, BG_GRAN, BDR_GRAND),
+      cell({ text: "Total", w: nameW, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      ...(isProprietorship ? [] : [cell({ text: totCyPct ? `${+totCyPct.toFixed(2)}%` : "", w: CAP_PCT, bold: true, bg: BG_GRAN, borders: BDR_GRAND, align: AlignmentType.CENTER })]),
+      nc(totCyOpening,  numW,  true, BG_GRAN, BDR_GRAND),
+      nc(totCyIntro,    numW,  true, BG_GRAN, BDR_GRAND),
+      ...(isProprietorship ? [] : [nc(totCyRem, CAP_NUM, true, BG_GRAN, BDR_GRAND), nc(totCyInt, CAP_NUM, true, BG_GRAN, BDR_GRAND)]),
+      nc(totCyWith,     numW,  true, BG_GRAN, BDR_GRAND),
+      nc(totCyPS,       numW,  true, BG_GRAN, BDR_GRAND),
+      nc(totCyClosing,  lastW, true, BG_GRAN, BDR_GRAND),
     ],
   });
 
@@ -1650,16 +1666,15 @@ function buildCapitalAccountSection(
 
   const previousYearRow = new TableRow({
     children: [
-      ec(CAP_SR, BG_TOT, BDR_SUB),
-      cell({ text: "Previous Year", w: CAP_NAME, bold: true, bg: BG_TOT, borders: BDR_SUB }),
-      cell({ text: "", w: CAP_PCT, bg: BG_TOT, borders: BDR_SUB }),
-      nc(pyOpening, CAP_NUM,  true, BG_TOT, BDR_SUB),
-      nc(pyIntro,   CAP_NUM,  true, BG_TOT, BDR_SUB),
-      nc(pyRem,     CAP_NUM,  true, BG_TOT, BDR_SUB),
-      nc(pyInt,     CAP_NUM,  true, BG_TOT, BDR_SUB),
-      nc(pyWith,    CAP_NUM,  true, BG_TOT, BDR_SUB),
-      nc(pyPS,      CAP_NUM,  true, BG_TOT, BDR_SUB),
-      nc(pyClose,   CAP_LAST, true, BG_TOT, BDR_SUB),
+      ec(srW, BG_TOT, BDR_SUB),
+      cell({ text: "Previous Year", w: nameW, bold: true, bg: BG_TOT, borders: BDR_SUB }),
+      ...(isProprietorship ? [] : [cell({ text: "", w: CAP_PCT, bg: BG_TOT, borders: BDR_SUB })]),
+      nc(pyOpening, numW,  true, BG_TOT, BDR_SUB),
+      nc(pyIntro,   numW,  true, BG_TOT, BDR_SUB),
+      ...(isProprietorship ? [] : [nc(pyRem, CAP_NUM, true, BG_TOT, BDR_SUB), nc(pyInt, CAP_NUM, true, BG_TOT, BDR_SUB)]),
+      nc(pyWith,    numW,  true, BG_TOT, BDR_SUB),
+      nc(pyPS,      numW,  true, BG_TOT, BDR_SUB),
+      nc(pyClose,   lastW, true, BG_TOT, BDR_SUB),
     ],
   });
 
@@ -1684,7 +1699,7 @@ function buildCapitalAccountSection(
     width:        { size: TW, type: WidthType.DXA },
     columnWidths: cw,
     rows: [
-      noteTitleRow(cw, "2", "Partners' Capital Account"),
+      noteTitleRow(cw, "2", isProprietorship ? "Capital Account" : "Partners' Capital Account"),
       makePeriodHdr(`Current Year — FY ${fyRange(cyYear)}`),
       makeHdrRow(),
       ...cyDataRows,
@@ -2438,7 +2453,8 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const note1Paras = buildNote1Section(entityName, cyYear, ntaData, sigArgs);
 
   // Phase 2 — Note 2 (Capital Account)
-  const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear);
+  const isProprietorship = (constitution || "").trim().toLowerCase() === "proprietorship";
+  const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear, isProprietorship);
 
   // Notes 3-28: export exactly the notes the UI shows — i.e. those active in
   // the dynamic note map (their BS/PL line carries data). The note number used
