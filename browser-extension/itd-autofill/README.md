@@ -1,9 +1,12 @@
 # CAFlow — ITD Portal Autofill (browser extension)
 
-Fills the Income Tax e-Filing login (PAN/Aadhaar/User ID, then Password) using
-the client credentials already saved in CAFlow. Stops right before the
-CAPTCHA/OTP step — that, and clicking the final Sign In button, stay manual
-on purpose.
+Fills the Income Tax e-Filing login (Login ID, then Password) using the
+client credentials already saved in CAFlow's "ITD (e-Filing) Login ID" /
+"ITD (e-Filing) Password" fields (Edit Client → Services → Portal Login
+Credentials) — the exact value saved there, whatever it is (PAN, Aadhaar, or
+another registered User ID; CAflow doesn't assume or validate which). Stops
+right before the CAPTCHA/OTP step — that, and clicking the final Sign In
+button, stay manual on purpose.
 
 ## What this is NOT
 
@@ -17,7 +20,7 @@ auto-updated. There is no Chrome Web Store listing.
 - **ITD (incometax.gov.in) only.** TRACES autofill is not built yet — the
   "Copy Login ID" / "Copy Password" flow in CAFlow still works for it, as it
   always has.
-- Fills PAN/User ID → clicks Continue → fills Password → **stops**. It never
+- Fills Login ID → clicks Continue → fills Password → **stops**. It never
   touches a CAPTCHA/OTP field and never clicks the final Sign In button.
 - If the ITD portal's page structure has changed since this was built and a
   field can't be found, you'll see a banner on the portal page saying exactly
