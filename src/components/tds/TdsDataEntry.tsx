@@ -3005,6 +3005,14 @@ export function TdsDataEntry({
                                   <TableHead className="text-xs text-right" style={{ width: 90, minWidth: 90 }}>Std Ded</TableHead>
                                   <TableHead className="text-xs text-right" style={{ width: 90, minWidth: 90 }}>Taxable</TableHead>
                                   <TableHead className="text-xs text-right" style={{ width: 70, minWidth: 70 }}>TDS</TableHead>
+                                  {/* Bug fix 2026-08-06: 24Q had no Interest column at all, so a
+                                      challan legitimately Fully Utilised via TDS + auto-computed
+                                      interest (see calcAutoInterest/computeApplied's own docs — the
+                                      SAME math the "Fully Utilised" badge already uses) looked
+                                      unexplained: the deductee row's own TDS figure alone never
+                                      summed to the challan total, with nowhere on this table showing
+                                      where the rest came from. */}
+                                  <TableHead className="text-xs text-right" style={{ width: 80, minWidth: 80 }}>Interest</TableHead>
                                   <TableHead className="text-xs" style={{ width: 60, minWidth: 60 }}>Details</TableHead>
                                 </>
                               ) : selForm === "27EQ" ? (
@@ -3041,7 +3049,7 @@ export function TdsDataEntry({
                             {/* Issue 5: Previous quarter entries section (read-only, Issue 7E: distinct styling) */}
                             {prevEntries.length > 0 && (
                               <TableRow className="bg-slate-100 border-l-4 border-l-slate-400">
-                                <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="py-1 px-2">
+                                <TableCell colSpan={selForm === "24Q" ? 11 : 12} className="py-1 px-2">
                                   {/* Dynamic label: single prev-quarter uses selQuarter/selFy helper;
                                       multi-quarter carry-forward lists all unique quarters from data */}
                                   <span className="text-[10px] font-semibold text-slate-600">
@@ -3051,7 +3059,7 @@ export function TdsDataEntry({
                               </TableRow>
                             )}
                             {prevEntries.map((d, idx) => {
-                              const colSpanVal = selForm === "24Q" ? 10 : 12;
+                              const colSpanVal = selForm === "24Q" ? 11 : 12;
                               // Per-row quarter badge — shows exactly which quarter/FY this
                               // read-only entry belongs to (resolves ambiguity when a
                               // challan has utilisation spanning multiple quarters).
@@ -3077,6 +3085,7 @@ export function TdsDataEntry({
                                       <TableCell className="text-right text-xs">{(d.standard_deduction_allowed || 0).toLocaleString("en-IN")}</TableCell>
                                       <TableCell className="text-right text-xs font-medium">{d.net_taxable_salary?.toLocaleString("en-IN") || "—"}</TableCell>
                                       <TableCell className="text-right text-xs font-semibold">{d.total_tax_deducted?.toLocaleString("en-IN") || "—"}</TableCell>
+                                      <TableCell className="text-right text-xs">{d.interest_amount > 0 ? d.interest_amount.toLocaleString("en-IN") : "—"}</TableCell>
                                       <TableCell><span className="text-[9px] text-slate-500">{d.quarter || "—"} FY {d.financial_year || "—"}</span></TableCell>
                                     </>
                                   ) : (
@@ -3101,7 +3110,7 @@ export function TdsDataEntry({
                             {/* Issue 5: Current quarter section header */}
                             {prevEntries.length > 0 && (
                               <TableRow className="bg-green-50">
-                                <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="py-1 px-2">
+                                <TableCell colSpan={selForm === "24Q" ? 11 : 12} className="py-1 px-2">
                                   <span className="text-[10px] font-semibold text-green-700">✅ Current Quarter Entries</span>
                                 </TableCell>
                               </TableRow>
@@ -3190,6 +3199,21 @@ export function TdsDataEntry({
                                       <TableCell className="text-right"><Input type="number" className={cn("h-7 text-xs w-20 text-right", locked && "bg-muted cursor-not-allowed opacity-75")} disabled={locked} defaultValue={d.standard_deduction_allowed || ""} onBlur={e => { if (!locked) updateDeducteeField(d.id, "standard_deduction_allowed", parseFloat(e.target.value) || null); }} /></TableCell>
                                       <TableCell className="text-right text-xs font-medium">{d.net_taxable_salary?.toLocaleString("en-IN") || "—"}</TableCell>
                                       <TableCell className="text-right text-xs font-semibold">{d.total_tax_deducted?.toLocaleString("en-IN") || "—"}</TableCell>
+                                      <TableCell className="text-right text-xs">
+                                        {(() => {
+                                          // Live-computed, same as computeApplied/the challan's own
+                                          // "Fully Utilised" math — never the stored interest_amount,
+                                          // which this form never writes to (see this column's own
+                                          // header comment for why that made utilisation status look
+                                          // unexplained rather than wrong).
+                                          const liveInterest = calcAutoInterest(
+                                            d.total_tax_deducted || d.tds_amount || 0,
+                                            d.date_of_payment ?? null,
+                                            selectedChallan?.deposit_date ?? null,
+                                          ).interest;
+                                          return liveInterest > 0 ? liveInterest.toLocaleString("en-IN") : "—";
+                                        })()}
+                                      </TableCell>
                                       <TableCell>
                                         <Button variant="ghost" size="icon" className="h-6 w-6" title="Full Salary Details" disabled={locked} onClick={() => openSalaryDrawer(d)}>
                                           <FileText size={12} />
@@ -3450,7 +3474,7 @@ export function TdsDataEntry({
 
                             {/* Issue 7F: Add Row - disabled when balance=0 or locked */}
                             <TableRow className="bg-muted/20">
-                              <TableCell colSpan={selForm === "24Q" ? 10 : 12} className="text-center py-2">
+                              <TableCell colSpan={selForm === "24Q" ? 11 : 12} className="text-center py-2">
                                 {isFilingLocked ? (
                                   <span className="text-xs text-muted-foreground flex items-center justify-center gap-1"><Lock size={10} /> Data entry locked</span>
                                 ) : selectedChallanBalance <= 0 ? (
