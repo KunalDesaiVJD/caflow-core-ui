@@ -508,8 +508,20 @@ export const StepServiceBilling = ({
     set("packageConfig", { ...data.packageConfig, ...patch });
   };
 
-  // Services NOT in the package (for individual activation in package mode)
-  const nonPackageServices = categories.filter((c) => !data.packageConfig.service_ids.includes(c.id));
+  // Services NOT in the package (for individual activation in package mode).
+  // TDS-linked categories are ALWAYS treated as individual, never packageable
+  // — see the checkbox list below (package selection filters them out the
+  // same way) for why: TDS Compliance needs its own Forms Applicable/Start-
+  // End Quarter/ITD-TRACES-credentials fields, which only render inside
+  // renderTdsRangeFields for a service reached through THIS list. A TDS
+  // service that ended up inside packageConfig.service_ids (stale data from
+  // before this fix, or a race) still falls through to here rather than
+  // vanishing — bug fixed 2026-08-05: a client with TDS Compliance checked
+  // INTO a package had literally no field anywhere to enter or view its
+  // ITD/TRACES credentials (the "Package Configuration" panel only ever
+  // rendered package_name/frequency/reminder/billing/invoice-type, never
+  // renderTdsRangeFields), so anything typed there had nowhere to be saved.
+  const nonPackageServices = categories.filter((c) => c.linked_module === "tds" || !data.packageConfig.service_ids.includes(c.id));
 
   if (loading) {
     return <div className="text-sm text-muted-foreground py-8 text-center">Loading services…</div>;
@@ -686,11 +698,15 @@ export const StepServiceBilling = ({
       {/* ── MODE B: Package Wise ── */}
       {data.billingMode === "package_wise" && (
         <div className="space-y-6">
-          {/* Service selection */}
+          {/* Service selection — TDS-linked categories are excluded here; see
+              nonPackageServices's own doc for why (they need their own
+              dedicated Forms/Quarter-range/credentials fields and always
+              render below under "Individual Services", regardless of the
+              overall billing mode). */}
           <div className="space-y-3">
             <h4 className="text-sm font-semibold text-foreground">Select services for package</h4>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              {categories.map((cat) => (
+              {categories.filter((cat) => cat.linked_module !== "tds").map((cat) => (
                 <label
                   key={cat.id}
                   className="flex items-center gap-2 rounded-md border border-border p-3 cursor-pointer hover:bg-accent/30 transition-colors"
