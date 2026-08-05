@@ -316,13 +316,15 @@ export async function extractPartiesFromTdsVouchers(params: {
     voucher_date:  string | null;
     voucher_type:  string | null;
     party_ledger:  string | null;
+    narration:     string | null;
     line_items:    Array<{ ledger_name?: string; amount?: number; dr_cr?: string }> | null;
   }
   const vouchers: Row[] = [];
   for (let from = 0; ; from += 1000) {
     const { data, error } = await (supabase as any)
       .from("tally_vouchers")
-      .select("voucher_date,voucher_type,party_ledger,line_items")
+      // P4-A (2026-08-05) — pull narration too for section inference fallback.
+      .select("voucher_date,voucher_type,party_ledger,narration,line_items")
       .eq("client_id",      client_id)
       .eq("financial_year", financial_year)
       .range(from, from + 999);
@@ -338,12 +340,16 @@ export async function extractPartiesFromTdsVouchers(params: {
     const items = Array.isArray(v.line_items) ? v.line_items : [];
     if (items.length === 0) continue;
 
-    // Filter to Journal-family vouchers. Different Tally installs use
-    // "Journal", "Purchase" (booking a bill with TDS deducted at bill-
-    // entry time), "Debit Note", "Credit Note". Payment/Receipt are
-    // excluded — those settle the TDS payable via bank, not deduct it.
+    // Filter to Journal-family vouchers plus Payment vouchers that
+    // ALSO happen to carry a TDS deduction on the Cr side. P2-F
+    // (2026-08-05): some clients book TDS at payment time —
+    //   Dr Party 100 / Cr TDS PAY 10 / Cr Bank 90
+    // which our previous Journal-only filter dropped. The subsequent
+    // "any Cr-side TDS ledger present?" check on tdsCrTotal filters
+    // out Payment vouchers that are simply challan-paying TDS to the
+    // government (those have TDS on the Dr side).
     const vtype = (v.voucher_type ?? "").toLowerCase();
-    if (/payment|receipt|contra/.test(vtype)) continue;
+    if (/receipt|contra/.test(vtype)) continue;
 
     // Find EVERY TDS line in this voucher (some Journals credit two TDS
     // ledgers if the client splits Payable and Late Fee — we account for
@@ -380,6 +386,15 @@ export async function extractPartiesFromTdsVouchers(params: {
         const inferred = inferSectionFromExpenseName(nm);
         if (inferred) { sectionHit = inferred; break; }
       }
+    }
+    // P4-A (2026-08-05) — final fallback: narration text often carries a
+    // section hint ("TDS on Professional Fees" / "u/s 194J" / "Rent for
+    // Nov"). Regex first for an explicit section token, then the same
+    // keyword map used for expense-ledger inference.
+    if (sectionHit == null && v.narration) {
+      const explicit = /\b194\s*([a-z]{1,3})\b/i.exec(v.narration);
+      if (explicit) sectionHit = `194${explicit[1].toUpperCase().replace(/\s+/g, "")}`;
+      else          sectionHit = inferSectionFromExpenseName(v.narration);
     }
 
     // Prefer the Tally-sync writer's `party_ledger` — it already resolves

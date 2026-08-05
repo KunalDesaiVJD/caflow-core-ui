@@ -269,6 +269,7 @@ function grossDifferenceReason(tbActivity: number, tdsGross: number, tdsTds: num
 
 interface AggDeductee {
   deductee_name: string;
+  deductee_pan?: string | null;
   section_code: string | null;
   nature_of_payment: string | null;
   total_amount_paid: number;
@@ -289,6 +290,7 @@ function aggregateDeducteesForMapper(rows: any[]): AggDeductee[] {
     if (!map.has(key)) {
       map.set(key, {
         deductee_name:     rawName,
+        deductee_pan:      r.deductee_pan ?? null,
         section_code:      r.section_code,
         nature_of_payment: r.nature_of_payment,
         total_amount_paid: 0, total_tds: 0,
@@ -296,6 +298,7 @@ function aggregateDeducteesForMapper(rows: any[]): AggDeductee[] {
       });
     }
     const agg = map.get(key)!;
+    if (r.deductee_pan && !agg.deductee_pan) agg.deductee_pan = r.deductee_pan;
     agg.total_amount_paid += r.amount_paid_credited ?? 0;
     agg.total_tds         += r.tds_amount           ?? 0;
     if (r.filing_id && !agg.filing_ids.includes(r.filing_id)) agg.filing_ids.push(r.filing_id);
@@ -569,7 +572,9 @@ export async function runAiMapper(params: {
   // 2. Fetch TDS deductees
   const { data: deducteeRows, error: dedErr } = await (supabase as any)
     .from("tds_deductees")
-    .select("id,filing_id,deductee_name,section_code,nature_of_payment,amount_paid_credited,tds_amount")
+    // P2-E-lite (2026-08-05) — pull PAN too for the PAN-match short-circuit
+    // in the matching loop below.
+    .select("id,filing_id,deductee_name,deductee_pan,section_code,nature_of_payment,amount_paid_credited,tds_amount")
     .eq("client_id", client_id)
     .eq("financial_year", financial_year);
   if (dedErr) throw new Error(`TDS deductees fetch error: ${dedErr.message}`);
@@ -616,9 +621,20 @@ export async function runAiMapper(params: {
       tdsAmtTie?: boolean;
     } | null = null;
 
+    // P2-E-lite (2026-08-05) — extract a PAN token from the TB ledger name
+    // (Tally clients sometimes name creditors like "SHANKARLAL - ABCPS1234N"
+    // or "Vanraj Engineers ABCPV5678K"). Regex: 5 letters + 4 digits + 1
+    // letter. Match against deductee_pan for a definitive short-circuit.
+    const PAN_RE = /\b([A-Z]{5}[0-9]{4}[A-Z])\b/i;
+    const tbPanMatch = PAN_RE.exec(String(tb.ledger_name ?? ""));
+    const tbPan     = tbPanMatch ? tbPanMatch[1].toUpperCase() : null;
+
     for (const ded of aggDeductees) {
       if (!ded.deductee_name) continue;
       const nameScore = tokenSortRatio(tb.ledger_name, ded.deductee_name);
+      // PAN match: hard evidence. Bypasses all other floors.
+      const panMatch = !!tbPan && !!ded.deductee_pan
+        && tbPan === String(ded.deductee_pan).toUpperCase().trim();
       // Phase 4 — TDS AMOUNT TIE-BACK. Voucher-derived candidates carry the
       // exact TDS amount deducted against the party in Tally. If that number
       // matches a deductee's total_tds within ₹10 OR 2 %, we have a strong
@@ -666,9 +682,10 @@ export async function runAiMapper(params: {
       const nameFloor = hasVoucherEvidence ? 60 : 70;
       const nearNameFloor  = 25;
       const looseNameFloor = 40;
-      if (!tdsAmtTie && !tdsAmtNear && !tdsAmtLoose && nameScore < nameFloor)  continue;
-      if (tdsAmtNear  && !tdsAmtTie && nameScore < nearNameFloor)  continue;
-      if (tdsAmtLoose && !tdsAmtTie && nameScore < looseNameFloor) continue;
+      // P2-E-lite — panMatch bypasses every name floor.
+      if (!panMatch && !tdsAmtTie && !tdsAmtNear && !tdsAmtLoose && nameScore < nameFloor)  continue;
+      if (!panMatch && tdsAmtNear  && !tdsAmtTie && nameScore < nearNameFloor)  continue;
+      if (!panMatch && tdsAmtLoose && !tdsAmtTie && nameScore < looseNameFloor) continue;
       const tbActivity = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0);
       // Use GST-normalised gross comparison to avoid spurious mismatches
       const { score: amtScore, gstAdjusted } = grossAmountScore(tbActivity, ded.total_amount_paid);
@@ -679,9 +696,11 @@ export async function runAiMapper(params: {
       if (tdsAmtTie)   confidence = Math.max(confidence, 85);
       if (tdsAmtNear)  confidence = Math.max(confidence, 60); // pending
       if (tdsAmtLoose) confidence = Math.max(confidence, 45); // needs review
+      if (panMatch)    confidence = Math.max(confidence, 95); // hard evidence
       if (confidence < 40) continue;
       if (!best || confidence > best.confidence) {
         const methods: string[] = [];
+        if (panMatch)                                    methods.push("pan_match");
         if (nameScore >= (isVoucherDerived ? 60 : 70)) methods.push("name_similarity");
         if (amtScore  >= 75) methods.push("amount_ratio");
         if (secScore  >= 80) methods.push("section_context");
@@ -689,7 +708,7 @@ export async function runAiMapper(params: {
         if (tdsAmtTie)   methods.push("tds_amount_tie");
         if (tdsAmtNear)  methods.push("tds_amount_near");
         if (tdsAmtLoose) methods.push("tds_amount_loose");
-        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted, tdsAmtTie: tdsAmtTie /* only exact tie qualifies as tie for bothMatch */ };
+        best = { ded, confidence, nameScore, amtScore, secScore, method: methods.join("+") || "ai_partial", gstAdjusted, tdsAmtTie: tdsAmtTie || panMatch /* PAN match is equivalent to exact-tie for the "confirmed" bothMatch gate */ };
       }
     }
 
@@ -720,6 +739,33 @@ export async function runAiMapper(params: {
           mapping_status:    "needs_review",
           mapped_by:         "ai",
         });
+      } else {
+        // P4-C (2026-08-05) — high-value creditor with NO voucher-derived
+        // TDS AND no 26Q filing. Might be a short-deduction scenario
+        // (auditor should have deducted TDS but didn't). Surface only
+        // when the TB activity is material (> ₹1,00,000 combined
+        // debit/credit) so we don't clutter with tiny operational
+        // vendors. Section stays null since we have no signal.
+        const material = Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0) >= 100_000;
+        if (material && !alreadyMapped.has(tb.ledger_name)) {
+          booksOnlyWritten++;
+          upsertRows.push({
+            client_id, firm_id, financial_year,
+            tb_ledger_name:    tb.ledger_name,
+            tb_parent_group:   tb.parent_group,
+            tb_total_debit:    Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0) || null,
+            tds_deductee_name: "(not filed)",
+            tds_section_code:  null,
+            tds_total_amount:  null,
+            tds_tds_amount:    null,
+            tds_filing_ids:    null,
+            match_confidence:  0,
+            match_method:      "zero_tds+books_only",
+            ai_reasoning:      `High-value creditor ${tb.ledger_name} shows ₹${Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0).toLocaleString("en-IN")} activity in Tally, but no TDS journal found and no matching 26Q filing. Potential short-deduction — auditor to verify whether TDS was applicable.`,
+            mapping_status:    "needs_review",
+            mapped_by:         "ai",
+          });
+        }
       }
       skipped++;
       continue;

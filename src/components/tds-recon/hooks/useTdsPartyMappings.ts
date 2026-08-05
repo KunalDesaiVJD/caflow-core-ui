@@ -119,7 +119,9 @@ export function useTdsPartyMappings(
           || methods.includes("tds_amount_near")
           || methods.includes("tds_amount_loose")
           || methods.includes("books_only")
-          || methods.includes("manual_link");
+          || methods.includes("manual_link")
+          || methods.includes("pan_match")
+          || methods.includes("zero_tds");
       });
 
       // 2026-07-24 — Root cause of Issues 9 & 12: this read-time dedupe was
