@@ -129,6 +129,37 @@ describe("createCorrection — seeds from the latest FILED correction, not the o
     expect(snapDeductees).toEqual([]);
   });
 
+  it("THE CARRY-FORWARD BLIND SPOT, FIXED: a challan created in an EARLIER quarter but reused by an in-period deductee is still snapshotted, not left correction_challan_id=null", async () => {
+    reset();
+    // Challan created under Q3 (its own financial_year/quarter never changes
+    // when reused later) — Q4's deductee draws against it via challan_id.
+    rows.tds_challans = [{
+      id: "ch-carried", client_id: "c1", filing_id: "filingQ3",
+      financial_year: "2025-26", quarter: "Q3", form_type: "26Q", total_challan_amount: 1000, is_archived: false,
+    }];
+    rows.tds_deductees = [{
+      id: "d1", client_id: "c1", filing_id: "filing1", challan_id: "ch-carried",
+      // Deductee's OWN period is Q4 — this is what's being corrected.
+      financial_year: "2025-26", quarter: "Q4", form_type: "26Q", total_tax_deducted: 400,
+    }];
+
+    const { correction, error } = await createCorrection(BASE_ARGS); // BASE_ARGS quarter: "Q4"
+    expect(error).toBeNull();
+
+    // The carried-forward challan must now appear in the snapshot even
+    // though its own quarter (Q3) doesn't match the corrected period (Q4).
+    const snapChallans = rows.tds_correction_challans.filter(c => c.correction_id === correction!.id);
+    expect(snapChallans).toHaveLength(1);
+    expect(snapChallans[0].original_challan_id).toBe("ch-carried");
+
+    // And the deductee must be linked to it — not correction_challan_id:
+    // null (the "unlinked" bucket with zero over-applied validation).
+    const snapDeductees = rows.tds_correction_deductees.filter(d => d.correction_id === correction!.id);
+    expect(snapDeductees).toHaveLength(1);
+    expect(snapDeductees[0].correction_challan_id).toBe(snapChallans[0].id);
+    expect(snapDeductees[0].correction_challan_id).not.toBeNull();
+  });
+
   it("a DRAFT (not yet filed) correction is ignored — only a FILED correction is a valid new baseline", async () => {
     reset();
     rows.tds_challans = [{ id: "ch1", client_id: "c1", filing_id: "filing1", financial_year: "2025-26", quarter: "Q4", form_type: "26Q", total_challan_amount: 1000, is_archived: false }];

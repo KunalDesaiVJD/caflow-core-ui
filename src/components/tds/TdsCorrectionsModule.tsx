@@ -998,22 +998,6 @@ function CorrectionDetail({
   const delta = useMemo(() => summariseCorrection(challans, deductees), [challans, deductees]);
   const hasChanges = delta.added + delta.modified + delta.deleted + delta.challansTouched > 0;
 
-  // ── Per-challan financial breakdown (Total / Utilised / Unutilised /
-  // Balance / Status) — the SAME engine Data Entry uses (rateEngine.ts),
-  // scoped to this correction's own rows only (a correction is a single,
-  // self-contained snapshot — no cross-quarter carry-forward concept
-  // applies). A deleted entry no longer counts as "utilised".
-  const challanBreakdown = useMemo(() => {
-    const m = new Map<string, ReturnType<typeof computeApplied> & { allocatable: number; status: string; colorClass: string }>();
-    for (const c of challans) {
-      const rows = deductees.filter(d => d.correction_challan_id === c.id && d.action !== "delete");
-      const bd = computeApplied(rows);
-      const allocatable = computeAllocatable(c.total_challan_amount || 0, c.late_fees_234e || 0);
-      m.set(c.id, { ...bd, allocatable, status: challanStatus(bd.applied, allocatable), colorClass: balanceColorClass(bd.applied, allocatable) });
-    }
-    return m;
-  }, [challans, deductees]);
-
   // ── Search + change filter ────────────────────────────────────────────────
   const visibleDeductees = useMemo(() => {
     const q = search.trim().toLowerCase();

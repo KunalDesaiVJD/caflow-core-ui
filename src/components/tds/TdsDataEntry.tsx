@@ -1562,6 +1562,38 @@ export function TdsDataEntry({
       }
     }
 
+    // ── Pre-save cross-utilization guard (firm instruction, 2026-08-06) ──────
+    // Only the fields that can move TDS/Interest — see the identical field
+    // list a few lines up, which is exactly when interest_amount also gets
+    // recomputed here. Blocks only when THIS edit INCREASES the challan
+    // past its total, never for a challan that was already over-applied
+    // before this edit (a typo fix or unrelated field change on an
+    // already-bad challan — e.g. imported before this guard existed —
+    // must still be editable; only a genuinely new over-application from
+    // THIS save is rejected).
+    if (deductee.challan_id && ["amount_paid_credited", "rate_of_tds", "date_of_payment", "deductee_pan"].includes(field)) {
+      const challanId = deductee.challan_id;
+      const bdBefore = getChallanBreakdownAll(challanId);
+      const challanObj = challans.find(c => c.id === challanId)
+        || (selectedChallan?.id === challanId ? selectedChallan : null)
+        || carryForwardChallans.find(cf => cf.challan.id === challanId)?.challan
+        || archivedChallans.find(ac => ac.id === challanId) || null;
+      if (challanObj) {
+        const siblingRows = (challanId === selectedChallan?.id ? [...prevEntries, ...deductees] : (allChallanDeductees[challanId] || []))
+          .filter((d: any) => !(isCorrectionMode && (d as any).action === "delete"));
+        const projectedRows = siblingRows.map((d: any) => d.id === deducteeId ? { ...d, ...updates } : d);
+        const pooled = computeChallanPooled(challanObj as any, projectedRows as any);
+        if (pooled.overApplied && pooled.effectiveApplied > bdBefore.effectiveApplied) {
+          toast({
+            title: "Over-applied — entry blocked",
+            description: `This would take the challan to ₹${pooled.effectiveApplied.toLocaleString("en-IN")} against a total of ₹${pooled.allocatable.toLocaleString("en-IN")} — exceeds it by ₹${(pooled.effectiveApplied - pooled.allocatable).toLocaleString("en-IN")}. Reduce this entry or increase the challan total first.`,
+            variant: "destructive",
+          });
+          return;
+        }
+      }
+    }
+
     // Correction mode: return the stored row. action / original_values are set
     // by DB TRIGGERS, so merging only what the client sent would leave the row
     // looking unchanged (Change column "—", "No changes yet") until a reload —
@@ -2873,18 +2905,19 @@ export function TdsDataEntry({
                 <>
                   {/* Issue 1 FIX: Full Challan Details — always visible (read-only when filed) */}
                   {(() => {
-                    const allocatable = (selectedChallan.total_challan_amount || 0) - (selectedChallan.late_fees_234e || 0);
+                    // TDS, Interest, and Late Fee are pooled against the challan's
+                    // own undiminished total (computeChallanPooled) — allocatable/
+                    // overApplied/unconsumed all come straight from that, not
+                    // re-derived here, so this can never drift from the shared rule.
+                    const bd = getChallanBreakdownAll(selectedChallan.id);
+                    const allocatable = bd.allocatable;
                     const matchOk = isChallanFullyUtilised(challanDeducteeTds, allocatable);
-                    const overApplied = isChallanOverApplied(challanDeducteeTds, allocatable);
-                    // Floored at 0 — an over-applied challan has nothing left to give a
-                    // future deductee, which is what this field answers ("how much can I
-                    // still allocate here"), not the negative over-draw amount itself
-                    // (that's what the Over-applied badge already communicates).
-                    const unconsumed = Math.max(0, allocatable - challanDeducteeTds);
+                    const overApplied = bd.overApplied;
+                    const unconsumed = bd.unconsumed;
                     // Combined-payment (cross-form) challan bifurcation — see
                     // getChallanBreakdownAll's own doc. Only worth a row when
                     // more than one form actually has entries against it.
-                    const byForm = getChallanBreakdownAll(selectedChallan.id).byForm;
+                    const byForm = bd.byForm;
                     return (
                       <Card className="bg-muted/30">
                         <CardContent className="px-3 py-1.5">
@@ -3691,9 +3724,11 @@ export function TdsDataEntry({
           {kasarVatavDialogChallan && (() => {
             const c = kasarVatavDialogChallan;
             const bd = getChallanBreakdownAll(c.id);
-            const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
-            const rawUnconsumed = Math.max(0, allocatable - bd.applied);
+            const allocatable = bd.allocatable;
             const existing = c.kasar_vatav_amount || 0;
+            // The gap before ANY kasar-vatav write-off — see openKasarVatavDialog's
+            // own comment on why the existing amount is added back.
+            const rawUnconsumed = bd.unconsumed + existing;
             return (
               <div className="space-y-3">
                 <div className="rounded-md bg-muted/40 p-2.5 text-xs space-y-1">

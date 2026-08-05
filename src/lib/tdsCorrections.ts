@@ -366,8 +366,21 @@ export async function createCorrection(args: {
     const inPeriod = (r: { financial_year: string | null; quarter: string | null; form_type?: string }) =>
       r.financial_year === args.financialYear && r.quarter === args.quarter && (r as any).form_type === args.formType;
 
-    const filedChallans = effChallans.filter(inPeriod) as any[];
+    const filedChallansInPeriod = effChallans.filter(inPeriod) as any[];
     const filedDeductees = effDeductees.filter(inPeriod) as any[];
+    // A carry-forward challan keeps the FINANCIAL_YEAR/QUARTER it was
+    // originally created under — inPeriod (above) only matches the corrected
+    // period, so a challan an in-period deductee actually draws against can
+    // fail that filter and be left out of the snapshot entirely. Without it,
+    // the deductee below gets correction_challan_id = null (no entry in
+    // challanIdMap) and falls into the correction editor's "unlinked"
+    // bucket — invisible to its own over-applied check, not just stale.
+    // Snapshot it too, by ID, regardless of its own period.
+    const referencedChallanIds = new Set(filedDeductees.map(d => d.challan_id).filter(Boolean));
+    const inPeriodChallanIds = new Set(filedChallansInPeriod.map(c => c.id));
+    const carriedForwardChallans = effChallans
+      .filter((c: any) => referencedChallanIds.has(c.id) && !inPeriodChallanIds.has(c.id)) as any[];
+    const filedChallans = [...filedChallansInPeriod, ...carriedForwardChallans];
 
     // Map original challan id -> new correction challan id, so the deductee
     // copies stay attached to the right challan (workflow step 5).

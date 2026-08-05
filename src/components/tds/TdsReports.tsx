@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { calcAutoInterest, withKasarVatav, computeApplied, computeAllocatable, challanStatus } from "@/lib/tds/rateEngine";
+import { calcAutoInterest, withKasarVatav, computeApplied, computeAllocatable, challanStatus, computeChallanPooled } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -280,37 +280,24 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     const challanIds = new Set(filingChallans.map((c: any) => c.id));
     const filingDeductees = deductees.filter((d: any) => challanIds.has(d.challan_id));
 
-    // Block export ONLY when applied total STRICTLY exceeds challan total (over-applied).
-    // Fully-utilized (applied === challan) and partial/unconsumed (applied < challan) are ALLOWED.
-    // Use Math.round(*100) to avoid floating-point false positives (e.g. 0.1+0.2 = 0.30000...4).
-    //
-    // Interest is recomputed live (calcAutoInterest) rather than trusted from
-    // each row's stored interest_amount — that column is only ever written by
-    // TdsDataEntry.tsx's per-cell edit handler, so a bulk-imported row never
-    // hand-edited afterward sits at 0 forever even though the grid's own
-    // read-only Interest cell (and the challan's own declared interest total)
-    // show the real figure. Trusting the stale 0 here under-counts `applied`,
-    // which can only ever make this check MISS a genuine over-application,
-    // never falsely block a valid export — but it's still wrong, so it's
-    // fixed the same way as TdsDataEntry.tsx's getChallanBreakdownAll /
-    // fetchCarryForwardChallans (same underlying bug, independently found).
-    const overApplied = filingChallans.filter((c: any) => {
-      const applied = filingDeductees
-        .filter((d: any) => d.challan_id === c.id)
-        .reduce((s: number, d: any) =>
-          s + (d.total_tax_deducted || d.tds_amount || 0)
-          + calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest
-          + (d.surcharge_amount || 0), 0);
-      // Kasar-Vatav write-off (see rateEngine's withKasarVatav) — included for
-      // consistency with every other "applied" computation in the TDS module.
-      const effectiveApplied = withKasarVatav(applied, c.kasar_vatav_amount);
-      const challanTotal = c.total_challan_amount || 0;
-      return Math.round(effectiveApplied * 100) > Math.round(challanTotal * 100); // strictly greater
-    });
+    // Block export ONLY when the POOLED total (TDS+Interest+Late Fee+Kasar-
+    // Vatav) STRICTLY exceeds the challan's own total_challan_amount — see
+    // computeChallanPooled's own doc for the cross-utilization rule (firm
+    // instruction 2026-08-06). Fully-utilized (pooled === total) and partial/
+    // unconsumed (pooled < total) are ALLOWED. The shared function also
+    // recomputes interest live rather than trusting each row's stored
+    // interest_amount (see its own doc — a bulk-imported row never hand-
+    // edited afterward can sit at 0 forever).
+    const overApplied = filingChallans
+      .map((c: any) => ({ challan: c, pooled: computeChallanPooled(c, filingDeductees.filter((d: any) => d.challan_id === c.id)) }))
+      .filter((x: any) => x.pooled.overApplied);
     if (overApplied.length > 0) {
       toast({
         title: "Cannot generate Genius XLS",
-        description: `One or more challans are over-applied (${overApplied.length} challan${overApplied.length > 1 ? "s" : ""}). Please correct them before proceeding.`,
+        description: `${overApplied.length} challan${overApplied.length > 1 ? "s are" : " is"} over-applied — ` +
+          overApplied.map((x: any) =>
+            `${x.challan.bsr_code || "No BSR"}/${x.challan.challan_serial_no || "—"} exceeds by ₹${(x.pooled.effectiveApplied - x.pooled.allocatable).toLocaleString("en-IN")}`,
+          ).join("; ") + ". Correct the entries before proceeding.",
         variant: "destructive",
       });
       return;
@@ -1091,37 +1078,28 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
     const fDeductees = deductees.filter((d: any) => cIds.has(d.challan_id));
 
     // ── Per-challan utilisation status ─────────────────────────────────────
-    // Applied = sum of (TDS + interest + surcharge) across all deductees for that challan.
-    // Status rules (strictly-greater = over-applied; equal = full; less = partial; zero = unconsumed).
-    //
-    // Interest recomputed live — see the identical fix (and its full
-    // rationale) a few lines up in runOverApplied's own applied calculation.
+    // computeChallanPooled — the ONE shared "is this over-applied" rule (live
+    // interest recompute, Kasar-Vatav, and TDS+Interest+Late Fee pooled
+    // against the challan's own undiminished total, firm instruction
+    // 2026-08-06) — so this guard can never quietly disagree with the Data
+    // Entry grid's own Over-applied badge the way its previous hand-rolled
+    // version (checking applied against the raw total with no late fee
+    // accounted for at all) could.
     type ChallanStatus = "over-applied" | "fully-utilized" | "partial" | "unconsumed";
     const challanStatus = fChallans.map((c: any) => {
-      const applied = fDeductees
-        .filter((d: any) => d.challan_id === c.id)
-        .reduce((s: number, d: any) =>
-          s + (d.total_tax_deducted || d.tds_amount || 0)
-          + calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest
-          + (d.surcharge_amount || 0), 0);
-      // Kasar-Vatav write-off counts toward utilisation status here too (see
-      // rateEngine's withKasarVatav) — otherwise a challan closed out
-      // specifically to read as Fully Utilized would still show as Unconsumed
-      // in this report.
-      const effectiveApplied = withKasarVatav(applied, c.kasar_vatav_amount);
-      const challanTotal = c.total_challan_amount || 0;
-      const appliedRounded  = Math.round(effectiveApplied * 100);
-      const challanRounded  = Math.round(challanTotal * 100);
+      const cDeductees = fDeductees.filter((d: any) => d.challan_id === c.id);
+      const pooled = computeChallanPooled(c, cDeductees);
       let status: ChallanStatus;
-      if (appliedRounded > challanRounded)    status = "over-applied";
-      else if (appliedRounded === 0)          status = "unconsumed";
-      else if (appliedRounded === challanRounded) status = "fully-utilized";
-      else                                    status = "partial";
-      return { challan: c, applied: effectiveApplied, challanTotal, status };
+      if (pooled.overApplied)             status = "over-applied";
+      else if (pooled.effectiveApplied === 0) status = "unconsumed";
+      else if (pooled.unconsumed === 0)   status = "fully-utilized";
+      else                                 status = "partial";
+      return { challan: c, applied: pooled.effectiveApplied, challanTotal: pooled.allocatable, unconsumed: pooled.unconsumed, status };
     });
 
     // Block Generate button when ANY challan is over-applied
-    const hasOverApplied = challanStatus.some(cs => cs.status === "over-applied");
+    const overAppliedChallans = challanStatus.filter(cs => cs.status === "over-applied");
+    const hasOverApplied = overAppliedChallans.length > 0;
 
     // Badge helper
     const statusBadge = (status: ChallanStatus) => {
@@ -1161,10 +1139,19 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
             ) : (
               <div className="flex flex-col items-center gap-2">
                 {hasOverApplied && (
-                  <p className="text-sm text-destructive font-medium flex items-center gap-1">
-                    <AlertTriangle size={14} />
-                    One or more challans are over-applied. Correct them before generating.
-                  </p>
+                  <div className="text-sm text-destructive font-medium text-center space-y-1 max-w-md">
+                    <p className="flex items-center justify-center gap-1">
+                      <AlertTriangle size={14} />
+                      {overAppliedChallans.length === 1 ? "1 challan is" : `${overAppliedChallans.length} challans are`} over-applied — correct before generating.
+                    </p>
+                    <ul className="text-xs font-normal text-muted-foreground space-y-0.5">
+                      {overAppliedChallans.map(cs => (
+                        <li key={cs.challan.id}>
+                          {cs.challan.bsr_code || "No BSR"} / {cs.challan.challan_serial_no || "—"}: applied ₹{cs.applied.toLocaleString("en-IN")} exceeds the ₹{cs.challanTotal.toLocaleString("en-IN")} challan total by ₹{(cs.applied - cs.challanTotal).toLocaleString("en-IN")}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
                 <Button
                   size="lg"
