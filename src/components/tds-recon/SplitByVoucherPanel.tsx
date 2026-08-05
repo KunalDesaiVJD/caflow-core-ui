@@ -17,11 +17,9 @@ import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {
-  useTdsVoucherClassifications, type ClassifiedVoucher,
-} from "./hooks/useTdsVoucherClassifications";
+import { useTdsVoucherClassifications } from "./hooks/useTdsVoucherClassifications";
 
 const TDS_SECTIONS = [
   "192","192A","193","194","194A","194B","194BB",
@@ -56,7 +54,8 @@ export function SplitByVoucherPanel({
   defaultSection: string | null;
 }) {
   const {
-    rows, loading, error, updateOne, bulkAssign, clearOne, bulkClear,
+    rows, loading, error, openingBalance, openingType,
+    updateOne, bulkAssign, clearOne, bulkClear,
   } = useTdsVoucherClassifications({
     enabled: true,
     clientId, firmId, financialYear, engagementId,
@@ -65,6 +64,28 @@ export function SplitByVoucherPanel({
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkSection, setBulkSection] = useState<string>(defaultSection ?? "194C");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Rows arrive pre-sorted by voucher_date/voucher_number from the RPC — walk
+  // them in that order, accumulating Dr(+)/Cr(-) on top of the ledger's
+  // opening balance, so each row's running balance matches what Tally itself
+  // would show for this ledger.
+  const withBalance = useMemo(() => {
+    let running = openingType === "Dr" ? openingBalance : -openingBalance;
+    return rows.map(r => {
+      const v = r.voucher;
+      const amt = Math.abs(Number(v.this_amount ?? v.amount ?? 0));
+      const isDr = (v.this_dr_cr ?? "Dr") === "Dr";
+      running += isDr ? amt : -amt;
+      return {
+        row: r,
+        debit: isDr ? amt : 0,
+        credit: isDr ? 0 : amt,
+        balance: Math.abs(running),
+        balanceType: running >= 0 ? "Dr" : "Cr",
+      };
+    });
+  }, [rows, openingBalance, openingType]);
 
   const totals = useMemo(() => {
     const bySection = new Map<string, number>();
@@ -162,10 +183,11 @@ export function SplitByVoucherPanel({
           No vouchers found under &quot;{tbLedgerName}&quot; for FY {financialYear ?? "—"}.
         </div>
       ) : (
-        <div className="overflow-auto max-h-[380px] border border-slate-200 rounded">
+        <div className="overflow-auto max-h-[460px] border border-slate-200 rounded">
           <table className="w-full text-[10px]">
             <thead className="sticky top-0 bg-slate-100 z-10">
               <tr>
+                <th className="p-1.5 text-left w-6" />
                 <th className="p-1.5 text-left w-8">
                   <Checkbox
                     checked={selected.size === rows.length && rows.length > 0}
@@ -177,73 +199,139 @@ export function SplitByVoucherPanel({
                 <th className="p-1.5 text-left">Particulars</th>
                 <th className="p-1.5 text-left w-24">Vch Type</th>
                 <th className="p-1.5 text-left w-16">No.</th>
-                <th className="p-1.5 text-right w-24">Amount</th>
+                <th className="p-1.5 text-right w-24 text-blue-700">Debit</th>
+                <th className="p-1.5 text-right w-24 text-rose-600">Credit</th>
+                <th className="p-1.5 text-right w-28">Balance</th>
                 <th className="p-1.5 text-center w-28">Section</th>
                 <th className="p-1.5 w-8" />
               </tr>
             </thead>
             <tbody>
-              {rows.map((r: ClassifiedVoucher) => {
+              {withBalance.map(({ row: r, debit, credit, balance, balanceType }) => {
                 const v = r.voucher;
                 const value = r.classification?.section_code_override || DEFAULT_TOKEN;
-                const amt = Math.abs(Number(v.this_amount ?? v.amount ?? 0));
+                const isExpanded = expandedId === v.id;
+                const lineItems = Array.isArray(v.line_items) ? v.line_items : [];
                 return (
-                  <tr key={v.id} className={cn(
-                    "border-t border-slate-100 hover:bg-slate-50/60",
-                    selected.has(v.id) && "bg-blue-50/40",
-                  )}>
-                    <td className="p-1.5">
-                      <Checkbox
-                        checked={selected.has(v.id)}
-                        onCheckedChange={() => toggle(v.id)}
-                        aria-label={`Select voucher ${v.voucher_number ?? v.id}`}
-                      />
-                    </td>
-                    <td className="p-1.5 whitespace-nowrap tabular-nums">{fmtDate(v.voucher_date)}</td>
-                    <td className="p-1.5">
-                      <div className="truncate max-w-[220px]" title={v.narration ?? ""}>
-                        {v.narration || v.party_ledger || "—"}
-                      </div>
-                    </td>
-                    <td className="p-1.5 text-muted-foreground">{v.voucher_type || "—"}</td>
-                    <td className="p-1.5 font-mono text-muted-foreground">{v.voucher_number || "—"}</td>
-                    <td className="p-1.5 text-right tabular-nums">₹{fmtINR(amt)}</td>
-                    <td className="p-1.5">
-                      <Select
-                        value={value}
-                        onValueChange={(v2) => {
-                          if (v2 === DEFAULT_TOKEN) {
-                            void clearOne(v.id);
-                          } else {
-                            void updateOne(v.id, {
-                              section_code_override: v2 === NONE ? null : v2,
-                            });
-                          }
-                        }}
-                      >
-                        <SelectTrigger className="h-6 text-[10px]"><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={DEFAULT_TOKEN}>
-                            Default {defaultSection ? `(${defaultSection})` : ""}
-                          </SelectItem>
-                          <SelectItem value={NONE}>— None —</SelectItem>
-                          {TDS_SECTIONS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                        </SelectContent>
-                      </Select>
-                    </td>
-                    <td className="p-1.5">
-                      {r.classification && (
+                  <>
+                    <tr key={v.id} className={cn(
+                      "border-t border-slate-100 hover:bg-slate-50/60",
+                      selected.has(v.id) && "bg-blue-50/40",
+                    )}>
+                      <td className="p-1.5">
                         <button
                           type="button"
                           className="text-slate-400 hover:text-slate-600"
-                          title="Clear override — revert to mapping default"
-                          onClick={() => void clearOne(v.id)}
+                          title="Show narration & voucher detail"
+                          onClick={() => setExpandedId(isExpanded ? null : v.id)}
                         >
-                          <X size={11} />
+                          {isExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
                         </button>
-                      )}
-                    </td>
-                  </tr>
+                      </td>
+                      <td className="p-1.5">
+                        <Checkbox
+                          checked={selected.has(v.id)}
+                          onCheckedChange={() => toggle(v.id)}
+                          aria-label={`Select voucher ${v.voucher_number ?? v.id}`}
+                        />
+                      </td>
+                      <td className="p-1.5 whitespace-nowrap tabular-nums">{fmtDate(v.voucher_date)}</td>
+                      <td className="p-1.5">
+                        <div className="truncate max-w-[220px]" title={v.narration ?? ""}>
+                          {v.narration || v.party_ledger || "—"}
+                        </div>
+                      </td>
+                      <td className="p-1.5 text-muted-foreground">{v.voucher_type || "—"}</td>
+                      <td className="p-1.5 font-mono text-muted-foreground">{v.voucher_number || "—"}</td>
+                      <td className="p-1.5 text-right tabular-nums text-blue-700 font-medium">
+                        {debit > 0 ? `₹${fmtINR(debit)}` : ""}
+                      </td>
+                      <td className="p-1.5 text-right tabular-nums text-rose-600 font-medium">
+                        {credit > 0 ? `₹${fmtINR(credit)}` : ""}
+                      </td>
+                      <td className="p-1.5 text-right tabular-nums">
+                        ₹{fmtINR(balance)} <span className="text-muted-foreground">{balanceType}</span>
+                      </td>
+                      <td className="p-1.5">
+                        <Select
+                          value={value}
+                          onValueChange={(v2) => {
+                            if (v2 === DEFAULT_TOKEN) {
+                              void clearOne(v.id);
+                            } else {
+                              void updateOne(v.id, {
+                                section_code_override: v2 === NONE ? null : v2,
+                              });
+                            }
+                          }}
+                        >
+                          <SelectTrigger className="h-6 text-[10px]"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={DEFAULT_TOKEN}>
+                              Default {defaultSection ? `(${defaultSection})` : ""}
+                            </SelectItem>
+                            <SelectItem value={NONE}>— None —</SelectItem>
+                            {TDS_SECTIONS.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </td>
+                      <td className="p-1.5">
+                        {r.classification && (
+                          <button
+                            type="button"
+                            className="text-slate-400 hover:text-slate-600"
+                            title="Clear override — revert to mapping default"
+                            onClick={() => void clearOne(v.id)}
+                          >
+                            <X size={11} />
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr key={`${v.id}-detail`} className="bg-blue-50/30 border-t border-blue-100">
+                        <td colSpan={10} className="p-0">
+                          <div className="mx-6 my-1.5 rounded border border-blue-100 overflow-hidden">
+                            {v.narration && (
+                              <div className="px-3 py-1.5 border-b border-blue-100 bg-white/60 text-muted-foreground">
+                                <span className="font-medium text-foreground">Narration: </span>{v.narration}
+                              </div>
+                            )}
+                            {lineItems.length > 0 && (
+                              <table className="w-full">
+                                <thead>
+                                  <tr className="bg-blue-100/60 text-[9px] uppercase tracking-wide text-muted-foreground">
+                                    <th className="text-left px-3 py-1 font-semibold">Ledger</th>
+                                    <th className="text-right px-3 py-1 font-semibold">Amount</th>
+                                    <th className="text-center px-3 py-1 font-semibold">Dr/Cr</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {lineItems.map((item, idx) => (
+                                    <tr key={idx} className={cn(
+                                      "border-t border-blue-100/60",
+                                      item.ledger_name === tbLedgerName ? "bg-blue-100/40 font-semibold" : "bg-white/40",
+                                    )}>
+                                      <td className="px-3 py-1">{item.ledger_name}</td>
+                                      <td className="px-3 py-1 text-right">₹{fmtINR(Math.abs(item.amount))}</td>
+                                      <td className="px-3 py-1 text-center">
+                                        <span className={cn("font-bold text-[9px]", item.dr_cr === "Cr" ? "text-rose-600" : "text-blue-700")}>
+                                          {item.dr_cr}
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                            {!v.narration && lineItems.length === 0 && (
+                              <div className="px-3 py-1.5 text-muted-foreground">No further detail on this voucher.</div>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </>
                 );
               })}
             </tbody>

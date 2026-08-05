@@ -61,14 +61,16 @@ export interface ClassifiedVoucher {
 }
 
 export interface UseTdsVoucherClassificationsResult {
-  rows:        ClassifiedVoucher[];
-  loading:     boolean;
-  error:       string | null;
-  refresh:     () => Promise<void>;
-  updateOne:   (voucherId: string, patch: Partial<Omit<VoucherClassification, "id" | "voucher_id" | "updated_at">>) => Promise<void>;
-  bulkAssign:  (voucherIds: string[], sectionCode: string | null) => Promise<void>;
-  clearOne:    (voucherId: string) => Promise<void>;
-  bulkClear:   (voucherIds: string[]) => Promise<void>;
+  rows:            ClassifiedVoucher[];
+  loading:         boolean;
+  error:           string | null;
+  openingBalance:  number;
+  openingType:     "Dr" | "Cr";
+  refresh:         () => Promise<void>;
+  updateOne:       (voucherId: string, patch: Partial<Omit<VoucherClassification, "id" | "voucher_id" | "updated_at">>) => Promise<void>;
+  bulkAssign:      (voucherIds: string[], sectionCode: string | null) => Promise<void>;
+  clearOne:        (voucherId: string) => Promise<void>;
+  bulkClear:       (voucherIds: string[]) => Promise<void>;
 }
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
@@ -92,6 +94,8 @@ export function useTdsVoucherClassifications(params: {
   const [classifications, setClassifications] = useState<Map<string, VoucherClassification>>(new Map());
   const [loading,         setLoading]         = useState(false);
   const [error,           setError]           = useState<string | null>(null);
+  const [openingBalance,  setOpeningBalance]  = useState(0);
+  const [openingType,     setOpeningType]     = useState<"Dr" | "Cr">("Dr");
 
   const load = useCallback(async () => {
     if (!enabled || !clientId || !financialYear || !mappingId || !tbLedgerName) {
@@ -129,7 +133,26 @@ export function useTdsVoucherClassifications(params: {
       } catch { /* fall through */ }
     }
 
-    // 2. Vouchers — prefer the same RPC LedgerVouchersView uses.
+    // 2. Opening balance for the running-balance column — same table/columns
+    //    LedgerVouchersView reads, scoped to whichever engagement we resolved.
+    if (engId) {
+      try {
+        const { data } = await (supabase as any)
+          .from("tally_trial_balance")
+          .select("opening_balance,opening_type")
+          .eq("engagement_id", engId)
+          .eq("ledger_name", tbLedgerName)
+          .maybeSingle();
+        setOpeningBalance(Number((data as any)?.opening_balance ?? 0));
+        setOpeningType(((data as any)?.opening_type === "Cr" ? "Cr" : "Dr"));
+      } catch {
+        setOpeningBalance(0); setOpeningType("Dr");
+      }
+    } else {
+      setOpeningBalance(0); setOpeningType("Dr");
+    }
+
+    // 3. Vouchers — prefer the same RPC LedgerVouchersView uses.
     let voucherRows: VoucherRow[] = [];
     if (engId) {
       try {
@@ -162,7 +185,7 @@ export function useTdsVoucherClassifications(params: {
       }
     }
 
-    // 3. Classifications — silently ignore "relation does not exist"
+    // 4. Classifications — silently ignore "relation does not exist"
     //    (migration not yet applied on this environment).
     const classMap = new Map<string, VoucherClassification>();
     try {
@@ -283,6 +306,7 @@ export function useTdsVoucherClassifications(params: {
 
   return {
     rows, loading, error,
+    openingBalance, openingType,
     refresh: load,
     updateOne: (voucherId, patch) => upsertRow(voucherId, patch),
     bulkAssign,
