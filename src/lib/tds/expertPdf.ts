@@ -176,14 +176,17 @@ function findAnchors(items: ExpertPdfTextItem[]): Anchors | null {
 
 /** The TDS section usually lives on its own short line above the column
  *  header ("TDS 194 C") — scanned top-down so the company name line (which
- *  matches nothing) is skipped and the first real hit wins. Real title-only
- *  files (every sample this parser was first built against) never reach the
- *  per-band fallback in bandSectionMarker below; this stays the primary path
- *  for them. */
+ *  matches nothing) is skipped and the first real hit wins. Tests whole BANDS
+ *  (bandSectionMarker below), not individual items — a multi-page print
+ *  reprints this same title atop every continuation page, and pdfjs splits
+ *  "TDS-26/27-194" and its trailing "C" into separate runs on that repeated
+ *  line exactly as it does for a mid-body marker, so testing items one at a
+ *  time here silently lost the letter and, worse, clobbered an already-
+ *  correctly-tracked currentSection the moment a later page's title was
+ *  (wrongly) re-resolved to a bare base. */
 function findSection(items: ExpertPdfTextItem[], headerY: number): string | null {
-  const above = items.filter((i) => i.y > headerY).sort((a, b) => b.y - a.y);
-  for (const i of above) {
-    const sec = canonicalSection(i.str);
+  for (const band of toBands(items.filter((i) => i.y > headerY))) {
+    const sec = bandSectionMarker(band);
     if (sec) return sec;
   }
   return null;
