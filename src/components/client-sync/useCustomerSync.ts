@@ -569,7 +569,7 @@ export function useCustomerSync() {
               // be overridden by a sync.
               const { data: existing } = await supabase
                 .from("clients")
-                .select("gstin, gstin_addresses, gstin_states, deleted_at, deleted_reason")
+                .select("gstin, gstin_addresses, gstin_states, deleted_at, deleted_reason, tan_number, pan, email, mobile, address")
                 .eq("customer_id", customer_id)
                 .maybeSingle();
 
@@ -612,6 +612,29 @@ export function useCustomerSync() {
                 archiveFlip.deleted_reason = "eoffice_inactive";
               }
 
+              // 2026-08-06 (TAN going blank "on its own" bug — same class as
+              // the GSTIN fix above, just never extended to these fields):
+              // buildClientPayload() maps an empty eOffice field to `null`
+              // unconditionally. eOffice is a billing/practice-management
+              // source, not the TDS/compliance system of record — it very
+              // commonly has no TAN (or PAN/email/mobile/address) on file
+              // for a client CAFlow already has one for. Every time an admin
+              // re-runs "Sync from API" to pull in new customers, that same
+              // request silently re-processes every ALREADY-matched existing
+              // client too, and an empty eOffice value would overwrite a
+              // manually-entered one with null — read by the user as "the
+              // TAN gets removed automatically" days after they saved it,
+              // since running the sync isn't perceived as editing that
+              // client at all. Fix: for exactly the fields eOffice is
+              // commonly incomplete for, an EMPTY api value never overwrites
+              // an EXISTING non-empty one — the sync can still fill a field
+              // CAFlow has blank, or correct one where eOffice has a
+              // genuinely different non-empty value; it just can never
+              // silently erase what's already there.
+              const preserveIfEmpty: Array<"tan_number" | "pan" | "email" | "mobile" | "address"> =
+                (["tan_number", "pan", "email", "mobile", "address"] as const)
+                  .filter(f => payload[f] == null && !!(existing as any)?.[f]);
+
               if (knownGstinCount >= 2) {
                 // Multi-GSTIN client — strip every GSTIN-related field from
                 // the payload so the sync leaves them untouched.
@@ -621,6 +644,7 @@ export function useCustomerSync() {
                 // Single / zero GSTIN — regular sync path.
                 updatePayload = { ...payload, is_active: active, ...archiveFlip };
               }
+              for (const f of preserveIfEmpty) delete updatePayload[f];
 
               // No `.is("deleted_at", null)` filter — we need to reach the
               // auto-archived rows too so they can be unarchived when the
