@@ -1011,6 +1011,24 @@ export async function runReconEngine(params: {
     return FALLBACK_RATE_TABLE[sec] ?? null;
   }
 
+  // Stage 2.5 (2026-08-05) — auditor-confirmed rate overrides for 194C /
+  // 194J parties. Consulted BEFORE any auto-detection (deductee_type,
+  // refined194JRate, actual-rate self-correction), so the auditor's
+  // judgement on Individual vs Company / Professional vs Technical is
+  // authoritative. Keyed by tb_ledger_name + tds_deductee_name + section.
+  const { data: overrideRows } = await (supabase as any)
+    .from("tds_party_rate_overrides")
+    .select("tb_ledger_name,tds_deductee_name,section_code,applicable_rate,applicable_nature")
+    .eq("client_id",      client_id)
+    .eq("financial_year", financial_year);
+  const rateOverrideMap = new Map<string, { rate: number; nature: string | null }>();
+  for (const r of (overrideRows as any[] | null) ?? []) {
+    const key = `${String(r.tb_ledger_name || "").trim().toLowerCase()}|${String(r.tds_deductee_name || "").trim().toLowerCase()}|${r.section_code}`;
+    rateOverrideMap.set(key, { rate: Number(r.applicable_rate) || 0, nature: r.applicable_nature ?? null });
+  }
+  const lookupRateOverride = (tb: string, ded: string, sec: string) =>
+    rateOverrideMap.get(`${String(tb || "").trim().toLowerCase()}|${String(ded || "").trim().toLowerCase()}|${sec}`);
+
   // 4. Delete pending flags for requested goals
   await (supabase as any).from("tds_recon_flags").delete()
     .eq("client_id", client_id).eq("financial_year", financial_year)
@@ -1227,6 +1245,11 @@ export async function runReconEngine(params: {
           const isCompSec = isCompany(dedSec?.primary_deductee_type ?? null);
           let rateSec = isCompSec ? rateEntrySec.rate_company : rateEntrySec.rate_individual;
           const threshSec = isCompSec ? rateEntrySec.threshold_company : rateEntrySec.threshold_individual;
+          // Stage 2.5 — auditor override wins first.
+          const overrideSec = lookupRateOverride(mapping.tb_ledger_name, mapping.tds_deductee_name, sec);
+          if (overrideSec) {
+            rateSec = overrideSec.rate;
+          }
           // Stage-2 hotfix — same actual-rate self-correction as the
           // non-split path below. If actualRate matches any legit rate
           // for the section, re-align expected `rateSec` to it.
@@ -1239,7 +1262,7 @@ export async function runReconEngine(params: {
           };
           const validForSecS = VALID_RATE_MAP_S[sec] ?? [];
           const rateMatchesAnyS = validForSecS.some(r => Math.abs(actualRateSec_pre - r) <= 0.30);
-          if (rateMatchesAnyS) {
+          if (!overrideSec && rateMatchesAnyS) {
             rateSec = validForSecS.reduce((a, b) =>
               Math.abs(actualRateSec_pre - a) < Math.abs(actualRateSec_pre - b) ? a : b
             );
@@ -1294,11 +1317,20 @@ export async function runReconEngine(params: {
       const isComp = isCompany(ded?.primary_deductee_type ?? null);
       let rate     = isComp ? rateEntry.rate_company : rateEntry.rate_individual;
       const thresh = isComp ? rateEntry.threshold_company : rateEntry.threshold_individual;
+
+      // Stage 2.5 — auditor override wins. If the auditor confirmed a
+      // rate for this party+section, use it directly and skip auto-
+      // detection (refined194JRate, actual-rate self-correction). The
+      // auditor's judgement is authoritative.
+      const override = lookupRateOverride(mapping.tb_ledger_name, mapping.tds_deductee_name, mapping.tds_section_code);
+      if (override) {
+        rate = override.rate;
+      }
       // 2026-07-24 — 194J splits into professional (10%) and technical (2%).
       // Section code alone is ambiguous; consult the deductee's nature/name
       // and the TB ledger name for technical/software/call-centre hints so
       // "Professional Fees" isn't wrongly benchmarked at 2% and vice versa.
-      if (mapping.tds_section_code === "194J") {
+      if (!override && mapping.tds_section_code === "194J") {
         rate = refined194JRate(
           (mapping as any).nature_of_payment ?? null,
           mapping.tds_deductee_name,
@@ -1322,7 +1354,8 @@ export async function runReconEngine(params: {
       };
       const validForSec = VALID_RATE_MAP[mapping.tds_section_code ?? ""] ?? [];
       const rateMatchesAny = validForSec.some(r => Math.abs(actualRateForCheck - r) <= 0.30);
-      if (rateMatchesAny) {
+      // Skip self-correction when auditor override is set (their choice wins).
+      if (!override && rateMatchesAny) {
         // The auditor actually deducted at one of the section's legitimate
         // rates. Re-align `rate` to that actual rate so the "expected"
         // computation below matches — no false variance.
