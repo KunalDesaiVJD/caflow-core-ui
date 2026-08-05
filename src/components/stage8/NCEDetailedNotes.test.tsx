@@ -140,4 +140,30 @@ describe("NCEDetailedNotes — static caption is renameable, figures stay locked
     // And the value must not have been accepted into local state either.
     expect(captionInput.value).toBe("Unsecured, considered good");
   });
+
+  it("force-opens and scrolls to the note targeted by a BS/P&L Note No. click — without Expand All", async () => {
+    setupSupabase();
+    const scrollSpy = vi.fn();
+    (HTMLElement.prototype as any).scrollIntoView = scrollSpy;
+
+    const qc = new QueryClient();
+    // Trade Receivables is static ref "18" (src/config/nceNotesConfig.ts).
+    // NOT clicking "Expand All" — the note must open on its own.
+    render(
+      <QueryClientProvider client={qc}>
+        <NCEDetailedNotes engagementId="e1" scrollToNoteNo={18} />
+      </QueryClientProvider>,
+    );
+
+    // Root cause of the reported "clicking a Note No. link doesn't open the
+    // note" bug: the old implementation scrolled from OUTSIDE this component
+    // on a fixed 250ms timer that raced this component's own load — on a
+    // large trial balance the self-heal rebuild alone can take several
+    // seconds, so document.getElementById found nothing. This component now
+    // owns the trigger and gates on its own `loading` state, so the caption
+    // (only rendered once a note is actually open) must appear without any
+    // manual expand step.
+    await waitFor(() => expect(screen.getAllByDisplayValue("Unsecured, considered good").length).toBeGreaterThan(0), { timeout: 5000 });
+    expect(scrollSpy).toHaveBeenCalled();
+  });
 });

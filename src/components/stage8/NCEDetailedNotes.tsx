@@ -81,6 +81,21 @@ interface Props {
    *  PipelineFinancialStatements passes the captured nceExpandedRows here so
    *  every PatternBTable starts with the same rows expanded as in the editor. */
   initialExpandedRows?: Set<string>;
+  /** 2026-08-06 fix ("clicking a Note No. link doesn't open the note"): the
+   *  STATIC note ref (NOTES_CONFIG / NOTE_META noteNumber, e.g. 3, not the
+   *  dynamic display number) to force-open and scroll to. NCENotesTab's old
+   *  approach scrolled from OUTSIDE this component on a fixed 250ms timer,
+   *  racing this component's own load (self-heal rebuild on a large TB can
+   *  take several seconds) — document.getElementById found nothing and the
+   *  click appeared to do nothing. This component owns openNotes/loading, so
+   *  it can gate correctly and also force the target note OPEN (the old path
+   *  never did — even a successful scroll would have landed on a collapsed
+   *  card). */
+  scrollToNoteNo?: number | null;
+  /** Bumped on every "Note No." click, including re-clicks of the SAME note,
+   *  so the effect below re-fires even though scrollToNoteNo's value alone
+   *  wouldn't change. */
+  scrollToken?: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -2002,7 +2017,7 @@ function PatternATable({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, initialExpandedRows }: Props) {
+export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, initialExpandedRows, scrollToNoteNo, scrollToken }: Props) {
   const queryClient = useQueryClient();
   const [noteData,    setNoteData]    = useState<Record<string, NCENoteData>>({});
   const [loading,     setLoading]     = useState(true);
@@ -2035,6 +2050,36 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       return next;
     });
   }, []);
+  // 2026-08-06 fix — force-open + scroll to the note targeted by a BS/P&L
+  // "Note No." click. Gated on `!loading` (not a fixed external timer) so it
+  // fires only once this component's own data — including the self-heal
+  // rebuild, which can take several seconds on a large TB — has actually
+  // rendered; the effect re-runs after that render commits, by which point
+  // document.getElementById is guaranteed to find the target NoteCard (its
+  // anchor exists whether the card is open or collapsed).
+  useEffect(() => {
+    if (scrollToNoteNo == null || loading) return;
+    if (scrollToNoteNo === 2 || scrollToNoteNo === 10) return; // Capital / PPE live elsewhere
+    const entry = Object.entries(NOTE_META).find(([, meta]) => {
+      const refs = meta.noteNumber.split(/\s*[&,]\s*/).map(s => parseInt(s.trim(), 10));
+      return refs.includes(scrollToNoteNo);
+    });
+    if (!entry) return;
+    const [noteType] = entry;
+    setOpenNotes(prev => (prev.has(noteType) ? prev : new Set(prev).add(noteType)));
+    // Must mirror the anchorId fallback the render loop actually uses below
+    // (dynamicNoteMap absent → parse the number from the config's title
+    // string, NOT `nce-note-type-*`) or the id here never matches the DOM.
+    const label = dynamicNoteMap
+      ? getDynamicNoteDisplay(noteType, dynamicNoteMap)
+      : (NOTES_CONFIG.find(c => c.noteType === noteType)?.title.match(/Note\s+([\d\s&]+):/i)?.[1]?.trim() ?? null);
+    const anchorId = label ? `nce-note-${label}` : `nce-note-type-${noteType}`;
+    // Opening the note (setOpenNotes above) changes layout height, so scroll
+    // on the next frame once that re-render has committed.
+    requestAnimationFrame(() => {
+      document.getElementById(anchorId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }, [scrollToNoteNo, scrollToken, loading, dynamicNoteMap]);
   // Persist the layout whenever it changes — edit mode only. During a locked
   // preview the toggles are hidden (forceOpen) so it can't change, and we must
   // not overwrite the pre-lock layout that the unlock remount will restore.

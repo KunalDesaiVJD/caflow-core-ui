@@ -2189,6 +2189,10 @@ export default function PipelineFinancialStatements({
 
   // ─── NCE note navigation state ────────────────────────────────────────────
   const [nceNavNote, setNceNavNote] = useState<number | null>(null);
+  // Bumped on every "Note No." click so re-clicking the SAME note re-triggers
+  // the force-open + scroll inside NCEDetailedNotes even though nceNavNote's
+  // value didn't change (see the 2026-08-06 fix note at the click handlers).
+  const [nceNoteNavToken, setNceNoteNavToken] = useState(0);
 
   // ─── Corporate note navigation state ─────────────────────────────────────
   const [corpNavNote, setCorpNavNote] = useState<{
@@ -9329,9 +9333,19 @@ export default function PipelineFinancialStatements({
                   }}
                   onNavigateToNote={(noteNo) => {
                     setActiveTab("notes");
+                    // 2026-08-06 fix: this used to null nceNavNote out again after
+                    // 1000ms "so re-clicking the same note works" — but the actual
+                    // force-open + scroll happens inside NCEDetailedNotes, gated on
+                    // its OWN loading state (which can take several seconds on a
+                    // large TB, e.g. the self-heal rebuild). Nulling this on a
+                    // fixed timer raced that load and could clear the target
+                    // before NCEDetailedNotes ever got to act on it, silently
+                    // defeating the navigation. Leave it set; clicking a
+                    // DIFFERENT note still updates it immediately, and
+                    // NCEDetailedNotes bumps nceNoteNavToken on every click via
+                    // onNoteNavConsumed so re-clicking the SAME note also re-fires.
                     setNceNavNote(noteNo);
-                    // Reset after a delay so re-clicking the same note works
-                    setTimeout(() => setNceNavNote(null), 1000);
+                    setNceNoteNavToken(t => t + 1);
                   }}
                 />
                 {nceSignatureBlock}
@@ -9512,9 +9526,19 @@ export default function PipelineFinancialStatements({
                   }}
                   onNavigateToNote={(noteNo) => {
                     setActiveTab("notes");
+                    // 2026-08-06 fix: this used to null nceNavNote out again after
+                    // 1000ms "so re-clicking the same note works" — but the actual
+                    // force-open + scroll happens inside NCEDetailedNotes, gated on
+                    // its OWN loading state (which can take several seconds on a
+                    // large TB, e.g. the self-heal rebuild). Nulling this on a
+                    // fixed timer raced that load and could clear the target
+                    // before NCEDetailedNotes ever got to act on it, silently
+                    // defeating the navigation. Leave it set; clicking a
+                    // DIFFERENT note still updates it immediately, and
+                    // NCEDetailedNotes bumps nceNoteNavToken on every click via
+                    // onNoteNavConsumed so re-clicking the SAME note also re-fires.
                     setNceNavNote(noteNo);
-                    // Reset after a delay so re-clicking the same note works
-                    setTimeout(() => setNceNavNote(null), 1000);
+                    setNceNoteNavToken(t => t + 1);
                   }}
                 />
                 {nceSignatureBlock}
@@ -9660,6 +9684,7 @@ export default function PipelineFinancialStatements({
               <NCENotesTab
                 engagementId={engagementId}
                 navigateToNote={nceNavNote}
+                navigateToken={nceNoteNavToken}
                 dynamicNoteMap={nceDynamicNoteMap}
                 onExpansionStateUpdate={handleNceExpansionStateUpdate}
                 // 2026-08-06 fix: this is the LIVE working editor, not the export
