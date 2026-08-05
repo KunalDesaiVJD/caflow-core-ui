@@ -655,6 +655,19 @@ export async function rejectCorrection(c: Correction, reason: string, actor: Act
   return error?.message ?? null;
 }
 
+/**
+ * Discard a draft correction outright — it was never submitted for
+ * signature, so there's nothing to preserve an audit trail for (that starts
+ * once someone actually signs off on it). Deletes the correction row;
+ * tds_correction_challans/deductees/audit_log all carry ON DELETE CASCADE
+ * (20260729170000), so their rows go with it.
+ */
+export async function discardCorrection(c: Correction) {
+  if (c.status !== "draft") return "Only a draft correction can be discarded.";
+  const { error } = await supabase.from("tds_corrections" as any).delete().eq("id", c.id);
+  return error?.message ?? null;
+}
+
 // ─── Field-level diff: Original vs Corrected ────────────────────────────────
 
 /** Human labels for the columns a correction can change. */

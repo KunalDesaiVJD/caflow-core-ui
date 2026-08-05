@@ -54,7 +54,7 @@ import {
   CORRECTION_STATUS_META, isCorrectionLocked, isCorrectionEditable,
   createCorrection, loadCorrectionDetail, submitCorrection,
   signAsPreparer, approveAsSenior, markCorrectionFiled,
-  rejectCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
+  rejectCorrection, discardCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
   undoCorrectionRow, uploadCorrectionProof, removeCorrectionProof, canMarkFiled, effectiveCorrectionAction,
   updateCorrectionProcessedOutcome, CORRECTION_PROCESSED_OUTCOMES,
   fetchRecommendations, type Recommendation,
@@ -863,6 +863,8 @@ function CorrectionDetail({
   const [signOpen, setSignOpen] = useState(false);
   const [approveOpen, setApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
+  const [discardOpen, setDiscardOpen] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
 
   const [search, setSearch] = useState("");
   const [changeFilter, setChangeFilter] = useState<ChangeFilter>("all");
@@ -1044,6 +1046,17 @@ function CorrectionDetail({
     load();
   };
 
+  const doDiscard = async () => {
+    if (!correction) return;
+    setDiscarding(true);
+    const err = await discardCorrection(correction);
+    setDiscarding(false);
+    if (err) { toast({ title: "Could not discard", description: err, variant: "destructive" }); return; }
+    setDiscardOpen(false);
+    toast({ title: "Draft discarded" });
+    onBack();
+  };
+
   if (loading) {
     return <div className="space-y-3"><Skeleton className="h-9 w-40" /><Skeleton className="h-16 w-full" /><Skeleton className="h-64 w-full" /></div>;
   }
@@ -1166,6 +1179,7 @@ function CorrectionDetail({
             onSignPreparer={() => setSignOpen(true)}
             onApproveSenior={() => setApproveOpen(true)}
             onReject={() => setRejectOpen(true)}
+            onDiscard={() => setDiscardOpen(true)}
             onRefresh={loadSilently}
             toast={toast}
           />
@@ -1243,6 +1257,26 @@ function CorrectionDetail({
         onRejected={() => { setRejectOpen(false); load(); }}
         toast={toast}
       />
+
+      {/* Discard — only reachable while status === "draft" (never submitted,
+          so there's nothing an audit trail needs to remember). */}
+      <Dialog open={discardOpen} onOpenChange={setDiscardOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Discard this draft?</DialogTitle>
+            <DialogDescription>
+              This correction has never been submitted for signature. Discarding it deletes
+              it permanently, including any edits made so far — this can't be undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button size="sm" variant="outline" onClick={() => setDiscardOpen(false)} disabled={discarding}>Cancel</Button>
+            <Button size="sm" variant="destructive" disabled={discarding} onClick={doDiscard}>
+              {discarding ? "Discarding…" : "Discard draft"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1509,7 +1543,7 @@ function SignatureSlot({ title, name, role, at, awaiting, note, action }: {
  */
 export function SignatureSection({
   correction, actor, busy, canApprove, isSamePerson,
-  onSubmitForSignature, onSignPreparer, onApproveSenior, onReject, onRefresh, toast,
+  onSubmitForSignature, onSignPreparer, onApproveSenior, onReject, onDiscard, onRefresh, toast,
 }: {
   correction: Correction;
   actor: Actor;
@@ -1520,6 +1554,7 @@ export function SignatureSection({
   onSignPreparer?: () => void;
   onApproveSenior?: () => void;
   onReject?: () => void;
+  onDiscard?: () => void;
   onRefresh?: () => void;
   toast?: any;
 }) {
@@ -1542,9 +1577,14 @@ export function SignatureSection({
             }
             action={
               status === "draft" ? (
-                <Button size="sm" className="gap-1 h-6 text-[11px] px-2" disabled={busy} onClick={onSubmitForSignature}>
-                  <Send size={11} /> Submit for signature
-                </Button>
+                <>
+                  <Button size="sm" className="gap-1 h-6 text-[11px] px-2" disabled={busy} onClick={onSubmitForSignature}>
+                    <Send size={11} /> Submit for signature
+                  </Button>
+                  <Button size="sm" variant="outline" className="gap-1 h-6 text-[11px] px-2" disabled={busy} onClick={onDiscard}>
+                    <Trash2 size={11} /> Discard
+                  </Button>
+                </>
               ) : status === "awaiting_employee" ? (
                 <Button size="sm" className="gap-1 h-6 text-[11px] px-2" onClick={onSignPreparer}>
                   <PenTool size={11} /> Sign as preparer
