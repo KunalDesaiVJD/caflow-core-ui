@@ -25,11 +25,26 @@
  */
 
 (async () => {
-  const creds = await new Promise((resolve) => {
+  // This tab is opened FIRST (synchronously, to satisfy the popup blocker —
+  // see TdsPortalLoginButtons.tsx's own comment), racing this content
+  // script's own load against the CAflow tab's async credential fetch +
+  // relay. That relay is normally faster (same-machine edge function call +
+  // an in-process extension message, vs. this tab's real network load of a
+  // full Angular app) but isn't guaranteed to win — a couple of short
+  // retries here closes that gap cheaply. An ordinary manual visit (by far
+  // the common case) just pays the same ~1s in exchange for silence, since
+  // "nothing queued" and "not queued YET" look identical from here.
+  const requestCredentials = () => new Promise((resolve) => {
     chrome.runtime.sendMessage({ type: "GET_ITD_CREDENTIALS" }, (response) => resolve(response));
   });
-  // No stored credentials — this is an ordinary manual visit to the login
-  // page (by far the common case), not an error. Do nothing.
+  let creds = await requestCredentials();
+  for (const delayMs of [400, 800]) {
+    if (creds?.ok) break;
+    await new Promise((r) => setTimeout(r, delayMs));
+    creds = await requestCredentials();
+  }
+  // Still nothing after retrying — an ordinary manual visit to the login
+  // page. Do nothing.
   if (!creds?.ok) return;
 
   showBanner("CAFlow: filling in your saved login…", "info");

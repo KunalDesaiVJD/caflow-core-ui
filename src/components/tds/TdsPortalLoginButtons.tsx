@@ -176,20 +176,29 @@ export function TdsPortalLoginButtons({ clientId }: Props) {
   /**
    * Hands the ITD login off to the browser extension (content-caflow.js,
    * browser-extension/itd-autofill/) via window.postMessage — the standard
-   * page-to-content-script channel — then opens the login page directly.
-   * Falls back to a toast if the extension doesn't ack within a few seconds
-   * (e.g. it was uninstalled after this page loaded, or storage.session
-   * failed) rather than opening the portal with nothing actually queued.
+   * page-to-content-script channel — then opens the login page.
+   *
+   * window.open() is called FIRST, synchronously, before any `await` — a
+   * popup opened after even one microtask of async work (a network call, a
+   * Promise) loses the "direct response to a click" status Chrome requires,
+   * and gets silently blocked with no visible error. Everything below that
+   * first line is async and races the new tab's own load time (network +
+   * an Angular app booting, reliably 1s+) against a same-machine edge
+   * function call + an in-process extension message — the credential relay
+   * wins that race in practice, and content-itd.js also retries its own
+   * fetch once as a safety net (see that file's own comment) for when it
+   * doesn't.
    */
   const autofillItd = async () => {
     if (!status) return;
+    window.open(ITD_LOGIN_URL, "_blank", "noopener,noreferrer");
     setAutofillingItd(true);
     const { data, error } = await supabase.functions.invoke("tds-portal-credentials", {
       body: { action: "read", client_service_id: status.clientServiceId },
     });
     if (error || !data?.itd_password || !status.itdLoginId) {
       setAutofillingItd(false);
-      toast({ title: "Could not auto-fill", description: error?.message || "No ITD password saved.", variant: "destructive" });
+      toast({ title: "Could not auto-fill", description: error?.message || "No ITD password saved. The portal is open — log in manually this time.", variant: "destructive" });
       return;
     }
     const acked = await new Promise<boolean>((resolve) => {
@@ -210,9 +219,8 @@ export function TdsPortalLoginButtons({ clientId }: Props) {
     });
     setAutofillingItd(false);
     if (!acked) {
-      toast({ title: "Extension didn't respond", description: "Opening the portal anyway — you'll need to log in manually this time.", variant: "destructive" });
+      toast({ title: "Extension didn't respond", description: "The portal is open, but the extension may not have received the credentials — log in manually if it wasn't filled.", variant: "destructive" });
     }
-    window.open(ITD_LOGIN_URL, "_blank", "noopener,noreferrer");
   };
 
   if (!clientId) return null;
