@@ -250,6 +250,10 @@ function Note1PreviewSection({
 interface Props {
   engagementId:   string;
   navigateToNote?: number | null;
+  /** Bumped on every "Note No." click (even re-clicks of the same note) so
+   *  NCEDetailedNotes' force-open + scroll effect re-fires even though
+   *  navigateToNote's value didn't change. */
+  navigateToken?: number;
   /** Dynamic note number map from PipelineFinancialStatements.
    *  Maps originalNoteRef → dynamicSequentialNoteNo so the Notes tab headings
    *  stay in sync with the note numbers shown in the BS/PL columns. */
@@ -288,7 +292,7 @@ interface Props {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, entityName, cyYear, initialExpandedRows, ntaData, sig }: Props) {
+export default function NCENotesTab({ engagementId, navigateToNote, navigateToken, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, entityName, cyYear, initialExpandedRows, ntaData, sig }: Props) {
   const [activeSubTab, setActiveSubTab] = useState("capital_account");
 
   useEffect(() => {
@@ -303,21 +307,17 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
         setActiveSubTab("ppe_schedule");
         return;
       }
-      // All other notes → Notes to Accounts tab + scroll to note
+      // All other notes → Notes to Accounts tab. The actual force-open +
+      // scroll is handled INSIDE NCEDetailedNotes (via the scrollToNoteNo
+      // prop below) — it owns the openNotes/loading state, so it can gate on
+      // its own data actually being ready instead of a fixed timer racing an
+      // unrelated load (2026-08-06 fix: a fixed 250ms delay here fired before
+      // the note cards existed in the DOM on any engagement whose self-heal
+      // rebuild took longer than that, e.g. large trial balances — the click
+      // appeared to do nothing).
       setActiveSubTab("notes_to_accounts");
-      // IDs use the dynamic number (from dynamicNoteMap); fall back to static ref.
-      const timer = setTimeout(() => {
-        const dynamicNo = dynamicNoteMap?.get(navigateToNote);
-        const el =
-          (dynamicNo != null
-            ? document.getElementById(`nce-note-${dynamicNo}`)
-            : null) ??
-          document.getElementById(`nce-note-${navigateToNote}`);
-        el?.scrollIntoView({ behavior: "smooth", block: "start" });
-      }, 250);
-      return () => clearTimeout(timer);
     }
-  }, [navigateToNote, dynamicNoteMap]);
+  }, [navigateToNote, navigateToken]);
 
   // In readOnly mode the on-screen Preview should mimic the DOCX export's
   // per-page layout: each "page" is a NAVY-bordered A4-style frame, and the
@@ -417,7 +417,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, dynamicNoteM
                 on every expansion update and would re-render NCEDetailedNotes on
                 every keystroke, causing a stale-effect loop (PatternBTable effects
                 re-fire → setNceExpandedRows → re-render → repeat). */}
-            <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} />
+            <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} scrollToNoteNo={navigateToNote} scrollToken={navigateToken} />
           </TabsContent>
 
           <TabsContent value="ppe_schedule" className="mt-3">
