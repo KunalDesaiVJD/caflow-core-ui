@@ -29,6 +29,7 @@ import { getNCENoteFaceTotal, NCE_CODE_TO_NOTE, NCE_NOTE_FS_MAP } from "@/lib/nc
 import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
 import { buildCanonicalNceCode, buildNceLiabCodeSet } from "@/lib/nceNoteRegistry";
 import { FS_BLOCK_UNEXPLAINED_DRIFT } from "@/lib/nceFeatureFlags";
+import { buildLedgerMapMatcher } from "@/lib/tallyText";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -434,18 +435,20 @@ export function computeCOATotals(
   // auto-populate does. First-writer-wins on duplicate keys; truly conflicting
   // duplicate keys (same name, different code) are a separate data-hygiene
   // item (exact/trim match still wins for the live TB-name variant).
-  const ciIndex: Record<string, { code: string }> = {};
-  for (const [k, v] of Object.entries(coaMapping)) {
-    if (!v?.code) continue;
-    const kk = String(k).trim().toLowerCase();
-    if (!(kk in ciIndex)) ciIndex[kk] = v;
-  }
-  const lookupMapping = (name: string) => {
-    if (!name) return undefined;
-    return coaMapping[name]
-        ?? coaMapping[name.trim()]
-        ?? ciIndex[String(name).trim().toLowerCase()];
-  };
+  //
+  // 2026-08-05 — RC-21 fix (VADIWALA "The District TB Centre\r\n" — Tally
+  // control chars / numeric HTML entities survive into ledger_name, e.g.
+  // "&#13;&#10;"). coa_mapping is always persisted keyed by cleanTallyName()
+  // output (see PipelineStage3.tsx / notesAutoPopulate.ts), but this lookup
+  // previously only trimmed + lowercased — never stripped control chars /
+  // entities — so a corrupted-name ledger matched on the COA Mapping screen
+  // but silently failed here, producing a false "unmapped ledger" + false
+  // note drift, and (via nceAutoPopulate's PY safety-reconcile) a spurious
+  // "Other (prior year)" plug row. buildLedgerMapMatcher (src/lib/tallyText.ts)
+  // is the single shared matcher — every mapping consumer in the codebase
+  // (this function, unmappedNonZero in PipelineFinancialStatements.tsx, ...)
+  // must go through it so they can never drift apart again.
+  const lookupMapping = buildLedgerMapMatcher(coaMapping);
   const dedupe = (rows: TBRowLike[]): TBRowLike[] => {
     const byName = new Map<string, TBRowLike>();
     for (const r of rows) {
@@ -484,20 +487,12 @@ export function computeCOATotals(
   // above intentionally skipped PY for these so the PY pass owns it cleanly.
   // Case-insensitive index for the PY-specific mapping (when supplied) — same
   // RC-16 rationale as the CY index above.
-  const pyCiIndex: Record<string, { code: string }> = {};
-  if (pyCoaMap) {
-    for (const [k, v] of Object.entries(pyCoaMap)) {
-      if (!v?.code) continue;
-      const kk = String(k).trim().toLowerCase();
-      if (!(kk in pyCiIndex)) pyCiIndex[kk] = v;
-    }
-  }
+  const lookupPyMapping = pyCoaMap ? buildLedgerMapMatcher(pyCoaMap) : undefined;
   if (hasPyTb) {
     for (const row of dedupe(pyTb)) {
       const nm = (row.ledger_name || "").trim();
       if (!nm) continue;
-      const mapped = pyCoaMap?.[nm] ?? pyCoaMap?.[row.ledger_name ?? ""]
-                  ?? pyCiIndex[nm.toLowerCase()] ?? lookupMapping(nm);
+      const mapped = lookupPyMapping?.(nm) ?? lookupMapping(nm);
       if (!mapped?.code) continue;
       const code = CANONICAL_NCE_CODE[mapped.code] ?? mapped.code;
       const noteType = CODE_TO_NOTE_TYPE[code] ?? code;

@@ -208,6 +208,20 @@ function NumInput({
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
+// Root cause of "edits lost after hard refresh" (VJDESAI, Aug-2026): the Save
+// button is (correctly, and intentionally — see save-nce-constrained-note's
+// server-side tie enforcement) disabled until the schedule ties to COA to the
+// rupee, which the depreciation leg routinely can't hit via the auto rate
+// formula. Edits made while untied were never persisted anywhere, so a
+// refresh silently reloaded the last-tied DB state with no warning. Fix:
+// mirror every dirty (unsaved) edit into localStorage so a refresh can offer
+// to restore it, and warn before an actual navigate-away/close. This does
+// NOT loosen the server-side tie guarantee — Save still requires cons.tied.
+function ppeDraftKey(engagementId: string, financialYear: string): string | null {
+  if (!engagementId || !financialYear) return null;
+  return `nce_ppe_draft:${engagementId}:${financialYear}`;
+}
+
 export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   const [rows,    setRows]    = useState<AssetRow[]>(initRows);
   const [loading, setLoading] = useState(true);
@@ -215,6 +229,13 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   const [eng,     setEng]     = useState<any>(null);
   const [coa, setCoa] = useState({ ppe: { cy: 0, py: 0 }, intg: { cy: 0, py: 0 }, depr: { cy: 0, py: 0 } });
   const [hasPyShell, setHasPyShell] = useState(false);
+  // Snapshot of the last-persisted (loaded or saved) rows — used to detect
+  // unsaved edits so they can be mirrored to a local draft and warned about.
+  const [savedSnapshot, setSavedSnapshot] = useState<string>("");
+  // A locally-stored draft found on load that differs from the DB state —
+  // offered to the user as an explicit Restore/Discard choice, never applied
+  // silently (so a stale local draft can never clobber real DB data).
+  const [draftCandidate, setDraftCandidate] = useState<AssetRow[] | null>(null);
 
   // ── Derived year labels (from self-fetched engagement) ───────────────────
   const financialYear = (eng?.financial_year as string) || "";
@@ -244,6 +265,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         .eq("engagement_id", engagementId)
         .order("sort_order");
       if (!cancelled) {
+        let finalRows: AssetRow[] = initRows();
         if (!error && data && data.length > 0) {
           const built = initRows();
           // Preserve sub-ledger rows from DB (sort_order >= SUB_BASE) and merge
@@ -269,13 +291,71 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
             const idx = built.findIndex(r => r.sort_order === so);
             if (idx >= 0) built[idx] = row;
           }
-          setRows([...built, ...subRows].sort((a, b) => a.sort_order - b.sort_order));
+          finalRows = [...built, ...subRows].sort((a, b) => a.sort_order - b.sort_order);
         }
+
+        // Draft recovery: if an earlier session left unsaved edits in this
+        // browser (couldn't save because the schedule didn't tie yet, and the
+        // tab was refreshed/closed before fixing it), offer to restore them
+        // rather than silently discarding — never applied automatically.
+        const dkey = ppeDraftKey(engagementId, String(engRow?.financial_year ?? ""));
+        const finalSnapshot = JSON.stringify(finalRows);
+        if (dkey) {
+          const rawDraft = localStorage.getItem(dkey);
+          if (rawDraft && rawDraft !== finalSnapshot) {
+            try {
+              const parsed = JSON.parse(rawDraft);
+              if (Array.isArray(parsed)) setDraftCandidate(parsed as AssetRow[]);
+            } catch { /* corrupted draft — ignore */ }
+          } else if (rawDraft) {
+            // Draft matches DB state exactly — nothing to recover, clean up.
+            localStorage.removeItem(dkey);
+          }
+        }
+
+        setRows(finalRows);
+        setSavedSnapshot(finalSnapshot);
         setLoading(false);
       }
     })();
     return () => { cancelled = true; };
   }, [engagementId]);
+
+  // ── Dirty tracking + local draft safety net ───────────────────────────────
+  const dirty = useMemo(() => !loading && JSON.stringify(rows) !== savedSnapshot, [rows, savedSnapshot, loading]);
+
+  useEffect(() => {
+    if (loading || readOnly) return;
+    const dkey = ppeDraftKey(engagementId, financialYear);
+    if (!dkey) return;
+    if (dirty) localStorage.setItem(dkey, JSON.stringify(rows));
+    else localStorage.removeItem(dkey);
+  }, [rows, dirty, loading, readOnly, engagementId, financialYear]);
+
+  // Warn on tab close / navigation away while there are unsaved edits — the
+  // schedule not tying yet is no longer a silent way to lose a team's work.
+  useEffect(() => {
+    if (readOnly) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      if (!dirty) return;
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty, readOnly]);
+
+  const restoreDraft = () => {
+    if (!draftCandidate) return;
+    setRows(draftCandidate);
+    setDraftCandidate(null);
+    toast.success("Draft restored — review and save once it ties to COA mapping.");
+  };
+  const discardDraft = () => {
+    const dkey = ppeDraftKey(engagementId, financialYear);
+    if (dkey) localStorage.removeItem(dkey);
+    setDraftCandidate(null);
+  };
 
   // ── COA anchor load (constrained mode only) ───────────────────────────────
   useEffect(() => {
@@ -412,6 +492,9 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
           return;
         }
         toast.success("PPE schedule saved — ties to COA mapping.");
+        setSavedSnapshot(JSON.stringify(rows));
+        const dkeyOk = ppeDraftKey(engagementId, financialYear);
+        if (dkeyOk) localStorage.removeItem(dkeyOk);
         return;
       }
 
@@ -442,6 +525,9 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       const { error: insErr } = await supabase.from("nce_ppe_schedule").insert(payload);
       if (insErr) throw insErr;
       toast.success("PPE Schedule saved");
+      setSavedSnapshot(JSON.stringify(rows));
+      const dkeyOk2 = ppeDraftKey(engagementId, financialYear);
+      if (dkeyOk2) localStorage.removeItem(dkeyOk2);
     } catch (err: any) {
       toast.error(err.message || "Save failed");
     } finally {
@@ -517,12 +603,20 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       : intangibleParents.length + rows.filter(r => r.asset_category === "intangible" && isSubLedger(r.sort_order)).length;
 
   const SaveBtn = () => (
-    <Button size="sm" onClick={handleSave} disabled={saving || (FS_NCE_CONSTRAINED_NOTES && !cons.tied)}>
-      {saving
-        ? <Loader2 className="animate-spin h-4 w-4 mr-1.5" />
-        : <Save className="h-4 w-4 mr-1.5" />}
-      {FS_NCE_CONSTRAINED_NOTES && !cons.tied ? "Fix the difference to save" : "Save PPE Schedule"}
-    </Button>
+    <div className="flex items-center gap-2">
+      {dirty && (
+        <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Unsaved changes
+          {FS_NCE_CONSTRAINED_NOTES && !cons.tied && " — saved locally on this device until it ties"}
+        </span>
+      )}
+      <Button size="sm" onClick={handleSave} disabled={saving || (FS_NCE_CONSTRAINED_NOTES && !cons.tied)}>
+        {saving
+          ? <Loader2 className="animate-spin h-4 w-4 mr-1.5" />
+          : <Save className="h-4 w-4 mr-1.5" />}
+        {FS_NCE_CONSTRAINED_NOTES && !cons.tied ? "Fix the difference to save" : "Save PPE Schedule"}
+      </Button>
+    </div>
   );
 
   /** Render one PARENT asset row (sort_order < SUB_BASE). isFirst drives
@@ -726,6 +820,20 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
           Note: Property, Plant and Equipment and Intangible Assets (owned assets)
         </p>
       </div>
+
+      {/* Local-draft recovery — an earlier session's unsaved edits survived a
+          refresh/close via localStorage; offer them back explicitly rather
+          than silently applying or silently losing them. */}
+      {!readOnly && draftCandidate && (
+        <div className="rounded-md border border-amber-300 bg-amber-50/60 dark:bg-amber-950/20 p-3 text-sm flex flex-wrap items-center gap-3">
+          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+          <span className="flex-1 min-w-[220px]">
+            Found unsaved edits from an earlier session on this device (the schedule didn't tie to COA mapping yet when it was last open, so they weren't saved).
+          </span>
+          <Button size="sm" variant="outline" onClick={restoreDraft} className="gap-1.5">Restore draft</Button>
+          <Button size="sm" variant="ghost" onClick={discardDraft}>Discard</Button>
+        </div>
+      )}
 
       {/* Constrained-mode COA anchor + difference to explain */}
       {FS_NCE_CONSTRAINED_NOTES && (
