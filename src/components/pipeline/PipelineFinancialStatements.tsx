@@ -8534,7 +8534,7 @@ export default function PipelineFinancialStatements({
               variant={nceIsLocked ? "default" : "outline"}
               size="sm"
               className={cn("gap-1", nceIsLocked && "bg-amber-500 hover:bg-amber-600 border-amber-500")}
-              title={nceIsLocked ? "Preview is locked — export uses current expand/collapse state. Click to unlock." : "Lock current expand/collapse state for export"}
+              title={nceIsLocked ? "Export preview uses this locked expand/collapse layout. Editing here is unaffected. Click to unlock." : "Lock current expand/collapse state for the export preview (does not affect editing)"}
               onClick={() => {
                 const next = !nceIsLocked;
                 setNceIsLocked(next);
@@ -9662,7 +9662,20 @@ export default function PipelineFinancialStatements({
                 navigateToNote={nceNavNote}
                 dynamicNoteMap={nceDynamicNoteMap}
                 onExpansionStateUpdate={handleNceExpansionStateUpdate}
-                readOnly={nceIsLocked}
+                // 2026-08-06 fix: this is the LIVE working editor, not the export
+                // preview — the read-only "locked" rendering already has its own
+                // dedicated surface (the "🔒 Draft Financial Statements — Preview"
+                // Dialog below, which hard-codes readOnly={true} independently of
+                // nceIsLocked). Wiring readOnly to nceIsLocked here made "Lock
+                // Preview" (intended only to freeze expand/collapse layout for
+                // export) also pointer-events-none the entire live editor —
+                // including the row/ledger rename inputs — with no visible
+                // explanation, so a user who ever clicked "Lock Preview" for an
+                // export appeared to have lost the ability to edit anything on
+                // that engagement (in that browser) until they noticed the
+                // unrelated "Unlock Preview" button. The live tab must stay
+                // editable regardless of the preview-lock toggle.
+                readOnly={false}
                 entityName={engagement?.clients?.name || ""}
                 cyYear={cyYear}
                 initialExpandedRows={nceIsLocked ? nceExpandedRows : undefined}
