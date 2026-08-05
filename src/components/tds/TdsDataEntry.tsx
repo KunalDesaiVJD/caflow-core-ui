@@ -5,7 +5,7 @@ import { isProcessedWorkStatus } from "./TdsFilingsManager";
 import {
   PAN_4TH_CHAR_MAP, isValidPan, isIndividualRateType, getRateForSection as getRateForSectionPure,
   calcAutoInterest, isChallanOverApplied, isChallanFullyUtilised, computeApplied, balanceColorClass,
-  sectionDropdownLabel, withKasarVatav,
+  sectionDropdownLabel, withKasarVatav, computeChallanPooled,
   type RateEntry,
 } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
@@ -937,9 +937,12 @@ export function TdsDataEntry({
   const openKasarVatavDialog = (c: Challan) => {
     if (isFilingLocked) return;
     const bd = getChallanBreakdownAll(c.id);
-    const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
-    const rawUnconsumed = Math.max(0, allocatable - bd.applied);
     const existing = c.kasar_vatav_amount || 0;
+    // The gap before ANY kasar-vatav write-off — bd.unconsumed already nets
+    // out the EXISTING write-off (it's folded into effectiveApplied), so add
+    // it back: the amount entered here REPLACES, not adds to, that existing
+    // value (see the pre-fill just below).
+    const rawUnconsumed = bd.unconsumed + existing;
     setKasarVatavDialogChallan(c);
     setKasarVatavAmountInput(String(existing > 0 ? existing : rawUnconsumed));
     setKasarVatavNoteInput(c.kasar_vatav_note || "");
@@ -998,8 +1001,7 @@ export function TdsDataEntry({
     const c = kasarVatavDialogChallan;
     if (!c || !user?.id || isFilingLocked) return;
     const bd = getChallanBreakdownAll(c.id);
-    const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
-    const rawUnconsumed = Math.max(0, allocatable - bd.applied);
+    const rawUnconsumed = bd.unconsumed + (c.kasar_vatav_amount || 0);
     const amt = parseFloat(kasarVatavAmountInput);
     if (isNaN(amt) || amt < 0) {
       toast({ title: "Enter a valid amount", variant: "destructive" });
@@ -1800,16 +1802,12 @@ export function TdsDataEntry({
       ...d,
       interest_amount: calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, depDate).interest,
     }));
-    const { tds, interest, surcharge, applied } = computeApplied(liveInterestRows);
-    const lateFees = (challanObj as Challan | null)?.late_fees_234e || 0;
-    const kasarVatav = (challanObj as Challan | null)?.kasar_vatav_amount || 0;
     // Per-FORM bifurcation of a combined-payment (cross-form) challan — see
     // fetchCarryForwardChallans' own comment on why a challan is never
-    // scoped to one form_type. "Applied" above already sums every form's
-    // rows together; this groups the SAME liveInterestRows by form_type
-    // first, so each form's share is computed with the identical live-
-    // interest math and the whole set always sums back to `applied` exactly
-    // (no separate/divergent calculation to drift out of sync with it).
+    // scoped to one form_type. Groups the SAME liveInterestRows by form_type
+    // so each form's share uses the identical live-interest math and the
+    // whole set always sums back to `applied` exactly (no separate/divergent
+    // calculation to drift out of sync with it).
     const byFormMap = new Map<string, typeof liveInterestRows>();
     for (const r of liveInterestRows) {
       const k = r.form_type || "—";
@@ -1818,13 +1816,23 @@ export function TdsDataEntry({
     const byForm = [...byFormMap.entries()]
       .map(([formType, rows]) => ({ formType, count: rows.length, ...computeApplied(rows) }))
       .sort((a, b) => a.formType.localeCompare(b.formType));
-    // Issue 4: Late fees are a separate govt levy — exclude from allocatable TDS amount.
-    // effectiveApplied additionally folds in any Kasar-Vatav write-off (see
-    // rateEngine's withKasarVatav) for Fully-Utilised/Unconsumed/Carry-Forward
-    // purposes — kept SEPARATE from `applied` itself so the tds/interest/
-    // surcharge breakdown shown in tooltips still sums to `applied`, not a
-    // number that silently includes a write-off with nothing to point to.
-    return { tds, interest, surcharge, lateFees, applied, kasarVatav, effectiveApplied: withKasarVatav(applied, kasarVatav), count: allForChallan.length, byForm };
+    // Cross-utilization (firm instruction, 2026-08-06): TDS, Interest, and
+    // Late Fee are ONE pool measured against the challan's own undiminished
+    // total_challan_amount — see computeChallanPooled's own doc for why this
+    // replaced the prior "late_fees_234e is an untouchable slice" rule, which
+    // produced false Over-Applied errors on challans genuinely within total.
+    // `allocatable`/`overApplied`/`unconsumed` are now computed HERE, once,
+    // instead of ~8 call sites below each re-deriving their own copy of
+    // `total_challan_amount - late_fees_234e` (the exact duplication that let
+    // one of them — the Genius Export guard — silently diverge).
+    const pooled = computeChallanPooled((challanObj as Challan | null) || {}, allForChallan as any);
+    return {
+      tds: pooled.tds, interest: pooled.interest, surcharge: pooled.surcharge, lateFees: pooled.lateFees,
+      applied: pooled.tds + pooled.interest + pooled.surcharge, kasarVatav: pooled.kasarVatav,
+      effectiveApplied: pooled.effectiveApplied, allocatable: pooled.allocatable,
+      overApplied: pooled.overApplied, unconsumed: pooled.unconsumed,
+      count: allForChallan.length, byForm,
+    };
   }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, archivedChallans, isCorrectionMode]);
 
   // Keep getChallanBreakdown as alias for backward compat
@@ -1988,7 +1996,7 @@ export function TdsDataEntry({
 
   const getBalanceColor = (challan: Challan) => {
     const bd = getChallanBreakdownAll(challan.id);
-    return balanceColorClass(bd.effectiveApplied, challan.total_challan_amount || 0);
+    return balanceColorClass(bd.effectiveApplied, bd.allocatable);
   };
 
   const client = clients.find(c => c.id === selClient);
@@ -2027,13 +2035,11 @@ export function TdsDataEntry({
     return Object.values(byFiling);
   };
 
-  // Challan balance for selected challan (Issue 7F)
+  // Challan balance for selected challan (Issue 7F) — pooled across TDS,
+  // Interest, and Late Fee (see computeChallanPooled's own doc).
   const selectedChallanBalance = useMemo(() => {
     if (!selectedChallan) return 0;
-    const bd = getChallanBreakdownAll(selectedChallan.id);
-    // Issue 4: allocatable = total - late_fees (late fees excluded from TDS allocation)
-    const allocatable = (selectedChallan.total_challan_amount || 0) - (selectedChallan.late_fees_234e || 0);
-    return Math.max(0, allocatable - bd.applied);
+    return getChallanBreakdownAll(selectedChallan.id).unconsumed;
   }, [selectedChallan, getChallanBreakdownAll]);
 
   // ─── CP-05: Generate Genius Excel ────────────────────────────────────────
@@ -2472,10 +2478,9 @@ export function TdsDataEntry({
                         // challan's history and balance are just as reviewable
                         // as before it was put away.
                         const bd = getChallanBreakdownAll(ac.id);
-                        const allocatable = (ac.total_challan_amount || 0) - (ac.late_fees_234e || 0);
-                        const pendingBalance = Math.max(0, allocatable - bd.effectiveApplied);
-                        const overApplied = isChallanOverApplied(bd.effectiveApplied, allocatable);
-                        const fullyUtilised = isChallanFullyUtilised(bd.effectiveApplied, allocatable);
+                        const pendingBalance = bd.unconsumed;
+                        const overApplied = bd.overApplied;
+                        const fullyUtilised = isChallanFullyUtilised(bd.effectiveApplied, bd.allocatable);
                         const statusLabel = overApplied ? "Over-applied" : fullyUtilised ? "Fully Utilised" : bd.effectiveApplied > 0 ? "Partially Utilised" : "Unutilised";
                         const statusClass = overApplied ? "bg-red-100 text-red-700" : fullyUtilised ? "bg-emerald-100 text-emerald-700"
                           : bd.effectiveApplied > 0 ? "bg-amber-100 text-amber-700" : "bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300";
@@ -2701,8 +2706,6 @@ export function TdsDataEntry({
                   {challans.map(c => {
                     const bd = getChallanBreakdownAll(c.id);
                     const entryChanges = correctionChangesForChallan(c.id);
-                    // Issue 4: Late fees excluded from allocatable amount (they are a separate govt levy)
-                    const allocatable = (c.total_challan_amount || 0) - (c.late_fees_234e || 0);
                     const lateFeeBalance = (c.late_fees_234e || 0) - (c.late_fees_used || 0);
                     return (
                       <TooltipProvider key={c.id}>
@@ -2803,8 +2806,8 @@ export function TdsDataEntry({
                                   {c.challan_serial_no && ` • No: ${c.challan_serial_no}`}
                                 </p>
                                 <div className={cn("flex items-center justify-between text-[10px] font-semibold",
-                                  isChallanOverApplied(bd.effectiveApplied, allocatable) ? "text-destructive" : isChallanFullyUtilised(bd.effectiveApplied, allocatable) ? "text-emerald-600" : "text-amber-600")}>
-                                  <span>{isChallanOverApplied(bd.effectiveApplied, allocatable) ? "Over-applied" : isChallanFullyUtilised(bd.effectiveApplied, allocatable) ? "Fully Utilised" : "Unconsumed"}</span>
+                                  bd.overApplied ? "text-destructive" : isChallanFullyUtilised(bd.effectiveApplied, bd.allocatable) ? "text-emerald-600" : "text-amber-600")}>
+                                  <span>{bd.overApplied ? "Over-applied" : isChallanFullyUtilised(bd.effectiveApplied, bd.allocatable) ? "Fully Utilised" : "Unconsumed"}</span>
                                   <span>₹{bd.effectiveApplied.toLocaleString("en-IN")}/₹{(c.total_challan_amount || 0).toLocaleString("en-IN")}</span>
                                 </div>
                                 <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden">

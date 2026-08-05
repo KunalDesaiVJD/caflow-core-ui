@@ -270,10 +270,54 @@ describe("computeChallanOverApplied — the ONE definition, so TdsValidateFinali
     expect(overApplied).toBe(true); // now exceeds the ₹1,154 allocatable
   });
 
-  it("late fees (234E) are excluded from allocatable, same as computeAllocatable", () => {
+  it("late fees (234E) POOL into effectiveApplied against the challan's raw total — the 2026-08-06 cross-utilization rule, not excluded from allocatable like computeAllocatable's own report-facing use", () => {
+    // Same total (1200) as the challan being fully consumed by TDS+interest
+    // (1154) + late fee (46) = exactly 1200 — no violation, because late fee
+    // is now part of the pooled applied figure, not carved out of the ceiling.
     const challanWithLateFee = { ...challan, total_challan_amount: 1200, late_fees_234e: 46 };
-    const { allocatable, overApplied } = computeChallanOverApplied(challanWithLateFee, [TDS_ROW, TDS_ROW]);
-    expect(allocatable).toBe(1154); // 1,200 - 46, same allocatable as the base fixture
+    const { allocatable, effectiveApplied, overApplied } = computeChallanOverApplied(challanWithLateFee, [TDS_ROW, TDS_ROW]);
+    expect(allocatable).toBe(1200); // the challan's RAW total — no more subtraction
+    expect(effectiveApplied).toBe(1200); // 1,154 TDS+interest + 46 late fee, pooled
     expect(overApplied).toBe(false);
+  });
+});
+
+describe("computeChallanPooled — cross-utilization between TDS, Interest, and Late Fee (firm instruction 2026-08-06)", () => {
+  const BASE = { total_challan_amount: 5200, late_fees_234e: 0, kasar_vatav_amount: 0, deposit_date: "2026-06-08" };
+  // Paid 2026-06-01 → due date 2026-07-07 → deposited 2026-06-08 is on time,
+  // so calcAutoInterest contributes ₹0 and these fixtures stay round numbers.
+  const ON_TIME = "2026-06-01";
+
+  it("is valid as long as TDS+Interest+LateFee together stay within the total, regardless of how it's split", () => {
+    // ₹4,800 TDS + ₹100 late fee = ₹4,900 pooled applied against a ₹5,200
+    // challan — the user's own worked example (5,000/100/100 declared,
+    // 4,800/90/10 used).
+    const rows = [{ tds_amount: 4800, total_tax_deducted: 4800, date_of_payment: ON_TIME, interest_amount: 0 }];
+    const r = computeChallanPooled({ ...BASE, late_fees_234e: 100 }, rows);
+    expect(r.tds).toBe(4800);
+    expect(r.lateFees).toBe(100);
+    expect(r.effectiveApplied).toBe(4900);
+    expect(r.allocatable).toBe(5200);
+    expect(r.overApplied).toBe(false);
+    expect(r.unconsumed).toBe(300);
+  });
+
+  it("no component is checked against its own individual share — only the pooled grand total matters", () => {
+    // TDS alone (₹5,000) already exceeds what the OLD per-component mental
+    // model would call "TDS's share" of a ₹5,200 challan carrying a ₹50 late
+    // fee — but nothing in this rule ever compares a component to anything
+    // but the shared pool, so it's valid as long as the total fits.
+    const rows = [{ tds_amount: 5000, total_tax_deducted: 5000, date_of_payment: ON_TIME, interest_amount: 0 }];
+    const r = computeChallanPooled({ ...BASE, late_fees_234e: 50 }, rows);
+    expect(r.effectiveApplied).toBe(5050);
+    expect(r.overApplied).toBe(false);
+  });
+
+  it("a genuinely over-applied challan is still correctly rejected", () => {
+    const rows = [{ tds_amount: 5100, total_tax_deducted: 5100, date_of_payment: ON_TIME, interest_amount: 0 }];
+    const r = computeChallanPooled({ ...BASE, late_fees_234e: 200 }, rows); // 5,100 + 200 = 5,300 > 5,200
+    expect(r.effectiveApplied).toBe(5300);
+    expect(r.overApplied).toBe(true);
+    expect(r.unconsumed).toBe(0);
   });
 });
