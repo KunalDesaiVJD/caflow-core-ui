@@ -420,7 +420,19 @@ export async function extractPartiesFromTdsVouchers(params: {
     // We scan Cr FIRST (the more common bill-entry pattern) then Dr, so
     // if a voucher genuinely has both a Cr party and a Dr party we take
     // the Cr one (bill entry — the payable being created).
+    // Stage-4 hotfix (2026-08-05) — the Tally-sync writer's `party_ledger`
+    // field is NOT trustworthy on its own once Payment vouchers are in
+    // scope (P2-F). A Payment voucher that pays off the TDS challan to
+    // the government has party_ledger = the TDS ledger's OWN name (Tally
+    // considers "TDS PAY" itself the counterparty of that payment). Using
+    // it blindly (a) recreated a fake "TDS PAY" party row, and (b) starved
+    // the REAL party (e.g. Sulochana Manish Pandey) of the voucher
+    // evidence that should have been attributed to her — that amount got
+    // vacuumed into the "TDS PAY" bucket instead. Reject party_ledger
+    // when it self-references a discovered TDS ledger and always fall
+    // through to the Cr/Dr leg scan in that case.
     let party = String(v.party_ledger ?? "").trim();
+    if (party && tdsIndex.has(party.toLowerCase())) party = "";
     if (!party) {
       const scanForParty = (side: "cr" | "dr"): string => {
         const legs = items.filter(li =>
@@ -438,6 +450,9 @@ export async function extractPartiesFromTdsVouchers(params: {
       party = scanForParty("cr") || scanForParty("dr");
     }
     if (!party) continue;
+    // Belt-and-braces: never let a resolved party equal a TDS ledger name,
+    // however it was derived.
+    if (tdsIndex.has(party.toLowerCase())) continue;
 
     const key = party.trim().toLowerCase() + "|" + (sectionHit ?? "_");
     const cur = agg.get(key) ?? {
