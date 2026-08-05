@@ -968,6 +968,21 @@ function aggregateDeducteesForRecon(rows: any[]): Map<string, { deductee_name: s
   return map;
 }
 
+// Stage-5 hotfix (2026-08-06) — the system genuinely bifurcates several
+// sections into (a)/(b) sub-codes (194J(a) Professional 10% / 194J(b)
+// Technical 2%; 194C(a) Individual 1% / 194C(b) Others 2% — see migration
+// 20260730180000). tds_deductees.section_code and mapping.tds_section_code
+// carry these bifurcated forms, but the rate-override lookup, the
+// VALID_RATE_MAP actual-rate self-correction, and the refined194JRate
+// trigger all compared against the BARE section ("194J", "194C") — an
+// exact-string mismatch that silently disabled every rate-correction path
+// for any client whose deductees use bifurcated codes (which is the norm
+// from FY 2026-27 onward). normalizeSectionBucket() strips the (a)/(b)
+// suffix so every rate-lookup site operates on the same bucket key.
+function normalizeSectionBucket(code: string | null | undefined): string {
+  return String(code ?? "").replace(/\([a-z]\)$/i, "").trim().toUpperCase();
+}
+
 function isCompany(t: string | null): boolean {
   if (!t) return false;
   const lower = t.toLowerCase();
@@ -1285,8 +1300,12 @@ export async function runReconEngine(params: {
           const isCompSec = isCompany(dedSec?.primary_deductee_type ?? null);
           let rateSec = isCompSec ? rateEntrySec.rate_company : rateEntrySec.rate_individual;
           const threshSec = isCompSec ? rateEntrySec.threshold_company : rateEntrySec.threshold_individual;
-          // Stage 2.5 — auditor override wins first.
-          const overrideSec = lookupRateOverride(mapping.tb_ledger_name, mapping.tds_deductee_name, sec);
+          // Stage-5 hotfix — bucket form so bifurcated codes (194J(b) etc.)
+          // actually match the lookup tables below.
+          const secBucket = normalizeSectionBucket(sec);
+          // Stage 2.5 — auditor override wins first. Overrides are stored
+          // under the bucket section, so look up with the same key.
+          const overrideSec = lookupRateOverride(mapping.tb_ledger_name, mapping.tds_deductee_name, secBucket);
           if (overrideSec) {
             rateSec = overrideSec.rate;
           }
@@ -1300,13 +1319,13 @@ export async function runReconEngine(params: {
             "194IB": [5], "194J": [2, 10], "194M": [5], "194Q": [0.1],
             "194R":  [10], "195": [20],
           };
-          const validForSecS = VALID_RATE_MAP_S[sec] ?? [];
+          const validForSecS = VALID_RATE_MAP_S[secBucket] ?? [];
           const rateMatchesAnyS = validForSecS.some(r => Math.abs(actualRateSec_pre - r) <= 0.30);
           if (!overrideSec && rateMatchesAnyS) {
             rateSec = validForSecS.reduce((a, b) =>
               Math.abs(actualRateSec_pre - a) < Math.abs(actualRateSec_pre - b) ? a : b
             );
-          } else if (sec === "194J") {
+          } else if (!overrideSec && secBucket === "194J") {
             rateSec = refined194JRate(
               (mapping as any).nature_of_payment ?? null,
               mapping.tds_deductee_name, mapping.tb_ledger_name,
@@ -1358,11 +1377,17 @@ export async function runReconEngine(params: {
       let rate     = isComp ? rateEntry.rate_company : rateEntry.rate_individual;
       const thresh = isComp ? rateEntry.threshold_company : rateEntry.threshold_individual;
 
+      // Stage-5 hotfix — bucket form ("194J" from "194J(b)") used for every
+      // rate-lookup site below so bifurcated codes actually match.
+      const sectionBucket = normalizeSectionBucket(mapping.tds_section_code);
+
       // Stage 2.5 — auditor override wins. If the auditor confirmed a
       // rate for this party+section, use it directly and skip auto-
       // detection (refined194JRate, actual-rate self-correction). The
-      // auditor's judgement is authoritative.
-      const override = lookupRateOverride(mapping.tb_ledger_name, mapping.tds_deductee_name, mapping.tds_section_code);
+      // auditor's judgement is authoritative. Overrides are stored under
+      // the bucket section (TdsReconFlagsPanel normalizes before saving),
+      // so look up with the same bucket key.
+      const override = lookupRateOverride(mapping.tb_ledger_name, mapping.tds_deductee_name, sectionBucket);
       if (override) {
         rate = override.rate;
       }
@@ -1370,7 +1395,7 @@ export async function runReconEngine(params: {
       // Section code alone is ambiguous; consult the deductee's nature/name
       // and the TB ledger name for technical/software/call-centre hints so
       // "Professional Fees" isn't wrongly benchmarked at 2% and vice versa.
-      if (!override && mapping.tds_section_code === "194J") {
+      if (!override && sectionBucket === "194J") {
         rate = refined194JRate(
           (mapping as any).nature_of_payment ?? null,
           mapping.tds_deductee_name,
@@ -1392,7 +1417,7 @@ export async function runReconEngine(params: {
         "194IB": [5], "194J": [2, 10], "194M": [5], "194Q": [0.1],
         "194R":  [10], "195": [20],
       };
-      const validForSec = VALID_RATE_MAP[mapping.tds_section_code ?? ""] ?? [];
+      const validForSec = VALID_RATE_MAP[sectionBucket] ?? [];
       const rateMatchesAny = validForSec.some(r => Math.abs(actualRateForCheck - r) <= 0.30);
       // Skip self-correction when auditor override is set (their choice wins).
       if (!override && rateMatchesAny) {
