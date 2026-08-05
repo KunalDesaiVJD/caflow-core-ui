@@ -5,7 +5,7 @@ import { downloadStorageFile, removePublicDocumentByUrl } from "@/lib/openStorag
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
 import { computeChallanOverApplied } from "@/lib/tds/rateEngine";
-import { READY_TO_FILE_STATUS } from "@/components/tds/TdsFilingsManager";
+import { READY_TO_FILE_STATUS, isProcessedWorkStatus } from "@/components/tds/TdsFilingsManager";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -940,19 +940,31 @@ export function TdsValidateFinalise({
     // return from the Filings Manager. An unfiltered write would then silently
     // un-file a filed return, moving "Filed" back to "Reviewed" while its ACK
     // stays attached. The CAS makes that case a harmless no-op instead.
-    const wantsRevert = filing.work_status === READY_TO_FILE_STATUS;
+    //
+    // Covers every LOCKED status, not just Ready to File — a signed return
+    // can be revoked (or, via an approved edit request below, unlocked by a
+    // reviewer) from Filed and from Processed with/without Default too, per
+    // the firm's own definition of "locked": Ready to File onward (2026-08-05).
+    const fromStatus = filing.work_status;
+    const wantsRevert = fromStatus === READY_TO_FILE_STATUS || fromStatus === "Filed" || isProcessedWorkStatus(fromStatus);
     // Same Realtime nudge as handleSign, so a revoke also reaches the
     // Dashboard immediately instead of waiting on the next poll.
-    const nudge = { last_updated_by: user.id, last_updated_at: new Date().toISOString() };
+    const nudge: Record<string, any> = { last_updated_by: user.id, last_updated_at: new Date().toISOString() };
+    // A filing date only means anything while the return IS filed — reverting
+    // past Filed without clearing it would leave a return sitting in Under
+    // Review claiming a filing date it no longer has, the same stale-date bug
+    // TdsFilingsManager.tsx's own manual status-dropdown path already guards
+    // against (its wasFiledGroup/isFiledGroup check) for this exact case.
+    if (fromStatus === "Filed" || isProcessedWorkStatus(fromStatus)) nudge.date_of_filing = null;
     let reverted = false;
     if (wantsRevert) {
       const { data, error } = await supabase.from("tds_filings")
         .update({ work_status: "Reviewed", ...nudge })
-        .eq("id", filing.id).eq("work_status", READY_TO_FILE_STATUS).select("id");
+        .eq("id", filing.id).eq("work_status", fromStatus).select("id");
       // Only claim the revert — in local state, in the audit trail and to the
       // user — once the DB confirms a row actually changed. A failed or
-      // no-op write must not unlock the workspace against a row that is still
-      // "Ready to File" (or has since moved to Filed).
+      // no-op write must not unlock the workspace against a row whose status
+      // has since moved on from what this component last saw.
       reverted = !error && !!data && data.length > 0;
       if (error) {
         toast({ title: "Couldn't update status", description: `Signature revoked, but the status could not be moved back: ${error.message}`, variant: "destructive" });
@@ -963,11 +975,11 @@ export function TdsValidateFinalise({
     if (reverted) {
       await logReconAudit({
         filingId: filing.id, firmId: filing.firm_id, userId: user.id, userName: userMap[user.id],
-        actionType: "STATUS_CHANGE", oldValue: READY_TO_FILE_STATUS, newValue: "Reviewed",
-        remark: "Auto-reverted: checker signature revoked, so the return is no longer ready to file.",
+        actionType: "STATUS_CHANGE", oldValue: fromStatus, newValue: "Reviewed",
+        remark: `Auto-reverted: checker signature revoked, so the return is no longer ${fromStatus}.`,
       });
       setFiling({ ...filing, work_status: "Reviewed" });
-      toast({ title: "Signature revoked", description: "Status moved back to Under Review — this return is no longer marked Ready to File." });
+      toast({ title: "Signature revoked", description: `Status moved back to Under Review — this return is no longer marked ${fromStatus}.` });
     }
     setSignature(null); setAttestChecked(false);
     setSigning(false);
@@ -1155,8 +1167,11 @@ export function TdsValidateFinalise({
   // signature. Before "Ready to File" existed this button wrote "Filed"
   // directly, so finalising had always frozen the workspace — keeping that
   // behaviour here is what stops the fix from silently unfreezing it.
-  // Escape hatch: Revoke Signature (below) sends the return back to Reviewed.
-  const isLocked = isFiled || isMarkedReadyToFile;
+  // Escape hatch: Revoke Signature (below) sends the return back to Reviewed,
+  // or — once past Filed, where Revoke Signature no longer applies — an
+  // approved edit request does the same (see the Request Changes block
+  // below, now shown for every locked state, not just Ready to File).
+  const isLocked = isFiled || isMarkedReadyToFile || isProcessedWorkStatus(filing?.work_status);
   const cErr = selClient ? complianceError() : null;
   const selectedClient = clients.find(c => c.id === selClient);
 
@@ -1983,10 +1998,8 @@ export function TdsValidateFinalise({
                     <ShieldCheck size={16} className={signature ? "text-emerald-600" : "text-muted-foreground"} />
                     <p className="text-sm font-semibold">Digital Signature — Checker Sign-Off</p>
                   </div>
-                  {isFiled ? (
-                    <p className="text-xs text-muted-foreground">
-                      {signature ? <>Signed by <b>{signature.signedByName}</b> on {new Date(signature.signedAt).toLocaleString("en-IN")}.</> : "Return already filed."}
-                    </p>
+                  {isFiled && !signature ? (
+                    <p className="text-xs text-muted-foreground">Return already filed.</p>
                   ) : signature ? (
                     <div className="flex items-center justify-between flex-wrap gap-2">
                       <p className="text-xs text-emerald-700 dark:text-emerald-300">
@@ -2027,27 +2040,38 @@ export function TdsValidateFinalise({
                   checker signs off from this ONE tab. */}
               <Card className={cn(canFile ? "border-emerald-200 dark:border-emerald-800" : "border-amber-200 dark:border-amber-800")}>
                 <CardContent className="p-4">
-                  {isFiled ? (
-                    <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-                      <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
-                        ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
-                      </p>
-                    </div>
-                  ) : isMarkedReadyToFile ? (
+                  {isLocked ? (
                     <div className="space-y-3">
-                      <div className="p-4 rounded-lg bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800">
-                        <p className="text-sm font-semibold text-sky-700 dark:text-sky-300">
-                          ✓ Return marked as Ready to File.
-                        </p>
-                        <p className="text-xs text-sky-700/80 dark:text-sky-300/80 mt-1">
-                          All validations are complete and the checker has signed. This return is
-                          <b> not filed yet</b> — file it on the income-tax portal, then attach the
-                          acknowledgement (ACK) in the Client Filing Summary to move it to Filed.
-                        </p>
-                      </div>
+                      {isFiled ? (
+                        <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                          <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                            ✓ Return marked as Filed. Generate Genius XLS Export from the Reports section.
+                          </p>
+                        </div>
+                      ) : isMarkedReadyToFile ? (
+                        <div className="p-4 rounded-lg bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800">
+                          <p className="text-sm font-semibold text-sky-700 dark:text-sky-300">
+                            ✓ Return marked as Ready to File.
+                          </p>
+                          <p className="text-xs text-sky-700/80 dark:text-sky-300/80 mt-1">
+                            All validations are complete and the checker has signed. This return is
+                            <b> not filed yet</b> — file it on the income-tax portal, then attach the
+                            acknowledgement (ACK) in the Client Filing Summary to move it to Filed.
+                          </p>
+                        </div>
+                      ) : (
+                        // Processed with/without Default — same locked treatment as
+                        // Filed, one status further down the same forward-only chain.
+                        <div className="p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                          <p className="text-sm font-semibold text-emerald-700 dark:text-emerald-300">
+                            ✓ Return marked as {filing?.work_status}.
+                          </p>
+                        </div>
+                      )}
 
                       {/* Data Entry, Validate & Finalise and attached documents are all
-                          frozen at this status (isLocked). The ONLY way back to an
+                          frozen at this status (isLocked) — Ready to File, Filed, and
+                          Processed with/without Default alike. The ONLY way back to an
                           editable state is Revoke Signature above (Firm Admin/Super
                           Admin only) or — for everyone else — a request approved here. */}
                       <div className="p-3 rounded-lg border bg-muted/30 space-y-2">
