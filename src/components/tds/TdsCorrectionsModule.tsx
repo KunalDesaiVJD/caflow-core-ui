@@ -48,7 +48,7 @@ import {
   AlertTriangle, Send, Upload, Eye, Lightbulb, ClipboardList,
 } from "lucide-react";
 import { isFilingTdsCompliant } from "@/lib/tdsQuarter";
-import { isProcessedWorkStatus, PROCESSED_WITH_DEFAULT_STATUS } from "./TdsFilingsManager";
+import { isProcessedWorkStatus, PROCESSED_WITH_DEFAULT_STATUS, PROCESSED_WITHOUT_DEFAULT_STATUS } from "./TdsFilingsManager";
 import { TdsDataEntry, CORRECTION_TDS_SOURCE } from "./TdsDataEntry";
 import {
   CORRECTION_STATUS_META, isCorrectionLocked, isCorrectionEditable,
@@ -125,8 +125,27 @@ const REASON_CODES = [
   { code: "Z", label: "Z — Higher rate u/s 206AA (PAN not available)" },
 ];
 
-/** Shown wherever a correction's state needs to read at a glance. */
-export function CorrectionStatusBadge({ status, className }: { status: string; className?: string }) {
+const PROCESSED_OUTCOME_TONE: Record<string, string> = {
+  [PROCESSED_WITH_DEFAULT_STATUS]: "bg-amber-200 text-amber-900 dark:bg-amber-900/50 dark:text-amber-200",
+  [PROCESSED_WITHOUT_DEFAULT_STATUS]: "bg-emerald-200 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200",
+};
+
+/**
+ * Shown wherever a correction's state needs to read at a glance. A filed
+ * correction's own processed_outcome (set from the Processed buttons in
+ * FilingBox) takes over the badge once recorded — "Filed" alone would be
+ * stale the moment someone records what happened after filing.
+ */
+export function CorrectionStatusBadge({
+  status, processedOutcome, className,
+}: { status: string; processedOutcome?: string | null; className?: string }) {
+  if (status === "filed" && processedOutcome) {
+    return (
+      <Badge className={cn("gap-1 text-[11px]", PROCESSED_OUTCOME_TONE[processedOutcome] || "bg-muted", className)}>
+        <CheckCircle2 size={11} /> {processedOutcome}
+      </Badge>
+    );
+  }
   const meta = CORRECTION_STATUS_META[status as CorrectionStatus] ?? CORRECTION_STATUS_META.draft;
   return (
     <Badge className={cn("gap-1 text-[11px]", meta.tone, className)}>
@@ -564,7 +583,7 @@ function CorrectionDashboard({
                       <TableCell className="text-xs py-1.5 max-w-[260px] truncate text-muted-foreground">
                         {r.reason || "—"}
                       </TableCell>
-                      <TableCell className="py-1.5"><CorrectionStatusBadge status={r.status} /></TableCell>
+                      <TableCell className="py-1.5"><CorrectionStatusBadge status={r.status} processedOutcome={r.processed_outcome} /></TableCell>
                       <TableCell className="text-xs py-1.5 whitespace-nowrap">
                         {r.raised_by_name || (r.raised_by ? userMap[r.raised_by] : null) || "—"}
                         {r.raised_by_role === "client" && (
@@ -1062,7 +1081,7 @@ function CorrectionDetail({
             <span className="text-sm text-muted-foreground">
               {correction.form_type} · {correction.quarter} {correction.financial_year}
             </span>
-            <CorrectionStatusBadge status={correction.status} />
+            <CorrectionStatusBadge status={correction.status} processedOutcome={correction.processed_outcome} />
 
             {/* No workflow buttons here. Each stage's action lives inside its own
                 box in the Signature & Filing column so an action sits with the
