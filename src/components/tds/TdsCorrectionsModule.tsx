@@ -56,6 +56,7 @@ import {
   signAsPreparer, approveAsSenior, markCorrectionFiled,
   rejectCorrection, summariseCorrection, logCorrectionAction, diffCorrectionRow,
   undoCorrectionRow, uploadCorrectionProof, removeCorrectionProof, canMarkFiled, effectiveCorrectionAction,
+  updateCorrectionProcessedOutcome, CORRECTION_PROCESSED_OUTCOMES,
   SUBMISSION_MODE_META, type SubmissionMode,
   type Correction, type CorrectionStatus, type CorrectionChallan,
   type CorrectionDeductee, type CorrectionAction, type Actor, type FieldDiff,
@@ -1407,6 +1408,7 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [removing, setRemoving] = useState(false);
+  const [settingOutcome, setSettingOutcome] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { setMode(correction.submission_mode ?? null); }, [correction.submission_mode]);
@@ -1450,6 +1452,20 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
     onRefresh?.();
   };
 
+  // Recorded LATER, once the department's CPC/TRACES response is known —
+  // the one field on a filed correction that stays writable (20260805150000's
+  // own carve-out in tds_correction_block_when_filed). Same two values as the
+  // original return's own work_status (TdsFilingsManager.tsx), so reporting
+  // reads consistently whether a period was ever corrected or not.
+  const setOutcome = async (outcome: typeof CORRECTION_PROCESSED_OUTCOMES[number]) => {
+    setSettingOutcome(true);
+    const err = await updateCorrectionProcessedOutcome(correction, outcome, actor);
+    setSettingOutcome(false);
+    if (err) { toast?.({ title: "Could not record the outcome", description: err, variant: "destructive" }); return; }
+    toast?.({ title: `Marked ${outcome}` });
+    onRefresh?.();
+  };
+
   return (
     <div className={cn(
       "rounded-md border p-2",
@@ -1478,6 +1494,39 @@ function FilingBox({ correction, actor, onRefresh, toast }: {
               ) : SUBMISSION_MODE_META[correction.submission_mode].proofLabel}
             </p>
           )}
+
+          {/* Processed outcome — the one field that stays writable after
+              filing (see setOutcome's own doc). Same two-button pattern as
+              the submission-mode picker above, so recording/changing it
+              never needs a separate dialog. */}
+          <div className="mt-1.5 pt-1.5 border-t space-y-1">
+            <span className="text-[11px] font-semibold text-muted-foreground">Processed</span>
+            <div className="grid grid-cols-2 gap-1.5">
+              {CORRECTION_PROCESSED_OUTCOMES.map(o => (
+                <button
+                  key={o}
+                  type="button"
+                  disabled={settingOutcome}
+                  onClick={() => setOutcome(o)}
+                  aria-pressed={correction.processed_outcome === o}
+                  className={cn(
+                    "rounded border px-1.5 py-1 text-[11px] text-left transition-colors disabled:opacity-60",
+                    correction.processed_outcome === o
+                      ? "border-emerald-300 bg-emerald-100 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200"
+                      : "border-input hover:bg-muted",
+                  )}
+                >
+                  {o}
+                </button>
+              ))}
+            </div>
+            {correction.processed_outcome && (
+              <p className="text-[10px] text-muted-foreground leading-snug">
+                By {correction.processed_by_name || "—"}
+                {correction.processed_at ? ` · ${format(new Date(correction.processed_at), "dd/MM/yy HH:mm")}` : ""}
+              </p>
+            )}
+          </div>
         </>
       ) : !ready ? (
         <p className="text-[11px] text-muted-foreground italic leading-snug">

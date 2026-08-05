@@ -49,6 +49,7 @@ export interface ChallanCsiStageStatus {
 interface Props {
   filing: any;
   selClient: string;
+  selForm: string;
   clientTan?: string | null;
   resolveFirmId: () => Promise<string | null>;
   disabled?: boolean;
@@ -82,7 +83,7 @@ const money = (n: number | null | undefined) =>
 
 /** Parses a CSI file's header line. Returns null if it doesn't look like a
  *  CSI file at all (not enough ^-delimited fields on line 1). */
-function parseCsiHeader(text: string): {
+export function parseCsiHeader(text: string): {
   challanCount: number; tan: string; deductorName: string;
   rpuVersion: string; fvuVersion: string; totalAmount: number; hashLineCount: number;
 } | null {
@@ -105,7 +106,7 @@ function parseCsiHeader(text: string): {
   return { challanCount, tan, deductorName, rpuVersion, fvuVersion, totalAmount, hashLineCount: lines.length - 1 };
 }
 
-export function TdsChallanCsiValidation({ filing, selClient, clientTan, resolveFirmId, disabled, onStatusChange, onActivity }: Props) {
+export function TdsChallanCsiValidation({ filing, selClient, selForm, clientTan, resolveFirmId, disabled, onStatusChange, onActivity }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
   const filingId: string | null = filing?.id ?? null;
@@ -174,7 +175,7 @@ export function TdsChallanCsiValidation({ filing, selClient, clientTan, resolveF
       firm_id: firmId,
       financial_year: filing.financial_year,
       quarter: filing.quarter,
-      form_type: (filing.tds_forms && filing.tds_forms[0]) || filing.form_type || "",
+      form_type: selForm,
       file_name: fileMeta.name,
       file_url: fileMeta.url,
       csi_tan: parsed.tan,

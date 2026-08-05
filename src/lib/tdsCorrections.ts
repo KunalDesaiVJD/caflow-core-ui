@@ -12,6 +12,7 @@
  * Entry and Validate & Finalise records must survive untouched for audit.
  */
 import { supabase } from "@/integrations/supabase/client";
+import { PROCESSED_WITH_DEFAULT_STATUS, PROCESSED_WITHOUT_DEFAULT_STATUS } from "@/components/tds/TdsFilingsManager";
 
 // ─── Status ─────────────────────────────────────────────────────────────────
 
@@ -166,6 +167,16 @@ export interface Correction {
   signed_by_name: string | null;
   signed_by_role: string | null;
   signed_at: string | null;
+
+  // The department's eventual CPC/TRACES response, recorded once the
+  // correction is filed — the SAME two values as the original return's
+  // work_status (PROCESSED_WITH_DEFAULT_STATUS/PROCESSED_WITHOUT_DEFAULT_STATUS,
+  // TdsFilingsManager.tsx). Settable only while status='filed' (DB CHECK,
+  // 20260805150000) — never a NEW correction status of its own.
+  processed_outcome: string | null;
+  processed_by: string | null;
+  processed_by_name: string | null;
+  processed_at: string | null;
 }
 
 export interface CorrectionChallan {
@@ -515,6 +526,42 @@ export async function markCorrectionFiled(
       actionType: "CORRECTION_FILED",
       detail: `Marked filed by ${actor.name || "—"}${opts?.reference ? ` · ref ${opts.reference}` : ""}`,
       oldValue: c.status, newValue: "filed", actor,
+    });
+  }
+  return error?.message ?? null;
+}
+
+/** The two outcomes a reviewer can record — same literal values as the
+ *  original return's work_status (TdsFilingsManager.tsx), and the DB CHECK
+ *  constraint (20260805150000) accepts nothing else. */
+export const CORRECTION_PROCESSED_OUTCOMES = [PROCESSED_WITH_DEFAULT_STATUS, PROCESSED_WITHOUT_DEFAULT_STATUS] as const;
+
+/**
+ * filed -> filed, with the department's eventual CPC/TRACES response
+ * recorded alongside — NOT a new correction status (status stays 'filed'
+ * throughout; see 20260805150000's own doc on why this is a carved-out
+ * exception to the otherwise-permanent read-only lock, not a new stage).
+ * Settable and resettable any number of times, same as correcting a typo —
+ * whoever can file the correction can also record or revise this.
+ */
+export async function updateCorrectionProcessedOutcome(
+  c: Correction, outcome: typeof CORRECTION_PROCESSED_OUTCOMES[number], actor: Actor,
+) {
+  if (c.status !== "filed") return "This correction has not been filed yet.";
+  if (!actor.id) return "You must be signed in to record this.";
+  const now = new Date().toISOString();
+  const { error } = await supabase.from("tds_corrections" as any)
+    .update({
+      processed_outcome: outcome, processed_by: actor.id, processed_by_name: actor.name,
+      processed_at: now, updated_at: now,
+    })
+    .eq("id", c.id);
+  if (!error) {
+    await logCorrectionAction({
+      correctionId: c.id, firmId: c.firm_id, clientId: c.client_id,
+      actionType: "CORRECTION_PROCESSED_OUTCOME_SET",
+      detail: `Marked ${outcome} by ${actor.name || "—"}`,
+      oldValue: c.processed_outcome, newValue: outcome, actor,
     });
   }
   return error?.message ?? null;
