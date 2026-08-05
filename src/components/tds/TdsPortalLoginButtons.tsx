@@ -9,11 +9,15 @@
  * genuinely separate artifact from this web app, installed once per person
  * via Chrome's Developer Mode "Load unpacked", not deployed alongside it.
  *
- * Firm instruction: fill the login ID and password automatically, but the
- * CAPTCHA/OTP step and the final Sign In click stay manual — the extension
- * never touches those, so it never attempts to defeat the portal's own
- * anti-bot gate, only removes the "look up and retype the login" toil in
- * front of it. ITD only for now (TRACES's own multi-step flow hasn't been
+ * Firm instruction (widened 2026-08-06, after the login-ID/password-only
+ * version was confirmed working): fill the login ID and password, confirm
+ * the Secure Access Message, and submit — stopping only if a CAPTCHA/OTP
+ * screen appears next. The Secure Access Message checkbox is a real
+ * anti-phishing control (confirms the user is on the genuine portal, not a
+ * spoofed clone) that auto-checking defeats the point of — flagged
+ * explicitly before widening scope to this; see content-itd.js's own header
+ * doc for the full reasoning, kept there since that's the file that actually
+ * does it. ITD only for now (TRACES's own multi-step flow hasn't been
  * mapped yet); TRACES still gets the copy-to-clipboard fallback below.
  *
  * This component detects the extension (content-caflow.js stamps a marker
@@ -88,7 +92,7 @@ function PortalLoginMenu({
       <DropdownMenuContent align="start" className="w-64">
         <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">
           {canAutofill
-            ? "Fills your login ID and password automatically — you still enter the CAPTCHA/OTP and sign in yourself."
+            ? "Fills and submits your login automatically — you only step in if a CAPTCHA/OTP screen appears."
             : hasAnyCredential
               ? "You still complete the login yourself — this only opens the portal and copies what's saved."
               : "No login saved for this client yet — add one in Edit Client → Services → TDS Compliance."}

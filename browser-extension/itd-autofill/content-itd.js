@@ -1,12 +1,21 @@
 /**
  * CAFlow — ITD Portal Autofill: content script for eportal.incometax.gov.in.
  *
- * Scope, deliberately: fills the Login ID (step 1), clicks Continue, then
- * fills Password on step 2 — and STOPS. It never touches a CAPTCHA or OTP
- * field, and never clicks the final Login/Submit button. That's the one
- * manual step CAFlow asked to keep manual, and it also means this script
- * never attempts to defeat the portal's own anti-bot gate — only removes
- * the "look up and retype the login ID and password" toil in front of it.
+ * Scope (widened 2026-08-06 — explicit, informed firm decision, see below):
+ * fills the Login ID (step 1) → Continue → fills Password → ticks the
+ * "Secure Access Message" confirmation checkbox → clicks the second
+ * Continue, which SUBMITS THE PASSWORD. It stops there. It never touches a
+ * CAPTCHA or OTP field if one appears next.
+ *
+ * The Secure Access Message checkbox is a real anti-phishing control — at
+ * registration the user picks a personal message, and this screen asks them
+ * to visually confirm it's theirs before continuing, proving they're on the
+ * genuine portal and not a spoofed clone that wouldn't know the message.
+ * Auto-checking it without a human ever reading that message defeats its
+ * purpose. This was flagged explicitly and the automation was requested
+ * anyway — kept as its own clearly-labelled step (not folded silently into
+ * the password fill) so that tradeoff stays visible in the code, not just
+ * in a chat log.
  *
  * The value filled here is exactly whatever CAflow has saved as the "ITD
  * (e-Filing) Login ID" for this client (Edit Client → Services → Portal
@@ -22,6 +31,12 @@
  * timeout fallback: if a selector doesn't match (the portal changed its
  * markup, or an account uses a different login path), this shows a banner
  * saying exactly what it could and couldn't do, instead of failing silently.
+ *
+ * Selectors verified directly against the live portal on 2026-08-06: the
+ * Login ID field, the first Continue button, the password field
+ * (#loginPasswordField), the confirmation checkbox (the page's only
+ * input[type="checkbox"]), and the second Continue button (disabled until
+ * BOTH the password is non-empty AND the checkbox is checked).
  */
 
 (async () => {
@@ -75,7 +90,32 @@
     return;
   }
   setNativeValue(passwordInput, creds.password || "");
-  showBanner("CAFlow: login ID and password filled — enter the CAPTCHA/OTP and sign in.", "success");
+
+  // Secure Access Message checkbox — see this file's own header doc for why
+  // auto-checking it is a deliberate, explicitly-requested tradeoff, not an
+  // oversight. .click() (not setting .checked directly) so Angular's own
+  // change detection actually registers it, same reasoning as setNativeValue.
+  const confirmCheckbox = await waitFor(() => document.querySelector('input[type="checkbox"]'), 5_000);
+  if (!confirmCheckbox) {
+    showBanner("CAFlow: password filled, but couldn't find the confirmation checkbox — please finish signing in yourself.", "info");
+    return;
+  }
+  if (!confirmCheckbox.checked) confirmCheckbox.click();
+
+  // The second Continue (submits the password) stays disabled until BOTH
+  // the password is non-empty and the checkbox is checked — wait for that
+  // rather than clicking immediately, since Angular's validation runs on
+  // its own tick after the events above.
+  const submitBtn = await waitFor(() => {
+    const btn = findButtonByText(/continue/i);
+    return btn && !btn.disabled ? btn : null;
+  }, 5_000);
+  if (!submitBtn) {
+    showBanner("CAFlow: password and confirmation filled, but Continue never enabled — please check and click it yourself.", "info");
+    return;
+  }
+  submitBtn.click();
+  showBanner("CAFlow: login submitted — enter the CAPTCHA/OTP if one appears.", "success");
 })();
 
 /** Polls for a truthy result from `check` every 150ms until `timeoutMs`. */
