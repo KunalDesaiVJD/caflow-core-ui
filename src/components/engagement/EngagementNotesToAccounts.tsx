@@ -4,26 +4,7 @@ import { NCEClientCertificate } from "@/components/stage8/NCEClientCertificate";
 import { NCEManagementLetter } from "@/components/stage8/NCEManagementLetter";
 import { NCENotesToAccounts } from "@/components/stage7/NotesToAccounts";
 import { CorporateNTA } from "./CorporateNTA";
-
-// Exact entity_type values stored in audit_engagements that indicate non-corporate.
-// isCompanyEntity() in entityUtils.ts is the canonical test for the corporate side;
-// this list covers the NCE side explicitly so the Stage 8 tab structure can be
-// activated without importing a utility that doesn't cover all NCE variants.
-const NON_CORPORATE_TYPES: string[] = [
-  "Partnership",
-  "LLP",
-  "Proprietorship",
-  "Sole Proprietorship",
-  "HUF",
-  "Trust",
-  "AOP",
-  "BOI",
-  "Individual",
-  "Hindu Undivided Family",
-  "Limited Liability Partnership",
-  "Association of Persons",
-  "Body of Individuals",
-];
+import { isNonCorporateEntityType } from "@/lib/entityType";
 
 interface Props {
   engagement: any;
@@ -53,9 +34,12 @@ export function EngagementNotesToAccounts({ engagement, client, onUpdate, isCorp
     client?.entity_type ||
     ""
   ).trim();
-  const isNonCorporate: boolean =
-    !isCorporate ||
-    NON_CORPORATE_TYPES.some(t => t.toLowerCase() === entityType.toLowerCase());
+  // 2026-08-06 fix (LALJIBHAI VADIWALA): routed through the shared classifier
+  // (src/lib/entityType.ts) — this file's own exact-match list never
+  // recognised AuditPipeline.tsx's short-code vocabulary ("firm" in
+  // particular), silently routing Partnership engagements created via that
+  // wizard to the Corporate tab structure.
+  const isNonCorporate: boolean = !isCorporate || isNonCorporateEntityType(entityType);
 
   // ── Empty-state guard ─────────────────────────────────────────────────────
   if (!engagementId) {

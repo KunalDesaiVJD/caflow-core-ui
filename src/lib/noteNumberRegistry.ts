@@ -22,6 +22,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { signedBalance as fsSignedBalance, signedOpening as fsSignedOpening } from "@/lib/fsSignConvention";
+import { isNonCorporateEntityType } from "@/lib/entityType";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ── SECTION 1 — v1 (backward-compatible) static registry ────────────────────
@@ -398,26 +399,6 @@ export function buildDynamicRegistry(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ── SECTION 7 — v2: Non-corporate type list (exported for reuse) ─────────────
-// ═══════════════════════════════════════════════════════════════════════════════
-
-export const NON_CORPORATE_TYPES: readonly string[] = [
-  "Individual",
-  "Proprietorship",
-  "Sole Proprietorship",
-  "Partnership",
-  "LLP",
-  "Limited Liability Partnership",
-  "HUF",
-  "Hindu Undivided Family",
-  "Trust",
-  "AOP",
-  "Association of Persons",
-  "BOI",
-  "Body of Individuals",
-] as const;
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // ── SECTION 8 — v2: useDynamicNoteRegistry() React hook ─────────────────────
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -530,15 +511,12 @@ export function useDynamicNoteRegistry(
     return {};
   }, [engagement?.coa_mapping]);
 
+  // 2026-08-06 fix (LALJIBHAI VADIWALA): routed through the shared classifier
+  // (src/lib/entityType.ts) — see PipelineFinancialStatements.tsx's isNonCorporate
+  // for the full explanation of the two-vocabulary entity_type bug this fixes.
   const isNonCorporate = useMemo<boolean>(() => {
-    const type = (
-      engagement?.entity_type ||
-      engagement?.clients?.entity_type ||
-      ""
-    ).trim();
-    return NON_CORPORATE_TYPES.some(
-      t => t.toLowerCase() === type.toLowerCase(),
-    );
+    const type = engagement?.entity_type || engagement?.clients?.entity_type || "";
+    return isNonCorporateEntityType(type);
   }, [engagement]);
 
   // Derive synthetic FS-code-keyed amounts from stage5_notes for the

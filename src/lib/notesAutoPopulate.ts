@@ -20,6 +20,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { cleanTallyName } from "@/lib/tallyText";
+import { isNonCorporateEntityType } from "@/lib/entityType";
 // 2026-06-05 Phase 6 — every TB sign-derivation in the corporate
 // notes-auto-populate path now routes through the shared module so the
 // corporate FS uses the SAME signing convention as NCE (and Stage 3 TB
@@ -347,22 +348,18 @@ export async function getCOAMapping(engagementId: string): Promise<COAMapping> {
   return out;
 }
 
-// Exact entity_type strings that classify an engagement as Non-Corporate (NCE).
-// MUST stay in sync with NON_CORPORATE_TYPES in PipelineFinancialStatements.tsx.
-const NON_CORPORATE_ENTITY_TYPES = new Set(
-  [
-    "Individual", "Proprietorship", "Sole Proprietorship", "Partnership",
-    "LLP", "Limited Liability Partnership", "HUF", "Hindu Undivided Family",
-    "Trust", "AOP", "Association of Persons", "BOI", "Body of Individuals",
-  ].map(s => s.toLowerCase()),
-);
-
 /**
  * Resolve whether an engagement is a Non-Corporate Entity (NCE). Reads the
  * engagement's entity_type, falling back to the client's entity_type. This is
  * the SAME source of truth Stage 6 / Stage 7 use to pick the NCE vs corporate
  * FS tree, so downstream views (e.g. the Ledger Explorer) classify ledger
  * codes against the right schema instead of always assuming corporate.
+ *
+ * 2026-08-06 fix (LALJIBHAI VADIWALA): routed through the single shared
+ * classifier (src/lib/entityType.ts) instead of this file's own exact-match
+ * set, which — like the sibling copy in PipelineFinancialStatements.tsx —
+ * never recognised AuditPipeline.tsx's short-code vocabulary ("firm" for
+ * Partnership in particular).
  */
 export async function getEngagementIsNonCorporate(engagementId: string): Promise<boolean> {
   const { data } = await supabase
@@ -370,10 +367,8 @@ export async function getEngagementIsNonCorporate(engagementId: string): Promise
     .select("entity_type, clients(entity_type)")
     .eq("id", engagementId)
     .maybeSingle();
-  const et = String(
-    (data as any)?.entity_type || (data as any)?.clients?.entity_type || "",
-  ).trim().toLowerCase();
-  return NON_CORPORATE_ENTITY_TYPES.has(et);
+  const et = (data as any)?.entity_type || (data as any)?.clients?.entity_type || "";
+  return isNonCorporateEntityType(et);
 }
 
 /**
