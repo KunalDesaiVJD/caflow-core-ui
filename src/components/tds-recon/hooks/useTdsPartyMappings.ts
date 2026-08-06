@@ -52,7 +52,7 @@ interface UseTdsPartyMappingsResult {
   refresh: () => void;
   updateStatus: (id: string, status: MappingStatus, note?: string) => Promise<void>;
   updateMapping: (id: string, patch: Partial<Pick<TbPartyMapping,
-    "tds_deductee_name" | "tds_section_code" | "notes"
+    "tds_deductee_name" | "tds_section_code" | "notes" | "mapping_status" | "tb_ledger_name" | "tb_parent_group"
   >>) => Promise<void>;
 }
 
@@ -195,7 +195,9 @@ export function useTdsPartyMappings(
 
   const updateMapping = useCallback(async (
     id: string,
-    patch: Partial<Pick<TbPartyMapping, "tds_deductee_name" | "tds_section_code" | "notes" | "mapping_status">>,
+    patch: Partial<Pick<TbPartyMapping,
+      "tds_deductee_name" | "tds_section_code" | "notes" | "mapping_status" | "tb_ledger_name" | "tb_parent_group"
+    >>,
   ) => {
     // 2026-07-24 — Root cause of Issue 2 ("Edit / Override Mapping cannot
     // change status from Confirmed → Pending"): the earlier implementation
@@ -209,7 +211,15 @@ export function useTdsPartyMappings(
       .from("tds_tb_party_mappings")
       .update(persist)
       .eq("id", id);
-    if (err) throw new Error(err.message);
+    if (err) {
+      // A re-linked TB ledger can collide with the DB's
+      // (client, fy, tb_ledger_name, tds_deductee_name) uniqueness — surface
+      // that as an actionable message instead of the raw Postgres error.
+      if (err.code === "23505" || /duplicate key/i.test(err.message ?? "")) {
+        throw new Error("This ledger is already mapped to this deductee. Reject the duplicate row first, or choose a different ledger.");
+      }
+      throw new Error(err.message);
+    }
     setMappings(prev =>
       prev.map(m => m.id === id
         ? { ...m, ...persist }
