@@ -10,7 +10,7 @@
  * Header: live exposure KPI bar + Export TDS Report button.
  */
 import { useState, useEffect, useCallback } from "react";
-import { Link2, GitCompareArrows, AlertOctagon, Landmark, FileDown, Loader2 } from "lucide-react";
+import { Link2, GitCompareArrows, AlertOctagon, Landmark, FileDown, Loader2, Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
@@ -18,9 +18,10 @@ import { TdsPartyMappingPanel } from "./TdsPartyMappingPanel";
 import { TdsReconFlagsPanel }  from "./TdsReconFlagsPanel";
 import { TdsMissingPanel }     from "./TdsMissingPanel";
 import { TdsDemandPanel }      from "./TdsDemandPanel";
+import { TdsAiMemoryPanel }    from "./TdsAiMemoryPanel";
 import { generateTdsReport }   from "./TdsReportGenerator";
 
-type TdsTab = "mappings" | "recon" | "missing" | "demand";
+type TdsTab = "mappings" | "recon" | "missing" | "demand" | "memory";
 
 interface Props {
   clientId:      string | null | undefined;
@@ -50,6 +51,7 @@ const TABS: Array<{ id: TdsTab; label: string; icon: React.ReactNode; phase: str
   { id: "recon",    label: "Reconciliation",  icon: <GitCompareArrows size={13} />, phase: "TDS-3" },
   { id: "missing",  label: "Missing TDS",     icon: <AlertOctagon size={13} />,     phase: "TDS-4" },
   { id: "demand",   label: "Demand Analysis", icon: <Landmark size={13} />,         phase: "TDS-6" },
+  { id: "memory",   label: "AI Memory",       icon: <Brain size={13} />,            phase: "AI" },
 ];
 
 function fmtINR(n: number): string {
@@ -284,6 +286,9 @@ export function TdsReconModule({ clientId, financialYear }: Props) {
       )}
       {activeTab === "demand"   && (
         <TdsDemandPanel       clientId={clientId} financialYear={financialYear} />
+      )}
+      {activeTab === "memory"   && (
+        <TdsAiMemoryPanel     clientId={clientId} financialYear={financialYear} />
       )}
     </div>
   );
