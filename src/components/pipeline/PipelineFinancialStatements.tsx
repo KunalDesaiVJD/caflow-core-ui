@@ -2286,6 +2286,7 @@ export default function PipelineFinancialStatements({
         .from("fa_financial_statements")
         .select("*")
         .eq("engagement_id", engagementId)
+        .is("deleted_at", null)
         .order("sort_order");
       return (data || []) as any[];
     },
@@ -2315,7 +2316,8 @@ export default function PipelineFinancialStatements({
       const { data: prevFs } = await supabase
         .from("fa_financial_statements")
         .select("line_item_code, amount_cy")
-        .eq("engagement_id", (prevEng as any).id);
+        .eq("engagement_id", (prevEng as any).id)
+        .is("deleted_at", null);
       return prevFs || [];
     },
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
@@ -4987,6 +4989,33 @@ export default function PipelineFinancialStatements({
       logReconciliationDrift(engagementId, user?.id ?? null, fsReconResult).catch(() => {});
     }
   }, [driftFingerprint, engagementId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Security/integrity audit (2026-08): CLAUDE.md §8 Invariant 5 says severe
+  // drift is always logged, but corpReconResult was never logged — only the
+  // NCE path above was wired. This mirrors that same logging for corporate
+  // engagements. It is a no-op today: corpReconResult is always null while
+  // FS_CORP_EXPORT_GATE is OFF (see the memo above), so this effect never
+  // fires until that flag is flipped. NOT flipping FS_CORP_EXPORT_GATE here —
+  // per docs/fs-remediation/FLIP-RUNBOOK.md it must be flipped LAST, after
+  // FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, NCE_SIGNED_NOTE_AMOUNTS +
+  // CORP_SIGNED_NOTE_TOTALS, and NCE_RESYNC_DELETE_FIRST have each been
+  // individually flipped and parity-validated against live engagement data
+  // in the credentialed environment (§10) — this session has no live DB
+  // access to safely do that. This logging is wired now so nothing else is
+  // needed when that flip happens through the proper runbook process.
+  const corpDriftFingerprint = useMemo(() => {
+    if (!corpReconResult || corpReconResult.severeCount === 0) return "";
+    return corpReconResult.rows
+      .filter(r => r.status === "drift_severe")
+      .map(r => `${r.code}:${r.delta.cy}:${r.delta.py}`)
+      .sort()
+      .join("|");
+  }, [corpReconResult]);
+  useEffect(() => {
+    if (corpDriftFingerprint && corpReconResult && corpReconResult.severeCount > 0) {
+      logReconciliationDrift(engagementId, user?.id ?? null, corpReconResult).catch(() => {});
+    }
+  }, [corpDriftFingerprint, engagementId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
   // entities use BS-balance + severe-drift check.

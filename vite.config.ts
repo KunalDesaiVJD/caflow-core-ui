@@ -12,19 +12,11 @@ export default defineConfig(({ mode }) => ({
     hmr: {
       overlay: false,
     },
-    proxy: {
-      // Local proxy for eofficeportal API — runs in Node.js (same machine as browser)
-      // so it can reach eofficeportal.com and bypass the expired SSL cert.
-      // This avoids CORS issues and does not depend on Supabase cloud connectivity.
-      "/api/eoffice": {
-        target: "https://eofficeportal.com",
-        changeOrigin: true,
-        secure: false,          // bypass expired SSL cert
-        rewrite: () =>
-          "/Company/SmartService.asmx/FillCustomerlist" +
-          "?customerGroupid=nullksd9ow34e9w0sdmoaskjof8w0eur0wejfomasdojo9auwerwjrowejmfojaspf",
-      },
-    },
+    // The eofficeportal dev proxy (and its hardcoded access-token query string)
+    // that used to live here has been removed — the frontend now goes exclusively
+    // through the authenticated Supabase edge function `customer-sync`, which
+    // reads its token from a Supabase secret. See supabase/functions/customer-sync
+    // for the current implementation.
   },
   plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
   resolve: {

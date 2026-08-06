@@ -159,9 +159,9 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
         supabase.from("audit_notes").select("id", { count: "exact", head: true }).eq("engagement_id", engId),
         supabase.from("audit_caro_responses").select("id", { count: "exact", head: true }).eq("engagement_id", engId),
         supabase.from("audit_3cd_responses").select("id", { count: "exact", head: true }).eq("engagement_id", engId),
-        supabase.from("fa_financial_statements").select("line_item_code, section, amount_cy").eq("engagement_id", engId),
-        supabase.from("documents").select("id, filename, r2_key, category, sub_category, is_final, is_signed, signed_at").eq("engagement_id", engId).eq("sub_category", "draft").order("created_at", { ascending: false }),
-        supabase.from("documents").select("id", { count: "exact", head: true }).eq("engagement_id", engId).eq("category", "mgmt_rep_letter"),
+        supabase.from("fa_financial_statements").select("line_item_code, section, amount_cy").eq("engagement_id", engId).is("deleted_at", null),
+        supabase.from("documents").select("id, filename, r2_key, category, sub_category, is_final, is_signed, signed_at").eq("engagement_id", engId).eq("sub_category", "draft").is("deleted_at", null).order("created_at", { ascending: false }),
+        supabase.from("documents").select("id", { count: "exact", head: true }).eq("engagement_id", engId).eq("category", "mgmt_rep_letter").is("deleted_at", null),
       ]);
 
       // Findings
@@ -402,7 +402,7 @@ export function EngagementReviewSignoff({ engagement, client, partner, onUpdate 
       // Always attach latest FS workbook (derived live — no dependency on edge function)
       const { data: fsRows } = await supabase
         .from("fa_financial_statements")
-        .select("*").eq("engagement_id", engagement.id).order("sort_order");
+        .select("*").eq("engagement_id", engagement.id).is("deleted_at", null).order("sort_order");
       if (fsRows?.length) {
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(fsRows), "Financial_Statements");

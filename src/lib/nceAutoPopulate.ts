@@ -1043,7 +1043,8 @@ export async function nceAutoPopulate(
   const { data: fsRows } = await supabase
     .from("fa_financial_statements")
     .select("line_item_code, amount_cy, amount_py")
-    .eq("engagement_id", engagementId);
+    .eq("engagement_id", engagementId)
+    .is("deleted_at", null);
 
   const fsByCode: Record<string, { cy: number; py: number }> = {};
   for (const r of (fsRows ?? [])) {
@@ -1121,7 +1122,8 @@ export async function nceAutoPopulate(
         const { data: prevNoteRows } = await supabase
           .from("nce_financial_notes")
           .select("note_type, cy_data")
-          .eq("engagement_id", primaryPrev.id);
+          .eq("engagement_id", primaryPrev.id)
+          .is("deleted_at", null);
         for (const r of (prevNoteRows ?? [])) {
           const raw = (r.cy_data as Record<string, any>) ?? {};
           const nums: Record<string, number> = {};

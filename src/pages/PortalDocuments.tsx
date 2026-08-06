@@ -53,7 +53,7 @@ export default function PortalDocuments() {
   const fetchDocs = useCallback(async () => {
     if (!activeClient) return;
     setLoading(true);
-    const { data } = await supabase.from("documents").select("*").eq("client_id", activeClient.id).order("filename");
+    const { data } = await supabase.from("documents").select("*").eq("client_id", activeClient.id).is("deleted_at", null).order("filename");
     setDocuments(data || []);
     setLoading(false);
   }, [activeClient]);
@@ -124,7 +124,11 @@ export default function PortalDocuments() {
     setDeleting(doc.id);
     try {
       await supabase.storage.from("firm-assets").remove([doc.r2_key]);
-      await supabase.from("documents").delete().eq("id", doc.id);
+      // No `deleted_by` here: portal (client-facing) sessions authenticate as
+      // Supabase auth users linked via clients.user_id, not rows in the
+      // internal `users` table that deleted_by's FK points at — see
+      // PortalClientContext for the client-lookup strategy.
+      await supabase.from("documents").update({ deleted_at: new Date().toISOString() }).eq("id", doc.id);
       toast.success("Document deleted");
       fetchDocs();
     } catch (e: any) {

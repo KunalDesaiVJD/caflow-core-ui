@@ -116,6 +116,7 @@ const queryClient = new QueryClient({
 
 function PortalGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
+  const location = useLocation();
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -129,6 +130,13 @@ function PortalGuard({ children }: { children: React.ReactNode }) {
   }
   if (!user) return <Navigate to="/login" replace />;
   if (user.role !== "client") return <Navigate to="/" replace />;
+  // Force password change redirect — mirrors ProtectedRoute's staff-side gate.
+  // Previously portal-client accounts could stay on their (possibly still
+  // default/temporary) password indefinitely since only the staff router
+  // enforced this flag.
+  if (user.must_change_password && location.pathname !== "/settings/change-password") {
+    return <Navigate to="/settings/change-password" replace />;
+  }
   return <>{children}</>;
 }
 

@@ -7,6 +7,16 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+function escapeHtml(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -53,6 +63,19 @@ serve(async (req) => {
     if (!engagement) {
       return new Response(JSON.stringify({ error: "Engagement not found" }), {
         status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { data: dbUser } = await supabase
+      .from("users")
+      .select("firm_id, role")
+      .eq("id", user.id)
+      .single();
+    const isSuper = dbUser?.role === "superadmin";
+    if (!isSuper && (!dbUser?.firm_id || String(engagement.firm_id) !== String(dbUser.firm_id))) {
+      return new Response(JSON.stringify({ error: "Forbidden: engagement is not in your firm" }), {
+        status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -227,7 +250,7 @@ serve(async (req) => {
 
     const kamHtml = keyAuditMatters
       .map((k) =>
-        `<div class="kam"><h4>${k.title || "Key Audit Matter"}</h4><p>${k.description || ""}</p></div>`
+        `<div class="kam"><h4>${escapeHtml(k.title || "Key Audit Matter")}</h4><p>${escapeHtml(k.description || "")}</p></div>`
       ).join("");
 
     let comparativeHtml = "";
@@ -245,7 +268,7 @@ serve(async (req) => {
         ? Object.entries(engagement.caro_responses as Record<string, string>)
         : [];
       const caroRows = caroEntries
-        .map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`)
+        .map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(v)}</td></tr>`)
         .join("");
       caroHtml = `
         <div class="section page-break">
@@ -289,34 +312,34 @@ serve(async (req) => {
 </style></head><body>
   ${warningBanner}
   <div class="letterhead">
-    <div class="letterhead-left">${firmName}</div>
-    <div class="letterhead-right">ICAI Registration No.: ${firmICAI}<br>Chartered Accountants</div>
+    <div class="letterhead-left">${escapeHtml(firmName)}</div>
+    <div class="letterhead-right">ICAI Registration No.: ${escapeHtml(firmICAI)}<br>Chartered Accountants</div>
   </div>
 
   <h2>Independent Auditor's Report</h2>
-  <p><strong>To the ${entityLabel} of ${clientName}</strong></p>
+  <p><strong>To the ${escapeHtml(entityLabel)} of ${escapeHtml(clientName)}</strong></p>
 
   <div class="section">
     <h3>Report on the Audit of Financial Statements</h3>
     <h4>Opinion</h4>
-    <p>${reportSections.opinion_paragraph || "We have audited the accompanying financial statements..."}</p>
+    <p>${escapeHtml(reportSections.opinion_paragraph as string) || "We have audited the accompanying financial statements..."}</p>
   </div>
 
   <div class="section">
     <h4>Basis for Opinion</h4>
-    <p>${reportSections.basis_for_opinion || "We conducted our audit in accordance with Standards on Auditing..."}</p>
+    <p>${escapeHtml(reportSections.basis_for_opinion as string) || "We conducted our audit in accordance with Standards on Auditing..."}</p>
   </div>
 
   ${kamHtml ? `<div class="section"><h3>Key Audit Matters</h3>${kamHtml}</div>` : ""}
 
   <div class="section">
     <h4>Responsibilities of Management for the Financial Statements</h4>
-    <p>${reportSections.management_responsibility || ""}</p>
+    <p>${escapeHtml(reportSections.management_responsibility as string)}</p>
   </div>
 
   <div class="section">
     <h4>Auditor's Responsibilities for the Audit of the Financial Statements</h4>
-    <p>${reportSections.auditor_responsibility || ""}</p>
+    <p>${escapeHtml(reportSections.auditor_responsibility as string)}</p>
   </div>
 
   ${caroHtml}
@@ -325,15 +348,15 @@ serve(async (req) => {
   ${notesCount > 0 ? `<p><em>See accompanying Notes 1 to ${notesCount} forming part of the financial statements.</em></p>` : ""}
 
   <div class="signature">
-    <p>For <strong>${firmName}</strong><br>
+    <p>For <strong>${escapeHtml(firmName)}</strong><br>
     Chartered Accountants<br>
-    Firm Registration Number: ${firmICAI}</p>
+    Firm Registration Number: ${escapeHtml(firmICAI)}</p>
     <div class="signature-space"></div>
     <div class="signature-block">
-      <strong>${sigPartnerName}</strong><br>
+      <strong>${escapeHtml(sigPartnerName)}</strong><br>
       Partner<br>
-      Membership No.: ${sigPartnerICAI}<br>
-      Place: ${sigCity}<br>
+      Membership No.: ${escapeHtml(sigPartnerICAI)}<br>
+      Place: ${escapeHtml(sigCity)}<br>
       Date: ${today}
     </div>
   </div>
@@ -347,7 +370,8 @@ serve(async (req) => {
       .from("documents")
       .select("*", { count: "exact", head: true })
       .eq("engagement_id", engagement_id)
-      .eq("sub_category", "draft");
+      .eq("sub_category", "draft")
+      .is("deleted_at", null);
 
     const version = (existingCount || 0) + 1;
     const filename = `audit_report_v${version}.html`;

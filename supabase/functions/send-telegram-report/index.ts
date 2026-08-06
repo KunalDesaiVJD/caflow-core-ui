@@ -39,6 +39,20 @@ Deno.serve(async (req: Request) => {
       return json({ error: "TELEGRAM_BOT_TOKEN not configured" }, 500);
     }
 
+    // ── Auth + firm-ownership gate (IDOR fix) ──
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.replace("Bearer ", "").trim();
+    if (!token) return json({ error: "Unauthorized" }, 401);
+
+    const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
+    if (authErr || !user) return json({ error: "Unauthorized" }, 401);
+
+    const { data: dbUser } = await supabase.from("users").select("firm_id, role").eq("id", user.id).single();
+    const isSuper = dbUser?.role === "superadmin";
+    if (!isSuper && (!dbUser?.firm_id || String(firm_id) !== String(dbUser.firm_id))) {
+      return json({ error: "Forbidden: firm_id does not match caller's firm" }, 403);
+    }
+
     // Look up all Telegram users linked to this firm
     const { data: tgUsers, error: dbErr } = await supabase
       .from("telegram_authorized_users")

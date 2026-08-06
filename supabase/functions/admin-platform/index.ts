@@ -92,6 +92,27 @@ Deno.serve(async (req) => {
       return new Response(JSON.stringify(firmsWithCounts), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    // DELETE FIRM — PRE-DELETE IMPACT SUMMARY
+    // Used by the typed-confirmation delete dialog in AdminFirms.tsx to show the
+    // user exactly how much data a firm delete will cascade through before they
+    // are allowed to type the firm name and confirm. Read-only, no mutation.
+    if (req.method === "GET" && action === "delete-firm-preview") {
+      const firmId = url.searchParams.get("id");
+      if (!firmId) {
+        return new Response(JSON.stringify({ error: "id required" }), { status: 400, headers: corsHeaders });
+      }
+      const [usersCount, clientsCount, engagementsCount] = await Promise.all([
+        adminClient.from("users").select("id", { count: "exact", head: true }).eq("firm_id", firmId),
+        adminClient.from("clients").select("id", { count: "exact", head: true }).eq("firm_id", firmId),
+        adminClient.from("audit_engagements").select("id", { count: "exact", head: true }).eq("firm_id", firmId),
+      ]);
+      return new Response(JSON.stringify({
+        users_count: usersCount.count || 0,
+        clients_count: clientsCount.count || 0,
+        engagements_count: engagementsCount.count || 0,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     // ADD FIRM
     if (req.method === "POST" && action === "add-firm") {
       const body = await req.json();

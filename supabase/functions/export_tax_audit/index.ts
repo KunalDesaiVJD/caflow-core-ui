@@ -677,9 +677,20 @@ serve(async (req) => {
     const client = (eng as any).clients ?? {};
     const fy     = (eng as any).financial_year ?? "";
 
+    // ── Firm-ownership gate (IDOR fix) — service-role client bypasses RLS,
+    // so we must verify the caller's own firm owns this engagement. ──────────
+    const { data: dbUser } = await supabase.from("users").select("firm_id, role").eq("id", user.id).single();
+    const isSuper = dbUser?.role === "superadmin";
+    if (!isSuper && (!dbUser?.firm_id || String((eng as any).firm_id) !== String(dbUser.firm_id))) {
+      return new Response(JSON.stringify({ error: "Forbidden: engagement is not in your firm" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     console.log("[export_tax_audit] engagement_id:", engagement_id, "form_type:", form_type);
     console.log("[export_tax_audit] financial_year:", fy, "client_id:", (eng as any).client_id);
-    console.log("[export_tax_audit] client keys:", Object.keys(client), "name:", client.name, "pan:", client.pan);
+    console.log("[export_tax_audit] client keys:", Object.keys(client), "name:", client.name);
 
     // ── Load audit_firm ───────────────────────────────────────────────────────
     let firm: Record<string, any> = {};

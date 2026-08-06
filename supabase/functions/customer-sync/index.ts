@@ -4,9 +4,19 @@
  * Server-side proxy for the eofficeportal FillCustomerlist API.
  * Solves browser CORS + expired SSL cert issues.
  *
- * SSL bypass strategy:
- *   Primary  — node:https with rejectUnauthorized:false  (same as sync_import.mjs — proven to work)
- *   Fallback — standard Deno fetch (may fail if cert is truly expired)
+ * SECURITY (see enterprise audit, 2026-08): this function used to (a) run with
+ * no caller authentication at all, (b) hardcode the eofficeportal access token
+ * in source, and (c) unconditionally disable TLS certificate verification with
+ * an HTTP fallback. All three are fixed below:
+ *   - Requires a valid Supabase Bearer token (any authenticated CAFlow user —
+ *     this proxies a shared external customer list, not per-firm data).
+ *   - The `customerGroupid` token is now read from the EOFFICE_CUSTOMER_GROUP_ID
+ *     secret (`npx supabase secrets set EOFFICE_CUSTOMER_GROUP_ID=<token>`),
+ *     never hardcoded. Treat the OLD hardcoded value as compromised.
+ *   - Standard, fully-verified TLS is tried FIRST. The insecure bypass tiers
+ *     only run if EOFFICE_ALLOW_INSECURE_TLS=true is explicitly set — they are
+ *     OFF by default. If eofficeportal.com's certificate is genuinely expired,
+ *     fix/renew it (or get it re-issued) rather than leaving the bypass on.
  *
  * Supabase Edge Functions support Node.js built-in modules via the `node:` specifier.
  */
@@ -16,6 +26,7 @@ import { request as nodeRequest, Agent } from "node:https";
 // @ts-ignore
 import { request as nodeHttpRequest } from "node:http";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin":  "*",
@@ -25,13 +36,18 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
-const API_PATH =
-  "/Company/SmartService.asmx/FillCustomerlist" +
-  "?customerGroupid=nullksd9ow34e9w0sdmoaskjof8w0eur0wejfomasdojo9auwerwjrowejmfojaspf";
+const CUSTOMER_GROUP_ID = Deno.env.get("EOFFICE_CUSTOMER_GROUP_ID");
+const ALLOW_INSECURE_TLS = Deno.env.get("EOFFICE_ALLOW_INSECURE_TLS") === "true";
 
 const API_HOST = "eofficeportal.com";
-const API_URL_HTTPS = "https://" + API_HOST + API_PATH;
-const API_URL_HTTP  = "http://"  + API_HOST + API_PATH;
+function apiPath(): string {
+  // "null" prefix preserved from the original working query string — appears
+  // to be how eofficeportal's ASMX endpoint expects a null-group placeholder
+  // combined with the token, based on the value's original form.
+  return "/Company/SmartService.asmx/FillCustomerlist?customerGroupid=null" + (CUSTOMER_GROUP_ID ?? "");
+}
+const API_URL_HTTPS = () => "https://" + API_HOST + apiPath();
+const API_URL_HTTP  = () => "http://"  + API_HOST + apiPath();
 
 // ─── XML → JSON parser ────────────────────────────────────────────────────────
 
@@ -111,10 +127,48 @@ function fetchNodeHttps(url: string, useHttp = false): Promise<string> {
 async function fetchUpstream(): Promise<string> {
   const errors: string[] = [];
 
-  // ── Tier 1: node:https with rejectUnauthorized:false (proven approach) ────
+  // ── Tier 1 (default, always tried first): standard, fully-verified TLS ────
+  try {
+    console.log("[Sync] Trying standard verified fetch…");
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    try {
+      const res = await fetch(API_URL_HTTPS(), { signal: controller.signal });
+      if (res.ok) {
+        const text = await res.text();
+        if (text.trim()) {
+          console.log("[Sync] Standard fetch succeeded, length:", text.length);
+          return text;
+        }
+        errors.push("Standard fetch: empty response");
+      } else {
+        errors.push(`Standard fetch: status ${res.status}`);
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    errors.push(`Standard fetch: ${msg}`);
+    console.warn("[Sync] Standard fetch failed:", msg);
+  }
+
+  if (!ALLOW_INSECURE_TLS) {
+    throw new Error(
+      `Verified TLS fetch to eofficeportal.com failed and EOFFICE_ALLOW_INSECURE_TLS is not set ` +
+      `(insecure fallback is intentionally disabled by default). If the certificate is genuinely ` +
+      `expired/misconfigured, fix it upstream or set EOFFICE_ALLOW_INSECURE_TLS=true as a deliberate, ` +
+      `understood risk. Errors: ${errors.join("; ")}`
+    );
+  }
+
+  console.warn("[Sync] EOFFICE_ALLOW_INSECURE_TLS=true — falling back to TLS-bypass tiers. " +
+    "This accepts MITM risk on client PII (PAN/TAN/GST/Aadhaar) in transit.");
+
+  // ── Tier 2: node:https with rejectUnauthorized:false (opt-in only) ────────
   try {
     console.log("[Sync] Trying node:https SSL bypass (HTTPS)…");
-    const text = await fetchNodeHttps(API_URL_HTTPS, false);
+    const text = await fetchNodeHttps(API_URL_HTTPS(), false);
     if (text.trim()) {
       console.log("[Sync] node:https HTTPS succeeded, length:", text.length);
       return text;
@@ -126,22 +180,7 @@ async function fetchUpstream(): Promise<string> {
     console.warn("[Sync] node:https HTTPS failed:", msg);
   }
 
-  // ── Tier 2: node:http plain HTTP (no SSL at all) ──────────────────────────
-  try {
-    console.log("[Sync] Trying node:http (plain HTTP)…");
-    const text = await fetchNodeHttps(API_URL_HTTP, true);
-    if (text.trim()) {
-      console.log("[Sync] node:http succeeded, length:", text.length);
-      return text;
-    }
-    errors.push("node:http: empty response");
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    errors.push(`node:http: ${msg}`);
-    console.warn("[Sync] node:http failed:", msg);
-  }
-
-  // ── Tier 3: Deno createHttpClient SSL bypass ──────────────────────────────
+  // ── Tier 3: Deno createHttpClient SSL bypass (opt-in only) ────────────────
   try {
     console.log("[Sync] Trying Deno createHttpClient SSL bypass…");
     // deno-lint-ignore no-explicit-any
@@ -151,7 +190,7 @@ async function fetchUpstream(): Promise<string> {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 30_000);
       try {
-        const res = await fetch(API_URL_HTTPS, { signal: controller.signal, client } as RequestInit);
+        const res = await fetch(API_URL_HTTPS(), { signal: controller.signal, client } as RequestInit);
         if (res.ok) {
           const text = await res.text();
           if (text.trim()) {
@@ -174,30 +213,19 @@ async function fetchUpstream(): Promise<string> {
     console.warn("[Sync] Deno SSL bypass failed:", msg);
   }
 
-  // ── Tier 4: Standard Deno fetch (last resort) ─────────────────────────────
+  // ── Tier 4: plain HTTP, no TLS at all (opt-in only, last resort) ──────────
   try {
-    console.log("[Sync] Trying standard Deno fetch…");
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 30_000);
-    try {
-      const res = await fetch(API_URL_HTTPS, { signal: controller.signal });
-      if (res.ok) {
-        const text = await res.text();
-        if (text.trim()) {
-          console.log("[Sync] Standard fetch succeeded, length:", text.length);
-          return text;
-        }
-        errors.push("Standard fetch: empty response");
-      } else {
-        errors.push(`Standard fetch: status ${res.status}`);
-      }
-    } finally {
-      clearTimeout(timer);
+    console.log("[Sync] Trying node:http (plain HTTP)…");
+    const text = await fetchNodeHttps(API_URL_HTTP(), true);
+    if (text.trim()) {
+      console.log("[Sync] node:http succeeded, length:", text.length);
+      return text;
     }
+    errors.push("node:http: empty response");
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
-    errors.push(`Standard fetch: ${msg}`);
-    console.warn("[Sync] Standard fetch failed:", msg);
+    errors.push(`node:http: ${msg}`);
+    console.warn("[Sync] node:http failed:", msg);
   }
 
   throw new Error(`All fetch attempts failed:\n${errors.join("\n")}`);
@@ -211,6 +239,36 @@ serve(async (req: Request) => {
   }
 
   try {
+    // Require any authenticated CAFlow user (this proxies a shared external
+    // customer feed, not per-firm data — but it must not be a fully open,
+    // unauthenticated internet-facing endpoint, which it was before this fix).
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.replace("Bearer ", "").trim();
+    if (!token) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const authClient = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    );
+    const { data: { user }, error: authErr } = await authClient.auth.getUser(token);
+    if (authErr || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!CUSTOMER_GROUP_ID) {
+      return new Response(
+        JSON.stringify({ error: "EOFFICE_CUSTOMER_GROUP_ID secret is not configured. Set it via: npx supabase secrets set EOFFICE_CUSTOMER_GROUP_ID=<token>" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
     const rawText = await fetchUpstream();
 
     let records: unknown[];

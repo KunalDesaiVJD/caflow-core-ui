@@ -25,7 +25,17 @@ if (!SERVICE_KEY) {
   console.error('[Sync] SUPABASE_SERVICE_ROLE_KEY environment variable is not set. Aborting.');
   process.exit(1);
 }
-const API_URL      = 'https://eofficeportal.com/Company/SmartService.asmx/FillCustomerlist?customerGroupid=nullksd9ow34e9w0sdmoaskjof8w0eur0wejfomasdojo9auwerwjrowejmfojaspf';
+// SECURITY: this used to hardcode the eofficeportal access token in plain text.
+// It's now read from EOFFICE_CUSTOMER_GROUP_ID — the same secret the
+// `customer-sync` edge function uses (npx supabase secrets set
+// EOFFICE_CUSTOMER_GROUP_ID=<token>). Treat the old hardcoded value as
+// compromised the same way as the service_role key above.
+const EOFFICE_TOKEN = process.env.EOFFICE_CUSTOMER_GROUP_ID;
+if (!EOFFICE_TOKEN) {
+  console.error('[Sync] EOFFICE_CUSTOMER_GROUP_ID environment variable is not set. Aborting.');
+  process.exit(1);
+}
+const API_URL = `https://eofficeportal.com/Company/SmartService.asmx/FillCustomerlist?customerGroupid=null${EOFFICE_TOKEN}`;
 
 const ENTITY_MAP = {
   'INDIVIDUAL': 'Individual', 'FIRM': 'Partnership', 'LLP': 'LLP',

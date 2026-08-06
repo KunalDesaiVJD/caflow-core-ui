@@ -107,7 +107,7 @@ export default function Documents() {
 
   async function fetchDocuments() {
     setLoading(true);
-    let query = supabase.from("documents").select("*").order("filename");
+    let query = supabase.from("documents").select("*").is("deleted_at", null).order("filename");
     if (selectedClient !== "all") query = query.eq("client_id", selectedClient);
     if (selectedFolder !== "all") {
       // Handle audit sub-folders
@@ -198,7 +198,7 @@ export default function Documents() {
     if (!deleteDoc) return;
     setDeleting(true);
     try {
-      const { error } = await supabase.from("documents").delete().eq("id", deleteDoc.id);
+      const { error } = await supabase.from("documents").update({ deleted_at: new Date().toISOString(), deleted_by: user?.id }).eq("id", deleteDoc.id);
       if (error) throw error;
       toast({ title: "Document deleted" });
       setDeleteDoc(null);

@@ -23,6 +23,21 @@ export function downloadBlob(blob: Blob, filename: string) {
 const stamp = () => new Date().toISOString().slice(0, 10);
 export const safeName = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "ai-auditor";
 
+/**
+ * Neutralize CSV formula injection ("CSV injection" / "Excel macro injection").
+ * Excel, Google Sheets and LibreOffice treat any cell beginning with =, +, -, @,
+ * a tab or a carriage return as a formula and auto-execute it on open. Since our
+ * CSV cells are sourced from AI Auditor answers grounded in ledger narrations /
+ * vendor names (untrusted-ish text), prefix such values with a leading apostrophe
+ * — the standard convention that forces spreadsheet apps to treat them as literal
+ * text instead of a formula.
+ */
+export function neutralizeCsvFormula(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  if (/^[=+\-@\t\r]/.test(value)) return `'${value}`;
+  return value;
+}
+
 /** Markdown (.md) — the raw answer, unchanged. */
 export function exportMarkdown(md: string, title: string) {
   downloadBlob(new Blob([md], { type: "text/markdown;charset=utf-8" }), `${safeName(title)}-${stamp()}.md`);
@@ -39,8 +54,15 @@ export function exportCsv(md: string, title: string) {
   const blocks = parseMarkdownBlocks(md);
   const t = blocks.find((b) => b.type === "table") as MdTable | undefined;
   const csv = t
-    ? Papa.unparse({ fields: t.headers.map(stripInline), data: t.rows.map((r) => r.map(stripInline)) })
-    : Papa.unparse(blocks.filter((b) => b.type !== "table").map((b) => ({ content: blockToText(b) })));
+    ? Papa.unparse({
+        fields: t.headers.map((h) => neutralizeCsvFormula(stripInline(h)) as string),
+        data: t.rows.map((r) => r.map((c) => neutralizeCsvFormula(stripInline(c)))),
+      })
+    : Papa.unparse(
+        blocks
+          .filter((b) => b.type !== "table")
+          .map((b) => ({ content: neutralizeCsvFormula(blockToText(b)) })),
+      );
   downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), `${safeName(title)}-${stamp()}.csv`);
 }
 

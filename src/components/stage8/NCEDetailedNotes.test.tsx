@@ -34,6 +34,7 @@ function makeChain(dataIfSingle: any, dataIfArray: any) {
   const chain: any = {};
   chain.select = () => chain;
   chain.eq = () => chain;
+  chain.is = () => chain;
   chain.order = () => chain;
   chain.update = () => chain;
   chain.insert = () => Promise.resolve({ data: null, error: null });

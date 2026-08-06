@@ -622,6 +622,79 @@ serve(async (req) => {
       financialYear: financialYr,
     } = body;
 
+    // ── Auth: require a valid Bearer token (was completely unauthenticated) ──
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.replace("Bearer ", "").trim();
+    if (!token) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
+    if (authErr || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // ── Firm-ownership gate (IDOR fix) ──
+    // The service-role client bypasses RLS, so we must verify the caller's own
+    // firm actually owns the engagement/client/firm this request targets — do
+    // not just trust a client-supplied firmId/clientId/engagementId at face value.
+    const { data: dbUser } = await supabase.from("users").select("firm_id, role").eq("id", user.id).single();
+    const isSuper = dbUser?.role === "superadmin";
+    if (!isSuper) {
+      let targetFirmId: string | null = null;
+
+      if (engId) {
+        const { data: engRow } = await supabase
+          .from("audit_engagements")
+          .select("firm_id, client_id")
+          .eq("id", engId)
+          .single();
+        if (!engRow) {
+          return new Response(JSON.stringify({ error: "Forbidden: engagement not found" }), {
+            status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        targetFirmId = engRow.firm_id;
+        // Cross-check the (possibly client-supplied) clientId against the
+        // engagement's own client, rather than trusting it independently.
+        const resolvedClientId = clientId ?? engRow.client_id;
+        if (resolvedClientId) {
+          const { data: clientRow } = await supabase.from("clients").select("firm_id").eq("id", resolvedClientId).single();
+          if (!clientRow || clientRow.firm_id !== engRow.firm_id) {
+            return new Response(JSON.stringify({ error: "Forbidden: client/engagement firm mismatch" }), {
+              status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+        }
+      } else if (clientId) {
+        const { data: clientRow } = await supabase.from("clients").select("firm_id").eq("id", clientId).single();
+        if (!clientRow) {
+          return new Response(JSON.stringify({ error: "Forbidden: client not found" }), {
+            status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        targetFirmId = clientRow.firm_id;
+      } else if (firmId) {
+        targetFirmId = firmId;
+      }
+
+      if (targetFirmId && (!dbUser?.firm_id || targetFirmId !== dbUser.firm_id)) {
+        return new Response(JSON.stringify({ error: "Forbidden: engagement/client is not in your firm" }), {
+          status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      // A directly-supplied firmId must also agree with the caller's own firm,
+      // even when an engagement/client check above already passed.
+      if (firmId && dbUser?.firm_id && firmId !== dbUser.firm_id) {
+        return new Response(JSON.stringify({ error: "Forbidden: firmId does not match your firm" }), {
+          status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     // Handle chunked uploads: store chunks in memory, process on last chunk
     // For simplicity in edge functions (stateless), we only support single-shot uploads
     // The client should reassemble chunks before sending, or send small files directly

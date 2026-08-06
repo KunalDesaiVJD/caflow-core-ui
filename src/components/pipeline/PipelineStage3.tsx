@@ -532,6 +532,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
         .from("fa_financial_statements")
         .select("*")
         .eq("engagement_id", engagementId)
+        .is("deleted_at", null)
         .order("sort_order");
       return (data || []) as any[];
     },
@@ -560,7 +561,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       const { data: prevFs } = await supabase
         .from("fa_financial_statements")
         .select("line_item_code, amount_cy")
-        .eq("engagement_id", (prevEng as any).id);
+        .eq("engagement_id", (prevEng as any).id)
+        .is("deleted_at", null);
       return prevFs || [];
     },
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
@@ -1156,8 +1158,8 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       // AND nce_financial_notes (auto + manual custom rows) for this engagement.
       // This is intentional: "Reset & Re-map" is a hard reset, not a soft re-sync.
       await Promise.all([
-        supabase.from("fa_financial_statements").delete().eq("engagement_id", engagementId),
-        supabase.from("nce_financial_notes").delete().eq("engagement_id", engagementId),
+        supabase.from("fa_financial_statements").update({ deleted_at: new Date().toISOString(), deleted_by: user?.id }).eq("engagement_id", engagementId),
+        supabase.from("nce_financial_notes").update({ deleted_at: new Date().toISOString(), deleted_by: user?.id }).eq("engagement_id", engagementId),
       ]);
       // Invalidate FS caches so Stage 7 reflects the cleared state immediately.
       queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import DOMPurify from "dompurify";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -304,7 +305,11 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
                                 <p className="font-medium text-muted-foreground text-xs uppercase mb-1">Message Body:</p>
                                 <div
                                   className="rounded border bg-white dark:bg-background p-3 text-xs max-h-48 overflow-auto prose prose-sm max-w-none"
-                                  dangerouslySetInnerHTML={{ __html: log.content.body }}
+                                  // log.content.body can originate from an external, low-trust
+                                  // client-portal user (e.g. audit query replies) that gets
+                                  // persisted verbatim into notification_log — sanitize before
+                                  // rendering to prevent stored XSS in this staff-facing view.
+                                  dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(log.content.body) }}
                                 />
                               </div>
                             )}
