@@ -2189,6 +2189,10 @@ export default function PipelineFinancialStatements({
 
   // ─── NCE note navigation state ────────────────────────────────────────────
   const [nceNavNote, setNceNavNote] = useState<number | null>(null);
+  // Bumped on every "Note No." click so re-clicking the SAME note re-triggers
+  // the force-open + scroll inside NCEDetailedNotes even though nceNavNote's
+  // value didn't change (see the 2026-08-06 fix note at the click handlers).
+  const [nceNoteNavToken, setNceNoteNavToken] = useState(0);
 
   // ─── Corporate note navigation state ─────────────────────────────────────
   const [corpNavNote, setCorpNavNote] = useState<{
@@ -8534,7 +8538,7 @@ export default function PipelineFinancialStatements({
               variant={nceIsLocked ? "default" : "outline"}
               size="sm"
               className={cn("gap-1", nceIsLocked && "bg-amber-500 hover:bg-amber-600 border-amber-500")}
-              title={nceIsLocked ? "Preview is locked — export uses current expand/collapse state. Click to unlock." : "Lock current expand/collapse state for export"}
+              title={nceIsLocked ? "Export preview uses this locked expand/collapse layout. Editing here is unaffected. Click to unlock." : "Lock current expand/collapse state for the export preview (does not affect editing)"}
               onClick={() => {
                 const next = !nceIsLocked;
                 setNceIsLocked(next);
@@ -9329,9 +9333,19 @@ export default function PipelineFinancialStatements({
                   }}
                   onNavigateToNote={(noteNo) => {
                     setActiveTab("notes");
+                    // 2026-08-06 fix: this used to null nceNavNote out again after
+                    // 1000ms "so re-clicking the same note works" — but the actual
+                    // force-open + scroll happens inside NCEDetailedNotes, gated on
+                    // its OWN loading state (which can take several seconds on a
+                    // large TB, e.g. the self-heal rebuild). Nulling this on a
+                    // fixed timer raced that load and could clear the target
+                    // before NCEDetailedNotes ever got to act on it, silently
+                    // defeating the navigation. Leave it set; clicking a
+                    // DIFFERENT note still updates it immediately, and
+                    // NCEDetailedNotes bumps nceNoteNavToken on every click via
+                    // onNoteNavConsumed so re-clicking the SAME note also re-fires.
                     setNceNavNote(noteNo);
-                    // Reset after a delay so re-clicking the same note works
-                    setTimeout(() => setNceNavNote(null), 1000);
+                    setNceNoteNavToken(t => t + 1);
                   }}
                 />
                 {nceSignatureBlock}
@@ -9512,9 +9526,19 @@ export default function PipelineFinancialStatements({
                   }}
                   onNavigateToNote={(noteNo) => {
                     setActiveTab("notes");
+                    // 2026-08-06 fix: this used to null nceNavNote out again after
+                    // 1000ms "so re-clicking the same note works" — but the actual
+                    // force-open + scroll happens inside NCEDetailedNotes, gated on
+                    // its OWN loading state (which can take several seconds on a
+                    // large TB, e.g. the self-heal rebuild). Nulling this on a
+                    // fixed timer raced that load and could clear the target
+                    // before NCEDetailedNotes ever got to act on it, silently
+                    // defeating the navigation. Leave it set; clicking a
+                    // DIFFERENT note still updates it immediately, and
+                    // NCEDetailedNotes bumps nceNoteNavToken on every click via
+                    // onNoteNavConsumed so re-clicking the SAME note also re-fires.
                     setNceNavNote(noteNo);
-                    // Reset after a delay so re-clicking the same note works
-                    setTimeout(() => setNceNavNote(null), 1000);
+                    setNceNoteNavToken(t => t + 1);
                   }}
                 />
                 {nceSignatureBlock}
@@ -9660,9 +9684,23 @@ export default function PipelineFinancialStatements({
               <NCENotesTab
                 engagementId={engagementId}
                 navigateToNote={nceNavNote}
+                navigateToken={nceNoteNavToken}
                 dynamicNoteMap={nceDynamicNoteMap}
                 onExpansionStateUpdate={handleNceExpansionStateUpdate}
-                readOnly={nceIsLocked}
+                // 2026-08-06 fix: this is the LIVE working editor, not the export
+                // preview — the read-only "locked" rendering already has its own
+                // dedicated surface (the "🔒 Draft Financial Statements — Preview"
+                // Dialog below, which hard-codes readOnly={true} independently of
+                // nceIsLocked). Wiring readOnly to nceIsLocked here made "Lock
+                // Preview" (intended only to freeze expand/collapse layout for
+                // export) also pointer-events-none the entire live editor —
+                // including the row/ledger rename inputs — with no visible
+                // explanation, so a user who ever clicked "Lock Preview" for an
+                // export appeared to have lost the ability to edit anything on
+                // that engagement (in that browser) until they noticed the
+                // unrelated "Unlock Preview" button. The live tab must stay
+                // editable regardless of the preview-lock toggle.
+                readOnly={false}
                 entityName={engagement?.clients?.name || ""}
                 cyYear={cyYear}
                 initialExpandedRows={nceIsLocked ? nceExpandedRows : undefined}
