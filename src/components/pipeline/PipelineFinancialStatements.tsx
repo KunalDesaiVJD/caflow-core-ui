@@ -9010,15 +9010,18 @@ export default function PipelineFinancialStatements({
           }
           onNavigate={(noteNo, subTab) => {
             setActiveTab("notes");
+            // 2026-08-06 fix: the fixed-300ms scroll this used to also fire
+            // here raced NotesTab's/NCEDetailedNotes's own initial load and
+            // could fail silently (or double-scroll if it fired after the
+            // real one already succeeded). Both viewers now own a
+            // loading-gated force-open+scroll effect of their own — setting
+            // the nav-target state below is sufficient.
             if (isNonCorporate) {
               setNceNavNote(noteNo);
+              setNceNoteNavToken(t => t + 1);
             } else {
               setCorpNavNote({ noteNo, subTab });
             }
-            // Scroll to the notes tab content after a short delay
-            setTimeout(() => {
-              document.getElementById(`note-${noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }, 300);
           }}
         />
       </div>
@@ -9197,10 +9200,11 @@ export default function PipelineFinancialStatements({
                     onClick={() => {
                       setSaveBlockedDialogOpen(false);
                       setActiveTab("notes");
+                      // 2026-08-06 fix: rely solely on NotesTab's own
+                      // loading-gated navigate effect (see NotesTab.tsx) —
+                      // the fixed-300ms inline scroll this used to also do
+                      // raced that same load and could fail or double-scroll.
                       setCorpNavNote({ noteNo: m.noteNo, subTab: m.subTabKey as "bs_liab" | "bs_asset" | "pl" | "fa" });
-                      setTimeout(() => {
-                        document.getElementById(`note-${m.noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-                      }, 300);
                     }}
                   >
                     Fix →
@@ -9309,8 +9313,18 @@ export default function PipelineFinancialStatements({
                   onEditNote={updateNoteOverride}
                   onNavigateToNote={(noteNo, subTab) => {
                     setActiveTab("notes");
+                    // 2026-08-06 fix (mirrors the NCE fix at the sibling
+                    // onNavigateToNote handlers below): nulling corpNavNote on
+                    // a fixed 1000ms timer raced NotesTab's own initial load
+                    // (loadStage5Notes + first-visit autoPopulateNotes), which
+                    // can take longer than that on a large trial balance —
+                    // the note's DOM section didn't exist yet, so the target
+                    // got cleared before NotesTab's own effect (now
+                    // loading-gated, see NotesTab.tsx) ever got to act on it.
+                    // Leave it set; {noteNo, subTab} is a fresh object on
+                    // every click, so re-clicking the SAME note still
+                    // re-triggers NotesTab's effect via referential inequality.
                     setCorpNavNote({ noteNo, subTab });
-                    setTimeout(() => setCorpNavNote(null), 1000);
                   }}
                 />
                 <CorporateSignatureBlock
@@ -9497,8 +9511,18 @@ export default function PipelineFinancialStatements({
                   }}
                   onNavigateToNote={(noteNo, subTab) => {
                     setActiveTab("notes");
+                    // 2026-08-06 fix (mirrors the NCE fix at the sibling
+                    // onNavigateToNote handlers below): nulling corpNavNote on
+                    // a fixed 1000ms timer raced NotesTab's own initial load
+                    // (loadStage5Notes + first-visit autoPopulateNotes), which
+                    // can take longer than that on a large trial balance —
+                    // the note's DOM section didn't exist yet, so the target
+                    // got cleared before NotesTab's own effect (now
+                    // loading-gated, see NotesTab.tsx) ever got to act on it.
+                    // Leave it set; {noteNo, subTab} is a fresh object on
+                    // every click, so re-clicking the SAME note still
+                    // re-triggers NotesTab's effect via referential inequality.
                     setCorpNavNote({ noteNo, subTab });
-                    setTimeout(() => setCorpNavNote(null), 1000);
                   }}
                 />
                 <CorporateSignatureBlock

@@ -32,7 +32,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast }       from "sonner";
-import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical, ArrowRightLeft, SpellCheck } from "lucide-react";
+import { Loader2, Save, RefreshCw, Plus, Trash2, Search, CornerUpRight, Minus, MoreVertical, ArrowRightLeft, SpellCheck, Info } from "lucide-react";
 import { cn }          from "@/lib/utils";
 import { findSpellIssues, applyAllSuggestions } from "@/lib/spellSuggest";
 import {
@@ -623,6 +623,19 @@ function CustomRowEditor({
             />
             <SpellFix value={row.label} onApply={onChangeLabel} hidden={readOnly} />
             <SourceBadge source={row.source} tbDerived={row.tbDerived} />
+            {row.id?.startsWith("py_recon_") && (
+              <Info
+                className="h-3 w-3 text-blue-500 shrink-0 cursor-help"
+                title={
+                  "This line reconciles this note's prior-year total to the COA-mapped prior-year " +
+                  "figure so it ties exactly to the Balance Sheet/P&L face — it is not a data-entry " +
+                  "row. It usually appears because a ledger active in the prior year has no current-" +
+                  "year counterpart (renamed, closed, or reclassified in Tally between financial " +
+                  "years). It will keep reappearing on every re-sync until that underlying ledger " +
+                  "mapping is corrected — check the prior-year Tally data for this note's category."
+                }
+              />
+            )}
           </div>
         </TableCell>
         {isPatternA ? (
