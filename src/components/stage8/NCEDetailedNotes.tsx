@@ -360,7 +360,28 @@ function NumInput({
 
 // ─── Source badge ─────────────────────────────────────────────────────────────
 
-function SourceBadge({ source, tbDerived }: { source: "auto" | "manual"; tbDerived?: boolean }) {
+function SourceBadge({ id, source, tbDerived }: { id?: string; source: "auto" | "manual"; tbDerived?: boolean }) {
+  // 2026-08-06 fix: the PY-safety-reconcile pass (nceAutoPopulate.ts, "Other
+  // (prior year)") auto-inserts a residual row (id prefix "py_recon_") to
+  // force this note's PY total to tie to the COA-derived PY target when they
+  // disagree. It was created with source:"auto" and no other marker, so it
+  // rendered with the exact same blue "Auto" badge as a genuine TB-backed
+  // ledger row — indistinguishable from real data, with a generic label that
+  // reads like a plausible (if oddly-named) Tally ledger. An auditor had no
+  // way to tell it apart without already knowing this internal mechanism
+  // exists. Flag it distinctly so it reads as what it is: a reconciliation
+  // adjustment, not a ledger.
+  if (id?.startsWith("py_recon_")) {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[9px] px-1 py-0 shrink-0 text-purple-600 border-purple-300"
+        title="Auto-inserted reconciliation adjustment — ties this note's prior-year total to the mapped ledger balances (COA). Not a ledger from the trial balance. If this amount looks wrong, check the COA mapping for ledgers in this note rather than editing this row."
+      >
+        Reconciliation
+      </Badge>
+    );
+  }
   // 2026-06-18 fix (Issue 2 in DBS REALTY report): the badge previously
   // read only `source`, which mixes two different concepts —
   //   (a) "where did the AMOUNT come from?" (TB ledger vs. auditor-typed)
@@ -622,7 +643,7 @@ function CustomRowEditor({
               placeholder="Row description"
             />
             <SpellFix value={row.label} onApply={onChangeLabel} hidden={readOnly} />
-            <SourceBadge source={row.source} tbDerived={row.tbDerived} />
+            <SourceBadge id={row.id} source={row.source} tbDerived={row.tbDerived} />
           </div>
         </TableCell>
         {isPatternA ? (
@@ -2050,13 +2071,25 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       return next;
     });
   }, []);
-  // 2026-08-06 fix — force-open + scroll to the note targeted by a BS/P&L
-  // "Note No." click. Gated on `!loading` (not a fixed external timer) so it
-  // fires only once this component's own data — including the self-heal
-  // rebuild, which can take several seconds on a large TB — has actually
-  // rendered; the effect re-runs after that render commits, by which point
-  // document.getElementById is guaranteed to find the target NoteCard (its
-  // anchor exists whether the card is open or collapsed).
+  // 2026-08-06 fix — keep the latest dynamicNoteMap accessible WITHOUT it
+  // being an effect dependency below. dynamicNoteMap is a new Map identity
+  // on every PipelineFinancialStatements render whose computedAmounts/
+  // mergedPY memo deps changed (manualOverrides, pyManualAmounts, ncePpeData,
+  // …) — state that can change from user actions elsewhere on the page,
+  // unrelated to notes navigation. Since scrollToNoteNo is deliberately left
+  // set after a click (so a same-note re-click can still re-fire via
+  // scrollToken), depending on dynamicNoteMap's identity made ANY such
+  // unrelated re-render silently re-open a note the user had since collapsed
+  // and yank the page back to it.
+  const dynamicNoteMapRef = useRef(dynamicNoteMap);
+  dynamicNoteMapRef.current = dynamicNoteMap;
+  // force-open + scroll to the note targeted by a BS/P&L "Note No." click.
+  // Gated on `!loading` (not a fixed external timer) so it fires only once
+  // this component's own data — including the self-heal rebuild, which can
+  // take several seconds on a large TB — has actually rendered; the effect
+  // re-runs after that render commits, by which point document.getElementById
+  // is guaranteed to find the target NoteCard (its anchor exists whether the
+  // card is open or collapsed).
   useEffect(() => {
     if (scrollToNoteNo == null || loading) return;
     if (scrollToNoteNo === 2 || scrollToNoteNo === 10) return; // Capital / PPE live elsewhere
@@ -2070,8 +2103,9 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     // Must mirror the anchorId fallback the render loop actually uses below
     // (dynamicNoteMap absent → parse the number from the config's title
     // string, NOT `nce-note-type-*`) or the id here never matches the DOM.
-    const label = dynamicNoteMap
-      ? getDynamicNoteDisplay(noteType, dynamicNoteMap)
+    const curDynamicNoteMap = dynamicNoteMapRef.current;
+    const label = curDynamicNoteMap
+      ? getDynamicNoteDisplay(noteType, curDynamicNoteMap)
       : (NOTES_CONFIG.find(c => c.noteType === noteType)?.title.match(/Note\s+([\d\s&]+):/i)?.[1]?.trim() ?? null);
     const anchorId = label ? `nce-note-${label}` : `nce-note-type-${noteType}`;
     // Opening the note (setOpenNotes above) changes layout height, so scroll
@@ -2079,7 +2113,9 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     requestAnimationFrame(() => {
       document.getElementById(anchorId)?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
-  }, [scrollToNoteNo, scrollToken, loading, dynamicNoteMap]);
+    // dynamicNoteMap intentionally OMITTED — see dynamicNoteMapRef above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToNoteNo, scrollToken, loading]);
   // Persist the layout whenever it changes — edit mode only. During a locked
   // preview the toggles are hidden (forceOpen) so it can't change, and we must
   // not overwrite the pre-lock layout that the unlock remount will restore.

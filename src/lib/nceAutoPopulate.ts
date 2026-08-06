@@ -29,7 +29,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { NOTES_CONFIG } from "@/config/nceNotesConfig";
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import { buildNoteFsMap } from "@/lib/nceNoteRegistry";
-import { buildLedgerMapMatcher } from "@/lib/tallyText";
+import { buildLedgerMapMatcher, cleanTallyName } from "@/lib/tallyText";
 
 // ── FS-code map ──────────────────────────────────────────────────────────────
 //
@@ -1058,16 +1058,24 @@ export async function nceAutoPopulate(
   // build them ONCE here instead of rebuilding inside every note iteration.
   // The previous in-loop `tb.find(...)` was O(ledgers²) per note × 19 notes,
   // which made re-sync crawl on large engagements (600+ ledgers).
+  // 2026-08-06 fix: tbParentByLedgerLower used to be keyed by RAW
+  // .trim().toLowerCase() ledger_name, then probed below with a coaMapping
+  // KEY — which is persisted as cleanTallyName(ledger_name) per tallyText.ts's
+  // own doc comment. Any ledger whose raw TB name carried a Tally control
+  // char or numeric HTML entity therefore built an index entry the probe side
+  // (clean) could never match, silently dropping that ledger's vote from
+  // groupToCodeGlobal — used by every PY-only-ledger fallback classification
+  // across all notes (systemic, not one-note-specific).
   const tbParentByLedgerLower: Record<string, string> = {};
   for (const r of tb) {
-    const nm = String(r.ledger_name || "").trim().toLowerCase();
+    const nm = cleanTallyName(r.ledger_name).toLowerCase().trim();
     if (nm) tbParentByLedgerLower[nm] = String(r.parent_group || "").toLowerCase().trim();
   }
   const groupToCodeGlobal: Record<string, string> = (() => {
     const counts: Record<string, Record<string, number>> = {};
     for (const [ledger, m] of Object.entries(coaMapping || {})) {
       const c = (m as any)?.code; if (!c) continue;
-      const grp = tbParentByLedgerLower[ledger.toLowerCase().trim()];
+      const grp = tbParentByLedgerLower[cleanTallyName(ledger).toLowerCase().trim()];
       if (!grp) continue;
       if (!counts[grp]) counts[grp] = {};
       counts[grp][c] = (counts[grp][c] || 0) + 1;
@@ -1503,16 +1511,22 @@ export async function nceAutoPopulate(
     let tbRefreshCy: Record<string, number> | null = null;
     let tbRefreshPy: Record<string, number> | null = null;
 
-    // PY-ledger lookup keyed by lowercase ledger name → signed PY closing.
-    // Used to attach per-ledger amountPy to staticSources so the expandable
-    // breakdown shows BOTH CY and PY amounts per ledger (Issue 2).
-    const pyByLedgerStatic: Record<string, number> = {};
-    if (pyTb.length > 0) {
-      for (const r of pyTb) {
-        const nm = String(r.ledger_name || "").trim();
-        if (!nm) continue;
-        pyByLedgerStatic[nm.toLowerCase()] = signedLedgerAmt(r, noteType);
-      }
+    // 2026-08-06 fix: pyByLedgerStatic used to be built here but was never
+    // read anywhere in this file (dead code) — removed. In its place: a
+    // cleanTallyName-normalized PY-shell lookup, built ONCE (was previously a
+    // per-row pyTb.find(...) inline below — O(ledgers × pyTb) as well as
+    // missing the cleanTallyName tier), used by the smart-matched static-row
+    // PY lookup a few lines down. That lookup feeds newPy[matchedRowId]
+    // directly (a REAL total, not just the info popover), so a raw
+    // trim+lowercase-only match silently understates a note's own PY total
+    // whenever a ledger's raw name differs between the CY and PY-shell TB
+    // fetches by a Tally control char / HTML entity — exactly the gap the
+    // PY-safety-reconcile pass downstream has to paper over with a visible
+    // "Other (prior year)" residual row.
+    const pyTbByCleanName = new Map<string, TBRow>();
+    for (const r of pyTb) {
+      const key = cleanTallyName(r.ledger_name).toLowerCase();
+      if (key && !pyTbByCleanName.has(key)) pyTbByCleanName.set(key, r);
     }
 
     if (noteFs.all) {
@@ -1577,11 +1591,11 @@ export async function nceAutoPopulate(
           // Carry PY amount too so the expander shows BOTH CY + PY columns.
           if (!staticSources[matchedRowId]) staticSources[matchedRowId] = [];
           // Per-ledger PY: look up against PY TB using the SAME head nature
-          // so signs net correctly in the expanded breakdown. Normalise both
-          // sides (trim + lowercase) so CRLF-suffixed Tally names (RAY WINGS
-          // "The District TB Centre\r\n") match their PY counterpart.
-          const cyKeyNorm = String(row.ledger_name || "").trim().toLowerCase();
-          const pyRowLookup = pyTb.find(r => String(r.ledger_name || "").trim().toLowerCase() === cyKeyNorm);
+          // so signs net correctly in the expanded breakdown. cleanTallyName
+          // (not just trim+lowercase — see pyTbByCleanName above) so a
+          // control-char/entity-corrupted Tally name still matches its PY
+          // counterpart, not just a trailing-CRLF-only case.
+          const pyRowLookup = pyTbByCleanName.get(cleanTallyName(row.ledger_name).toLowerCase());
           const pyAmtLedger = pyRowLookup ? signedLedgerAmt(pyRowLookup, noteType) : 0;
           staticSources[matchedRowId].push({
             ledger: row.ledger_name,
@@ -1730,10 +1744,26 @@ export async function nceAutoPopulate(
       // PY-only walk and the CY aggregation. Every PY value across the
       // entire note now respects the head's natural side, so the note
       // total = variance drill total = BS face total for every NCE client.
+      // 2026-08-06 fix: pyByLedgerB/cyByLedgerB were keyed by raw
+      // .trim().toLowerCase() ledger_name (and cyByLedgerB additionally
+      // GATED by a direct coaMapping[row.ledger_name] bracket lookup below —
+      // the most severe tier of the RC-21 bug class). This map is consumed
+      // by the generic Stage-2 per-ledger grouping loop for EVERY Pattern-B
+      // note — trade_payables, other_cl, other_expenses (Ambica's "Other
+      // Expenses" note), cogs, etc. — not just the strictly-TB-driven ones,
+      // so a raw-name mismatch here silently understates a note's own PY
+      // total for any ledger whose raw name differs (by a Tally control char
+      // or HTML entity) between the CY and PY-shell TB fetches, while
+      // computeCOATotals (which DOES cleanTallyName) counts it correctly —
+      // exactly the gap the PY-safety-reconcile pass papers over with a
+      // visible "Other (prior year)" residual. Normalize with cleanTallyName
+      // throughout this matching subsystem (also fixed below at the
+      // STALE-MANUAL-ROW REFRESH consumer, ~line 2680, which reads these same
+      // keys against manual-row labels — both sides must stay consistent).
       const pyByLedgerB: Record<string, number> = {};
       if (pyTb.length > 0) {
         for (const r of pyTb) {
-          const nm = String(r.ledger_name || "").trim();
+          const nm = cleanTallyName(r.ledger_name);
           if (!nm) continue;
           pyByLedgerB[nm.toLowerCase()] = signedLedgerAmt(r, noteType);
         }
@@ -1750,9 +1780,15 @@ export async function nceAutoPopulate(
       // Build a current TB-by-ledger CY map so we can refresh those rows below.
       const cyByLedgerB: Record<string, number> = {};
       for (const row of tb) {
-        const mapped = coaMapping[row.ledger_name];
+        // was: coaMapping[row.ledger_name] — exact bracket, no cleanTallyName;
+        // silently excluded a dirty-named ledger from this map entirely (see
+        // fix note above pyByLedgerB), which also meant it never reached the
+        // PY-shell-empty fallback a few lines below. lookupCoa is the same
+        // shared matcher (buildLedgerMapMatcher) already built above for this
+        // note's CY walk.
+        const mapped = lookupCoa(row.ledger_name);
         if (!mapped || !codeSet.has(mapped.code)) continue;
-        const nm = String(row.ledger_name || "").trim();
+        const nm = cleanTallyName(row.ledger_name);
         if (!nm) continue;
         const nmLower = nm.toLowerCase();
         cyByLedgerB[nmLower] = signedLedgerAmt(row, noteType);
@@ -1863,7 +1899,7 @@ export async function nceAutoPopulate(
         for (const g of group.ledgers) {
           cySum += g.amt;
           const pyFromWalk = g.pyAmt ?? 0;
-          const pyFromTb   = pyByLedgerB[g.ledger.toLowerCase()] ?? 0;
+          const pyFromTb   = pyByLedgerB[cleanTallyName(g.ledger).toLowerCase()] ?? 0;
           const pyVal = Math.abs(pyFromWalk) > 0.005
             ? pyFromWalk
             : (Math.abs(pyFromTb) > 0.005 ? pyFromTb : pyForCustomRow(noteType, id, g.ledger));
@@ -2630,7 +2666,9 @@ export async function nceAutoPopulate(
       for (const cr of [...absorbedManualRows, ...autoRows]) {
         if (!cr.sources || !Array.isArray(cr.sources)) continue;
         for (const src of cr.sources) {
-          const sLbl = (src.ledger || "").trim().toLowerCase();
+          // cleanTallyName: must stay consistent with the (now clean-keyed)
+          // tbRefreshCy/tbRefreshPy this feeds into, below.
+          const sLbl = cleanTallyName(src.ledger || "").toLowerCase();
           if (sLbl) tbLedgerToOwnerRow.set(sLbl, cr.id);
         }
       }
@@ -2662,7 +2700,18 @@ export async function nceAutoPopulate(
       for (const mr of absorbedManualRows) {
         // Intermediate heading guard — see comment above. Skip entirely.
         if (hasChildren.has(mr.id)) continue;
-        const lbl = (mr.label || "").trim().toLowerCase();
+        // 2026-08-06 fix: cleanTallyName here too — tbRefreshCy/tbRefreshPy
+        // (built above from pyByLedgerB/cyByLedgerB) are now keyed by
+        // cleanTallyName'd ledger names. mr.label is typically the raw
+        // ledger_name a custom row was originally created from (see
+        // deriveBaseHead/group.ledgers[0].ledger above), so leaving this side
+        // un-normalized while the build side changed would have silently
+        // broken the MAHARSH INFRA stale-value refresh for any row whose
+        // label carries the same Tally control-char/entity artifacts this
+        // whole fix targets — a regression, not a fix. cleanTallyName on an
+        // already-clean label is a no-op, so already-working matches are
+        // unaffected.
+        const lbl = cleanTallyName(mr.label || "").toLowerCase();
         if (!lbl) continue;
 
         // ── DOUBLE-COUNT GUARD ───────────────────────────────────────
@@ -3176,15 +3225,20 @@ export async function nceAutoPopulate(
       // Resolve ledger → code: prefer the row's own ejectedSource (more
       // reliable than label, which the auditor may have re-titled), then
       // the label itself, then nothing.
+      // 2026-08-06 fix: was coaMapping[ejected] ?? pyCoaMap[ejected] — exact
+      // bracket, no cleanTallyName/CI fallback. buildLedgerMapMatcher matches
+      // the RC-21 pattern already used elsewhere in this file.
+      const lookupCyLtSt = buildLedgerMapMatcher(coaMapping || {});
+      const lookupPyLtSt = buildLedgerMapMatcher(pyCoaMap || {});
       const resolveCode = (cr: NCECustomRow): string | undefined => {
         const ejected = ((cr as any).ejectedSource as string | undefined)?.trim();
         if (ejected) {
-          const m = coaMapping[ejected] ?? pyCoaMap[ejected];
+          const m = lookupCyLtSt(ejected) ?? lookupPyLtSt(ejected);
           if (m?.code) return m.code;
         }
         const lbl = (cr.label || "").trim();
         if (lbl) {
-          const m = coaMapping[lbl] ?? pyCoaMap[lbl];
+          const m = lookupCyLtSt(lbl) ?? lookupPyLtSt(lbl);
           if (m?.code) return m.code;
         }
         return undefined;
@@ -3199,6 +3253,16 @@ export async function nceAutoPopulate(
       // 39,97,75,075 = 5×, exactly the count of stale key buckets that
       // had been written over time). The TB amount, by contrast, can
       // never inflate — it's the ground truth.
+      // 2026-08-06 fix: matched candidates against TB rows via raw
+      // .trim().toLowerCase() only (RC-21 failure mode — same class already
+      // fixed twice in this effort: computeCOATotals client-side, and
+      // save-nce-constrained-note's server-side resolver). A manual row
+      // whose ejectedSource/label carries a Tally control char or numeric
+      // HTML entity silently found no TB match here and fell through to 0,
+      // while computeCOATotals (which the PY-safety-reconcile pass compares
+      // against) resolves the same ledger correctly — producing exactly the
+      // note-vs-COA gap that pass papers over with a visible
+      // "Other (prior year)" residual.
       const tbAmountFor = (cr: NCECustomRow, col: "cy" | "py"): number => {
         const ejected = ((cr as any).ejectedSource as string | undefined)?.trim();
         const lbl     = (cr.label || "").trim();
@@ -3208,8 +3272,8 @@ export async function nceAutoPopulate(
         if (candidates.length === 0) return 0;
         const src = col === "cy" ? tb : pyTb;
         for (const name of candidates) {
-          const nm = name.toLowerCase();
-          const row = src.find(r => (r.ledger_name || "").trim().toLowerCase() === nm);
+          const nm = cleanTallyName(name).toLowerCase();
+          const row = src.find(r => cleanTallyName(r.ledger_name).toLowerCase() === nm);
           if (!row) continue;
           return noteAmt(row, noteType);
         }
@@ -3272,15 +3336,20 @@ export async function nceAutoPopulate(
     // BUG 1 defect this flag fixes).
     if (noteFs.all && noteFs.all.length > 0) {
       const ourCodes = new Set(noteFs.all);
+      // 2026-08-06 fix: same RC-21 gap as resolveCode/tbAmountFor above —
+      // see fix notes there. resolveCodeAll gates whether a manual row is
+      // "ours" at all; a dirty-named row silently returning undefined here
+      // means it's excluded from this whole normalization pass, not just
+      // given a wrong amount.
       const resolveCodeAll = (cr: NCECustomRow): string | undefined => {
         const ejected = ((cr as any).ejectedSource as string | undefined)?.trim();
         if (ejected) {
-          const m = coaMapping[ejected] ?? pyCoaMap[ejected];
+          const m = lookupCyLtSt(ejected) ?? lookupPyLtSt(ejected);
           if (m?.code) return m.code;
         }
         const lbl = (cr.label || "").trim();
         if (lbl) {
-          const m = coaMapping[lbl] ?? pyCoaMap[lbl];
+          const m = lookupCyLtSt(lbl) ?? lookupPyLtSt(lbl);
           if (m?.code) return m.code;
         }
         return undefined;
@@ -3294,8 +3363,8 @@ export async function nceAutoPopulate(
         if (candidates.length === 0) return 0;
         const src = col === "cy" ? tb : pyTb;
         for (const name of candidates) {
-          const nm = name.toLowerCase();
-          const row = src.find(r => (r.ledger_name || "").trim().toLowerCase() === nm);
+          const nm = cleanTallyName(name).toLowerCase();
+          const row = src.find(r => cleanTallyName(r.ledger_name).toLowerCase() === nm);
           if (!row) continue;
           return noteAmt(row, noteType);
         }
@@ -3333,14 +3402,31 @@ export async function nceAutoPopulate(
     // Ensures: Note Total = COA Total (Dr netted against Cr for contra).
     // Runs AFTER all restore/refresh cycles so nothing can override it.
     if (STRICTLY_TB_DRIVEN_B.has(noteType)) {
+      // 2026-08-06 fix: this whole self-contained pass used direct
+      // coaMapping[row.ledger_name] bracket lookups (no cleanTallyName, no
+      // fallback at all) despite explicitly running "AFTER all
+      // restore/refresh cycles so nothing can override it" — i.e. as the
+      // LAST word on this note's total before the PY-safety-reconcile pass
+      // reads it. A dirty-named ledger silently fell through every gate here
+      // (excluded from signedCyLookup/signedPyLookup entirely), so it
+      // neither got overwritten with the fresh signed TB amount nor caught
+      // by the duplicate guard — leaving whatever value survived earlier
+      // passes as final, which may not equal the COA-derived target. Route
+      // through the shared matcher (buildLedgerMapMatcher) like the CY walk
+      // earlier in this function already does, and cleanTallyName every key
+      // in this block consistently (signedCyLookup/signedPyLookup,
+      // ownedBySource, and both duplicate-check/overwrite loops below all
+      // cross-reference each other via the same key space).
+      const lookupCyRecon = buildLedgerMapMatcher(coaMapping || {});
+      const lookupPyRecon = buildLedgerMapMatcher(pyCoaMap || {});
       // Build a fresh lookup from TB with signed amounts
       const signedCyLookup: Record<string, number> = {};
       const signedPyLookup: Record<string, number> = {};
       const noteCodeSet = new Set([...(noteFs.all ?? []), ...(noteFs.lt ?? []), ...(noteFs.st ?? [])]);
       for (const row of tb) {
-        const mapped = coaMapping[row.ledger_name];
+        const mapped = lookupCyRecon(row.ledger_name);
         if (!mapped || !noteCodeSet.has(mapped.code)) continue;
-        const nm = String(row.ledger_name || "").trim().toLowerCase();
+        const nm = cleanTallyName(row.ledger_name).toLowerCase();
         if (!nm) continue;
         signedCyLookup[nm] = signedLedgerAmt(row, noteType);
         // Only set PY from CY opening when it's non-zero. P&L accounts
@@ -3353,10 +3439,10 @@ export async function nceAutoPopulate(
       }
       // PY shell TB provides PY for P&L accounts (whose CY opening = 0)
       for (const row of pyTb) {
-        const nm = String(row.ledger_name || "").trim().toLowerCase();
+        const nm = cleanTallyName(row.ledger_name).toLowerCase();
         if (!nm) continue;
         if (signedPyLookup[nm] === undefined) {
-          const mapped = coaMapping[row.ledger_name] ?? pyCoaMap[row.ledger_name];
+          const mapped = lookupCyRecon(row.ledger_name) ?? lookupPyRecon(row.ledger_name);
           if (mapped && noteCodeSet.has(mapped.code)) {
             signedPyLookup[nm] = signedLedgerAmt(row, noteType);
           }
@@ -3380,13 +3466,13 @@ export async function nceAutoPopulate(
         const ownedBySource = new Set<string>();
         for (const cr of leakFreeCustomRows) {
           for (const s of cr.sources ?? []) {
-            const sn = (s.ledger || "").trim().toLowerCase();
+            const sn = cleanTallyName(s.ledger || "").toLowerCase();
             if (sn) ownedBySource.add(sn);
           }
         }
         for (const cr of leakFreeCustomRows) {
           if ((cr.sources ?? []).length === 0) {
-            const lbl = (cr.label || "").trim().toLowerCase();
+            const lbl = cleanTallyName(cr.label || "").toLowerCase();
             if (lbl && signedCyLookup[lbl] !== undefined && ownedBySource.has(lbl)) {
               duplicateIds.add(cr.id);
             }
@@ -3395,7 +3481,7 @@ export async function nceAutoPopulate(
       }
       for (const cr of leakFreeCustomRows) {
         if (duplicateIds.has(cr.id)) continue; // Skip duplicate rows
-        const lbl = (cr.label || "").trim().toLowerCase();
+        const lbl = cleanTallyName(cr.label || "").toLowerCase();
         if (!lbl) continue;
         if (signedCyLookup[lbl] !== undefined) {
           mergedCy[cr.id] = signedCyLookup[lbl];

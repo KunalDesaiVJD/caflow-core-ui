@@ -62,7 +62,7 @@ import FsStatusChip from "@/components/pipeline/FsStatusChip";
 import { evaluateNotesStaleness } from "@/lib/notesStaleness";
 import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE, FS_NO_MANUAL_NOTE_ADD, FS_NCE_CONSTRAINED_NOTES } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, validateCorporateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
-import { buildLedgerMapMatcher } from "@/lib/tallyText";
+import { buildLedgerMapMatcher, cleanTallyName } from "@/lib/tallyText";
 import { computeNceCoaAnchoredFace } from "@/lib/nceFaceAnchor";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
@@ -548,14 +548,29 @@ export const NCE_CODE_TO_STATIC_REF: Readonly<Record<string, number>> = {
   NCE_CAP: 2,
   NCE_LTB: 3, NCE_OLTL: 4, NCE_LTP: 5,
   NCE_STB: 6, NCE_TP: 7, NCE_OCL: 8, NCE_STP: 9,
-  NCE_PPE: 10, NCE_CWIP: 11, NCE_INTG: 12,
+  // 2026-08-06 fix: NCE_INTG used to point at static ref 12, which has no
+  // NOTE_META/NOTES_CONFIG entry anywhere (Intangibles has no note card of
+  // its own — it's shown inside the PPE/FA Schedule, per NCE_CODE_TO_NOTE_KEY
+  // above: 'NCE_INTG: "ppe"'). Clicking it switched to the Notes tab and then
+  // silently found nothing to open or scroll to. Route it to 10 instead — the
+  // SAME number NCE_DEPR already shares below for the identical reason ("same
+  // FA Schedule"), which NCENotesTab already special-cases to open PPE Schedule.
+  NCE_PPE: 10, NCE_CWIP: 11, NCE_INTG: 10,
   NCE_NCINV: 13, NCE_LTLA: 14, NCE_ONCA: 15,
-  NCE_CINV: 16, NCE_STCK: 17, NCE_TR: 18, NCE_CASH: 19, NCE_STLA: 20, NCE_OCA: 21,
+  // 2026-08-06 fix: NCE_CINV (ref 16, "Current investments") and NCE_PART_REM
+  // (ref 31, "Partners' remuneration") also have no NOTE_META entry — no note
+  // card exists for either anywhere in NCEDetailedNotes.tsx. NCE_PART_REM was
+  // already documented as "intentionally absent" in NCE_CODE_TO_NOTE_KEY above
+  // but this map was never updated to match, so it stayed clickable-but-dead.
+  // Both are removed here so NoteCell's `label` resolves to undefined and the
+  // cell renders as a plain "—" (same as any other no-note line item) instead
+  // of a button that switches tabs and opens nothing.
+  NCE_STCK: 17, NCE_TR: 18, NCE_CASH: 19, NCE_STLA: 20, NCE_OCA: 21,
   NCE_REV_OPS: 22, NCE_REV_OTH: 23,
   // Issue 1 — NCE Depreciation row shares the PPE note number (10) so the
   // FA Schedule serves both BS PPE and P&L Depreciation.  Clicks navigate
   // to the same Note 10 (FA grid) in the NCE Notes tab.
-  NCE_COGS: 24, NCE_CII: 26, NCE_EMP_EXP: 27, NCE_FIN_COST: 28, NCE_DEPR: 10, NCE_OTH_EXP: 30, NCE_PART_REM: 31,
+  NCE_COGS: 24, NCE_CII: 26, NCE_EMP_EXP: 27, NCE_FIN_COST: 28, NCE_DEPR: 10, NCE_OTH_EXP: 30,
 };
 
 // ── P&L FS code → registry note key ─────────────────────────────────────────
@@ -1109,7 +1124,7 @@ export function buildNCEBSRows(
     // Task 8: grouped parent heading + sub-items matching Corporate order (PPE, Intangibles, CWIP)
     { kind: "subhead", label: "(a) Property, Plant & Equipment and Intangible Assets", indent: 1 },
     { kind: "item", label: "     (i)   Property, plant and equipment",  noteNo: sn(10, cy["NCE_PPE"],   py["NCE_PPE"]),   cy: pos("NCE_PPE"),   py: pospy("NCE_PPE"),   indent: 2, code: "NCE_PPE" },
-    { kind: "item", label: "     (ii)  Intangible assets",              noteNo: sn(12, cy["NCE_INTG"],  py["NCE_INTG"]),  cy: pos("NCE_INTG"),  py: pospy("NCE_INTG"),  indent: 2, code: "NCE_INTG" },
+    { kind: "item", label: "     (ii)  Intangible assets",              noteNo: sn(10, cy["NCE_INTG"],  py["NCE_INTG"]),  cy: pos("NCE_INTG"),  py: pospy("NCE_INTG"),  indent: 2, code: "NCE_INTG" },
     { kind: "item", label: "     (iii) Capital work-in-progress",       noteNo: sn(11, cy["NCE_CWIP"],  py["NCE_CWIP"]),  cy: pos("NCE_CWIP"),  py: pospy("NCE_CWIP"),  indent: 2, code: "NCE_CWIP" },
     { kind: "item", label: "(b) Non-current investments",               noteNo: sn(13, cy["NCE_NCINV"], py["NCE_NCINV"]), cy: pos("NCE_NCINV"), py: pospy("NCE_NCINV"), indent: 1, code: "NCE_NCINV" },
     { kind: "item", label: "(c) Long-term loans and advances",          noteNo: sn(14, cy["NCE_LTLA"],  py["NCE_LTLA"]),  cy: pos("NCE_LTLA"),  py: pospy("NCE_LTLA"),  indent: 1, code: "NCE_LTLA" },
@@ -2856,8 +2871,18 @@ export default function PipelineFinancialStatements({
     if (!tallyTb?.length) return [];
     return tallyTb.map((l: any) => {
       return {
-        account_name:  String(l.ledger_name || "").trim(),
-        account_group: l.parent_group || "",
+        // 2026-08-06 fix: this is the BS/PL face's own authoritative TB row
+        // list — trim-only left Tally's internal ASCII control chars (\x04
+        // on root-group ledgers) and numeric HTML entities (&#13; etc.) in
+        // account_name, while coa_mapping is persisted keyed by
+        // cleanTallyName(ledger_name) (src/lib/tallyText.ts). Every direct
+        // coaMapping[a.account_name] lookup downstream in this file was
+        // therefore comparing a dirty name against clean keys and silently
+        // missing that ledger — upstream of and poisoning matching
+        // throughout this component. cleanTallyName matches
+        // PipelineStage3.tsx's own local ledger-list construction.
+        account_name:  cleanTallyName(l.ledger_name),
+        account_group: cleanTallyName(l.parent_group) || "",
         // Break #7 fix: use fsSignConvention instead of inline isDr ? cb : -cb
         balance: fsSignedBalance(l.closing_balance, l.balance_type, "DR"),
         opening_balance: fsSignedOpening(l.opening_balance, l.opening_type, "DR"),
@@ -2927,6 +2952,16 @@ export default function PipelineFinancialStatements({
     return {};
   }, [engagement?.coa_mapping]);
 
+  // 2026-08-06 fix: shared, memoized ledger→code matcher (exact → trim → CI →
+  // cleanTallyName, src/lib/tallyText.ts) for this component. Several places
+  // below used to do a direct coaMapping[name] bracket lookup with zero
+  // normalization — the most severe tier of the RC-21 bug class (a
+  // control-char/entity-corrupted ledger name never matches at all) — or a
+  // locally hand-rolled exact+CI-only index that stopped one tier short.
+  // Building this once here (rather than per-callsite) also avoids rebuilding
+  // an equivalent index redundantly in every memo that needs it.
+  const lookupCoaMapping = useMemo(() => buildLedgerMapMatcher(coaMapping || {}), [coaMapping]);
+
   // ─── PY Shell TB helpers for inventory dual-posting ───────────────────────
 
   // Build a fast lookup map from the PY Shell TB: ledger_name → { opening, closing }
@@ -2934,7 +2969,10 @@ export default function PipelineFinancialStatements({
     const m = new Map<string, { opening: number; closing: number }>();
     if (!pyShellTb?.length) return m;
     for (const row of pyShellTb) {
-      const name = String(row.ledger_name || "").trim();
+      // 2026-08-06 fix: keyed by cleanTallyName to stay consistent with
+      // tbAccounts.account_name (fixed above) — its sole consumer looks this
+      // map up via acct.account_name.
+      const name = cleanTallyName(row.ledger_name);
       if (!name) continue;
       m.set(name, {
         opening: fsSignedOpening(row.opening_balance, row.opening_type, "DR"),
@@ -2957,25 +2995,12 @@ export default function PipelineFinancialStatements({
   // pyShellPLAmounts (~:2933) and nceAutoPopulate.ts isInventoryRow (~:1950).
   const pyInvCII = useMemo((): number | null => {
     if (!pyShellTb?.length) return null;
-    // Case-insensitive overlays for both mappings.
-    const cyMappingLower: Record<string, { code: string }> = {};
-    for (const [k, v] of Object.entries(coaMapping || {})) {
-      if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
-    }
-    const pyMappingLower: Record<string, { code: string }> = {};
-    for (const [k, v] of Object.entries(pyShellCoaMapping || {})) {
-      if (v?.code) pyMappingLower[k.toLowerCase().trim()] = v;
-    }
-    const resolveCode = (rawName: string): string | undefined => {
-      const name = rawName.trim();
-      const lower = name.toLowerCase();
-      return (
-        (coaMapping as any)[name]?.code
-        ?? cyMappingLower[lower]?.code
-        ?? (pyShellCoaMapping as any)?.[name]?.code
-        ?? pyMappingLower[lower]?.code
-      );
-    };
+    // 2026-08-06 fix: replaced the local exact+CI-only overlays (missing the
+    // cleanTallyName tier — RC-21 failure mode) with the shared matcher, tried
+    // CY mapping then PY-shell mapping, matching the original fallback order.
+    const lookupPy = buildLedgerMapMatcher(pyShellCoaMapping || {});
+    const resolveCode = (rawName: string): string | undefined =>
+      lookupCoaMapping(rawName)?.code ?? lookupPy(rawName)?.code;
     let hasInv = false;
     let total = 0;
     for (const row of pyShellTb) {
@@ -2997,7 +3022,7 @@ export default function PipelineFinancialStatements({
     if (!pyShellTbMap.size) return [];
     const result: { ledger: string; cyOpening: number; pyClosing: number }[] = [];
     for (const acct of tbAccounts) {
-      const mapping = coaMapping[acct.account_name];
+      const mapping = lookupCoaMapping(acct.account_name);
       if (!mapping || !INV_CODES.has(mapping.code)) continue;
       const pyRow = pyShellTbMap.get(acct.account_name);
       if (!pyRow) continue;
@@ -3037,14 +3062,12 @@ export default function PipelineFinancialStatements({
   const pyShellPLAmounts: Record<string, number> = useMemo(() => {
     if (!pyShellTb?.length) return {};
     const amounts: Record<string, number> = {};
-    const cyMappingLower: Record<string, { code: string }> = {};
-    for (const [k, v] of Object.entries(coaMapping || {})) {
-      if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
-    }
+    // 2026-08-06 fix: was exact + local CI-only overlay (missing the
+    // cleanTallyName tier). Shared matcher below.
     for (const row of pyShellTb) {
       const name = String(row.ledger_name || "").trim();
       if (!name) continue;
-      const mapped = (coaMapping as any)[name] || cyMappingLower[name.toLowerCase()];
+      const mapped = lookupCoaMapping(name);
       if (!mapped?.code) continue;
       const item = activeFlatItems.find(i => i.code === mapped.code);
       if (!item) continue;
@@ -3084,14 +3107,12 @@ export default function PipelineFinancialStatements({
   const pyShellBSAmounts: Record<string, number> = useMemo(() => {
     if (!pyShellTb?.length) return {};
     const amounts: Record<string, number> = {};
-    const cyMappingLower: Record<string, { code: string }> = {};
-    for (const [k, v] of Object.entries(coaMapping || {})) {
-      if (v?.code) cyMappingLower[k.toLowerCase().trim()] = v;
-    }
+    // 2026-08-06 fix: was exact + local CI-only overlay (missing the
+    // cleanTallyName tier). Shared matcher below.
     for (const row of pyShellTb) {
       const name = String(row.ledger_name || "").trim();
       if (!name) continue;
-      const mapped = (coaMapping as any)[name] || cyMappingLower[name.toLowerCase()];
+      const mapped = lookupCoaMapping(name);
       if (!mapped?.code) continue;
       const item = activeFlatItems.find(i => i.code === mapped.code);
       if (!item) continue;
@@ -3115,7 +3136,7 @@ export default function PipelineFinancialStatements({
     };
     for (const item of activeTree) computeParent(item);
     return amounts;
-  }, [pyShellTb, coaMapping, activeFlatItems, activeTree]);
+  }, [pyShellTb, lookupCoaMapping, activeFlatItems, activeTree]);
   const hasPyShellBS = Object.keys(pyShellBSAmounts).length > 0;
 
   // ─── Load manual PY P&L amounts from engagement.py_manual_amounts ──────
@@ -3215,23 +3236,11 @@ export default function PipelineFinancialStatements({
     // 2026-08-04 — Ledger-name normalisation index (RAY WINGS fix). A raw
     // exact-match lookup drops Tally ledgers whose names carry stray CRLF
     // whitespace ("The District TB Centre\r\n"). computeCOATotals — the
-    // reconciliation validator — already tolerates this via trim+CI, so a
-    // face built from raw lookup lands out of sync with the validator (and
-    // with the note total). Mirror the same fallback here so every path
-    // resolves the same ledger set.
-    const coaMappingCI: Record<string, { code: string }> = {};
-    for (const [k, v] of Object.entries(coaMapping || {})) {
-      if (!v?.code) continue;
-      const kk = String(k).trim().toLowerCase();
-      if (!(kk in coaMappingCI)) coaMappingCI[kk] = v;
-    }
-    const lookupMap = (name: string | null | undefined) => {
-      if (!name) return undefined;
-      const raw = String(name);
-      return (coaMapping as any)[raw]
-          ?? (coaMapping as any)[raw.trim()]
-          ?? coaMappingCI[raw.trim().toLowerCase()];
-    };
+    // reconciliation validator — already tolerates this via trim+CI+
+    // cleanTallyName, so a face built from raw lookup lands out of sync with
+    // the validator (and with the note total). Mirror the same fallback here
+    // so every path resolves the same ledger set.
+    const lookupMap = lookupCoaMapping;
 
     // Aggregate TB accounts → FS line items via COA mapping
     for (const acct of tbAccounts) {
@@ -3348,7 +3357,7 @@ export default function PipelineFinancialStatements({
     // into a reserves/capital ledger, the closing balance ALREADY includes the
     // profit — crediting again would double-count.
     if (!isNonCorporate) {
-      const reservesLedgers = tbAccounts.filter(a => coaMapping[a.account_name]?.code === "BS_EQ_RS");
+      const reservesLedgers = tbAccounts.filter(a => lookupMap(a.account_name)?.code === "BS_EQ_RS");
       const booksClosed = currentYearProfitAlreadyInReserves(reservesLedgers);
       const rev   = amounts["PL_REV"] || 0; // negative (credit)
       const exp   = amounts["PL_EXP"] || 0; // positive (debit)
@@ -3400,13 +3409,13 @@ export default function PipelineFinancialStatements({
     }
 
     return amounts;
-  }, [tbAccounts, coaMapping, manualOverrides, isNonCorporate, ncePpeData]);
+  }, [tbAccounts, coaMapping, lookupCoaMapping, manualOverrides, isNonCorporate, ncePpeData]);
 
   // True when at least one TB ledger is mapped to any dual-posting inventory code.
   // Used to lock the corresponding P&L code from manual overrides.
   const hasInvMapping = useMemo(
-    () => tbAccounts.some(a => INV_CODES.has(coaMapping[a.account_name]?.code)),
-    [tbAccounts, coaMapping],
+    () => tbAccounts.some(a => INV_CODES.has(lookupCoaMapping(a.account_name)?.code)),
+    [tbAccounts, lookupCoaMapping],
   );
 
   // ═══════ COMPARATIVE (PY) AMOUNTS ═══════
@@ -3415,21 +3424,10 @@ export default function PipelineFinancialStatements({
   // always comes from prior engagement's fa_financial_statements.
   const computedAmountsPY: Record<string, number> = useMemo(() => {
     const amounts: Record<string, number> = {};
-    // 2026-08-04 — trim+CI fallback so CRLF-suffixed Tally ledger names
-    // resolve the same on this face path as they do inside computeCOATotals.
-    const coaMappingCI: Record<string, { code: string }> = {};
-    for (const [k, v] of Object.entries(coaMapping || {})) {
-      if (!v?.code) continue;
-      const kk = String(k).trim().toLowerCase();
-      if (!(kk in coaMappingCI)) coaMappingCI[kk] = v;
-    }
-    const lookupMap = (name: string | null | undefined) => {
-      if (!name) return undefined;
-      const raw = String(name);
-      return (coaMapping as any)[raw]
-          ?? (coaMapping as any)[raw.trim()]
-          ?? coaMappingCI[raw.trim().toLowerCase()];
-    };
+    // 2026-08-04 — trim+CI+cleanTallyName fallback so control-char/CRLF
+    // Tally ledger names resolve the same on this face path as they do
+    // inside computeCOATotals.
+    const lookupMap = lookupCoaMapping;
     for (const acct of tbAccounts) {
       // 2026-06-01 — Mirror PipelineStage3's alias resolution so FS computes
       // the same PY opening-balance aggregate the COA Mapping screen shows.
@@ -3453,7 +3451,7 @@ export default function PipelineFinancialStatements({
     };
     for (const item of activeTree) computeTotal(item);
     return amounts;
-  }, [tbAccounts, coaMapping, activeTree, aliases]);
+  }, [tbAccounts, coaMapping, lookupCoaMapping, activeTree, aliases]);
 
   // ─── Merged PY: BS uses computedAmountsPY (from opening); P&L uses pyAmounts (prior engagement) ───
   // When there is no prior engagement, PY P&L is sourced from engagement.py_manual_amounts.
@@ -3535,7 +3533,7 @@ export default function PipelineFinancialStatements({
     if (pyInvCII !== null) {
       // Corporate: PL_EXP_CII | NCE: NCE_CII — write to whichever is applicable
       const hasCorporateInv = tbAccounts.some(a => {
-        const code = coaMapping[a.account_name]?.code;
+        const code = lookupCoaMapping(a.account_name)?.code;
         return code && INV_DUAL_MAP[code] === "PL_EXP_CII";
       });
       merged[hasCorporateInv ? "PL_EXP_CII" : "NCE_CII"] = pyInvCII;
@@ -3692,7 +3690,7 @@ export default function PipelineFinancialStatements({
     }
 
     return merged;
-  }, [computedAmountsPY, pyAmounts, pyManualAmounts, pyShellPLAmounts, pyShellBSAmounts, hasPyShellBS, noPriorEngagement, activeFlatItems, activeTree, pyInvCII, isNonCorporate]);
+  }, [computedAmountsPY, pyAmounts, pyManualAmounts, pyShellPLAmounts, pyShellBSAmounts, hasPyShellBS, noPriorEngagement, activeFlatItems, activeTree, pyInvCII, isNonCorporate, tbAccounts, lookupCoaMapping]);
 
   // ─── NCE Dynamic Note Number Map ────────────────────────────────────────────
   // Maps originalNoteRef → dynamicSequentialNoteNo for NCE entities.
@@ -3717,14 +3715,14 @@ export default function PipelineFinancialStatements({
     const exportPy: Record<string, number> = {};
     let hasInvMappingLocal = false;
     for (const acct of tbAccounts) {
-      const mapping = coaMapping[acct.account_name];
+      const mapping = lookupCoaMapping(acct.account_name);
       // 2026-06-01 — Apply alias resolution to PY only (matches Stage3
       // semantics). Aliases let the auditor say a CY ledger's PY closing
       // (= opening balance on CY TB) was previously classified to a
       // different code; without this redirection the FS PY total drifted
       // from COA Mapping's PY total.
       const aliasName = aliases[acct.account_name];
-      const pyMapping = (aliasName ? coaMapping[aliasName] : null) ?? mapping;
+      const pyMapping = (aliasName ? lookupCoaMapping(aliasName) : null) ?? mapping;
       if (!mapping && !pyMapping) continue;
       const opening = acct.opening_balance ?? 0;
       const plCode  = mapping ? INV_DUAL_MAP[mapping.code]  : undefined;
@@ -4322,7 +4320,7 @@ export default function PipelineFinancialStatements({
 
     return { exportCy, exportPy, cyOf, pyOf, bs, pl, cfs };
   }, [
-    tbAccounts, coaMapping, manualOverrides, activeTree, aliases,
+    tbAccounts, coaMapping, lookupCoaMapping, manualOverrides, activeTree, aliases,
     pyAmounts, pyManualAmounts, pyShellPLAmounts, noPriorEngagement, isNonCorporate,
     computedAmounts, mergedPY, noteOverrides, pyInvCII,
     stage5NotesData,
@@ -5430,11 +5428,12 @@ export default function PipelineFinancialStatements({
       //   2. CY engagement's coaMapping  — fallback when the PY shell hasn't
       //      been mapped yet or the ledger name is identical across years.
       const preview: Record<string, number> = {};
+      const lookupPyEngMapping = buildLedgerMapMatcher(pyEngCoaMapping || {});
       for (const row of pyTbRows) {
         const name = String(row.ledger_name || "").trim();
         const mapping =
-          (pyEngCoaMapping[name]) ||       // 1. PY shell's own mapping
-          (coaMapping as any)[name];        // 2. CY fallback
+          lookupPyEngMapping(name) ||       // 1. PY shell's own mapping
+          lookupCoaMapping(name);           // 2. CY fallback
         if (!mapping || !plLeafCodes.has(mapping.code)) continue;
         const signed = fsSignedBalance(row.closing_balance, row.balance_type, "DR");
         preview[mapping.code] = (preview[mapping.code] || 0) + signed;
@@ -5453,7 +5452,7 @@ export default function PipelineFinancialStatements({
     } finally {
       setFetchingPyTally(false);
     }
-  }, [engagement, engagementId, activeFlatItems, coaMapping]);
+  }, [engagement, engagementId, activeFlatItems, coaMapping, lookupCoaMapping]);
 
   // ─── Save manual PY P&L amounts to audit_engagements.py_manual_amounts ──
   // Writes enriched { v, by, at } shape; amounts without meta retain legacy shape.
@@ -7652,7 +7651,7 @@ export default function PipelineFinancialStatements({
       for (const item of notedItems) {
         const tbLedgerNames = new Set<string>();
         const rows: Array<Record<string, any>> = tbAccounts
-          .filter(a => coaMapping[a.account_name]?.code === item.code)
+          .filter(a => lookupCoaMapping(a.account_name)?.code === item.code)
           .map(a => {
             tbLedgerNames.add(String(a.account_name).toLowerCase().trim());
             return {
@@ -8980,16 +8979,24 @@ export default function PipelineFinancialStatements({
             + (corpPlData?.deferredTax?.py ?? 0)
           }
           onNavigate={(noteNo, subTab) => {
+            // 2026-08-06 fix: this was a THIRD note-navigation entry point
+            // that PR #48 never touched — it never bumped nceNoteNavToken (so
+            // re-clicking the same note here after navigating away did
+            // nothing) and it still had the original racy fixed-300ms
+            // setTimeout + document.getElementById('note-${noteNo}') scroll,
+            // which for NCE targets the wrong DOM id entirely (NCE anchors
+            // are 'nce-note-*', not 'note-*' — that format is corporate-only)
+            // and for corporate races the note grid's own load exactly like
+            // the pre-#48 bug. Route through the same state NCE's BS/PL
+            // NoteCell handlers use — NCEDetailedNotes' own effect (gated on
+            // its `loading` state) owns the actual force-open + scroll now.
             setActiveTab("notes");
             if (isNonCorporate) {
               setNceNavNote(noteNo);
+              setNceNoteNavToken(t => t + 1);
             } else {
               setCorpNavNote({ noteNo, subTab });
             }
-            // Scroll to the notes tab content after a short delay
-            setTimeout(() => {
-              document.getElementById(`note-${noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-            }, 300);
           }}
         />
       </div>
