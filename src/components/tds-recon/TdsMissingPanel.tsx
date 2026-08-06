@@ -11,6 +11,7 @@
  *   • Create Mapping dialog: pre-fill section, let auditor enter deductee name
  */
 import { useState, useCallback } from "react";
+import { supabase }   from "@/integrations/supabase/client";
 import { Button }     from "@/components/ui/button";
 import { runMissingScanner } from "./tdsEngine";
 import { Badge }      from "@/components/ui/badge";

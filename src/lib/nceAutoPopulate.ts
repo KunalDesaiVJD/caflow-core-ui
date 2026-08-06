@@ -26,7 +26,7 @@ import { supabase } from "@/integrations/supabase/client";
 // 2026-06-05 Phase 3 — every getNCENoteFaceTotal call now reads from the
 // canonical computeNoteTotals helper instead of its own leaf-sum algorithm.
 // NOTES_CONFIG is needed to resolve note_type → NoteConfig at call time.
-import { NOTES_CONFIG } from "@/config/nceNotesConfig";
+import { NOTES_CONFIG, type NoteConfig } from "@/config/nceNotesConfig";
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import { buildNoteFsMap } from "@/lib/nceNoteRegistry";
 import { buildLedgerMapMatcher, cleanTallyName } from "@/lib/tallyText";
@@ -3221,6 +3221,19 @@ export async function nceAutoPopulate(
     // shows the row only in the side COA mapping says it belongs in,
     // matching the BS face exactly. CY and PY are normalised independently
     // because a settled-in-CY loan (e.g. AU SFB) lives in PY only.
+    // 2026-08-06 fix: hoisted above both the noteFs.lt/st block and the
+    // noteFs.all block below — resolveCodeAll (inside the noteFs.all block)
+    // referenced these as if they were in scope there, but they were
+    // previously declared INSIDE the noteFs.lt/st block only, a sibling
+    // scope. Any Pattern-B note (noteFs.all — cash_bank, other_cl,
+    // trade_payables, inventories, trade_receivables, etc., the majority of
+    // NCE notes) with a manual custom row threw
+    // "ReferenceError: lookupCyLtSt is not defined" the instant
+    // resolveCodeAll ran, crashing the entire nceAutoPopulate() call —
+    // including the initial note-generation path and both the "Refresh
+    // notes from TB" and "Recompute Notes" rebuild actions.
+    const lookupCyLtSt = buildLedgerMapMatcher(coaMapping || {});
+    const lookupPyLtSt = buildLedgerMapMatcher(pyCoaMap || {});
     if ((noteFs.lt && noteFs.lt.length > 0) || (noteFs.st && noteFs.st.length > 0)) {
       const ltCodes = new Set(noteFs.lt ?? []);
       const stCodes = new Set(noteFs.st ?? []);
@@ -3230,8 +3243,6 @@ export async function nceAutoPopulate(
       // 2026-08-06 fix: was coaMapping[ejected] ?? pyCoaMap[ejected] — exact
       // bracket, no cleanTallyName/CI fallback. buildLedgerMapMatcher matches
       // the RC-21 pattern already used elsewhere in this file.
-      const lookupCyLtSt = buildLedgerMapMatcher(coaMapping || {});
-      const lookupPyLtSt = buildLedgerMapMatcher(pyCoaMap || {});
       const resolveCode = (cr: NCECustomRow): string | undefined => {
         const ejected = ((cr as any).ejectedSource as string | undefined)?.trim();
         if (ejected) {
