@@ -5,7 +5,7 @@ saved in CAFlow's "ITD (e-Filing) Login ID" / "ITD (e-Filing) Password"
 fields (Edit Client → Services → Portal Login Credentials) — the exact value
 saved there, whatever it is (PAN, Aadhaar, or another registered User ID;
 CAflow doesn't assume or validate which) — then confirms the Secure Access
-Message and submits. Stops only if a CAPTCHA or OTP screen appears next.
+Message. **You click the final Continue yourself** to actually sign in.
 
 ## What this is NOT
 
@@ -14,24 +14,37 @@ extension, not part of the Vite/React build. It only exists locally on each
 person's machine (see Install below); it is not deployed, published, or
 auto-updated. There is no Chrome Web Store listing.
 
-## Scope (v0.2 — widened 2026-08-06, explicit firm decision)
+## Scope (v0.2.3 — settled 2026-08-06 after same-day back-and-forth)
 
 - **ITD (incometax.gov.in) only.** TRACES autofill is not built yet — the
   "Copy Login ID" / "Copy Password" flow in CAFlow still works for it, as it
   always has.
 - Fills Login ID → Continue → fills Password → ticks the **Secure Access
-  Message confirmation checkbox** → clicks the second Continue, which
-  **submits the password**. It stops there — it never touches a CAPTCHA/OTP
-  field if the portal shows one after this.
-- **On the Secure Access Message checkbox**: this is a real anti-phishing
-  control, not a mechanical step. At registration, the account holder picks
-  a personal message; this screen shows it back and asks them to confirm
-  it's theirs — proving they're on the genuine portal, not a spoofed clone
-  that wouldn't know the message. Auto-checking it without a human actually
-  reading that message defeats its purpose. This was explicitly flagged
-  before building it, and the automation was requested anyway — recorded
-  here, and in `content-itd.js`'s own header comment, so that tradeoff stays
-  visible to whoever reads this next, not just in a chat log.
+  Message confirmation checkbox** — and **stops**. It never clicks the final
+  submit button, never touches a CAPTCHA/OTP field.
+- **Why the final click stays manual, specifically**: this was briefly
+  automated (v0.3.0, since reverted), then deliberately pulled back out.
+  Live testing against a real account confirmed the submit button's own
+  click handler does not respond to a script-generated `.click()` — every
+  other control on this page (the checkbox included) responds fine to the
+  identical technique, so this reads as a deliberate, targeted control on
+  that one button, not a general framework quirk. The one technique that
+  could have gotten past it — Chrome's `debugger` permission, which can
+  inject an OS-level "trusted" click indistinguishable from a real one —
+  was built and then removed. Defeating a control a site placed
+  specifically on its final authentication step is circumventing
+  anti-automation protection, not filling in a form, and that line holds
+  regardless of how many times bypassing it is requested. See
+  `content-itd.js`'s own header comment for the full account, kept there
+  deliberately rather than cleaned up.
+- **On the Secure Access Message checkbox** (a smaller version of the same
+  question, and still worth naming): this is a real anti-phishing control,
+  not a mechanical step. At registration, the account holder picks a
+  personal message; this screen shows it back and asks them to confirm it's
+  theirs — proving they're on the genuine portal, not a spoofed clone that
+  wouldn't know the message. Auto-checking it without a human actually
+  reading that message defeats its purpose. Flagged explicitly before
+  building it, and the automation was requested anyway.
 - If the ITD portal's page structure has changed since this was built and a
   field can't be found, you'll see a banner on the portal page saying exactly
   what happened — it never fails silently.
@@ -46,9 +59,13 @@ auto-updated. There is no Chrome Web Store listing.
 5. Confirm it's enabled. No further setup needed — it activates
    automatically on the CAflow app and on the ITD portal.
 
-To pick up a change after this folder is edited, click the refresh icon on
-the extension's card at `chrome://extensions` — Chrome does not auto-reload
-unpacked extensions.
+To pick up a change after this folder is edited, **remove the old entry
+entirely** and Load unpacked again — Chrome does not reliably auto-reload
+an unpacked extension just from the refresh icon, and this has repeatedly
+been the real explanation behind a report that looked like a fresh bug.
+Every on-page banner ends with `[vX.Y.Z]` — check that number against
+`manifest.json`'s own `version` field to confirm which build actually ran,
+without needing to open `chrome://extensions` at all.
 
 ## How it works
 
@@ -62,30 +79,31 @@ unpacked extensions.
    they're consumed and erased the instant the ITD tab reads them — a second
    tab or a page reload never replays the same saved password.
 3. On the ITD portal tab, the extension fills Login ID, clicks Continue,
-   fills Password, ticks the Secure Access Message checkbox, and clicks the
-   final Continue — which submits the login.
+   fills Password, and ticks the Secure Access Message checkbox — then
+   stops and tells you it's your turn to click Continue.
 
 ## Verified (2026-08-06)
 
 Every selector this script uses was confirmed directly against the live
-portal, including a real account reaching the actual password screen — the
-Login ID field, both Continue buttons, the password field
+portal with a real account, reaching the actual password screen — the
+Login ID field, the first Continue button, the password field
 (`#loginPasswordField`), and the confirmation checkbox (the page's only
-`input[type="checkbox"]`, disabled-Continue gate confirmed to require both
-it and a non-empty password). All fills use the native value setter +
-`input`/`change` events (or `.click()` for the checkbox/buttons) so
-Angular's own form validation actually registers the change — plain
-`.value =` would leave Continue permanently disabled.
+`input[type="checkbox"]`). All fills use the native value setter +
+`input`/`change` events (or `.click()` for the checkbox) so Angular's own
+form validation actually registers the change — plain `.value =` would
+leave Continue permanently disabled.
 
-v0.1.2 also widened the credential-poll window from ~1.2s to ~12s, closing
-a timing race where a slow edge-function cold start could beat the old
-short retry window and leave the field unfilled with no visible error.
+Also fixed the same day: the portal's Angular router leaves a step's own
+Continue button in the DOM (hidden, not destroyed) after navigating past
+it — confirmed by direct inspection: two elements matched `/continue/i`,
+one with `offsetParent: null` and a completely different CSS class from
+the real, visible one. A plain text-match query could non-deterministically
+grab the wrong one. `findButtonByText` now skips anything not visible.
 
-Not yet verified end-to-end with a REAL password (only the User ID step was
-tested against a live account; the password/checkbox/submit steps were
-verified structurally — selectors exist, disabled-state logic confirmed —
-but never actually exercised with a real submission, deliberately, to avoid
-touching a real account's login state during development). If anything
-after the password field doesn't behave as expected, the on-page banner
-will say exactly what it could and couldn't do — please report its exact
-text.
+Also widened the credential-poll window from ~1.2s to ~12s (closing a
+timing race where a slow edge-function cold start could beat the old short
+retry window and leave the field unfilled with no visible error), and
+briefly pointed the "Auto-fill ITD Login" button at `/dashboard` instead of
+`/login` directly (reverted — a *stale* session, past the portal's own
+15-minute idle timeout, redirects to a different `#/sessionExpire` page
+with no login form at all, which `/login` sidesteps entirely).

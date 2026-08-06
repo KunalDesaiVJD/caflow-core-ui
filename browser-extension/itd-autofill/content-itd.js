@@ -1,21 +1,37 @@
 /**
  * CAFlow — ITD Portal Autofill: content script for eportal.incometax.gov.in.
  *
- * Scope (widened 2026-08-06 — explicit, informed firm decision, see below):
- * fills the Login ID (step 1) → Continue → fills Password → ticks the
- * "Secure Access Message" confirmation checkbox → clicks the second
- * Continue, which SUBMITS THE PASSWORD. It stops there. It never touches a
- * CAPTCHA or OTP field if one appears next.
+ * Scope, current (settled 2026-08-06 after a same-day back-and-forth — see
+ * the trail below, kept rather than cleaned up, since the reasoning matters
+ * more here than usual): fills the Login ID (step 1) → Continue → fills
+ * Password → ticks the "Secure Access Message" confirmation checkbox — and
+ * STOPS. It never clicks the final submit button, never touches a CAPTCHA
+ * or OTP field.
+ *
+ * That final click was briefly automated, then deliberately reverted. Live
+ * testing (against a real account, read-only up to the click itself — see
+ * git history for the exact sequence) confirmed the submit button's own
+ * click handler does not respond to a script-generated .click() — the
+ * checkbox and every other control on this page respond fine to the exact
+ * same technique, so this looks like a deliberate, targeted control on
+ * THIS specific button, not a general framework quirk. The one technique
+ * that could have gotten around it — Chrome's debugger protocol injecting
+ * an OS-level "trusted" click indistinguishable from a real one — was
+ * built, then removed: defeating a control a site placed specifically on
+ * its final authentication step is circumventing anti-automation
+ * protection, not filling in a form, and that line holds regardless of how
+ * many times bypassing it is requested. Everything up to that click stays
+ * automated; that one click is yours.
  *
  * The Secure Access Message checkbox is a real anti-phishing control — at
  * registration the user picks a personal message, and this screen asks them
  * to visually confirm it's theirs before continuing, proving they're on the
  * genuine portal and not a spoofed clone that wouldn't know the message.
  * Auto-checking it without a human ever reading that message defeats its
- * purpose. This was flagged explicitly and the automation was requested
- * anyway — kept as its own clearly-labelled step (not folded silently into
- * the password fill) so that tradeoff stays visible in the code, not just
- * in a chat log.
+ * purpose too — flagged explicitly before building it, and kept as its own
+ * clearly-labelled step below rather than folded silently into the password
+ * fill, so that tradeoff (a smaller one than the submit click, still worth
+ * naming) stays visible in the code, not just in a chat log.
  *
  * The value filled here is exactly whatever CAflow has saved as the "ITD
  * (e-Filing) Login ID" for this client (Edit Client → Services → Portal
@@ -114,8 +130,19 @@
     showBanner("CAFlow: password and confirmation filled, but Continue never enabled — please check and click it yourself.", "info");
     return;
   }
-  submitBtn.click();
-  showBanner("CAFlow: login submitted — enter the CAPTCHA/OTP if one appears.", "success");
+
+  // STOPS HERE, DELIBERATELY (2026-08-06): confirmed live that a plain
+  // .click() reaches this exact, correct, visible button and the page still
+  // never advances — this specific submit button appears to reject
+  // script-generated clicks. That's very likely a deliberate anti-automation
+  // control on a government tax portal, not a bug to route around. A
+  // technique exists that could defeat it (Chrome's debugger protocol can
+  // inject an OS-level "trusted" click indistinguishable from a real one),
+  // but building that crosses from "fill in what I already typed" into
+  // "circumvent a security control this site placed here on purpose" —
+  // not something to automate regardless of how many times it's requested.
+  // Fill everything, leave this one click to a real person.
+  showBanner("CAFlow: login ID, password, and confirmation filled — click Continue yourself to finish signing in.", "success");
 })();
 
 /** Polls for a truthy result from `check` every 150ms until `timeoutMs`. */
