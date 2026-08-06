@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -263,6 +263,11 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   // this guards against). Cleared on a successful save or once the user
   // edits a row in response to it.
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Auto-save-on-tie bookkeeping (see the effect below handleSave/cons) —
+  // declared here so the load effect can reset lastAutoSaveAttempt for a
+  // freshly-loaded engagement without forward-referencing a later const.
+  const handleSaveRef = useRef<() => void>(() => {});
+  const lastAutoSaveAttempt = useRef<string | null>(null);
 
   // ── Derived year labels (from self-fetched engagement) ───────────────────
   const financialYear = (eng?.financial_year as string) || "";
@@ -342,6 +347,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
 
         setRows(finalRows);
         setSavedSnapshot(finalSnapshot);
+        lastAutoSaveAttempt.current = null;
         setLoading(false);
       }
     })();
@@ -625,6 +631,41 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   // ── Constrained-mode tie status (difference to explain) ───────────────────
   const cons = useMemo(() => computeTie(rows, coa, hasPyShell), [rows, coa, hasPyShell]);
 
+  // ── Auto-save on tie (PPE Schedule ONLY — no other note type does this) ────
+  // Root-cause fix for "the Save button doesn't respond": rather than depend
+  // on a click ever reliably reaching the button (browser quirks, a stray
+  // re-render mid-click, a user who insists they can't click it), persist
+  // automatically the moment the schedule actually ties to COA mapping.
+  // handleSave() itself still re-verifies the tie fresh against the server
+  // immediately before writing (see loadCoaAnchor() above), so this can never
+  // save an untied schedule — it only removes the manual click as the sole
+  // trigger. The manual Save button stays as a fallback / for saving sooner
+  // than the debounce window.
+  //
+  // - Debounced (1.2s of no row/tie change) so a burst of edits across many
+  //   asset rows settles before writing, instead of firing on every row.
+  // - `handleSaveRef` always calls the LATEST handleSave via closure without
+  //   putting the (unmemoized, every-render-new) function in the effect's
+  //   dependency array — putting it there would reset the debounce timer on
+  //   every unrelated re-render of this component and the timer could never
+  //   elapse.
+  // - `lastAutoSaveAttempt` guards against retry-looping the SAME tied row
+  //   state forever when the save is rejected for a reason unrelated to the
+  //   tie (e.g. the engagement was finalized mid-session) — it only
+  //   re-attempts once the row data actually changes again.
+  useEffect(() => { handleSaveRef.current = handleSave; });
+  useEffect(() => {
+    if (loading || readOnly || saving || !FS_NCE_CONSTRAINED_NOTES) return;
+    if (!dirty || !cons.tied) return;
+    const snapshot = JSON.stringify(rows);
+    if (lastAutoSaveAttempt.current === snapshot) return;
+    const t = setTimeout(() => {
+      lastAutoSaveAttempt.current = snapshot;
+      handleSaveRef.current();
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [rows, dirty, cons.tied, saving, loading, readOnly]);
+
   // One-click reconcile: nudge each category's LAST row (the balancer) so every
   // COA leg ties — Σ opening = COA PY net, Σ depreciation = booked NCE_DEPR, Σ
   // closing (net block) = COA CY net. The legs are independent fields (opening /
@@ -689,17 +730,21 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   // JSX components — this matches that pattern.
   const renderSaveBtn = () => (
     <div className="flex items-center gap-2">
-      {dirty && (
+      {dirty && !saving && (
         <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Unsaved changes
-          {FS_NCE_CONSTRAINED_NOTES && !cons.tied && " — saved locally on this device until it ties"}
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+          {FS_NCE_CONSTRAINED_NOTES && !cons.tied
+            ? "Unsaved changes — saved locally on this device until it ties"
+            : "Ties to COA mapping — saving automatically…"}
         </span>
       )}
       <Button size="sm" onClick={handleSave} disabled={saving || (FS_NCE_CONSTRAINED_NOTES && !cons.tied)}>
         {saving
           ? <Loader2 className="animate-spin h-4 w-4 mr-1.5" />
           : <Save className="h-4 w-4 mr-1.5" />}
-        {FS_NCE_CONSTRAINED_NOTES && !cons.tied ? "Fix the difference to save" : "Save PPE Schedule"}
+        {saving
+          ? "Saving…"
+          : FS_NCE_CONSTRAINED_NOTES && !cons.tied ? "Fix the difference to save" : "Save PPE Schedule"}
       </Button>
     </div>
   );

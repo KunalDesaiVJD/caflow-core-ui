@@ -108,3 +108,75 @@ describe("NCEPPESchedule — local draft safety net", () => {
     expect(screen.queryByText(/unsaved edits from an earlier session/i)).toBeNull();
   });
 });
+
+/**
+ * Root cause of "the Save button doesn't respond to clicks" (AMBICA PLASTIC
+ * INDUSTRIES, Aug-2026): SaveBtn was a locally-defined component invoked as
+ * JSX, so React remounted its DOM node on every render (fixed separately).
+ * Rather than depend solely on a click ever landing on a button, the
+ * schedule now saves itself the moment it ties to COA mapping — this pins
+ * that behaviour end-to-end with no button click involved at all.
+ */
+describe("NCEPPESchedule — auto-save on tie", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+  });
+
+  it("saves automatically, with no button click, once an edit makes the schedule tie to COA mapping", async () => {
+    const mappedEngRow = { ...engRow, coa_mapping: { Plant: { code: "NCE_PPE" } } };
+    (supabase.from as any).mockImplementation((table: string) => {
+      if (table === "audit_engagements") return makeChain(mappedEngRow, []);
+      if (table === "nce_ppe_schedule") return makeChain([], []);
+      if (table === "tally_trial_balance")
+        return makeChain([], [
+          { ledger_name: "Plant", closing_balance: 1000, balance_type: "DR", opening_balance: 0, opening_type: "DR" },
+        ]);
+      return makeChain(null, []);
+    });
+    (supabase.functions.invoke as any).mockResolvedValue({ data: { ok: true }, error: null });
+
+    const { container } = render(<NCEPPESchedule engagementId="e1" />);
+    await waitFor(() => expect(screen.getByText(/Freehold land/i)).toBeTruthy());
+    // Wait for the COA anchor fetch (TB → NCE_PPE ₹1,000) to land before editing,
+    // so the edit below ties on the first render instead of racing the load.
+    await waitFor(() => expect(container.textContent || "").toContain("1,000"));
+
+    // Freehold land's Opening Balance — rate 0% auto-calculates depreciation to 0,
+    // so ₹1,000 opening also ties the (unmapped, ₹0) NCE_DEPR anchor exactly.
+    const inputs = container.querySelectorAll('input[type="text"]');
+    fireEvent.change(inputs[1], { target: { value: "1000" } });
+    fireEvent.blur(inputs[1]);
+
+    await waitFor(() => expect(container.textContent || "").toContain("ready to save"));
+    expect(supabase.functions.invoke).not.toHaveBeenCalled();
+
+    // No click anywhere — the debounced auto-save effect fires on its own.
+    await waitFor(
+      () => expect(supabase.functions.invoke).toHaveBeenCalledWith(
+        "save-nce-constrained-note",
+        expect.objectContaining({
+          body: expect.objectContaining({ type: "ppe", engagement_id: "e1" }),
+        }),
+      ),
+      { timeout: 3000 },
+    );
+  });
+
+  it("does not auto-save while the schedule is still untied", async () => {
+    setupSupabase([]); // no coa_mapping → COA anchor is ₹0, so a non-zero edit stays untied
+    (supabase.functions.invoke as any).mockResolvedValue({ data: { ok: true }, error: null });
+
+    const { container } = render(<NCEPPESchedule engagementId="e1" />);
+    await waitFor(() => expect(screen.getByText(/Freehold land/i)).toBeTruthy());
+
+    const inputs = container.querySelectorAll('input[type="text"]');
+    fireEvent.change(inputs[1], { target: { value: "50000" } });
+    fireEvent.blur(inputs[1]);
+
+    await waitFor(() => expect(container.textContent || "").toContain("Unsaved changes"));
+    // Give the 1.2s debounce window a chance to have fired if it incorrectly would.
+    await new Promise(r => setTimeout(r, 1500));
+    expect(supabase.functions.invoke).not.toHaveBeenCalled();
+  });
+});
