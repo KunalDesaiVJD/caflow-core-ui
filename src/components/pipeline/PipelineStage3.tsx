@@ -1802,7 +1802,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       out.push({ name: key, code, suggestion: bestScore >= 0.5 ? best : null });
     }
     return out;
-  }, [tbAccounts, coaMapping, coaMapCI]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tbAccounts, coaMapping, lookupMapping]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── DUPLICATE-LEDGER GUARD (2026-06-25) ─────────────────────────────────────
   // Catches the silent double-count risk: two LIVE ledgers mapped to the SAME
@@ -1839,7 +1839,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       }
     }
     return out;
-  }, [tbAccounts, coaMapping, coaMapCI]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tbAccounts, coaMapping, lookupMapping]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── INVENTORY MAPPING GUARD (2026-06-29) ────────────────────────────────────
   // Surfaces inventory data-quality problems at MAPPING time (instead of only as
@@ -1868,7 +1868,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
       }
     }
     return out;
-  }, [tbAccounts, coaMapping, coaMapCI]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tbAccounts, coaMapping, lookupMapping]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Companion: last year carried stock but NO current-year stock is mapped at all
   // (the ledger was renamed/removed, not just mis-mapped). Returns the PY amount.
