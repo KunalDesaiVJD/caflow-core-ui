@@ -24,8 +24,9 @@
  *   and roll back on any Supabase error so bulk-tagging feels
  *   instantaneous even on a slow connection.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { logTdsLearningEvent, normalizeTdsPatternFragment } from "./useTdsLearningLogger";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -209,6 +210,11 @@ export function useTdsVoucherClassifications(params: {
 
   useEffect(() => { void load(); }, [load]);
 
+  // Latest vouchers, readable from inside upsertRow/clearRow without adding
+  // `vouchers` to their dependency arrays.
+  const vouchersRef = useRef<VoucherRow[]>(vouchers);
+  useEffect(() => { vouchersRef.current = vouchers; }, [vouchers]);
+
   // ── Mutations (optimistic + roll-back on error) ─────────────────────────────
 
   const upsertRow = useCallback(async (voucherId: string, patch: Partial<Omit<VoucherClassification, "id" | "voucher_id" | "updated_at">>) => {
@@ -249,6 +255,25 @@ export function useTdsVoucherClassifications(params: {
       if (upErr) throw upErr;
       // Refresh in the background so we pick up the real row id.
       void load();
+
+      // Learning capture — per-voucher section overrides are how the
+      // auditor tells the module "vouchers like this one, under this
+      // ledger, actually belong to a different section than the mapping
+      // default." Keyed by voucher_type so the pattern generalizes across
+      // future vouchers of the same kind under the same ledger.
+      if (row.section_code_override) {
+        const voucher = vouchersRef.current.find(v => v.id === voucherId);
+        logTdsLearningEvent({
+          clientId, firmId, financialYear, engagementId,
+          eventType: "voucher_classification",
+          entityType: "tds_voucher_classification", entityId: voucherId,
+          patternType: "voucher_classification_rule",
+          patternKey: `ledger:${normalizeTdsPatternFragment(tbLedgerName)}:vch:${normalizeTdsPatternFragment(voucher?.voucher_type ?? "unknown")}`,
+          beforeValue: { section: prev?.section_code_override ?? defaultSection ?? null },
+          afterValue: { section: row.section_code_override },
+          source: "manual",
+        });
+      }
     } catch (e: any) {
       // Roll back
       setClassifications(m => {
@@ -273,12 +298,29 @@ export function useTdsVoucherClassifications(params: {
         .eq("voucher_id", voucherId)
         .eq("tb_ledger_name", tbLedgerName);
       if (dErr) throw dErr;
+
+      // Learning capture — only when there was an actual override to
+      // revert; clearing a row with no prior override is a no-op with
+      // nothing to learn from.
+      if (prev?.section_code_override && firmId) {
+        const voucher = vouchersRef.current.find(v => v.id === voucherId);
+        logTdsLearningEvent({
+          clientId, firmId, financialYear, engagementId,
+          eventType: "voucher_classification",
+          entityType: "tds_voucher_classification", entityId: voucherId,
+          patternType: "voucher_classification_rule",
+          patternKey: `ledger:${normalizeTdsPatternFragment(tbLedgerName)}:vch:${normalizeTdsPatternFragment(voucher?.voucher_type ?? "unknown")}`,
+          beforeValue: { section: prev.section_code_override },
+          afterValue: { section: defaultSection ?? null },
+          source: "manual",
+        });
+      }
     } catch (e: any) {
       // Roll back
       if (prev) setClassifications(m => new Map(m).set(voucherId, prev));
       setError(`Failed to clear classification: ${e?.message ?? String(e)}`);
     }
-  }, [clientId, financialYear, tbLedgerName, classifications]);
+  }, [clientId, firmId, financialYear, engagementId, tbLedgerName, defaultSection, classifications]);
 
   const bulkAssign = useCallback(async (voucherIds: string[], sectionCode: string | null) => {
     for (const id of voucherIds) {
