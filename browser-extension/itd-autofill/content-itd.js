@@ -177,12 +177,19 @@ function setNativeValue(input, value) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+// Stamped into every banner so a screenshot alone proves which build
+// actually ran — Chrome doesn't auto-reload an unpacked extension, so
+// "which version is installed" has repeatedly been the real question
+// behind a report that looked like a fresh bug. No more chrome://extensions
+// round-trip needed to answer it.
+const EXTENSION_VERSION = chrome.runtime.getManifest().version;
+
 function showBanner(text, kind) {
   const colors = {
     info: "#2563eb", success: "#059669", error: "#dc2626",
   };
   const el = document.createElement("div");
-  el.textContent = text;
+  el.textContent = `${text} [v${EXTENSION_VERSION}]`;
   el.style.cssText = `
     position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
     z-index: 2147483647; background: ${colors[kind] || colors.info}; color: white;

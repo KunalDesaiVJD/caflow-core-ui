@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CAFlow — ITD Portal Autofill",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Fills the Income Tax e-Filing login, confirms the Secure Access Message, and submits. Stops only for CAPTCHA/OTP if one appears.",
   "permissions": ["storage"],
   "host_permissions": [
