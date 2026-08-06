@@ -677,7 +677,17 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       ? tangibleParents.length + rows.filter(r => r.asset_category === "tangible" && isSubLedger(r.sort_order)).length
       : intangibleParents.length + rows.filter(r => r.asset_category === "intangible" && isSubLedger(r.sort_order)).length;
 
-  const SaveBtn = () => (
+  // NOT a React component — called as a plain function (renderSaveBtn()), never
+  // invoked as JSX (<SaveBtn/>). A function declared inside another component's
+  // body and invoked via JSX gets a NEW identity every render, so React treats
+  // it as a different component type each time and unmounts + remounts its DOM
+  // subtree on every re-render of NCEPPESchedule (COA anchor refresh, any row
+  // edit, draft-banner state, …) — a real button element being destroyed and
+  // recreated under the user's cursor reads as "the Save button doesn't
+  // respond to clicks", exactly like the reported symptom. renderAssetRow /
+  // renderSubLedgerRow already avoid this by being called as functions, not
+  // JSX components — this matches that pattern.
+  const renderSaveBtn = () => (
     <div className="flex items-center gap-2">
       {dirty && (
         <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
@@ -968,7 +978,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       {/* Top save — hidden in readOnly / preview mode */}
       {!readOnly && (
         <div className="flex justify-end">
-          <SaveBtn />
+          {renderSaveBtn()}
         </div>
       )}
 
@@ -1147,7 +1157,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       {/* Bottom save — hidden in readOnly / preview mode */}
       {!readOnly && (
         <div className="flex justify-end pt-1">
-          <SaveBtn />
+          {renderSaveBtn()}
         </div>
       )}
     </div>
