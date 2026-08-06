@@ -4,9 +4,10 @@
  * Loads tds_tb_party_mappings for a given client + FY.
  * Provides helpers to confirm, reject, or update a mapping.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { isPartyLedgerGroup } from "../tdsEngine";
+import { logTdsLearningEvent, normalizeTdsPatternFragment } from "./useTdsLearningLogger";
 
 export type MappingStatus = "pending" | "confirmed" | "rejected" | "needs_review";
 
@@ -51,7 +52,7 @@ interface UseTdsPartyMappingsResult {
   refresh: () => void;
   updateStatus: (id: string, status: MappingStatus, note?: string) => Promise<void>;
   updateMapping: (id: string, patch: Partial<Pick<TbPartyMapping,
-    "tds_deductee_name" | "tds_section_code" | "notes"
+    "tds_deductee_name" | "tds_section_code" | "notes" | "mapping_status" | "tb_ledger_name" | "tb_parent_group"
   >>) => Promise<void>;
 }
 
@@ -140,6 +141,11 @@ export function useTdsPartyMappings(
 
   useEffect(() => { load(); }, [load]);
 
+  // Latest mappings, readable from inside stable (deps-[]) callbacks below
+  // without forcing updateStatus/updateMapping to be recreated on every load.
+  const mappingsRef = useRef<TbPartyMapping[]>(mappings);
+  useEffect(() => { mappingsRef.current = mappings; }, [mappings]);
+
   const counts: MappingCounts = {
     total:        mappings.length,
     confirmed:    mappings.filter(m => m.mapping_status === "confirmed").length,
@@ -161,11 +167,37 @@ export function useTdsPartyMappings(
     setMappings(prev =>
       prev.map(m => m.id === id ? { ...m, mapping_status: status, notes: note ?? m.notes } : m),
     );
+
+    // Learning capture — a "confirm" is a decisive signal ("this vendor →
+    // section pairing is correct"); a bare "reject" has no replacement
+    // value to learn from, so it's left out of the pattern-learning table
+    // (the append-only event log still isn't touched for it — nothing
+    // meaningful to record without a corrected value).
+    if (status === "confirmed") {
+      const m = mappingsRef.current.find(row => row.id === id);
+      if (m && m.tds_section_code) {
+        const isAiSuggested = !(m.match_method || "").includes("manual_link");
+        logTdsLearningEvent({
+          clientId: m.client_id, firmId: m.firm_id, financialYear: m.financial_year,
+          eventType: isAiSuggested ? "ai_suggestion_accepted" : "manual_override",
+          entityType: "tds_tb_party_mappings", entityId: m.id,
+          patternType: "party_section_mapping",
+          patternKey: `vendor:${normalizeTdsPatternFragment(m.tds_deductee_name)}:section`,
+          afterValue: { section: m.tds_section_code },
+          aiSuggestedValue: isAiSuggested ? { section: m.tds_section_code } : null,
+          aiConfidence: isAiSuggested ? m.match_confidence : null,
+          aiMethod: m.match_method,
+          source: isAiSuggested ? "ai_accepted" : "manual",
+        });
+      }
+    }
   }, []);
 
   const updateMapping = useCallback(async (
     id: string,
-    patch: Partial<Pick<TbPartyMapping, "tds_deductee_name" | "tds_section_code" | "notes" | "mapping_status">>,
+    patch: Partial<Pick<TbPartyMapping,
+      "tds_deductee_name" | "tds_section_code" | "notes" | "mapping_status" | "tb_ledger_name" | "tb_parent_group"
+    >>,
   ) => {
     // 2026-07-24 — Root cause of Issue 2 ("Edit / Override Mapping cannot
     // change status from Confirmed → Pending"): the earlier implementation
@@ -179,12 +211,47 @@ export function useTdsPartyMappings(
       .from("tds_tb_party_mappings")
       .update(persist)
       .eq("id", id);
-    if (err) throw new Error(err.message);
+    if (err) {
+      // A re-linked TB ledger can collide with the DB's
+      // (client, fy, tb_ledger_name, tds_deductee_name) uniqueness — surface
+      // that as an actionable message instead of the raw Postgres error.
+      if (err.code === "23505" || /duplicate key/i.test(err.message ?? "")) {
+        throw new Error("This ledger is already mapped to this deductee. Reject the duplicate row first, or choose a different ledger.");
+      }
+      throw new Error(err.message);
+    }
     setMappings(prev =>
       prev.map(m => m.id === id
         ? { ...m, ...persist }
         : m),
     );
+
+    // Learning capture — an explicit Section/Deductee edit is the strongest
+    // correction signal the module has: the auditor deliberately typed or
+    // picked a different value than what was shown.
+    const before = mappingsRef.current.find(row => row.id === id);
+    if (before) {
+      const newSection  = patch.tds_section_code   !== undefined ? patch.tds_section_code   : before.tds_section_code;
+      const newDeductee = patch.tds_deductee_name  !== undefined ? patch.tds_deductee_name   : before.tds_deductee_name;
+      const sectionChanged  = patch.tds_section_code  !== undefined && patch.tds_section_code  !== before.tds_section_code;
+      const deducteeChanged = patch.tds_deductee_name !== undefined && patch.tds_deductee_name !== before.tds_deductee_name;
+      if (newSection && (sectionChanged || deducteeChanged)) {
+        const isAiSuggested = !(before.match_method || "").includes("manual_link");
+        logTdsLearningEvent({
+          clientId: before.client_id, firmId: before.firm_id, financialYear: before.financial_year,
+          eventType: deducteeChanged ? "party_mapping_change" : "section_override",
+          entityType: "tds_tb_party_mappings", entityId: id,
+          patternType: "party_section_mapping",
+          patternKey: `vendor:${normalizeTdsPatternFragment(newDeductee)}:section`,
+          beforeValue: { section: before.tds_section_code, deductee_name: before.tds_deductee_name },
+          afterValue: { section: newSection, deductee_name: newDeductee },
+          aiSuggestedValue: isAiSuggested ? { section: before.tds_section_code } : null,
+          aiConfidence: isAiSuggested ? before.match_confidence : null,
+          aiMethod: before.match_method,
+          source: sectionChanged && isAiSuggested ? "ai_overridden" : "manual",
+        });
+      }
+    }
   }, []);
 
   return { mappings, loading, error, counts, firmId, refresh: load, updateStatus, updateMapping };

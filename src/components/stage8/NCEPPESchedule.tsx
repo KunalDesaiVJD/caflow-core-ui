@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -157,6 +157,27 @@ function calcClosing(r: AssetRow): number {
   return Math.round((calcRowTotal(r) - effDep(r)) * 100) / 100;
 }
 
+/** Pure tie-check — factored out of the `cons` useMemo so handleSave can run
+ *  the SAME check against a freshly re-fetched COA anchor (not the stale
+ *  render-time `coa` state) immediately before attempting a save. */
+function computeTie(
+  rows: AssetRow[],
+  coa: { ppe: { cy: number; py: number }; intg: { cy: number; py: number }; depr: { cy: number; py: number } },
+  hasPyShell: boolean,
+) {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const sumCat = (cat: string, f: (r: AssetRow) => number) => r2(rows.filter(r => r.asset_category === cat).reduce((s, r) => s + f(r), 0));
+  const tanClose = sumCat("tangible", calcClosing), intClose = sumCat("intangible", calcClosing);
+  const tanOpen = sumCat("tangible", r => Number(r.opening_balance) || 0), intOpen = sumCat("intangible", r => Number(r.opening_balance) || 0);
+  const depTot = r2(rows.reduce((s, r) => s + effDep(r), 0));
+  const d = {
+    tanCy: r2(coa.ppe.cy - tanClose), intCy: r2(coa.intg.cy - intClose), dep: r2(coa.depr.cy - depTot),
+    tanPy: r2(coa.ppe.py - tanOpen), intPy: r2(coa.intg.py - intOpen),
+  };
+  const tied = Math.abs(d.tanCy) <= 1 && Math.abs(d.intCy) <= 1 && Math.abs(d.dep) <= 1 && (!hasPyShell || (Math.abs(d.tanPy) <= 1 && Math.abs(d.intPy) <= 1));
+  return { tanClose, intClose, depTot, d, tied };
+}
+
 function fmtNum(v: number): string {
   if (!Number.isFinite(v) || Math.abs(v) < 0.5) return "—";
   return Math.round(v).toLocaleString("en-IN", {
@@ -236,6 +257,17 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   // offered to the user as an explicit Restore/Discard choice, never applied
   // silently (so a stale local draft can never clobber real DB data).
   const [draftCandidate, setDraftCandidate] = useState<AssetRow[] | null>(null);
+  // Persistent (non-toast) record of the last save failure. A toast alone
+  // vanishes in a few seconds — a rejected save with nothing left on screen
+  // afterward reads as "the button doesn't work" (the exact support report
+  // this guards against). Cleared on a successful save or once the user
+  // edits a row in response to it.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  // Auto-save-on-tie bookkeeping (see the effect below handleSave/cons) —
+  // declared here so the load effect can reset lastAutoSaveAttempt for a
+  // freshly-loaded engagement without forward-referencing a later const.
+  const handleSaveRef = useRef<() => void>(() => {});
+  const lastAutoSaveAttempt = useRef<string | null>(null);
 
   // ── Derived year labels (from self-fetched engagement) ───────────────────
   const financialYear = (eng?.financial_year as string) || "";
@@ -315,6 +347,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
 
         setRows(finalRows);
         setSavedSnapshot(finalSnapshot);
+        lastAutoSaveAttempt.current = null;
         setLoading(false);
       }
     })();
@@ -358,43 +391,68 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   };
 
   // ── COA anchor load (constrained mode only) ───────────────────────────────
-  useEffect(() => {
-    if (!engagementId || !FS_NCE_CONSTRAINED_NOTES) return;
-    let cancelled = false;
-    (async () => {
-      const loadTB = async (id: string) => {
-        const out: any[] = [];
-        for (let f = 0; ; f += 1000) {
-          const { data } = await supabase.from("tally_trial_balance")
-            .select("ledger_name,closing_balance,balance_type,opening_balance,opening_type")
-            .eq("engagement_id", id).order("ledger_name").range(f, f + 999);
-          if (!data || !data.length) break; out.push(...data); if (data.length < 1000) break;
-        }
-        return out;
-      };
-      const { data: e } = await supabase.from("audit_engagements")
-        .select("client_id, coa_mapping, financial_year").eq("id", engagementId).maybeSingle();
-      if (cancelled || !e) return;
-      const cyMap = ((e as any).coa_mapping ?? {}) as any;
-      const cyTb = await loadTB(engagementId);
-      const p = String((e as any).financial_year ?? "").split("-");
-      const prevFy = p.length === 2 ? `${parseInt(p[0]) - 1}-${String(parseInt(p[0])).slice(-2)}` : "";
-      let pyTb: any[] = []; let pyMap: any = {};
-      if (prevFy && (e as any).client_id) {
-        const { data: shells } = await supabase.from("audit_engagements")
-          .select("id, coa_mapping").eq("client_id", (e as any).client_id).eq("financial_year", prevFy).eq("is_py_shell", true);
-        for (const s of (shells ?? []) as any[]) { const tb = await loadTB(s.id); if (tb.length) { pyTb = tb; pyMap = s.coa_mapping ?? {}; break; } }
+  // A standalone, re-callable loader (not inlined in the effect) — handleSave
+  // calls this FRESH immediately before checking the tie, so a COA mapping /
+  // TB re-sync made in another tab (or earlier in the same session) can never
+  // leave the schedule showing a stale "ready to save" while the server's
+  // independently re-derived anchor has since moved. That "client says tied,
+  // server rejects" gap is exactly what made a real save read as "the button
+  // doesn't work" (AMBICA PLASTIC INDUSTRIES support report).
+  const loadCoaAnchor = useCallback(async (): Promise<{
+    coa: { ppe: { cy: number; py: number }; intg: { cy: number; py: number }; depr: { cy: number; py: number } };
+    hasPyShell: boolean;
+  } | null> => {
+    if (!engagementId || !FS_NCE_CONSTRAINED_NOTES) return null;
+    const loadTB = async (id: string) => {
+      const out: any[] = [];
+      for (let f = 0; ; f += 1000) {
+        const { data } = await supabase.from("tally_trial_balance")
+          .select("ledger_name,closing_balance,balance_type,opening_balance,opening_type")
+          .eq("engagement_id", id).order("ledger_name").range(f, f + 999);
+        if (!data || !data.length) break; out.push(...data); if (data.length < 1000) break;
       }
-      if (cancelled) return;
-      const t = computeCOATotals(cyTb as any, pyTb as any, cyMap, pyMap);
-      setHasPyShell(pyTb.length > 0);
-      setCoa({ ppe: t["NCE_PPE"] ?? { cy: 0, py: 0 }, intg: t["NCE_INTG"] ?? { cy: 0, py: 0 }, depr: t["NCE_DEPR"] ?? { cy: 0, py: 0 } });
-    })();
-    return () => { cancelled = true; };
+      return out;
+    };
+    const { data: e } = await supabase.from("audit_engagements")
+      .select("client_id, coa_mapping, financial_year").eq("id", engagementId).maybeSingle();
+    if (!e) return null;
+    const cyMap = ((e as any).coa_mapping ?? {}) as any;
+    const cyTb = await loadTB(engagementId);
+    const p = String((e as any).financial_year ?? "").split("-");
+    const prevFy = p.length === 2 ? `${parseInt(p[0]) - 1}-${String(parseInt(p[0])).slice(-2)}` : "";
+    let pyTb: any[] = []; let pyMap: any = {};
+    if (prevFy && (e as any).client_id) {
+      // Deterministic order: if a client ever ends up with more than one
+      // is_py_shell row for the same year, the client (RLS-scoped) and the
+      // edge function (service-role, sees everything) must pick the SAME
+      // row, or their independently-recomputed COA anchors silently diverge.
+      // audit_engagements has no created_at column, so order by id —
+      // deterministic and stable, mirrored in the edge function.
+      const { data: shells } = await supabase.from("audit_engagements")
+        .select("id, coa_mapping").eq("client_id", (e as any).client_id).eq("financial_year", prevFy).eq("is_py_shell", true)
+        .order("id", { ascending: true });
+      for (const s of (shells ?? []) as any[]) { const tb = await loadTB(s.id); if (tb.length) { pyTb = tb; pyMap = s.coa_mapping ?? {}; break; } }
+    }
+    const t = computeCOATotals(cyTb as any, pyTb as any, cyMap, pyMap);
+    return {
+      coa: { ppe: t["NCE_PPE"] ?? { cy: 0, py: 0 }, intg: t["NCE_INTG"] ?? { cy: 0, py: 0 }, depr: t["NCE_DEPR"] ?? { cy: 0, py: 0 } },
+      hasPyShell: pyTb.length > 0,
+    };
   }, [engagementId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadCoaAnchor().then(result => {
+      if (cancelled || !result) return;
+      setCoa(result.coa);
+      setHasPyShell(result.hasPyShell);
+    });
+    return () => { cancelled = true; };
+  }, [loadCoaAnchor]);
 
   // ── Update ──────────────────────────────────────────────────────────────
   const updateRow = (sort_order: number, field: keyof AssetRow, value: number | string) => {
+    setSaveError(null);
     setRows(prev =>
       prev.map(r => {
         if (r.sort_order !== sort_order) return r;
@@ -457,11 +515,39 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
   // ── Save (DELETE → INSERT) ───────────────────────────────────────────────
   const handleSave = async () => {
     setSaving(true);
+    setSaveError(null);
     try {
       // Constrained mode: route through the edge function, which re-derives COA
       // server-side and rejects the save unless net block + depreciation tie
       // (CY net = closing, PY net = opening; depreciation = NCE_DEPR).
       if (FS_NCE_CONSTRAINED_NOTES) {
+        // Re-derive the COA anchor FRESH right before saving. The `coa` shown
+        // on screen was loaded on mount and can go stale if the COA mapping
+        // or TB was re-synced since — another tab, or an earlier stage in
+        // this same session. The server always re-derives fresh on its own
+        // and will reject against ITS numbers regardless of what the client
+        // believed, so checking a stale anchor risks a doomed round-trip that
+        // reads to the user as "the button doesn't work". Refresh first and
+        // fail fast with the CURRENT figures if it's genuinely no longer tied.
+        const fresh = await loadCoaAnchor();
+        if (fresh) {
+          setCoa(fresh.coa);
+          setHasPyShell(fresh.hasPyShell);
+          const freshCons = computeTie(rows, fresh.coa, fresh.hasPyShell);
+          if (!freshCons.tied) {
+            const parts: string[] = [];
+            if (Math.abs(freshCons.d.tanCy) > 1) parts.push(`tangible closing off ₹${inr(freshCons.d.tanCy)}`);
+            if (Math.abs(freshCons.d.intCy) > 1) parts.push(`intangible closing off ₹${inr(freshCons.d.intCy)}`);
+            if (Math.abs(freshCons.d.dep) > 1) parts.push(`depreciation off ₹${inr(freshCons.d.dep)}`);
+            if (fresh.hasPyShell && Math.abs(freshCons.d.tanPy) > 1) parts.push(`tangible opening off ₹${inr(freshCons.d.tanPy)}`);
+            if (fresh.hasPyShell && Math.abs(freshCons.d.intPy) > 1) parts.push(`intangible opening off ₹${inr(freshCons.d.intPy)}`);
+            const msg = `COA mapping or trial balance changed since this page loaded — the schedule no longer ties (${parts.join("; ")}). Figures above have been refreshed; use "Auto-balance to COA mapping" or adjust the rows, then save again.`;
+            setSaveError(msg);
+            toast.error(msg);
+            return;
+          }
+        }
+
         const cPayload = rows.map(r => ({
           asset_category: r.asset_category, asset_name: r.asset_name,
           coa_code: r.asset_category === "tangible" ? "NCE_PPE" : "NCE_INTG",
@@ -483,15 +569,19 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
             if (body?.mismatches?.length) detail = body.mismatches.join("  ·  ");
             else if (body?.error) detail = `${body.error}${body.detail ? ": " + body.detail : ""}`;
           } catch { /* keep the generic message */ }
+          setSaveError(detail);
           toast.error(detail);
           return;
         }
         if ((data as any)?.error) {
           const ms = (data as any)?.mismatches as string[] | undefined;
-          toast.error(ms?.length ? ms.join("  ·  ") : (data as any).error);
+          const msg = ms?.length ? ms.join("  ·  ") : (data as any).error;
+          setSaveError(msg);
+          toast.error(msg);
           return;
         }
         toast.success("PPE schedule saved — ties to COA mapping.");
+        setSaveError(null);
         setSavedSnapshot(JSON.stringify(rows));
         const dkeyOk = ppeDraftKey(engagementId, financialYear);
         if (dkeyOk) localStorage.removeItem(dkeyOk);
@@ -525,30 +615,56 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       const { error: insErr } = await supabase.from("nce_ppe_schedule").insert(payload);
       if (insErr) throw insErr;
       toast.success("PPE Schedule saved");
+      setSaveError(null);
       setSavedSnapshot(JSON.stringify(rows));
       const dkeyOk2 = ppeDraftKey(engagementId, financialYear);
       if (dkeyOk2) localStorage.removeItem(dkeyOk2);
     } catch (err: any) {
-      toast.error(err.message || "Save failed");
+      const msg = err.message || "Save failed";
+      setSaveError(msg);
+      toast.error(msg);
     } finally {
       setSaving(false);
     }
   };
 
   // ── Constrained-mode tie status (difference to explain) ───────────────────
-  const cons = useMemo(() => {
-    const r2 = (n: number) => Math.round(n * 100) / 100;
-    const sumCat = (cat: string, f: (r: AssetRow) => number) => r2(rows.filter(r => r.asset_category === cat).reduce((s, r) => s + f(r), 0));
-    const tanClose = sumCat("tangible", calcClosing), intClose = sumCat("intangible", calcClosing);
-    const tanOpen = sumCat("tangible", r => Number(r.opening_balance) || 0), intOpen = sumCat("intangible", r => Number(r.opening_balance) || 0);
-    const depTot = r2(rows.reduce((s, r) => s + effDep(r), 0));
-    const d = {
-      tanCy: r2(coa.ppe.cy - tanClose), intCy: r2(coa.intg.cy - intClose), dep: r2(coa.depr.cy - depTot),
-      tanPy: r2(coa.ppe.py - tanOpen), intPy: r2(coa.intg.py - intOpen),
-    };
-    const tied = Math.abs(d.tanCy) <= 1 && Math.abs(d.intCy) <= 1 && Math.abs(d.dep) <= 1 && (!hasPyShell || (Math.abs(d.tanPy) <= 1 && Math.abs(d.intPy) <= 1));
-    return { tanClose, intClose, depTot, d, tied };
-  }, [rows, coa, hasPyShell]);
+  const cons = useMemo(() => computeTie(rows, coa, hasPyShell), [rows, coa, hasPyShell]);
+
+  // ── Auto-save on tie (PPE Schedule ONLY — no other note type does this) ────
+  // Root-cause fix for "the Save button doesn't respond": rather than depend
+  // on a click ever reliably reaching the button (browser quirks, a stray
+  // re-render mid-click, a user who insists they can't click it), persist
+  // automatically the moment the schedule actually ties to COA mapping.
+  // handleSave() itself still re-verifies the tie fresh against the server
+  // immediately before writing (see loadCoaAnchor() above), so this can never
+  // save an untied schedule — it only removes the manual click as the sole
+  // trigger. The manual Save button stays as a fallback / for saving sooner
+  // than the debounce window.
+  //
+  // - Debounced (1.2s of no row/tie change) so a burst of edits across many
+  //   asset rows settles before writing, instead of firing on every row.
+  // - `handleSaveRef` always calls the LATEST handleSave via closure without
+  //   putting the (unmemoized, every-render-new) function in the effect's
+  //   dependency array — putting it there would reset the debounce timer on
+  //   every unrelated re-render of this component and the timer could never
+  //   elapse.
+  // - `lastAutoSaveAttempt` guards against retry-looping the SAME tied row
+  //   state forever when the save is rejected for a reason unrelated to the
+  //   tie (e.g. the engagement was finalized mid-session) — it only
+  //   re-attempts once the row data actually changes again.
+  useEffect(() => { handleSaveRef.current = handleSave; });
+  useEffect(() => {
+    if (loading || readOnly || saving || !FS_NCE_CONSTRAINED_NOTES) return;
+    if (!dirty || !cons.tied) return;
+    const snapshot = JSON.stringify(rows);
+    if (lastAutoSaveAttempt.current === snapshot) return;
+    const t = setTimeout(() => {
+      lastAutoSaveAttempt.current = snapshot;
+      handleSaveRef.current();
+    }, 1200);
+    return () => clearTimeout(t);
+  }, [rows, dirty, cons.tied, saving, loading, readOnly]);
 
   // One-click reconcile: nudge each category's LAST row (the balancer) so every
   // COA leg ties — Σ opening = COA PY net, Σ depreciation = booked NCE_DEPR, Σ
@@ -602,19 +718,33 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       ? tangibleParents.length + rows.filter(r => r.asset_category === "tangible" && isSubLedger(r.sort_order)).length
       : intangibleParents.length + rows.filter(r => r.asset_category === "intangible" && isSubLedger(r.sort_order)).length;
 
-  const SaveBtn = () => (
+  // NOT a React component — called as a plain function (renderSaveBtn()), never
+  // invoked as JSX (<SaveBtn/>). A function declared inside another component's
+  // body and invoked via JSX gets a NEW identity every render, so React treats
+  // it as a different component type each time and unmounts + remounts its DOM
+  // subtree on every re-render of NCEPPESchedule (COA anchor refresh, any row
+  // edit, draft-banner state, …) — a real button element being destroyed and
+  // recreated under the user's cursor reads as "the Save button doesn't
+  // respond to clicks", exactly like the reported symptom. renderAssetRow /
+  // renderSubLedgerRow already avoid this by being called as functions, not
+  // JSX components — this matches that pattern.
+  const renderSaveBtn = () => (
     <div className="flex items-center gap-2">
-      {dirty && (
+      {dirty && !saving && (
         <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 dark:text-amber-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> Unsaved changes
-          {FS_NCE_CONSTRAINED_NOTES && !cons.tied && " — saved locally on this device until it ties"}
+          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+          {FS_NCE_CONSTRAINED_NOTES && !cons.tied
+            ? "Unsaved changes — saved locally on this device until it ties"
+            : "Ties to COA mapping — saving automatically…"}
         </span>
       )}
       <Button size="sm" onClick={handleSave} disabled={saving || (FS_NCE_CONSTRAINED_NOTES && !cons.tied)}>
         {saving
           ? <Loader2 className="animate-spin h-4 w-4 mr-1.5" />
           : <Save className="h-4 w-4 mr-1.5" />}
-        {FS_NCE_CONSTRAINED_NOTES && !cons.tied ? "Fix the difference to save" : "Save PPE Schedule"}
+        {saving
+          ? "Saving…"
+          : FS_NCE_CONSTRAINED_NOTES && !cons.tied ? "Fix the difference to save" : "Save PPE Schedule"}
       </Button>
     </div>
   );
@@ -872,10 +1002,28 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
         </div>
       )}
 
+      {/* Persistent save-failure banner — stays on screen (unlike a toast)
+          until dismissed, the user edits a row, or a save succeeds, so a
+          rejected save is always self-diagnosing instead of reading as a
+          silently broken button. */}
+      {!readOnly && saveError && (
+        <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm flex items-start gap-2">
+          <AlertTriangle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+          <span className="flex-1">{saveError}</span>
+          <button
+            type="button"
+            className="text-xs text-muted-foreground hover:text-foreground shrink-0"
+            onClick={() => setSaveError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {/* Top save — hidden in readOnly / preview mode */}
       {!readOnly && (
         <div className="flex justify-end">
-          <SaveBtn />
+          {renderSaveBtn()}
         </div>
       )}
 
@@ -1054,7 +1202,7 @@ export function NCEPPESchedule({ engagementId, readOnly = false }: Props) {
       {/* Bottom save — hidden in readOnly / preview mode */}
       {!readOnly && (
         <div className="flex justify-end pt-1">
-          <SaveBtn />
+          {renderSaveBtn()}
         </div>
       )}
     </div>

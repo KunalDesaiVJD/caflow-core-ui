@@ -24,7 +24,7 @@ import {
 import {
   Bot, RefreshCw, CheckCircle2, XCircle, Pencil, Save, X,
   ChevronDown, ChevronRight, Info, Loader2, Search, ExternalLink,
-  AlertTriangle, BadgeCheck, Rows3,
+  AlertTriangle, BadgeCheck, Rows3, Link2,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -33,6 +33,7 @@ import {
   useTdsPartyMappings, MappingStatus, TbPartyMapping,
 } from "./hooks/useTdsPartyMappings";
 import { usePartyExpenseLedgers } from "./hooks/usePartyExpenseLedgers";
+import { logTdsLearningEvent, normalizeTdsPatternFragment } from "./hooks/useTdsLearningLogger";
 import { runAiMapper } from "./tdsEngine";
 import { SplitByVoucherPanel } from "./SplitByVoucherPanel";
 import { TdsLedgerSetupPanel } from "./TdsLedgerSetupPanel";
@@ -128,16 +129,80 @@ function MethodBadge({ method }: { method: string | null }) {
   );
 }
 
+// ─── Reusable search-and-pick field ─────────────────────────────────────────
+// Shared by: the "Search & link Tally ledger…" picker (Unmapped Deductees),
+// the Override Mapping form's TB Ledger + TDS Deductee Name fields, and the
+// "+ Link another ledger" action on an already-mapped row. Selection can
+// ONLY come from `options` — the visible text box is a filter, not a value,
+// so (per the "Deductee Name should not be manually typed" requirement) the
+// underlying value can never drift from a real Tally ledger / TDS deductee.
+function InlineSearchPicker({
+  value, placeholder, options, onSelect, disabled, className,
+}: {
+  value: string;
+  placeholder: string;
+  options: Array<{ value: string; label: string; sublabel?: string | null }>;
+  onSelect: (value: string) => void;
+  disabled?: boolean;
+  className?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [open,  setOpen]  = useState(false);
+  const filtered = (query
+    ? options.filter(o => o.label.toLowerCase().includes(query.toLowerCase()))
+    : options
+  ).slice(0, 20);
+  return (
+    <div className={cn("relative", className)}>
+      <Input
+        value={open ? query : value}
+        onChange={e => { setQuery(e.target.value); setOpen(true); }}
+        onFocus={() => { setQuery(""); setOpen(true); }}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder={placeholder}
+        className="h-7 text-xs"
+        disabled={disabled}
+      />
+      {open && filtered.length > 0 && (
+        <div className="absolute left-0 top-8 z-30 w-full min-w-[240px] max-h-56 overflow-y-auto border rounded bg-white shadow-lg">
+          {filtered.map(o => (
+            <button
+              key={o.value}
+              type="button"
+              className="w-full text-left px-2 py-1 text-xs hover:bg-blue-50 flex flex-col"
+              onMouseDown={() => { onSelect(o.value); setOpen(false); setQuery(""); }}
+            >
+              <span className="font-medium text-slate-800 truncate">{o.label}</span>
+              {o.sublabel && <span className="text-[10px] text-slate-500 truncate">{o.sublabel}</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {open && filtered.length === 0 && (
+        <div className="absolute left-0 top-8 z-30 w-full min-w-[240px] border rounded bg-white shadow-lg px-2 py-1.5 text-[10px] text-muted-foreground">
+          No matches
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Inline edit form ─────────────────────────────────────────────────────────
 function EditForm({
-  mapping, onSave, onCancel, saving,
+  mapping, tbCreditors, allDeductees, onSave, onCancel, saving,
 }: {
   mapping: TbPartyMapping;
-  onSave: (patch: { tds_deductee_name: string; tds_section_code: string | null; notes: string; mapping_status: MappingStatus }) => void;
+  tbCreditors: Array<{ ledger_name: string; parent_group: string | null }>;
+  allDeductees: Array<{ deductee_name: string; deductee_pan: string | null }>;
+  onSave: (patch: {
+    tds_deductee_name: string; tds_section_code: string | null; notes: string;
+    mapping_status: MappingStatus; tb_ledger_name: string; tb_parent_group: string | null;
+  }) => void;
   onCancel: () => void;
   saving: boolean;
 }) {
   const [name,    setName]    = useState(mapping.tds_deductee_name);
+  const [ledgerName, setLedgerName] = useState(mapping.tb_ledger_name);
   // 2026-07-25 — Root cause of "Something went wrong" when clicking the
   // Edit / Override Mapping pencil: the Section <Select> below used to
   // render a <SelectItem value=""> for the "— None —" option. Radix
@@ -162,18 +227,40 @@ function EditForm({
     ? (mapping.mapping_status as MappingStatus) : "confirmed";
   const [status, setStatus] = useState<MappingStatus>(seedStatus);
 
+  const deducteeOptions = allDeductees.map(d => ({
+    value: d.deductee_name, label: d.deductee_name, sublabel: d.deductee_pan,
+  }));
+  const ledgerOptions = tbCreditors.map(c => ({
+    value: c.ledger_name, label: c.ledger_name, sublabel: c.parent_group,
+  }));
+
   return (
     <div className="p-3 bg-blue-50/60 border border-blue-100 rounded-lg space-y-2">
       <p className="text-[11px] font-semibold text-blue-700">Override Mapping</p>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
-          <label className="text-[10px] text-muted-foreground">TDS Deductee Name</label>
-          <Input
-            value={name} onChange={e => setName(e.target.value)}
-            className="h-7 text-xs"
-            placeholder="Exact name from TDS filing"
+          <label className="text-[10px] text-muted-foreground">TB Ledger (Tally)</label>
+          <InlineSearchPicker
+            value={ledgerName}
+            onSelect={setLedgerName}
+            options={ledgerOptions}
+            placeholder="Search Tally ledger…"
           />
         </div>
+        <div className="space-y-1">
+          <label className="text-[10px] text-muted-foreground">
+            TDS Deductee Name
+            <span className="ml-1 normal-case font-normal">— pick from TDS Management, not typed</span>
+          </label>
+          <InlineSearchPicker
+            value={name}
+            onSelect={setName}
+            options={deducteeOptions}
+            placeholder="Search TDS deductee…"
+          />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
         <div className="space-y-1">
           <label className="text-[10px] text-muted-foreground">TDS Section</label>
           <Select value={section} onValueChange={setSection}>
@@ -223,8 +310,10 @@ function EditForm({
             tds_section_code: section && section !== NONE ? section : null,
             notes: note,
             mapping_status: status,
+            tb_ledger_name: ledgerName,
+            tb_parent_group: tbCreditors.find(c => c.ledger_name === ledgerName)?.parent_group ?? mapping.tb_parent_group,
           })}
-          disabled={!name.trim() || saving}
+          disabled={!name.trim() || !ledgerName.trim() || saving}
         >
           {saving ? <Loader2 size={11} className="animate-spin mr-1" /> : <Save size={11} className="mr-1" />}
           Save
@@ -378,8 +467,14 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
             if (!p) return false;
             const KEEP = /(creditor|debtor|loan|advance|deposit|payable|receivable|current liabilit|other liabilit|other asset)/;
             const SKIP = /(bank|cash-in-hand|cash in hand|capital|reserve|fixed asset|investment|duties|inventory|stock|purchase|expense|income|indirect|direct|misc|suspense|branch|statutory)/;
+            // KEEP wins when both match — "Creditors for Purchase" /
+            // "Creditors for Expenses" are standard Tally sub-groups of
+            // Sundry Creditors and must stay included even though SKIP's
+            // "purchase"/"expense" terms (meant to exclude true P&L heads
+            // like "Purchase Accounts") also match their name.
+            if (KEEP.test(p)) return true;
             if (SKIP.test(p)) return false;
-            return KEEP.test(p);
+            return false;
           };
           // Stage 7 / P5-A — dedupe by trim+lowercase name so the picker
           // doesn't show "V J Desai & Co" and "V J DESAI & CO" as two
@@ -406,6 +501,9 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
   // 2026-08-01 — Scenario 1: which mapping row is showing its voucher-level
   // section drill-down (one at a time to keep the panel compact).
   const [splitId,     setSplitId]     = useState<string | null>(null);
+  // One deductee can have several Tally ledger-name variants — this tracks
+  // which mapped row currently has its "+ Link another ledger" picker open.
+  const [linkMoreId,  setLinkMoreId]  = useState<string | null>(null);
   const [savingId,    setSavingId]    = useState<string | null>(null);
   const [expandedId,  setExpandedId]  = useState<string | null>(null);
   // Issue 1 — track which rows have their full expense-ledger list expanded.
@@ -563,7 +661,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
   };
   const handleSaveEdit = async (id: string, patch: {
     tds_deductee_name: string; tds_section_code: string | null; notes: string;
-    mapping_status: MappingStatus;
+    mapping_status: MappingStatus; tb_ledger_name: string; tb_parent_group: string | null;
   }) => {
     setSavingId(id);
     try {
@@ -574,6 +672,102 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
       toast.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
     } finally { setSavingId(null); }
   };
+
+  // ── Link a Tally ledger to a TDS deductee — upserts a manual_link mapping
+  // row. Used by both the "Unmapped deductees" picker (deductee has NO
+  // mapping yet) and "+ Link another ledger" on an already-mapped row
+  // (Issue: one deductee, several Tally ledger-name variants in Tally —
+  // e.g. "Cavitak Marketing (P) Ltd", "…-guj", "Cavitak Marketing" all
+  // billing the same real party). Each call inserts one additional mapping
+  // row for the SAME deductee_name; the DB's uniqueness key is
+  // (client, fy, tb_ledger_name, tds_deductee_name), so multiple ledgers
+  // per deductee are first-class, not a workaround.
+  const linkTallyLedgerToDeductee = useCallback(async (
+    tbLedgerName: string,
+    deductee: { deductee_name: string; section_code: string | null; amount_paid_credited: number | null; tds_amount: number | null },
+  ) => {
+    if (!clientId || !financialYear || !firmId) return;
+    const chosen = tbCreditors.find(c => c.ledger_name === tbLedgerName);
+    const fullRow = {
+      client_id: clientId,
+      firm_id:   firmId,
+      financial_year: financialYear,
+      tb_ledger_name:    tbLedgerName,
+      tb_parent_group:   chosen?.parent_group ?? null,
+      tb_total_debit:    null,
+      tds_deductee_name: deductee.deductee_name,
+      tds_section_code:  deductee.section_code,
+      tds_total_amount:  deductee.amount_paid_credited,
+      tds_tds_amount:    deductee.tds_amount,
+      match_confidence:  100,
+      // P1-E (2026-08-04) — method is a single "manual_link" token (no fake
+      // "name_similarity" tacked on). Panel treats mapped_by="auditor" as
+      // authoritative and renders "Manual link" as the source pill.
+      match_method:      "manual_link",
+      ai_reasoning:      `Manually linked by auditor: ${tbLedgerName} → ${deductee.deductee_name} (${deductee.section_code ?? "section unknown"}).`,
+      mapping_status:    "confirmed",
+      mapped_by:         "auditor",
+    };
+    // 2026-08-04 — same graceful fallback runAiMapper uses: migration
+    // 20260501000002 adds tds_tds_amount but may not have shipped to every
+    // project yet. On a PostgREST "column not found" error, retry without
+    // that field.
+    const initial = await (supabase as any)
+      .from("tds_tb_party_mappings")
+      .upsert(fullRow, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" })
+      .select("id");
+    let err: any = initial.error;
+    let savedId: string | undefined = initial.data?.[0]?.id;
+    if (err && String(err.message || "").includes("tds_tds_amount")) {
+      const { tds_tds_amount: _omit, ...fallback } = fullRow;
+      void _omit;
+      const retry = await (supabase as any)
+        .from("tds_tb_party_mappings")
+        .upsert(fallback, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" })
+        .select("id");
+      err = retry.error;
+      savedId = retry.data?.[0]?.id;
+    }
+    if (err) {
+      toast.error(`Link failed: ${err.message}`);
+      return;
+    }
+
+    // Learning capture — a manual link is the strongest signal this module
+    // has: 100% confidence, no AI guess involved, the auditor deliberately
+    // paired a real Tally ledger with a real TDS deductee and its section.
+    if (deductee.section_code) {
+      logTdsLearningEvent({
+        clientId, firmId, financialYear,
+        eventType: "manual_override",
+        entityType: "tds_tb_party_mappings", entityId: savedId,
+        patternType: "party_section_mapping",
+        patternKey: `vendor:${normalizeTdsPatternFragment(deductee.deductee_name)}:section`,
+        afterValue: { section: deductee.section_code },
+        source: "manual",
+      });
+    }
+    // Stage-1 follow-up (2026-08-04) — kill orphan books_only rows for the
+    // same TB ledger so the panel stops showing the party twice after a
+    // manual link. Cascade through tds_recon_flags first for the FK
+    // constraint.
+    try {
+      const { data: orphans } = await (supabase as any)
+        .from("tds_tb_party_mappings")
+        .select("id")
+        .eq("client_id", clientId)
+        .eq("financial_year", financialYear)
+        .eq("tb_ledger_name", tbLedgerName)
+        .like("match_method", "%books_only%");
+      const orphanIds = ((orphans as any[]) || []).map(o => o.id);
+      if (orphanIds.length > 0) {
+        await (supabase as any).from("tds_recon_flags").delete().in("mapping_id", orphanIds);
+        await (supabase as any).from("tds_tb_party_mappings").delete().in("id", orphanIds);
+      }
+    } catch { /* non-fatal */ }
+    toast.success(`Linked ${tbLedgerName} → ${deductee.deductee_name}`);
+    refresh();
+  }, [clientId, financialYear, firmId, tbCreditors, refresh]);
 
   // ─── Render ─────────────────────────────────────────────────────────────────
 
@@ -720,6 +914,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
               const isEditing  = editId === m.id;
               const isSaving   = savingId === m.id;
               const isSplit    = splitId === m.id;
+              const isLinkingMore = linkMoreId === m.id;
 
               return (
                 <div key={m.id} className="hover:bg-muted/10 transition-colors">
@@ -999,6 +1194,27 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                           </TooltipTrigger>
                           <TooltipContent side="bottom" className="text-xs">Split by voucher (per-section)</TooltipContent>
                         </Tooltip>
+                        {/* One deductee can have several Tally ledger-name
+                            variants (e.g. a branch suffix) — this opens a
+                            picker to add ANOTHER mapping row for the same
+                            deductee, rather than replacing this one. */}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type="button"
+                              className={cn(
+                                "p-0.5 rounded",
+                                isLinkingMore
+                                  ? "bg-slate-200 text-slate-700"
+                                  : "text-slate-500 hover:bg-slate-100",
+                              )}
+                              onClick={() => { setLinkMoreId(isLinkingMore ? null : m.id); setEditId(null); setSplitId(null); setExpandedId(null); }}
+                            >
+                              <Link2 size={12} />
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" className="text-xs">Link another Tally ledger to this deductee</TooltipContent>
+                        </Tooltip>
                         {m.ai_reasoning && (
                           <Tooltip>
                             <TooltipTrigger asChild>
@@ -1038,6 +1254,8 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                     <div className="px-4 pb-3">
                       <EditForm
                         mapping={m}
+                        tbCreditors={tbCreditors}
+                        allDeductees={allDeductees}
                         onSave={patch => handleSaveEdit(m.id, patch)}
                         onCancel={() => setEditId(null)}
                         saving={isSaving}
@@ -1058,6 +1276,47 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                       />
                     </div>
                   )}
+                  {/* "+ Link another ledger" — one deductee, several Tally
+                      ledger-name variants (Issue: "Cavitak Marketing (P)
+                      Ltd", "…-guj", "Cavitak Marketing" all the same real
+                      party). Inserts a NEW mapping row, doesn't touch this
+                      one. */}
+                  {isLinkingMore && (() => {
+                    const alreadyLinked = new Set(
+                      mappings
+                        .filter(x => x.tds_deductee_name === m.tds_deductee_name)
+                        .map(x => x.tb_ledger_name),
+                    );
+                    const options = tbCreditors
+                      .filter(c => !alreadyLinked.has(c.ledger_name))
+                      .map(c => ({ value: c.ledger_name, label: c.ledger_name, sublabel: c.parent_group }));
+                    return (
+                      <div className="px-4 pb-3">
+                        <div className="p-3 bg-slate-50/60 border border-slate-200 rounded-lg space-y-2">
+                          <p className="text-[11px] font-semibold text-slate-700">
+                            Link another Tally ledger to &quot;{m.tds_deductee_name}&quot;
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            For when the same TDS deductee is booked under more than one Tally ledger name.
+                          </p>
+                          <InlineSearchPicker
+                            value=""
+                            placeholder="Search Tally ledger…"
+                            options={options}
+                            onSelect={async (ledgerName) => {
+                              await linkTallyLedgerToDeductee(ledgerName, {
+                                deductee_name: m.tds_deductee_name,
+                                section_code: m.tds_section_code,
+                                amount_paid_credited: m.tds_total_amount,
+                                tds_amount: m.tds_tds_amount,
+                              });
+                              setLinkMoreId(null);
+                            }}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })}
@@ -1099,77 +1358,7 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                   key={d.id}
                   deductee={d}
                   tbCreditors={tbCreditors}
-                  onLink={async (tbLedgerName) => {
-                    if (!clientId || !financialYear || !firmId) return;
-                    const chosen = tbCreditors.find(c => c.ledger_name === tbLedgerName);
-                    const fullRow = {
-                      client_id: clientId,
-                      firm_id:   firmId,
-                      financial_year: financialYear,
-                      tb_ledger_name:    tbLedgerName,
-                      tb_parent_group:   chosen?.parent_group ?? null,
-                      tb_total_debit:    null,
-                      tds_deductee_name: d.deductee_name,
-                      tds_section_code:  d.section_code,
-                      tds_total_amount:  d.amount_paid_credited,
-                      tds_tds_amount:    d.tds_amount,
-                      match_confidence:  100,
-                      // P1-E (2026-08-04) — method is a single "manual_link"
-                      // token (no fake "name_similarity" tacked on). Panel
-                      // treats mapped_by="auditor" as authoritative and
-                      // renders "Manual link" as the source pill.
-                      match_method:      "manual_link",
-                      ai_reasoning:      `Manually linked by auditor: ${tbLedgerName} → ${d.deductee_name} (${d.section_code ?? "section unknown"}).`,
-                      mapping_status:    "confirmed",
-                      mapped_by:         "auditor",
-                    };
-                    // 2026-08-04 — same graceful fallback runAiMapper uses:
-                    // migration 20260501000002 adds tds_tds_amount but may
-                    // not have shipped to every project yet. On a PostgREST
-                    // "column not found" error, retry without that field.
-                    let err: any;
-                    ({ error: err } = await (supabase as any)
-                      .from("tds_tb_party_mappings")
-                      .upsert(fullRow, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" }));
-                    if (err && String(err.message || "").includes("tds_tds_amount")) {
-                      const { tds_tds_amount: _omit, ...fallback } = fullRow;
-                      void _omit;
-                      const retry = await (supabase as any)
-                        .from("tds_tb_party_mappings")
-                        .upsert(fallback, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" });
-                      err = retry.error;
-                    }
-                    if (err) {
-                      toast.error(`Link failed: ${err.message}`);
-                      return;
-                    }
-                    // Stage-1 follow-up (2026-08-04) — kill orphan books_only
-                    // rows for the same TB ledger so the panel stops showing
-                    // Shanker Furniture twice after a manual link. Cascade
-                    // through tds_recon_flags first for the FK constraint.
-                    try {
-                      const { data: orphans } = await (supabase as any)
-                        .from("tds_tb_party_mappings")
-                        .select("id")
-                        .eq("client_id", clientId)
-                        .eq("financial_year", financialYear)
-                        .eq("tb_ledger_name", tbLedgerName)
-                        .like("match_method", "%books_only%");
-                      const orphanIds = ((orphans as any[]) || []).map(o => o.id);
-                      if (orphanIds.length > 0) {
-                        await (supabase as any)
-                          .from("tds_recon_flags")
-                          .delete()
-                          .in("mapping_id", orphanIds);
-                        await (supabase as any)
-                          .from("tds_tb_party_mappings")
-                          .delete()
-                          .in("id", orphanIds);
-                      }
-                    } catch { /* non-fatal */ }
-                    toast.success(`Linked ${tbLedgerName} → ${d.deductee_name}`);
-                    refresh();
-                  }}
+                  onLink={tbLedgerName => linkTallyLedgerToDeductee(tbLedgerName, d)}
                 />
               ))}
             </div>

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "CAFlow — ITD Portal Autofill",
-  "version": "0.2.0",
-  "description": "Fills the Income Tax e-Filing login, confirms the Secure Access Message, and submits. Stops only for CAPTCHA/OTP if one appears.",
+  "version": "0.2.3",
+  "description": "Fills the Income Tax e-Filing login and confirms the Secure Access Message. Stops at the final submit — that click, and CAPTCHA/OTP if one appears, stay manual.",
   "permissions": ["storage"],
   "host_permissions": [
     "https://caflow-core-ui.vercel.app/*",

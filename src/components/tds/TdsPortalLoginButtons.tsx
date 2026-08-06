@@ -9,16 +9,21 @@
  * genuinely separate artifact from this web app, installed once per person
  * via Chrome's Developer Mode "Load unpacked", not deployed alongside it.
  *
- * Firm instruction (widened 2026-08-06, after the login-ID/password-only
- * version was confirmed working): fill the login ID and password, confirm
- * the Secure Access Message, and submit — stopping only if a CAPTCHA/OTP
- * screen appears next. The Secure Access Message checkbox is a real
- * anti-phishing control (confirms the user is on the genuine portal, not a
- * spoofed clone) that auto-checking defeats the point of — flagged
- * explicitly before widening scope to this; see content-itd.js's own header
- * doc for the full reasoning, kept there since that's the file that actually
- * does it. ITD only for now (TRACES's own multi-step flow hasn't been
- * mapped yet); TRACES still gets the copy-to-clipboard fallback below.
+ * Scope, settled 2026-08-06 after a same-day back-and-forth (full account in
+ * content-itd.js's own header comment, kept there deliberately): fills the
+ * login ID, password, and the Secure Access Message confirmation checkbox —
+ * then stops. The final submit click and any CAPTCHA/OTP stay manual. That
+ * submit click was briefly automated and then deliberately reverted: live
+ * testing confirmed the portal's own submit button rejects script-generated
+ * clicks specifically (every other control on the page responds fine to the
+ * same technique), which reads as a deliberate anti-automation control on
+ * that one button — and the one technique that could have defeated it
+ * (Chrome's debugger permission, injecting an OS-level "trusted" click) was
+ * built and then removed, because circumventing a control a site placed on
+ * its own final authentication step isn't something to automate regardless
+ * of how many times it's requested. ITD only for now (TRACES's own
+ * multi-step flow hasn't been mapped yet); TRACES still gets the
+ * copy-to-clipboard fallback below.
  *
  * This component detects the extension (content-caflow.js stamps a marker
  * attribute on <html> at document_start) and only shows "Auto-fill ITD
@@ -100,7 +105,7 @@ function PortalLoginMenu({
       <DropdownMenuContent align="start" className="w-64">
         <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">
           {canAutofill
-            ? "Fills and submits your login automatically — you only step in if a CAPTCHA/OTP screen appears."
+            ? "Fills your login ID, password, and confirms the Secure Access Message — you click Continue yourself to finish signing in."
             : hasAnyCredential
               ? "You still complete the login yourself — this only opens the portal and copies what's saved."
               : "No login saved for this client yet — add one in Edit Client → Services → TDS Compliance."}

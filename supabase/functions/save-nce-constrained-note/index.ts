@@ -180,8 +180,17 @@ Deno.serve(async (req) => {
     const prevFy = p.length === 2 ? `${parseInt(p[0]) - 1}-${String(parseInt(p[0])).slice(-2)}` : '';
     let pyTb: TBRow[] = []; let pyMap: Mapping | null = null;
     if (prevFy) {
+      // Deterministic order: the client (RLS-scoped) and this function
+      // (service-role, sees every row) must pick the SAME shell when a
+      // client ever ends up with more than one is_py_shell row for the same
+      // year, or the two independently-recomputed COA anchors silently
+      // diverge — a "client says tied, server rejects" gap that looks like a
+      // broken Save button. audit_engagements has no created_at column, so
+      // order by id — deterministic and stable, mirrored in
+      // NCEPPESchedule.tsx's loadCoaAnchor().
       const { data: shells } = await svc.from('audit_engagements')
-        .select('id, coa_mapping').eq('client_id', eng.client_id).eq('financial_year', prevFy).eq('is_py_shell', true);
+        .select('id, coa_mapping').eq('client_id', eng.client_id).eq('financial_year', prevFy).eq('is_py_shell', true)
+        .order('id', { ascending: true });
       for (const s of (shells ?? [])) {
         const tb = await loadTB(svc, s.id);
         if (tb.length) { pyTb = tb; pyMap = (s.coa_mapping ?? {}) as Mapping; break; }

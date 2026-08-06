@@ -11,6 +11,13 @@
  * disk) and are single-use: content-itd.js asks for them once and this
  * worker clears them immediately after handing them over, plus a 2-minute
  * expiry as a backstop in case the ITD tab is never opened at all.
+ *
+ * A TRUSTED_CLICK relay (Chrome debugger protocol, to inject an OS-level
+ * click on the final submit button) was built and then deliberately removed
+ * on 2026-08-06 — see content-itd.js's own header doc for why: the portal
+ * appears to reject script-generated clicks on that button specifically, on
+ * purpose, and defeating that crosses a line this project isn't willing to
+ * cross regardless of how many times it's requested.
  */
 
 const CREDENTIAL_TTL_MS = 2 * 60 * 1000;

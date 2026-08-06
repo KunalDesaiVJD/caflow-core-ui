@@ -69,8 +69,14 @@ export function isPartyLedgerGroup(parentGroup: string | null | undefined): bool
   if (!p) return false;
   const KEEP = /(creditor|debtor|loan|advance|deposit|payable|receivable|current liabilit|other liabilit|other asset)/;
   const SKIP = /(bank|cash-in-hand|cash in hand|capital|reserve|fixed asset|investment|duties|inventory|stock|purchase|expense|income|indirect|direct|misc|suspense|branch|statutory)/;
+  // KEEP wins when both match — "Creditors for Purchase" / "Creditors for
+  // Expenses" are standard Tally sub-groups of Sundry Creditors and must
+  // stay included even though SKIP's "purchase"/"expense" terms (meant to
+  // exclude true P&L heads like "Purchase Accounts") also match their name.
+  // Same fix mirrored in TdsPartyMappingPanel's manual-link picker.
+  if (KEEP.test(p)) return true;
   if (SKIP.test(p)) return false;
-  return KEEP.test(p);
+  return false;
 }
 
 // ─── Section-prescribed TDS rates (Income Tax Act, FY 2025-26) ───────────────
