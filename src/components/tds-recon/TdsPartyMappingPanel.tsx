@@ -33,6 +33,7 @@ import {
   useTdsPartyMappings, MappingStatus, TbPartyMapping,
 } from "./hooks/useTdsPartyMappings";
 import { usePartyExpenseLedgers } from "./hooks/usePartyExpenseLedgers";
+import { logTdsLearningEvent, normalizeTdsPatternFragment } from "./hooks/useTdsLearningLogger";
 import { runAiMapper } from "./tdsEngine";
 import { SplitByVoucherPanel } from "./SplitByVoucherPanel";
 import { TdsLedgerSetupPanel } from "./TdsLedgerSetupPanel";
@@ -711,21 +712,40 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
     // 20260501000002 adds tds_tds_amount but may not have shipped to every
     // project yet. On a PostgREST "column not found" error, retry without
     // that field.
-    let err: any;
-    ({ error: err } = await (supabase as any)
+    const initial = await (supabase as any)
       .from("tds_tb_party_mappings")
-      .upsert(fullRow, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" }));
+      .upsert(fullRow, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" })
+      .select("id");
+    let err: any = initial.error;
+    let savedId: string | undefined = initial.data?.[0]?.id;
     if (err && String(err.message || "").includes("tds_tds_amount")) {
       const { tds_tds_amount: _omit, ...fallback } = fullRow;
       void _omit;
       const retry = await (supabase as any)
         .from("tds_tb_party_mappings")
-        .upsert(fallback, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" });
+        .upsert(fallback, { onConflict: "client_id,financial_year,tb_ledger_name,tds_deductee_name" })
+        .select("id");
       err = retry.error;
+      savedId = retry.data?.[0]?.id;
     }
     if (err) {
       toast.error(`Link failed: ${err.message}`);
       return;
+    }
+
+    // Learning capture — a manual link is the strongest signal this module
+    // has: 100% confidence, no AI guess involved, the auditor deliberately
+    // paired a real Tally ledger with a real TDS deductee and its section.
+    if (deductee.section_code) {
+      logTdsLearningEvent({
+        clientId, firmId, financialYear,
+        eventType: "manual_override",
+        entityType: "tds_tb_party_mappings", entityId: savedId,
+        patternType: "party_section_mapping",
+        patternKey: `vendor:${normalizeTdsPatternFragment(deductee.deductee_name)}:section`,
+        afterValue: { section: deductee.section_code },
+        source: "manual",
+      });
     }
     // Stage-1 follow-up (2026-08-04) — kill orphan books_only rows for the
     // same TB ledger so the panel stops showing the party twice after a
