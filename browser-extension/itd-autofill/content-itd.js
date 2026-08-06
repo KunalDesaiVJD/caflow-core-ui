@@ -140,9 +140,23 @@ function waitFor(check, timeoutMs) {
   });
 }
 
+/**
+ * Finds a VISIBLE button/link matching `pattern`. Visibility matters here
+ * specifically because this Angular SPA appears to leave a step's own
+ * Continue button in the DOM (hidden, not removed) after navigating past
+ * it rather than destroying the route component — a plain text-match can
+ * then non-deterministically grab step 1's stale, hidden Continue instead
+ * of step 2's real, visible one, depending on exactly when the DOM is
+ * queried. `.click()`-ing that stale node does nothing observable, which
+ * is exactly the "everything filled in, nothing happens" symptom this was
+ * built to fix. offsetParent is null for any element (or ancestor) with
+ * display:none — a fast, reliable way to filter to what's actually
+ * rendered, without needing to know the framework's exact routing quirk.
+ */
 function findButtonByText(pattern) {
   const candidates = document.querySelectorAll("button, a[role='button']");
   for (const el of candidates) {
+    if (el.offsetParent === null) continue; // hidden — not the live step's control
     if (pattern.test((el.textContent || "").trim())) return el;
   }
   return null;
