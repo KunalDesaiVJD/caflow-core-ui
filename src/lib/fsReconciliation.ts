@@ -672,15 +672,16 @@ export function validateOpeningVsPriorClose(args: {
   const hasShell = (args.pyShellTb?.length ?? 0) > 0;
   if (!hasShell) return { mismatches: [], allOk: true, hasShell: false, computedAt };
 
-  // Case-insensitive mapping lookup (mirrors computeCOATotals).
-  const ciIndex: Record<string, { code: string }> = {};
-  for (const [k, v] of Object.entries(args.coaMapping || {})) {
-    if (!v?.code) continue;
-    const kk = normName(k);
-    if (!(kk in ciIndex)) ciIndex[kk] = v;
-  }
-  const codeOf = (name: string): string | undefined =>
-    (args.coaMapping?.[name] ?? args.coaMapping?.[name.trim()] ?? ciIndex[normName(name)])?.code;
+  // 2026-08-06 fix: this used to be a hand-rolled exact→trim→CI index that
+  // stopped one tier short of buildLedgerMapMatcher (no cleanTallyName
+  // fallback) — the exact RC-21 failure mode the buildLedgerMapMatcher doc
+  // comment warns about, living in the same file as its own fix
+  // (computeCOATotals below, already on the shared matcher). A BS ledger
+  // whose raw name carried a Tally control char or HTML entity failed
+  // codeOf() here even when correctly mapped, silently dropping a real
+  // opening-vs-prior-close mismatch from Pass 1/2 instead of flagging it.
+  const lookupMapping = buildLedgerMapMatcher(args.coaMapping || {});
+  const codeOf = (name: string): string | undefined => lookupMapping(name)?.code;
 
   // PY-shell signed closing keyed by EFFECTIVE CURRENT name (alias-resolved)
   // so a renamed ledger lines up with its current-year counterpart.

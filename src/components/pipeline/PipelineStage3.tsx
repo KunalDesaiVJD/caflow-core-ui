@@ -43,7 +43,7 @@ import { useAiSkills } from "@/hooks/useAiSkills";
 // reconciled. Stage 3's debit-positive normalisation is the same rule
 // applied with nature = "DR" — see fsSignConvention.signedBalance.
 import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
-import { cleanTallyName } from "@/lib/tallyText";
+import { cleanTallyName, buildLedgerMapMatcher } from "@/lib/tallyText";
 
 // ═══════════════════════════════════════
 // Non-Corporate entity detection
@@ -1733,17 +1733,20 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // dropped from BOTH the CY and PY columns — undercounting the note vs the
   // Notes/Face (which match case-insensitively via nceAutoPopulate). Final
   // fallback resolves the same way the note auto-populate does.
-  const coaMapCI = useMemo(() => {
-    const m: Record<string, { code: string }> = {};
-    for (const [k, v] of Object.entries(coaMapping || {})) {
-      if (!(v as any)?.code) continue;
-      const kk = String(k).trim().toLowerCase();
-      if (!(kk in m)) m[kk] = v as any;
-    }
-    return m;
-  }, [coaMapping]);
-  const resolveMapping = (name: string): { code: string } | undefined =>
-    coaMapping[name] ?? coaMapping[String(name).trim()] ?? coaMapCI[String(name).trim().toLowerCase()];
+  //
+  // 2026-08-06 fix (RC-21 follow-up): this comment's own claim — "resolves the
+  // same way the note auto-populate does" — stopped being true once the note
+  // engine's matchers gained a fourth cleanTallyName tier (control chars /
+  // numeric HTML entities Tally can leave in ledger_name). This is the
+  // COA-Mapping page's single most-used lookup (drives orphan detection,
+  // duplicate-ledger guard, the PY comparative build, and the main mapping
+  // display), so a dirty-named ledger here could show as "unmapped" on this
+  // page while its coa_mapping entry simultaneously gets flagged as an orphan
+  // needing a rename — a confusing false-positive on both sides. Route through
+  // the same shared matcher (exact → trim → CI → cleanTallyName) instead of a
+  // hand-rolled index that stops one tier short.
+  const lookupMapping = useMemo(() => buildLedgerMapMatcher(coaMapping || {}), [coaMapping]);
+  const resolveMapping = (name: string): { code: string } | undefined => lookupMapping(name);
 
   // ═══════ Phase 2 + 4 (re-sync flow): ORPHANED-MAPPING QUARANTINE ═══════
   // After a Tally re-sync, ledgers that were renamed or deleted leave their
