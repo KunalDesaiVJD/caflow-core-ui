@@ -87,16 +87,29 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
   const [pyFaRows, setPyFaRows] = useState<FARow[] | null>(null);
 
   // ── Navigate to a specific note from BS / P&L click ──────────────────
+  // 2026-08-06 fix (mirrors #48's fix for the NCE notes viewer): this used to
+  // scroll on a FIXED 250ms timer, racing this component's own initial load
+  // (loadStage5Notes + first-visit autoPopulateNotes, which round-trips the
+  // DB and can take longer than 250ms on a large trial balance) — the note's
+  // DOM section didn't exist yet, so getElementById found nothing and the
+  // click silently did nothing. Gate on this component's own `loading` state
+  // instead, exactly like NCEDetailedNotes does, so the scroll only runs once
+  // the target note is actually guaranteed to be in the DOM. `navigateToNote`
+  // is a freshly-constructed object on every click (see the two call sites in
+  // PipelineFinancialStatements.tsx), so re-clicking the SAME note still
+  // re-triggers this effect via referential inequality — no separate "nav
+  // token" is needed the way the NCE fix needed one for its primitive number.
   useEffect(() => {
-    if (!navigateToNote) return;
+    if (!navigateToNote || loading || !notes) return;
     setActiveTab(navigateToNote.subTab);
-    const timer = setTimeout(() => {
+    // Switching tabs changes which TabsContent is mounted; scroll on the next
+    // frame once that re-render has committed (same technique as NCE).
+    requestAnimationFrame(() => {
       document
         .getElementById(`note-${navigateToNote.noteNo}`)
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [navigateToNote]);
+    });
+  }, [navigateToNote, loading, notes]);
 
   // ── Initial load + auto-populate-if-needed ────────────────────────────
   useEffect(() => {

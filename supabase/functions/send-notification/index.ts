@@ -87,13 +87,43 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+// Escape a value for safe interpolation into HTML markup (text or attribute
+// context). Applied to every data value — client names, reply/query text,
+// custom messages, etc. — that gets interpolated into the outbound email
+// templates below. Some of that data (e.g. client-portal reply_text /
+// query_text) originates from an external, low-trust client-portal user with
+// no sanitization on the way in, and the composed HTML is both emailed via
+// Microsoft Graph and persisted to notification_log for later rendering by
+// firm staff (src/components/billing/EmailLogTab.tsx) — so unescaped values
+// here are a stored-XSS vector. This only escapes data values; it must never
+// be applied to the function's own structural HTML/tags.
+function escapeHtml(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // ── Email HTML builder ───────────────────────────────────────────────
 
 function buildEmailHTML(type: string, payload: Record<string, any>): string {
-  const firmName = payload.firm_name || "V J Desai & Co. LLP, Chartered Accountants";
+  const firmName = escapeHtml(payload.firm_name || "V J Desai & Co. LLP, Chartered Accountants");
   const amt = payload.amount
     ? `₹${Number(payload.amount).toLocaleString("en-IN")}`
     : "N/A";
+  const clientName    = escapeHtml(payload.client_name || "Client");
+  const customMessage = payload.custom_message ? escapeHtml(payload.custom_message) : "";
+  const invoiceNo     = escapeHtml(payload.invoice_no || "N/A");
+  const dueDate       = escapeHtml(payload.due_date || "");
+  const documentType  = escapeHtml(payload.document_type || "");
+  const section       = escapeHtml(payload.section || "N/A");
+  const portalUrl     = payload.portal_url ? escapeHtml(payload.portal_url) : "";
+  const pdfUrl        = payload.pdf_url ? escapeHtml(payload.pdf_url) : "";
+  const email         = escapeHtml(payload.email || "N/A");
+  const password      = escapeHtml(payload.password || "N/A");
 
   const wrapper = (body: string) => `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
@@ -138,11 +168,11 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
     case "audit_draft_report":
     case "audit_final_report":
       return wrapper(`
-        <p>Dear ${payload.client_name || "Client"},</p>
-        <p>${payload.custom_message || "Please find the audit communication details below."}</p>
-        ${payload.portal_url ? `
+        <p>Dear ${clientName},</p>
+        <p>${customMessage || "Please find the audit communication details below."}</p>
+        ${portalUrl ? `
         <p style="margin:16px 0;">
-          <a href="${payload.portal_url}"
+          <a href="${portalUrl}"
              style="background:#c8960c;color:#fff;padding:10px 22px;border-radius:6px;text-decoration:none;font-weight:600;display:inline-block;">
             View in Client Portal →
           </a>
@@ -152,59 +182,59 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
 
     case "invoice_generated":
       return wrapper(`
-        <p>Dear ${payload.client_name || "Client"},</p>
+        <p>Dear ${clientName},</p>
         <p>Please find below the details of your invoice:</p>
         <table class="info">
-          <tr><td>Invoice No.</td><td>${payload.invoice_no || "N/A"}</td></tr>
+          <tr><td>Invoice No.</td><td>${invoiceNo}</td></tr>
           <tr><td>Amount</td><td>${amt}</td></tr>
-          ${payload.due_date ? `<tr><td>Due Date</td><td>${payload.due_date}</td></tr>` : ""}
-          ${payload.document_type ? `<tr><td>Type</td><td>${payload.document_type}</td></tr>` : ""}
+          ${dueDate ? `<tr><td>Due Date</td><td>${dueDate}</td></tr>` : ""}
+          ${documentType ? `<tr><td>Type</td><td>${documentType}</td></tr>` : ""}
         </table>
-        ${payload.custom_message ? `<p style="margin-top:12px">${payload.custom_message}</p>` : ""}
+        ${customMessage ? `<p style="margin-top:12px">${customMessage}</p>` : ""}
         <p>Kindly arrange payment at the earliest convenience.</p>
         <p>Thank you for your continued trust in our services.</p>
         <p>Regards,<br><strong>${firmName}</strong></p>`);
 
     case "quotation_sent":
       return wrapper(`
-        <p>Dear ${payload.client_name || "Client"},</p>
+        <p>Dear ${clientName},</p>
         <p>Please find our quotation for your reference:</p>
         <table class="info">
-          <tr><td>Document No.</td><td>${payload.invoice_no || "N/A"}</td></tr>
+          <tr><td>Document No.</td><td>${invoiceNo}</td></tr>
           <tr><td>Amount</td><td>${amt}</td></tr>
         </table>
-        ${payload.custom_message ? `<p>${payload.custom_message}</p>` : ""}
+        ${customMessage ? `<p>${customMessage}</p>` : ""}
         <p>Please review and revert with your confirmation.</p>
         <p>Regards,<br><strong>${firmName}</strong></p>`);
 
     case "proforma_sent":
       return wrapper(`
-        <p>Dear ${payload.client_name || "Client"},</p>
+        <p>Dear ${clientName},</p>
         <p>Please find the proforma invoice below:</p>
         <table class="info">
-          <tr><td>Document No.</td><td>${payload.invoice_no || "N/A"}</td></tr>
+          <tr><td>Document No.</td><td>${invoiceNo}</td></tr>
           <tr><td>Amount</td><td>${amt}</td></tr>
         </table>
-        ${payload.custom_message ? `<p>${payload.custom_message}</p>` : ""}
+        ${customMessage ? `<p>${customMessage}</p>` : ""}
         <p>Regards,<br><strong>${firmName}</strong></p>`);
 
     case "credit_note_issued":
       return wrapper(`
-        <p>Dear ${payload.client_name || "Client"},</p>
+        <p>Dear ${clientName},</p>
         <p>A credit note has been issued against your account:</p>
         <table class="info">
-          <tr><td>Credit Note No.</td><td>${payload.invoice_no || "N/A"}</td></tr>
+          <tr><td>Credit Note No.</td><td>${invoiceNo}</td></tr>
           <tr><td>Amount</td><td>${amt}</td></tr>
         </table>
-        ${payload.custom_message ? `<p>${payload.custom_message}</p>` : ""}
+        ${customMessage ? `<p>${customMessage}</p>` : ""}
         <p>Regards,<br><strong>${firmName}</strong></p>`);
 
     case "payment_reminder":
       return wrapper(`
-        <p>Dear ${payload.client_name || "Client"},</p>
+        <p>Dear ${clientName},</p>
         <p>This is a friendly reminder for the outstanding payment:</p>
         <table class="info">
-          <tr><td>Invoice No.</td><td>${payload.invoice_no || "N/A"}</td></tr>
+          <tr><td>Invoice No.</td><td>${invoiceNo}</td></tr>
           <tr><td>Outstanding Amount</td><td style="color:#dc2626">${amt}</td></tr>
         </table>
         <p>Please process the payment at your earliest convenience to avoid any inconvenience.</p>
@@ -213,9 +243,9 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
     case "tds_due_7_days":
       return wrapper(`
         <p>Dear Team,</p>
-        <p>TDS filing for <strong>${payload.client_name || "N/A"}</strong> is due in <strong>7 days</strong>.</p>
+        <p>TDS filing for <strong>${escapeHtml(payload.client_name || "N/A")}</strong> is due in <strong>7 days</strong>.</p>
         <table class="info">
-          <tr><td>Section</td><td>${payload.section || "N/A"}</td></tr>
+          <tr><td>Section</td><td>${section}</td></tr>
           <tr><td>Amount</td><td>${amt}</td></tr>
         </table>
         <p>Please ensure timely filing to avoid penalties.</p>`);
@@ -223,26 +253,26 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
     case "tds_due_1_day":
       return wrapper(`
         <p style="color:#dc2626;font-weight:bold;font-size:16px">⚠ URGENT: TDS Due Tomorrow</p>
-        <p>TDS filing for <strong>${payload.client_name || "N/A"}</strong> is due <strong>tomorrow</strong>.</p>
+        <p>TDS filing for <strong>${escapeHtml(payload.client_name || "N/A")}</strong> is due <strong>tomorrow</strong>.</p>
         <table class="info">
-          <tr><td>Section</td><td>${payload.section || "N/A"}</td></tr>
+          <tr><td>Section</td><td>${section}</td></tr>
           <tr><td>Amount</td><td style="color:#dc2626">${amt}</td></tr>
         </table>
         <p style="color:#dc2626">Immediate action required to avoid penalties.</p>`);
 
     case "ledger_statement":
       return wrapper(`
-        <p>Dear ${payload.client_name || "Client"},</p>
+        <p>Dear ${clientName},</p>
         <p>Please find your ledger statement for your review. Kindly confirm the balances at your earliest.</p>
-        ${payload.custom_message ? `<p>${payload.custom_message}</p>` : ""}
+        ${customMessage ? `<p>${customMessage}</p>` : ""}
         <p>Regards,<br><strong>${firmName}</strong></p>`);
 
     case "audit_report_ready":
       return wrapper(`
-        <p>Dear ${payload.client_name || "Client"},</p>
+        <p>Dear ${clientName},</p>
         <p>Your audit report is ready for review.</p>
-        ${payload.pdf_url ? `<p><a href="${payload.pdf_url}" style="background:#1a3a5c;color:#fff;padding:10px 20px;text-decoration:none;border-radius:4px;display:inline-block">Download Report</a></p>` : ""}
-        ${payload.custom_message ? `<p>${payload.custom_message}</p>` : ""}
+        ${pdfUrl ? `<p><a href="${pdfUrl}" style="background:#1a3a5c;color:#fff;padding:10px 20px;text-decoration:none;border-radius:4px;display:inline-block">Download Report</a></p>` : ""}
+        ${customMessage ? `<p>${customMessage}</p>` : ""}
         <p>Regards,<br><strong>${firmName}</strong></p>`);
 
     case "new_user_welcome":
@@ -250,15 +280,15 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
         <h3>Welcome to CAFlow!</h3>
         <p>Your account has been set up successfully. Here are your login details:</p>
         <table class="info">
-          <tr><td>Email</td><td>${payload.email || "N/A"}</td></tr>
-          <tr><td>Temporary Password</td><td><code style="background:#f3f4f6;padding:4px 8px;border-radius:4px">${payload.password || "N/A"}</code></td></tr>
+          <tr><td>Email</td><td>${email}</td></tr>
+          <tr><td>Temporary Password</td><td><code style="background:#f3f4f6;padding:4px 8px;border-radius:4px">${password}</code></td></tr>
         </table>
         <p>Please change your password after your first login.</p>`);
 
     default:
       return wrapper(`
-        <p>${payload.custom_message || "Please find the details below."}</p>
-        ${payload.invoice_no ? `<p>Reference: ${payload.invoice_no}</p>` : ""}`);
+        <p>${customMessage || "Please find the details below."}</p>
+        ${invoiceNo !== "N/A" ? `<p>Reference: ${invoiceNo}</p>` : ""}`);
   }
 }
 
@@ -273,25 +303,38 @@ function buildPortalDigestHtml(activities: any[], firmName: string): string {
     const actLabel = a.activity === "document_upload" ? "Uploaded a document" : "Replied to a query";
     const meta     = (typeof a.metadata === "object" && a.metadata) ? a.metadata : {};
 
+    // NOTE: query_text / reply_text / attachment_name / filename / details all
+    // ultimately trace back to an external, low-trust client-portal user (see
+    // src/pages/PortalQueries.tsx sendReply()) with no sanitization on the way
+    // in — escape every one of them before interpolating into this HTML.
+    const clientNameEsc  = escapeHtml(a.client_name || "Client");
+    const detailsEsc     = a.details ? escapeHtml(a.details) : "";
+    const queryRefEsc    = meta.query_ref ? escapeHtml(meta.query_ref) : "";
+    const queryTextEsc   = meta.query_text ? escapeHtml(meta.query_text) : "";
+    const replyTextEsc   = meta.reply_text ? escapeHtml(meta.reply_text) : "";
+    const attachNameEsc  = meta.attachment_name ? escapeHtml(meta.attachment_name) : "";
+    const filenameEsc    = meta.filename ? escapeHtml(meta.filename) : "";
+    const subCategoryEsc = meta.sub_category ? escapeHtml(meta.sub_category) : "";
+
     let detailBlock = "";
 
     if (a.activity === "query_reply") {
       detailBlock = `
-        ${meta.query_ref ? `<p style="margin:0 0 8px;font-size:12px;color:#6b7280"><strong>Query Ref:</strong> ${meta.query_ref}</p>` : ""}
-        ${meta.query_text ? `
+        ${queryRefEsc ? `<p style="margin:0 0 8px;font-size:12px;color:#6b7280"><strong>Query Ref:</strong> ${queryRefEsc}</p>` : ""}
+        ${queryTextEsc ? `
         <div style="background:#f9fafb;border-left:3px solid #d97706;padding:10px 14px;margin:0 0 10px;border-radius:0 4px 4px 0">
           <p style="margin:0 0 4px;font-size:10px;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Original Query</p>
-          <p style="margin:0;font-size:13px;color:#374151;line-height:1.5">${meta.query_text}</p>
+          <p style="margin:0;font-size:13px;color:#374151;line-height:1.5">${queryTextEsc}</p>
         </div>` : ""}
-        ${meta.reply_text ? `
+        ${replyTextEsc ? `
         <div style="background:#fffbf0;border-left:3px solid #f59e0b;padding:10px 14px;margin:0 0 10px;border-radius:0 4px 4px 0">
           <p style="margin:0 0 4px;font-size:10px;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Client's Reply</p>
-          <p style="margin:0;font-size:13px;color:#374151;line-height:1.5;white-space:pre-line">${meta.reply_text}</p>
-        </div>` : (a.details ? `<p style="margin:0 0 8px;font-size:13px;color:#374151">${a.details}</p>` : "")}
-        ${meta.attachment_name ? `
+          <p style="margin:0;font-size:13px;color:#374151;line-height:1.5;white-space:pre-line">${replyTextEsc}</p>
+        </div>` : (detailsEsc ? `<p style="margin:0 0 8px;font-size:13px;color:#374151">${detailsEsc}</p>` : "")}
+        ${attachNameEsc ? `
         <p style="margin:0;font-size:12px;color:#374151">
           📎 <strong>Attached File:</strong>
-          <span style="color:#1a3a5c;font-style:italic">${meta.attachment_name}</span>
+          <span style="color:#1a3a5c;font-style:italic">${attachNameEsc}</span>
         </p>` : ""}
       `;
     } else if (a.activity === "document_upload") {
@@ -299,14 +342,14 @@ function buildPortalDigestHtml(activities: any[], firmName: string): string {
         <div style="background:#eff6ff;border-left:3px solid #3b82f6;padding:10px 14px;border-radius:0 4px 4px 0">
           <p style="margin:0 0 4px;font-size:10px;color:#9ca3af;font-weight:700;text-transform:uppercase;letter-spacing:.5px">Document Uploaded</p>
           <p style="margin:0;font-size:13px;color:#374151;font-weight:600">
-            📄 ${meta.filename || a.details || "—"}
+            📄 ${filenameEsc || detailsEsc || "—"}
           </p>
-          ${meta.sub_category ? `<p style="margin:4px 0 0;font-size:11px;color:#6b7280">Category: <strong>${meta.sub_category}</strong></p>` : ""}
+          ${subCategoryEsc ? `<p style="margin:4px 0 0;font-size:11px;color:#6b7280">Category: <strong>${subCategoryEsc}</strong></p>` : ""}
         </div>
       `;
     } else {
-      detailBlock = a.details
-        ? `<p style="margin:0;font-size:13px;color:#374151">${a.details}</p>`
+      detailBlock = detailsEsc
+        ? `<p style="margin:0;font-size:13px;color:#374151">${detailsEsc}</p>`
         : "";
     }
 
@@ -314,7 +357,7 @@ function buildPortalDigestHtml(activities: any[], firmName: string): string {
     <div style="border:1px solid #e5e7eb;border-radius:8px;margin:0 0 16px;overflow:hidden">
       <div style="background:#f9fafb;padding:10px 14px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center">
         <div style="font-size:13px;font-weight:600;color:#1a3a5c">
-          ${icon} ${a.client_name || "Client"}
+          ${icon} ${clientNameEsc}
           <span style="color:#9ca3af;font-weight:400;margin-left:6px">— ${actLabel}</span>
         </div>
         <div style="font-size:11px;color:#9ca3af;white-space:nowrap;margin-left:12px">${time}</div>
@@ -323,11 +366,13 @@ function buildPortalDigestHtml(activities: any[], firmName: string): string {
     </div>`;
   }).join("");
 
+  const firmNameEsc = escapeHtml(firmName);
+
   return `<!DOCTYPE html>
 <html><head><meta charset="utf-8"></head>
 <body style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;padding:0;color:#333">
 <div style="background:#1a3a5c;color:#fff;padding:18px 24px">
-  <h2 style="margin:0;font-size:18px;font-weight:600">${firmName}</h2>
+  <h2 style="margin:0;font-size:18px;font-weight:600">${firmNameEsc}</h2>
   <p style="margin:4px 0 0;font-size:12px;opacity:.8">Client Portal — Activity Digest</p>
 </div>
 <div style="border:1px solid #e5e7eb;border-top:none;padding:24px">

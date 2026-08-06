@@ -12,8 +12,30 @@ Deno.serve(async (req) => {
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
+
+    // ── Auth: require a valid bearer token ───────────────────────
+    const authHeader = req.headers.get('Authorization') ?? '';
+    const token = authHeader.replace('Bearer ', '').trim();
+    if (!token) return new Response(JSON.stringify({ error: 'Unauthorized' }),
+      { status: 401, headers: { ...cors, 'Content-Type': 'application/json' } });
+
+    const { data: { user }, error: authErr } = await sb.auth.getUser(token);
+    if (authErr || !user) return new Response(JSON.stringify({ error: 'Unauthorized' }),
+      { status: 401, headers: { ...cors, 'Content-Type': 'application/json' } });
+
     const { client_id, fy } = await req.json();
     if (!client_id || !fy) throw new Error('client_id and fy are required');
+
+    // ── Firm-ownership gate (prevents cross-firm/unauthenticated writes) ──
+    const { data: dbUser } = await sb.from('users').select('firm_id, role').eq('id', user.id).single();
+    const isSuper = dbUser?.role === 'superadmin';
+    if (!isSuper) {
+      const { data: client } = await sb.from('clients').select('firm_id').eq('id', client_id).single();
+      if (!client || !dbUser?.firm_id || client.firm_id !== dbUser.firm_id) {
+        return new Response(JSON.stringify({ error: 'Forbidden: client is not in your firm' }),
+          { status: 403, headers: { ...cors, 'Content-Type': 'application/json' } });
+      }
+    }
 
     const fyY     = parseInt(fy.split('-')[0]);
     const fyStart = new Date(fyY,     3,  1);

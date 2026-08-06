@@ -2301,6 +2301,7 @@ export default function PipelineFinancialStatements({
         .from("fa_financial_statements")
         .select("*")
         .eq("engagement_id", engagementId)
+        .is("deleted_at", null)
         .order("sort_order");
       return (data || []) as any[];
     },
@@ -2330,7 +2331,8 @@ export default function PipelineFinancialStatements({
       const { data: prevFs } = await supabase
         .from("fa_financial_statements")
         .select("line_item_code, amount_cy")
-        .eq("engagement_id", (prevEng as any).id);
+        .eq("engagement_id", (prevEng as any).id)
+        .is("deleted_at", null);
       return prevFs || [];
     },
     enabled: !!engagement?.client_id && !!engagement?.financial_year,
@@ -4985,6 +4987,33 @@ export default function PipelineFinancialStatements({
       logReconciliationDrift(engagementId, user?.id ?? null, fsReconResult).catch(() => {});
     }
   }, [driftFingerprint, engagementId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Security/integrity audit (2026-08): CLAUDE.md §8 Invariant 5 says severe
+  // drift is always logged, but corpReconResult was never logged — only the
+  // NCE path above was wired. This mirrors that same logging for corporate
+  // engagements. It is a no-op today: corpReconResult is always null while
+  // FS_CORP_EXPORT_GATE is OFF (see the memo above), so this effect never
+  // fires until that flag is flipped. NOT flipping FS_CORP_EXPORT_GATE here —
+  // per docs/fs-remediation/FLIP-RUNBOOK.md it must be flipped LAST, after
+  // FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, NCE_SIGNED_NOTE_AMOUNTS +
+  // CORP_SIGNED_NOTE_TOTALS, and NCE_RESYNC_DELETE_FIRST have each been
+  // individually flipped and parity-validated against live engagement data
+  // in the credentialed environment (§10) — this session has no live DB
+  // access to safely do that. This logging is wired now so nothing else is
+  // needed when that flip happens through the proper runbook process.
+  const corpDriftFingerprint = useMemo(() => {
+    if (!corpReconResult || corpReconResult.severeCount === 0) return "";
+    return corpReconResult.rows
+      .filter(r => r.status === "drift_severe")
+      .map(r => `${r.code}:${r.delta.cy}:${r.delta.py}`)
+      .sort()
+      .join("|");
+  }, [corpReconResult]);
+  useEffect(() => {
+    if (corpDriftFingerprint && corpReconResult && corpReconResult.severeCount > 0) {
+      logReconciliationDrift(engagementId, user?.id ?? null, corpReconResult).catch(() => {});
+    }
+  }, [corpDriftFingerprint, engagementId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Final Export Excel gate: corporate must satisfy ALL three; non-corporate
   // entities use BS-balance + severe-drift check.
@@ -8991,6 +9020,12 @@ export default function PipelineFinancialStatements({
             // NoteCell handlers use — NCEDetailedNotes' own effect (gated on
             // its `loading` state) owns the actual force-open + scroll now.
             setActiveTab("notes");
+            // 2026-08-06 fix: the fixed-300ms scroll this used to also fire
+            // here raced NotesTab's/NCEDetailedNotes's own initial load and
+            // could fail silently (or double-scroll if it fired after the
+            // real one already succeeded). Both viewers now own a
+            // loading-gated force-open+scroll effect of their own — setting
+            // the nav-target state below is sufficient.
             if (isNonCorporate) {
               setNceNavNote(noteNo);
               setNceNoteNavToken(t => t + 1);
@@ -9175,10 +9210,11 @@ export default function PipelineFinancialStatements({
                     onClick={() => {
                       setSaveBlockedDialogOpen(false);
                       setActiveTab("notes");
+                      // 2026-08-06 fix: rely solely on NotesTab's own
+                      // loading-gated navigate effect (see NotesTab.tsx) —
+                      // the fixed-300ms inline scroll this used to also do
+                      // raced that same load and could fail or double-scroll.
                       setCorpNavNote({ noteNo: m.noteNo, subTab: m.subTabKey as "bs_liab" | "bs_asset" | "pl" | "fa" });
-                      setTimeout(() => {
-                        document.getElementById(`note-${m.noteNo}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-                      }, 300);
                     }}
                   >
                     Fix →
@@ -9287,8 +9323,18 @@ export default function PipelineFinancialStatements({
                   onEditNote={updateNoteOverride}
                   onNavigateToNote={(noteNo, subTab) => {
                     setActiveTab("notes");
+                    // 2026-08-06 fix (mirrors the NCE fix at the sibling
+                    // onNavigateToNote handlers below): nulling corpNavNote on
+                    // a fixed 1000ms timer raced NotesTab's own initial load
+                    // (loadStage5Notes + first-visit autoPopulateNotes), which
+                    // can take longer than that on a large trial balance —
+                    // the note's DOM section didn't exist yet, so the target
+                    // got cleared before NotesTab's own effect (now
+                    // loading-gated, see NotesTab.tsx) ever got to act on it.
+                    // Leave it set; {noteNo, subTab} is a fresh object on
+                    // every click, so re-clicking the SAME note still
+                    // re-triggers NotesTab's effect via referential inequality.
                     setCorpNavNote({ noteNo, subTab });
-                    setTimeout(() => setCorpNavNote(null), 1000);
                   }}
                 />
                 <CorporateSignatureBlock
@@ -9475,8 +9521,18 @@ export default function PipelineFinancialStatements({
                   }}
                   onNavigateToNote={(noteNo, subTab) => {
                     setActiveTab("notes");
+                    // 2026-08-06 fix (mirrors the NCE fix at the sibling
+                    // onNavigateToNote handlers below): nulling corpNavNote on
+                    // a fixed 1000ms timer raced NotesTab's own initial load
+                    // (loadStage5Notes + first-visit autoPopulateNotes), which
+                    // can take longer than that on a large trial balance —
+                    // the note's DOM section didn't exist yet, so the target
+                    // got cleared before NotesTab's own effect (now
+                    // loading-gated, see NotesTab.tsx) ever got to act on it.
+                    // Leave it set; {noteNo, subTab} is a fresh object on
+                    // every click, so re-clicking the SAME note still
+                    // re-triggers NotesTab's effect via referential inequality.
                     setCorpNavNote({ noteNo, subTab });
-                    setTimeout(() => setCorpNavNote(null), 1000);
                   }}
                 />
                 <CorporateSignatureBlock

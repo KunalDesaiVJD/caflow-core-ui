@@ -2203,7 +2203,8 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
           .from("nce_financial_notes")
           .select("note_type, cy_data, py_data")
           .eq("engagement_id", engagementId)
-          .eq("financial_year", fy);
+          .eq("financial_year", fy)
+          .is("deleted_at", null);
         if (cancelled) return;
         if (error) throw error;
 

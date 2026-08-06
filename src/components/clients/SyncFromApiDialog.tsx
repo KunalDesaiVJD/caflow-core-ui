@@ -33,9 +33,12 @@ import {
 
 // ─── API config ───────────────────────────────────────────────────────────────
 
-const API_URL =
-  "https://eofficeportal.com/Company/SmartService.asmx/FillCustomerlist" +
-  "?customerGroupid=nullksd9ow34e9w0sdmoaskjof8w0eur0wejfomasdojo9auwerwjrowejmfojaspf";
+// NOTE: this component is currently unused (no other file imports it — the live
+// sync feature is CustomerSyncDialog.tsx / useCustomerSync.ts). It used to hardcode
+// the eofficeportal access token and fetch eofficeportal.com directly from the
+// browser; both have been removed for consistency with the fixed hook (see
+// useCustomerSync.ts and supabase/functions/customer-sync for the current,
+// authenticated, server-side-secret-backed approach).
 
 // ─── Entity type mapping (all 8 values confirmed from live API) ───────────────
 
@@ -91,19 +94,6 @@ interface Props {
   onComplete:    () => void;
 }
 
-// ─── Parse XML → JSON array ───────────────────────────────────────────────────
-
-function parseApiXml(xmlText: string): ApiRecord[] {
-  const parser  = new DOMParser();
-  const xmlDoc  = parser.parseFromString(xmlText, "text/xml");
-  const strEl   = xmlDoc.querySelector("string");
-  if (!strEl) throw new Error("API response is missing the expected <string> element");
-  const jsonStr = strEl.textContent || "";
-  const records = JSON.parse(jsonStr);
-  if (!Array.isArray(records)) throw new Error("Expected a JSON array inside the XML response");
-  return records as ApiRecord[];
-}
-
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Props) {
@@ -131,18 +121,18 @@ export function SyncFromApiDialog({ open, onOpenChange, firmId, onComplete }: Pr
     setErrorMsg("");
 
     try {
-      // 1a. Call eofficeportal API
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 30_000);
-      let response: Response;
-      try {
-        response = await fetch(API_URL, { signal: controller.signal });
-      } finally {
-        clearTimeout(timer);
+      // 1a. Call eofficeportal via the authenticated Supabase edge function —
+      // never fetch eofficeportal.com directly from the browser (see note above).
+      const { data: fnData, error: fnError } = await supabase.functions.invoke(
+        "customer-sync",
+        { method: "GET" },
+      );
+      if (fnError) throw new Error(fnError.message || "Edge Function error — is 'customer-sync' deployed?");
+      if (fnData?.error) throw new Error(fnData.error);
+      if (!fnData?.records || !Array.isArray(fnData.records)) {
+        throw new Error("Could not retrieve customer list from API.");
       }
-      if (!response.ok) throw new Error(`API returned HTTP ${response.status}`);
-      const xmlText = await response.text();
-      const records = parseApiXml(xmlText);
+      const records = fnData.records as ApiRecord[];
 
       // 1b. Fetch ALL existing customer_ids — both published AND drafts
       //     (customer_id is the SOLE dedup key; PAN / name are NOT used)

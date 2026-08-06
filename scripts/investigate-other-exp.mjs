@@ -5,7 +5,19 @@
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = "https://hubyywmodekfdzhwiumb.supabase.co";
-const SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh1Ynl5d21vZGVrZmR6aHdpdW1iIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3Mjc4OTI3OCwiZXhwIjoyMDg4MzY1Mjc4fQ.PmVYktsuUJDweOgP7J_209hlrV_xQl2qUOi7Uc7yeHc";
+// SECURITY: this used to be a service_role key hardcoded in plain text —
+// full, unrestricted database access, bypassing every RLS policy — checked
+// into and pushed to git. It's now read from the environment instead. This
+// does NOT undo the exposure: the old key value is still present in this
+// file's git history and must be treated as compromised. Rotate it from the
+// Supabase dashboard (Project Settings → API → service_role → regenerate),
+// then set the new value as SUPABASE_SERVICE_ROLE_KEY before running this
+// script — never paste it back into this file.
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+if (!SERVICE_KEY) {
+  console.error("[investigate-other-exp] SUPABASE_SERVICE_ROLE_KEY environment variable is not set. Aborting.");
+  process.exit(1);
+}
 
 const supabase = createClient(SUPABASE_URL, SERVICE_KEY);
 const ENG_ID = "dae6984f-a803-4187-8e29-6fa158220da7";

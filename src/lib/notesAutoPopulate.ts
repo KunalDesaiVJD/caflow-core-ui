@@ -521,7 +521,8 @@ export async function getPreviousYearFsAmounts(
   const { data: rows } = await supabase
     .from("fa_financial_statements")
     .select("line_item_code, amount_cy")
-    .eq("engagement_id", prevEngId);
+    .eq("engagement_id", prevEngId)
+    .is("deleted_at", null);
   const out: Record<string, number> = {};
   for (const r of (rows || []) as any[]) {
     if (r.line_item_code) {

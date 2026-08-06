@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -123,6 +124,12 @@ export default function AuditIntelligence() {
   const [showEditDialog, setShowEditDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [formSaving, setFormSaving] = useState(false);
+  // Typed-confirmation guard for the destructive engagement delete, plus a
+  // pre-delete impact summary so the user sees the blast radius before the
+  // "Delete Permanently" button becomes clickable.
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deletePreview, setDeletePreview] = useState<{ documents: number; notes: number; workpapers: number } | null>(null);
+  const [deletePreviewLoading, setDeletePreviewLoading] = useState(false);
 
   // Filters
   const [filterAuditType, setFilterAuditType] = useState<string>("all");
@@ -267,6 +274,39 @@ export default function AuditIntelligence() {
     } catch (err) {
       console.error("loadMetrics failed", err);
     }
+  };
+
+  // Fetch a pre-delete impact summary for the delete-confirmation dialog.
+  // Read-only counts against the highest-impact child tables — the actual
+  // cascade delete logic in handleDelete() is unchanged.
+  const loadDeletePreview = async (engId: string) => {
+    setDeletePreviewLoading(true);
+    try {
+      const [docsRes, notesRes, wpRes] = await Promise.all([
+        (supabase as any).from("documents").select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+        (supabase as any).from("nce_financial_notes").select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+        (supabase as any).from("audit_workpapers").select("id", { count: "exact", head: true }).eq("engagement_id", engId),
+      ]);
+      setDeletePreview({
+        documents: docsRes.count || 0,
+        notes: notesRes.count || 0,
+        workpapers: wpRes.count || 0,
+      });
+    } catch (err) {
+      console.error("loadDeletePreview failed", err);
+      setDeletePreview(null);
+    } finally {
+      setDeletePreviewLoading(false);
+    }
+  };
+
+  const openDeleteDialog = (engId?: string) => {
+    const id = engId ?? selectedEngagementId;
+    if (engId) setSelectedEngagementId(engId);
+    setDeleteConfirmText("");
+    setDeletePreview(null);
+    if (id) loadDeletePreview(id);
+    setShowDeleteDialog(true);
   };
 
   // Filter engagements by all 4 filters and auto-resolve
@@ -442,6 +482,10 @@ export default function AuditIntelligence() {
       toast.error("Only firm administrators and superadmins can delete engagements.");
       return;
     }
+    if (deleteConfirmText.trim() !== deleteConfirmTarget) {
+      toast.error("Type the exact client name and FY to confirm deletion.");
+      return;
+    }
     const eid = selectedEngagementId;
     setFormSaving(true);
     try {
@@ -509,10 +553,20 @@ export default function AuditIntelligence() {
     setFormSaving(false);
     setShowDeleteDialog(false);
     setSelectedEngagementId("");
+    setDeleteConfirmText("");
+    setDeletePreview(null);
     refreshEngagements();
   };
 
   const userMap = useMemo(() => new Map(users.map(u => [u.id, u.name])), [users]);
+
+  // The exact string the user must type to confirm engagement deletion —
+  // no separate "engagement code" field exists, so client name + FY (the
+  // same identifier already shown in the dialog copy) is the confirmation key.
+  const deleteConfirmTarget = useMemo(() => {
+    if (!selectedEngagement) return "";
+    return `${selectedEngagement.client_name} — FY ${selectedEngagement.financial_year}`;
+  }, [selectedEngagement]);
 
   const selectedClientName = useMemo(() => {
     if (!selectedClientId || selectedClientId === "all") return "";
@@ -732,7 +786,7 @@ export default function AuditIntelligence() {
                   <Pencil size={14} className="mr-2" /> Edit Engagement
                 </DropdownMenuItem>
                 {canDeleteEngagement && (
-                  <DropdownMenuItem onClick={() => setShowDeleteDialog(true)} className="text-destructive focus:text-destructive">
+                  <DropdownMenuItem onClick={() => openDeleteDialog()} className="text-destructive focus:text-destructive">
                     <Trash2 size={14} className="mr-2" /> Delete Engagement
                   </DropdownMenuItem>
                 )}
@@ -929,7 +983,7 @@ export default function AuditIntelligence() {
                         <Button
                           variant="ghost" size="icon" className="h-6 w-6 text-destructive hover:text-destructive"
                           title="Delete engagement"
-                          onClick={() => { setSelectedEngagementId(e.id); setShowDeleteDialog(true); }}
+                          onClick={() => openDeleteDialog(e.id)}
                         >
                           <Trash2 size={11} />
                         </Button>
@@ -1072,8 +1126,11 @@ export default function AuditIntelligence() {
         </DialogContent>
       </Dialog>
 
-      {/* ─── Delete Confirmation ─── */}
-      <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+      {/* ─── Delete Confirmation — typed confirmation required ─── */}
+      <Dialog open={showDeleteDialog} onOpenChange={(open) => {
+        setShowDeleteDialog(open);
+        if (!open) { setDeleteConfirmText(""); setDeletePreview(null); }
+      }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Permanently Delete Engagement?</DialogTitle>
@@ -1081,9 +1138,42 @@ export default function AuditIntelligence() {
               This will <strong>permanently delete</strong> "{selectedEngagement?.client_name} — FY {selectedEngagement?.financial_year}" and all associated data (Tally sync, trial balance, financial statements, TDS, IT returns). This cannot be undone.
             </DialogDescription>
           </DialogHeader>
+          <div className="space-y-3">
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
+              {deletePreviewLoading ? (
+                <span className="text-muted-foreground">Calculating impact…</span>
+              ) : deletePreview ? (
+                <>
+                  This will permanently delete{" "}
+                  <strong>{deletePreview.documents}</strong> document{deletePreview.documents === 1 ? "" : "s"},{" "}
+                  <strong>{deletePreview.notes}</strong> financial note{deletePreview.notes === 1 ? "" : "s"}, and{" "}
+                  <strong>{deletePreview.workpapers}</strong> workpaper{deletePreview.workpapers === 1 ? "" : "s"} — along with
+                  the full trial balance, tax audit data, and planning history for this engagement.
+                </>
+              ) : (
+                <span className="text-muted-foreground">Impact summary unavailable — proceed with caution.</span>
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label>
+                Type <strong>{deleteConfirmTarget}</strong> to confirm
+              </Label>
+              <Input
+                autoFocus
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                placeholder={deleteConfirmTarget}
+                autoComplete="off"
+              />
+            </div>
+          </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete} disabled={formSaving}>
+            <Button
+              variant="destructive"
+              onClick={handleDelete}
+              disabled={formSaving || deleteConfirmText.trim() !== deleteConfirmTarget}
+            >
               {formSaving && <Loader2 size={16} className="mr-2 animate-spin" />}
               Delete Permanently
             </Button>

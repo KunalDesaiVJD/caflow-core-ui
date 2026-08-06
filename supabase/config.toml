@@ -33,22 +33,32 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.get-document-url]
-verify_jwt = false
+# Flipped to true (defense-in-depth): now has its own auth.getUser + firm-ownership
+# check in-code, requiring a Bearer token only (no query-param fallback).
+verify_jwt = true
 
 [functions.generate-audit-report]
 verify_jwt = false
 
 [functions.calculate-depreciation]
-verify_jwt = false
+# Flipped to true (defense-in-depth): now has its own auth.getUser + firm-ownership
+# check in-code, but the platform-level JWT gate should not be relied on skip.
+verify_jwt = true
 
 [functions.parse-tally-tb]
-verify_jwt = false
+# Flipped to true (defense-in-depth): now has its own auth.getUser + firm-ownership
+# check in-code.
+verify_jwt = true
 
 [functions.tag-tb-ledgers]
-verify_jwt = false
+# Flipped to true (defense-in-depth): now has its own auth.getUser + firm-ownership
+# check in-code.
+verify_jwt = true
 
 [functions.rollover-notes-previous-year]
-verify_jwt = false
+# Flipped to true (defense-in-depth): now has its own auth.getUser + firm-ownership
+# check in-code.
+verify_jwt = true
 
 [functions.customer-sync]
 verify_jwt = false
@@ -78,3 +88,28 @@ verify_jwt = false
 
 [functions.tds-recon-compare]
 verify_jwt = false
+
+# Pinned explicitly (previously absent from this file, leaving the deploy-time
+# default implicit and undocumented). All seven self-validate the caller via
+# supabase.auth.getUser(token) in-code; verify_jwt=true adds a platform-level
+# backstop in front of that.
+[functions.analyze-coa-override]
+verify_jwt = true
+
+[functions.msme-calibrate]
+verify_jwt = true
+
+[functions.msme-extract-ledger]
+verify_jwt = true
+
+[functions.msme-panel-review]
+verify_jwt = true
+
+[functions.save-nce-constrained-note]
+verify_jwt = true
+
+[functions.send-telegram-report]
+verify_jwt = true
+
+[functions.tds-portal-credentials]
+verify_jwt = true

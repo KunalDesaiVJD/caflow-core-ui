@@ -15,14 +15,30 @@ const ROLE_HIERARCHY: Record<string, number> = {
   client: 0,
 };
 
-const DEFAULT_PASSWORDS: Record<string, string> = {
-  superadmin: "SuperAdmin@2025!",
-  firm_admin: "FirmAdmin@2025!",
-  partner_ca: "Partner@2025!",
-  manager: "Manager@2025!",
-  staff_article: "Staff@2025!",
-  client: "Client@2025!",
-};
+// SECURITY: previously every new/reset account of a given role got the SAME
+// hardcoded password (e.g. every "client" account got "Client@2025!") — a
+// known, guessable, platform-wide credential visible to anyone with repo
+// access. Replaced with a per-account cryptographically random temporary
+// password; must_change_password is still set and now also enforced
+// server-side (see requireNotMustChangePassword below), not just client-side.
+function generateTempPassword(): string {
+  const upper   = "ABCDEFGHJKLMNPQRSTUVWXYZ"; // no I/O — avoid look-alikes
+  const lower   = "abcdefghijkmnpqrstuvwxyz";
+  const digits  = "23456789";
+  const symbols = "!@#$%^&*";
+  const all     = upper + lower + digits + symbols;
+  const pick = (charset: string) => charset[crypto.getRandomValues(new Uint32Array(1))[0] % charset.length];
+  const required = [pick(upper), pick(lower), pick(digits), pick(symbols)];
+  const rest = Array.from({ length: 12 }, () => pick(all));
+  const chars = [...required, ...rest];
+  // Fisher-Yates shuffle using crypto randomness so the required-class chars
+  // aren't always in the same first-4 positions.
+  for (let i = chars.length - 1; i > 0; i--) {
+    const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1);
+    [chars[i], chars[j]] = [chars[j], chars[i]];
+  }
+  return chars.join("");
+}
 
 /**
  * Robustly resolve an existing auth user by email.
@@ -262,8 +278,8 @@ Deno.serve(async (req) => {
 
       const targetFirmId = requestingUser.role === "superadmin" ? (firm_id || requestingUser.firm_id) : requestingUser.firm_id;
 
-      // Use role-based default password
-      const password = DEFAULT_PASSWORDS[role] || "Default@2025!";
+      // Per-account random temporary password (see generateTempPassword above)
+      const password = generateTempPassword();
 
       // Create auth user
       const { data: authUser, error: authError } = await adminClient.auth.admin.createUser({
@@ -482,7 +498,7 @@ Deno.serve(async (req) => {
       // Normalize so the provisioned account always matches what the UI shows
       // and what the client types at sign-in.
       const email = String(rawEmail).trim().toLowerCase();
-      const password = DEFAULT_PASSWORDS["client"];
+      const password = generateTempPassword();
 
       // Reliable lookup — NOT the old single-page listUsers() (see helper).
       const existing = await findAuthUserByEmail(adminClient, email);

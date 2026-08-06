@@ -1,16 +1,15 @@
 /**
  * useCustomerSync — all sync logic isolated in one hook.
  *
- * API:  https://eofficeportal.com/Company/SmartService.asmx/FillCustomerlist
- *       ?customerGroupid=null<key>
- * Format: text/xml wrapping a JSON array in <string> element
- *
- * CORS / SSL strategy (two-tier):
- *   1. Try Supabase Edge Function proxy first (`customer-sync`).
- *      The Edge Function calls the API server-side — no CORS, no SSL issues.
- *   2. If the Edge Function call fails (e.g. not yet deployed), fall back to
- *      a direct browser fetch of CUSTOMER_SYNC_API_URL.
- *      Direct fetch WILL fail in production if the SSL cert is expired.
+ * SECURITY (enterprise audit, 2026-08): this hook used to embed the eofficeportal
+ * access token directly in client-side source (shipped to every visitor's
+ * browser via the JS bundle) and fall back to fetching eofficeportal.com
+ * DIRECTLY from the browser if the Supabase edge function was unavailable —
+ * both removed. The ONLY path now is the authenticated Supabase edge function
+ * `customer-sync`, which holds the token as a server-side secret and requires
+ * a valid CAFlow session. If that function isn't deployed/reachable, sync
+ * fails with a clear error instead of silently falling back to an insecure,
+ * token-in-browser direct fetch.
  *
  * To deploy the Edge Function:
  *   npx supabase functions deploy customer-sync --project-ref hubyywmodekfdzhwiumb
@@ -25,12 +24,6 @@
 import { useState, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
-
-// ─── API config (single source of truth) ──────────────────────────────────────
-
-export const CUSTOMER_SYNC_API_URL =
-  "https://eofficeportal.com/Company/SmartService.asmx/FillCustomerlist" +
-  "?customerGroupid=nullksd9ow34e9w0sdmoaskjof8w0eur0wejfomasdojo9auwerwjrowejmfojaspf";
 
 // ─── Entity type mapping (8 values confirmed from live API) ───────────────────
 
@@ -182,23 +175,6 @@ function classifyFetchError(err: unknown, edgeFnAvailable: boolean): string {
   return message;
 }
 
-// ─── XML → JSON parser ────────────────────────────────────────────────────────
-
-function parseCustomerList(rawText: string): ApiRecord[] {
-  if (!rawText?.trim()) {
-    throw new Error("API returned empty or invalid data. Contact administrator.");
-  }
-  const parser  = new DOMParser();
-  const xmlDoc  = parser.parseFromString(rawText, "text/xml");
-  const strEl   = xmlDoc.querySelector("string");
-  if (!strEl) throw new Error("API response is missing expected <string> element");
-  const jsonStr = strEl.textContent || "";
-  if (!jsonStr.trim()) throw new Error("Empty <string> element in API response");
-  const records = JSON.parse(jsonStr);
-  if (!Array.isArray(records)) throw new Error("Expected a JSON array inside the XML");
-  return records as ApiRecord[];
-}
-
 // ─── Build field-update payload shared by INSERT and UPDATE ───────────────────
 
 function buildClientPayload(r: ApiRecord) {
@@ -241,87 +217,27 @@ export function useCustomerSync() {
 
     try {
       let records: ApiRecord[] | null = null;
-      let edgeFnError = "";
 
-      // ── Tier 0: Vite dev-server proxy (fastest — runs on user's own machine) ─
-      // Works in any environment where the Vite dev server is running (localhost).
-      // Vite proxies the request server-side in Node.js with secure:false, so it
-      // bypasses the expired SSL cert and reaches eofficeportal.com on local network.
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 30_000);
-        let res: Response;
-        try {
-          res = await fetch("/api/eoffice", { signal: controller.signal });
-        } finally {
-          clearTimeout(timer);
-        }
-        if (res.ok) {
-          const rawText = await res.text();
-          if (rawText.trim()) {
-            records = parseCustomerList(rawText);
-            console.log("[Sync] Records via Vite proxy:", records.length);
-          }
-        }
-      } catch (proxyErr: any) {
-        console.warn("[Sync] Vite proxy failed:", proxyErr?.message);
+      // Supabase Edge Function proxy — the ONLY path now. It calls eofficeportal
+      // server-side (no CORS/TLS issues in the browser) and holds the access
+      // token as a server-side secret; a direct-from-browser fallback used to
+      // exist here but shipped the token in the JS bundle and has been removed.
+      const { data: fnData, error: fnError } = await supabase.functions.invoke(
+        "customer-sync",
+        { method: "GET" },
+      );
+      if (fnError) {
+        edgeFnAvailable = !!(fnError as any).context?.status;
+        throw new Error(fnError.message || "Edge Function error — is 'customer-sync' deployed?");
       }
-
-      // ── Tier 1: Supabase Edge Function proxy ────────────────────────────────
-      if (!records) try {
-        const { data: fnData, error: fnError } = await supabase.functions.invoke(
-          "customer-sync",
-          { method: "GET" },
-        );
-        if (fnError) {
-          edgeFnError = fnError.message || "Edge Function error";
-          if ((fnError as any).context?.status) {
-            edgeFnAvailable = true;
-          }
-        } else if (fnData?.records && Array.isArray(fnData.records)) {
-          records         = fnData.records as ApiRecord[];
-          edgeFnAvailable = true;
-          console.log("[Sync] Records via Edge Function:", records.length);
-        } else if (fnData?.error) {
-          // Edge Function IS deployed and ran, but upstream API failed.
-          // Throw immediately with the detailed server-side error.
-          // No point trying direct browser fetch — same API, same network issue.
-          edgeFnAvailable = true;
-          throw new Error(fnData.error);
-        }
-      } catch (e: any) {
-        // Re-throw errors we intentionally raised above (fnData.error path)
-        if (edgeFnAvailable) throw e;
-        edgeFnError = e?.message ?? "Edge Function unavailable";
-        console.warn("[Sync] Edge Function threw:", edgeFnError);
+      if (fnData?.error) {
+        edgeFnAvailable = true;
+        throw new Error(fnData.error);
       }
-
-      // ── Tier 2: Direct browser fetch (fallback — only if Edge Fn is NOT deployed) ─
-      if (!records) {
-        console.warn("[Sync] Falling back to direct fetch. Edge Function error:", edgeFnError);
-
-        const controller = new AbortController();
-        const timer      = setTimeout(() => controller.abort(), 30_000);
-        let response: Response;
-        try {
-          response = await fetch(CUSTOMER_SYNC_API_URL, { signal: controller.signal });
-        } finally {
-          clearTimeout(timer);
-        }
-
-        const contentType = response.headers.get("content-type") ?? "unknown";
-        console.log("[Sync] API response format:", contentType);
-
-        if (!response.ok) throw new Error(`API returned HTTP ${response.status}`);
-
-        const rawText = await response.text();
-        if (!rawText.trim()) {
-          console.error("[Sync] Empty response body. Content-Type:", contentType);
-          throw new Error("API returned empty or invalid data. Contact administrator.");
-        }
-        console.log("[Sync] Raw response length (chars):", rawText.length);
-
-        records = parseCustomerList(rawText);
+      if (fnData?.records && Array.isArray(fnData.records)) {
+        records         = fnData.records as ApiRecord[];
+        edgeFnAvailable = true;
+        console.log("[Sync] Records via Edge Function:", records.length);
       }
 
       if (!records) throw new Error("Could not retrieve customer list from API.");

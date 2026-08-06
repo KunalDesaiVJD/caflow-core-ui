@@ -69,7 +69,15 @@ serve(async (req) => {
   }
 
   try {
-    const { engagementId, firmId } = await req.json();
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.replace("Bearer ", "").trim();
+    if (!token) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { engagementId } = await req.json();
     if (!engagementId) {
       return new Response(JSON.stringify({ error: "Missing engagementId" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -80,6 +88,26 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
+
+    const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
+    if (authErr || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // ── Firm-ownership gate (IDOR fix) ──
+    // The service-role client bypasses RLS, so we MUST verify the caller's firm owns this engagement.
+    const { data: dbUser } = await supabase.from("users").select("firm_id, role").eq("id", user.id).single();
+    const isSuper = dbUser?.role === "superadmin";
+    if (!isSuper) {
+      const { data: engagement } = await supabase.from("audit_engagements").select("firm_id").eq("id", engagementId).single();
+      if (!engagement || !dbUser?.firm_id || String(engagement.firm_id) !== String(dbUser.firm_id)) {
+        return new Response(JSON.stringify({ error: "Forbidden: engagement is not in your firm" }), {
+          status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
 
     // 1. Fetch all leaf ledgers for this engagement
     const { data: ledgers, error: ledgerErr } = await supabase

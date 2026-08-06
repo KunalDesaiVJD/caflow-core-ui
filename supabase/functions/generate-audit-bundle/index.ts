@@ -74,6 +74,21 @@ serve(async (req) => {
     const firmId = engagement.firm_id;
     const fy = engagement.financial_year || "";
 
+    // ── FIRM OWNERSHIP CHECK ─────────────────────────────────────────
+    const { data: dbUser } = await supabase
+      .from("users")
+      .select("firm_id, role")
+      .eq("id", user.id)
+      .single();
+
+    const isSuper = dbUser?.role === "superadmin";
+    if (!isSuper && (!dbUser?.firm_id || String(firmId) !== String(dbUser.firm_id))) {
+      return new Response(
+        JSON.stringify({ error: "Forbidden: engagement is not in your firm" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     // Parallel data fetches
     const [
       { data: client },
@@ -123,7 +138,8 @@ serve(async (req) => {
         .from("documents")
         .select("*", { count: "exact", head: true })
         .eq("engagement_id", engagement_id)
-        .eq("sub_category", "final_bundle"),
+        .eq("sub_category", "final_bundle")
+        .is("deleted_at", null),
     ]);
 
     const clientName = client?.name || "the Entity";

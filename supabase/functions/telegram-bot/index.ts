@@ -256,6 +256,12 @@ async function tgApiCall(method: string, params: Record<string, unknown> = {}): 
 
 const WEBHOOK_URL = "https://hubyywmodekfdzhwiumb.supabase.co/functions/v1/telegram-bot";
 
+// Telegram's own anti-spoofing mechanism: setWebhook(secret_token=...) makes Telegram send
+// this value back on every update via X-Telegram-Bot-Api-Secret-Token, which we verify below.
+// Set via `npx supabase secrets set TELEGRAM_WEBHOOK_SECRET=<random-value>`, then hit this
+// function with ?setup=1 once to re-register the webhook with the secret attached.
+const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
+
 // ─── Main Serve ───────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   // Health check + webhook status/setup
@@ -274,6 +280,7 @@ Deno.serve(async (req: Request) => {
         url: WEBHOOK_URL,
         allowed_updates: ["message", "callback_query"],
         drop_pending_updates: true,
+        ...(WEBHOOK_SECRET ? { secret_token: WEBHOOK_SECRET } : {}),
       });
       return new Response(
         JSON.stringify({
@@ -298,6 +305,16 @@ Deno.serve(async (req: Request) => {
       }),
       { headers: { "Content-Type": "application/json" } }
     );
+  }
+
+  // Reject forged webhook POSTs that don't carry Telegram's own secret token.
+  // (No-op until TELEGRAM_WEBHOOK_SECRET is provisioned — see comment above WEBHOOK_SECRET.)
+  if (WEBHOOK_SECRET) {
+    const incomingSecret = req.headers.get("X-Telegram-Bot-Api-Secret-Token");
+    if (incomingSecret !== WEBHOOK_SECRET) {
+      console.warn("[Bot] Rejected webhook POST: missing/invalid X-Telegram-Bot-Api-Secret-Token");
+      return new Response("ok"); // 200 so Telegram doesn't retry-storm; request is dropped either way
+    }
   }
 
   let body: any;

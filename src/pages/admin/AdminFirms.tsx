@@ -45,6 +45,12 @@ const AdminFirms = () => {
   const [impersonateFirm, setImpersonateFirm] = useState<Firm | null>(null);
   const [deleteFirm, setDeleteFirm] = useState<Firm | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Typed-confirmation guard for the destructive firm delete (must match the
+  // firm name exactly before the button enables) + a pre-delete impact
+  // summary fetched from admin-platform so the user sees the blast radius.
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deletePreview, setDeletePreview] = useState<{ users_count: number; clients_count: number; engagements_count: number } | null>(null);
+  const [deletePreviewLoading, setDeletePreviewLoading] = useState(false);
 
   useEffect(() => {
     // Wait until role is resolved (null = optimistic JWT phase, role not yet loaded from DB)
@@ -108,6 +114,7 @@ const AdminFirms = () => {
 
   const handleDeleteFirm = async () => {
     if (!deleteFirm) return;
+    if (deleteConfirmText.trim() !== deleteFirm.name) return;
     setDeleting(true);
     try {
       await callAdmin("delete-firm", "POST", { id: deleteFirm.id });
@@ -119,6 +126,19 @@ const AdminFirms = () => {
     } finally {
       setDeleting(false);
     }
+  };
+
+  // Open the delete dialog and fetch the pre-delete impact summary so the
+  // user sees exactly how much cascades before they can type the firm name.
+  const openDeleteFirm = (firm: Firm) => {
+    setDeleteFirm(firm);
+    setDeleteConfirmText("");
+    setDeletePreview(null);
+    setDeletePreviewLoading(true);
+    callAdmin("delete-firm-preview", "GET", undefined, { id: firm.id })
+      .then((data) => setDeletePreview(data))
+      .catch(() => setDeletePreview(null))
+      .finally(() => setDeletePreviewLoading(false));
   };
 
   const handleImpersonate = async () => {
@@ -198,7 +218,7 @@ const AdminFirms = () => {
                         <Button size="sm" variant="ghost" onClick={() => { setImpersonateFirm(firm); setImpersonateOpen(true); }}>
                           <UserCheck className="h-3.5 w-3.5" />
                         </Button>
-                        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => setDeleteFirm(firm)}>
+                        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => openDeleteFirm(firm)}>
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
@@ -297,19 +317,54 @@ const AdminFirms = () => {
         </DialogContent>
       </Dialog>
 
-      {/* Delete Firm Confirmation */}
-      <AlertDialog open={!!deleteFirm} onOpenChange={open => { if (!open) setDeleteFirm(null); }}>
+      {/* Delete Firm Confirmation — typed confirmation required */}
+      <AlertDialog open={!!deleteFirm} onOpenChange={open => { if (!open) { setDeleteFirm(null); setDeleteConfirmText(""); setDeletePreview(null); } }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Firm</AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete <strong>{deleteFirm?.name}</strong>? This action cannot be undone. All users and clients associated with this firm will be affected.
+            <AlertDialogTitle>Permanently Delete Firm</AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3">
+                <p>
+                  You are about to <strong>permanently delete</strong> <strong>{deleteFirm?.name}</strong>. This action cannot be undone.
+                </p>
+                <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
+                  {deletePreviewLoading ? (
+                    <span className="text-muted-foreground">Calculating impact…</span>
+                  ) : deletePreview ? (
+                    <>
+                      This will permanently delete{" "}
+                      <strong>{deletePreview.clients_count}</strong> client{deletePreview.clients_count === 1 ? "" : "s"},{" "}
+                      <strong>{deletePreview.engagements_count}</strong> engagement{deletePreview.engagements_count === 1 ? "" : "s"}, and{" "}
+                      <strong>{deletePreview.users_count}</strong> user account{deletePreview.users_count === 1 ? "" : "s"} — along with every financial
+                      statement, TDS filing, and audit workpaper under this firm.
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">Impact summary unavailable — proceed with caution.</span>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-foreground">
+                    Type <strong>{deleteFirm?.name}</strong> to confirm
+                  </label>
+                  <Input
+                    autoFocus
+                    value={deleteConfirmText}
+                    onChange={(e) => setDeleteConfirmText(e.target.value)}
+                    placeholder={deleteFirm?.name || ""}
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDeleteFirm} disabled={deleting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              {deleting ? "Deleting…" : "Delete"}
+            <AlertDialogAction
+              onClick={handleDeleteFirm}
+              disabled={deleting || deleteConfirmText.trim() !== deleteFirm?.name}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleting ? "Deleting…" : "Delete Permanently"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

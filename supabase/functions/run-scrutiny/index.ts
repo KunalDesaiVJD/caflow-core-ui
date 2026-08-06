@@ -41,6 +41,20 @@ serve(async (req) => {
       });
     }
 
+    // ── Firm-ownership gate (IDOR fix, handoff Ticket 0.4) ──
+    // The service-role client bypasses RLS, so we MUST verify the caller's firm owns this client.
+    const { data: dbUser } = await supabase.from("users").select("firm_id, role").eq("id", user.id).single();
+    const isSuper = dbUser?.role === "superadmin";
+    if (!isSuper) {
+      const { data: client } = await supabase.from("clients").select("firm_id").eq("id", client_id).single();
+      if (!client || !dbUser?.firm_id || client.firm_id !== dbUser.firm_id) {
+        return new Response(JSON.stringify({ error: "Forbidden: client is not in your firm" }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const counts = { HIGH: 0, MEDIUM: 0, LOW: 0, AI: 0 };
     const findings: any[] = [];
 

@@ -1439,10 +1439,11 @@ function ClientDocumentsPanel({ clientId, firmId }: { clientId: string; firmId: 
   const [deleting,  setDeleting]  = useState<string | null>(null);
   const [cat,       setCat]       = useState("Other");
   const { toast }                 = useToast();
+  const { user }                  = useAuth();
 
   const fetchDocs = useCallback(async () => {
     setLoading(true);
-    const { data } = await supabase.from("documents").select("*").eq("client_id", clientId).order("created_at", { ascending: false });
+    const { data } = await supabase.from("documents").select("*").eq("client_id", clientId).is("deleted_at", null).order("created_at", { ascending: false });
     setDocs(data || []);
     setLoading(false);
   }, [clientId]);
@@ -1488,7 +1489,7 @@ function ClientDocumentsPanel({ clientId, firmId }: { clientId: string; firmId: 
     setDeleting(doc.id);
     try {
       await supabase.storage.from("firm-assets").remove([doc.r2_key]);
-      await supabase.from("documents").delete().eq("id", doc.id);
+      await supabase.from("documents").update({ deleted_at: new Date().toISOString(), deleted_by: user?.id }).eq("id", doc.id);
       toast({ title: "Deleted", description: doc.filename });
       fetchDocs();
     } catch (err: any) {

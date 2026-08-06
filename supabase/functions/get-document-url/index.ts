@@ -13,13 +13,33 @@ serve(async (req) => {
   }
 
   try {
-    // JWT verification is handled by Supabase's edge-function gateway.
-    // We only need the service-role client here to generate the signed URL
-    // (bypasses storage RLS so any authenticated firm member can preview files).
+    // Auth is NOT handled by the platform gateway for this function (verify_jwt=false
+    // in supabase/config.toml) — it must be validated here, and the resolved storage
+    // path must be checked against the caller's own firm before minting a signed URL.
+    const authHeader = req.headers.get("Authorization") ?? "";
+    const token = authHeader.replace("Bearer ", "").trim();
+    if (!token) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
+
+    const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
+    if (authErr || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { data: dbUser } = await supabase.from("users").select("firm_id, role").eq("id", user.id).single();
+    const isSuper = dbUser?.role === "superadmin";
 
     const body = await req.json();
     const { document_id, file_path, bucket } = body;
@@ -36,8 +56,30 @@ serve(async (req) => {
     let filename: string | undefined;
 
     if (file_path) {
-      // Direct storage path — use service role, no RLS check needed
-      // doc lookup skipped; filename derived from path
+      // Direct storage path — storage paths follow either "firms/<firm_id>/clients/<client_id>/..."
+      // or "clients/<client_id>/..." conventions (both used across the app). We cannot trust the
+      // caller's path unchecked, so resolve the owning client's firm_id and compare it to the
+      // caller's own firm before minting a signed URL. Fail closed if no client segment is found.
+      const clientIdMatch = file_path.match(/clients\/([^/]+)/);
+      if (!isSuper) {
+        if (!clientIdMatch) {
+          return new Response(JSON.stringify({ error: "Forbidden: cannot verify ownership of this path" }), {
+            status: 403,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+        const { data: pathClient } = await supabase
+          .from("clients")
+          .select("firm_id")
+          .eq("id", clientIdMatch[1])
+          .single();
+        if (!pathClient || !dbUser?.firm_id || String(pathClient.firm_id) !== String(dbUser.firm_id)) {
+          return new Response(JSON.stringify({ error: "Forbidden: file is not in your firm" }), {
+            status: 403,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
       r2_key = file_path;
       storageBucket = bucket || "documents";
       filename = file_path.split("/").pop();
