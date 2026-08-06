@@ -37,6 +37,7 @@ import type { NoteConfig, NoteRowDef } from "@/config/nceNotesConfig";
 // read perRow lookups instead of duplicating the math locally.
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import { collapseDuplicateCustomRows } from "@/lib/nceAutoPopulate";
+import { isProprietorshipEntityType } from "@/lib/entityType";
 import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
@@ -2453,7 +2454,11 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const note1Paras = buildNote1Section(entityName, cyYear, ntaData, sigArgs);
 
   // Phase 2 — Note 2 (Capital Account)
-  const isProprietorship = (constitution || "").trim().toLowerCase() === "proprietorship";
+  // 2026-08-06 fix (LALJIBHAI VADIWALA): was an exact-string check against
+  // only the full word "Proprietorship" — `constitution` here is fed the
+  // raw engagement/client entity_type, which AuditPipeline.tsx's wizard can
+  // write as the short code "individual" instead. See src/lib/entityType.ts.
+  const isProprietorship = isProprietorshipEntityType(constitution);
   const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear, isProprietorship);
 
   // Notes 3-28: export exactly the notes the UI shows — i.e. those active in

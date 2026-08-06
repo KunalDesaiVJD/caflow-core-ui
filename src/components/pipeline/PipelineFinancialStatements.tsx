@@ -63,6 +63,7 @@ import { evaluateNotesStaleness } from "@/lib/notesStaleness";
 import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE, FS_NO_MANUAL_NOTE_ADD, FS_NCE_CONSTRAINED_NOTES } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, validateCorporateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { buildLedgerMapMatcher, cleanTallyName } from "@/lib/tallyText";
+import { isNonCorporateEntityType } from "@/lib/entityType";
 import { computeNceCoaAnchoredFace } from "@/lib/nceFaceAnchor";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
@@ -179,23 +180,15 @@ const INV_PL_CODES = new Set(Object.values(INV_DUAL_MAP));
 
 // ═══════════════════════════════════════
 // Non-Corporate Entity detection
-// Exact values stored in audit_engagements.entity_type  (see StepBasicInfo.tsx)
+// 2026-08-06 fix (LALJIBHAI VADIWALA): this used to be its own exact-match
+// list against only the full-word entity_type vocabulary ("Proprietorship",
+// "Partnership", ...). AuditPipeline.tsx's "New Engagement" wizard writes a
+// SEPARATE short-code vocabulary instead ("individual", "firm", "llp", ...) —
+// "firm" (its value for Partnership) was never in this list, so a Partnership
+// engagement created via that wizard silently routed to the CORPORATE FS
+// engine. Now routed through the single shared classifier — see
+// src/lib/entityType.ts, which documents both vocabularies.
 // ═══════════════════════════════════════
-const NON_CORPORATE_TYPES: string[] = [
-  "Individual",
-  "Proprietorship",
-  "Sole Proprietorship",
-  "Partnership",
-  "LLP",
-  "Limited Liability Partnership",
-  "HUF",
-  "Hindu Undivided Family",
-  "Trust",
-  "AOP",
-  "Association of Persons",
-  "BOI",
-  "Body of Individuals",
-];
 
 // ── NCE_FS_ITEMS imported from shared config (src/config/nceLineItems.ts) ──
 // One source of truth — also used by Stage 6 COA Mapping (PipelineStage3.tsx).
@@ -1933,9 +1926,7 @@ export default function PipelineFinancialStatements({
   // then falls back to clients.entity_type (set on the client record).
   const entityType: string =
     (engagement?.entity_type || engagement?.clients?.entity_type || "").trim();
-  const isNonCorporate: boolean = NON_CORPORATE_TYPES.some(
-    t => t.toLowerCase() === entityType.toLowerCase()
-  );
+  const isNonCorporate: boolean = isNonCorporateEntityType(entityType);
   // Cash-Flow Statement applicability — driven by Stage 1 questionnaire answer
   // ("Does the company prepare Cash Flow Statement?"). When set to "no", the
   // Cash Flow tab is hidden in the Financial Statements view. Default = true.

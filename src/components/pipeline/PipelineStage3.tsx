@@ -44,20 +44,21 @@ import { useAiSkills } from "@/hooks/useAiSkills";
 // applied with nature = "DR" — see fsSignConvention.signedBalance.
 import { signedBalance, signedOpening } from "@/lib/fsSignConvention";
 import { cleanTallyName, buildLedgerMapMatcher } from "@/lib/tallyText";
+import { isNonCorporateEntityType } from "@/lib/entityType";
 
 // ═══════════════════════════════════════
 // Non-Corporate entity detection
+// 2026-08-06 fix (LALJIBHAI VADIWALA): this was a CASE-SENSITIVE exact-match
+// array (`.includes(entityType)`, no .toLowerCase() anywhere) against
+// Title-Case values ("Individual", "Firm", "LLP", ...). AuditPipeline.tsx's
+// "New Engagement" wizard writes entity_type as an all-lowercase short code
+// ("individual", "firm", "llp", "trust", "huf", "aop", "company") — NONE of
+// which ever matched this array case-sensitively. Every engagement created
+// via that wizard was silently treated as CORPORATE here — the wrong chart
+// of accounts (SCHEDULE_III_DIV_I / FLAT_ITEMS) entirely, not just the wrong
+// Capital Account columns — regardless of its real constitution. Routed
+// through the shared classifier; see src/lib/entityType.ts.
 // ═══════════════════════════════════════
-const NON_CORPORATE = [
-  "Partnership", "LLP", "Limited Liability Partnership",
-  "Firm",                                     // ← added: entity_type exactly "Firm"
-  "Proprietorship", "Sole Proprietorship",
-  "HUF", "Hindu Undivided Family",
-  "Trust",
-  "AOP", "Association of Persons",
-  "BOI", "Body of Individuals",
-  "Individual",
-];
 
 // ── Inventory dual-posting map ────────────────────────────────────────────────
 // Maps each BS inventory code → its P&L "Changes in Inventories" code.
@@ -331,7 +332,7 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   // ─── Entity type detection ───
   // Check both engagement-level and client-level entity_type for safety.
   const entityType: string = (engagement?.entity_type || engagement?.clients?.entity_type || "").trim();
-  const isNonCorporate: boolean = NON_CORPORATE.includes(entityType);
+  const isNonCorporate: boolean = isNonCorporateEntityType(entityType);
 
   // Active line-item set — swap for NCE entities; corporate path is 100% untouched.
   const activeTree      = isNonCorporate ? NCE_FS_ITEMS   : SCHEDULE_III_DIV_I;
