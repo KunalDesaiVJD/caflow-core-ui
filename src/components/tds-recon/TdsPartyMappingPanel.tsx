@@ -378,8 +378,14 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
             if (!p) return false;
             const KEEP = /(creditor|debtor|loan|advance|deposit|payable|receivable|current liabilit|other liabilit|other asset)/;
             const SKIP = /(bank|cash-in-hand|cash in hand|capital|reserve|fixed asset|investment|duties|inventory|stock|purchase|expense|income|indirect|direct|misc|suspense|branch|statutory)/;
+            // KEEP wins when both match — "Creditors for Purchase" /
+            // "Creditors for Expenses" are standard Tally sub-groups of
+            // Sundry Creditors and must stay included even though SKIP's
+            // "purchase"/"expense" terms (meant to exclude true P&L heads
+            // like "Purchase Accounts") also match their name.
+            if (KEEP.test(p)) return true;
             if (SKIP.test(p)) return false;
-            return KEEP.test(p);
+            return false;
           };
           // Stage 7 / P5-A — dedupe by trim+lowercase name so the picker
           // doesn't show "V J Desai & Co" and "V J DESAI & CO" as two
