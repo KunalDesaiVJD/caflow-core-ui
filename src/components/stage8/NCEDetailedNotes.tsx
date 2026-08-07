@@ -360,7 +360,28 @@ function NumInput({
 
 // ─── Source badge ─────────────────────────────────────────────────────────────
 
-function SourceBadge({ id, source, tbDerived }: { id?: string; source: "auto" | "manual"; tbDerived?: boolean }) {
+function SourceBadge({ id, source, tbDerived, staleTbMissing }: { id?: string; source: "auto" | "manual"; tbDerived?: boolean; staleTbMissing?: boolean }) {
+  // 2026-08-06 fix (AMBICA): this row originated from a matched TB ledger
+  // (tbDerived) but that ledger no longer resolves on the current TB /
+  // PY-shell — renamed, closed, or just not re-synced. Nothing in
+  // nceAutoPopulate revisits such a row automatically (auto-correcting it
+  // risks deleting a genuine hand-typed adjustment that also has no TB
+  // match), so its stored amount is frozen indefinitely and can silently
+  // diverge from the COA-computed total — exactly the mechanism behind a
+  // "Other (prior year)" residual that survives a Recompute untouched.
+  // Flagged here so the auditor can see it and decide: delete the row if
+  // the ledger is genuinely gone, or leave it if it's intentional.
+  if (staleTbMissing) {
+    return (
+      <Badge
+        variant="outline"
+        className="text-[9px] px-1 py-0 shrink-0 text-red-600 border-red-300"
+        title="This row was originally populated from a Trial Balance ledger, but that ledger no longer matches anything on the current TB or PY-shell TB — it may have been renamed, closed, or the client just hasn't been re-synced. Its amount is frozen and will NOT update automatically. Check the ledger in Tally / COA Mapping, then either delete this row or edit it manually."
+      >
+        Ledger not found
+      </Badge>
+    );
+  }
   // 2026-08-06 fix: the PY-safety-reconcile pass (nceAutoPopulate.ts, "Other
   // (prior year)") auto-inserts a residual row (id prefix "py_recon_") to
   // force this note's PY total to tie to the COA-derived PY target when they
@@ -643,7 +664,7 @@ function CustomRowEditor({
               placeholder="Row description"
             />
             <SpellFix value={row.label} onApply={onChangeLabel} hidden={readOnly} />
-            <SourceBadge id={row.id} source={row.source} tbDerived={row.tbDerived} />
+            <SourceBadge id={row.id} source={row.source} tbDerived={row.tbDerived} staleTbMissing={row.staleTbMissing} />
           </div>
         </TableCell>
         {isPatternA ? (
