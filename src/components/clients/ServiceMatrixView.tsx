@@ -232,7 +232,7 @@ export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, 
       {/* ── Matrix table ── */}
       <div className="border border-border rounded-lg overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-xs" style={{ minWidth: 640 + services.length * 44 }}>
+          <table className="w-full border-collapse text-xs" style={{ minWidth: 640 + services.length * 64 }}>
             <thead>
               <tr className="bg-muted/60 border-b border-border">
                 <th className="sticky left-0 z-10 bg-muted/60 text-left px-3 py-2.5 font-semibold text-muted-foreground uppercase tracking-wide text-[10.5px] whitespace-nowrap">
@@ -245,16 +245,21 @@ export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, 
                     key={s.id}
                     onClick={() => setPicked(p => (p === s.id ? null : s.id))}
                     className={cn(
-                      "w-11 min-w-11 align-bottom pb-2.5 pt-2 cursor-pointer transition-colors",
+                      "w-16 min-w-16 max-w-16 align-bottom pb-2 pt-2 px-1 cursor-pointer transition-colors",
                       picked === s.id ? "bg-primary/10" : "hover:bg-muted",
                     )}
                   >
+                    {/* Contained, wrapping label — a rotated version of this
+                        used to overflow its 44px box and get visually
+                        painted over by the next column's opaque background
+                        (siblings paint in DOM order), which looked like the
+                        text was being cut off. Wrapping to 2 lines within
+                        the column's own width fixes that at the root. */}
                     <span
                       className={cn(
-                        "inline-block whitespace-nowrap text-[10.5px] font-semibold origin-bottom-left",
+                        "block text-center text-[10px] font-semibold leading-[1.15] break-words",
                         picked === s.id ? "text-primary" : "text-muted-foreground",
                       )}
-                      style={{ transform: "rotate(-38deg)" }}
                     >
                       {s.name}
                     </span>
