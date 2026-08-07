@@ -90,10 +90,13 @@ export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, 
       if (clientRows.length === 0) { setActiveSet(new Set()); return; }
 
       const clientIds = clientRows.map(c => c.id);
+      const validServiceIds = new Set(svcList.map(s => s.id));
       const CHUNK = 500;
       const pairs: string[] = [];
       for (let i = 0; i < clientIds.length; i += CHUNK) {
         const idsChunk = clientIds.slice(i, i + CHUNK);
+
+        // Direct per-service assignments.
         const csRows = await fetchAllPages<{ client_id: string; service_category_id: string }>((from, to) =>
           supabase
             .from("client_services")
@@ -103,6 +106,27 @@ export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, 
             .range(from, to)
         );
         for (const r of csRows) pairs.push(`${r.client_id}::${r.service_category_id}`);
+
+        // Package billing — a client on an active package has every service
+        // in that package's service_category_ids array, even with NO
+        // client_services row for it. Skipping this undercounted every
+        // tile by however many clients are package-billed for that service
+        // (confirmed: 2 clients had IT Returns via package only, causing
+        // the "517 vs 519" mismatch against the IT Returns module, which
+        // already unions both sources — see resolveClassification there).
+        const pkgRows = await fetchAllPages<{ client_id: string; service_category_ids: string[] | null }>((from, to) =>
+          supabase
+            .from("client_service_packages")
+            .select("client_id, service_category_ids")
+            .in("client_id", idsChunk)
+            .eq("is_active", true)
+            .range(from, to)
+        );
+        for (const r of pkgRows) {
+          for (const catId of (r.service_category_ids ?? [])) {
+            if (validServiceIds.has(catId)) pairs.push(`${r.client_id}::${catId}`);
+          }
+        }
       }
       setActiveSet(new Set(pairs));
     } finally {
