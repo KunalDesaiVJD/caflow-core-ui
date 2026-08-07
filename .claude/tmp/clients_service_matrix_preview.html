@@ -424,7 +424,8 @@
       }).join("");
       const match = c.name.toLowerCase().includes(q) || c.pan.toLowerCase().includes(q);
       const entMatch = !ent || c.ent === ent;
-      return `<tr class="${match && entMatch ? "" : "hide"}" data-svc="${c.svc.join(",")}">
+      const svcMatch = !picked || c.svc.includes(picked);
+      return `<tr class="${match && entMatch && svcMatch ? "" : "hide"}" data-svc="${c.svc.join(",")}">
         <td class="name-cell"><a href="#">${c.name}</a></td>
         <td class="meta-cell">${c.pan}</td>
         <td class="meta-cell">${c.ent}</td>
@@ -468,10 +469,11 @@
     if (picked) {
       const label = SERVICES.find(s => s.key === picked).label;
       const n = serviceCount(picked);
-      hint.innerHTML = `Highlighting <b>${label}</b> — <b>${n}</b> of ${CLIENTS.length} clients`;
+      hint.innerHTML = `Filtered to <b>${label}</b> — <b>${n}</b> of ${CLIENTS.length} clients`;
     } else {
       hint.textContent = "";
     }
+    render(); // re-apply row visibility now that the service filter changed
   }
   summary.addEventListener("click", (e) => {
     const tile = e.target.closest(".summary-tile");
