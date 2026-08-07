@@ -94,4 +94,35 @@ describe("computeCOATotals — RC-21 regression (VADIWALA / RAY WINGS TECHNOLOGY
     expect(result["NCE_OTH_EXP"]).toBeDefined();
     expect(result["NCE_OTH_EXP"].py).not.toBe(0);
   });
+
+  it("AMBICA regression: a closed PY-only ledger with no direct mapping in either year resolves via parent_group inheritance, matching nceAutoPopulate's own PY-only walk and the COA Mapping screen's pyShellPLAmounts", () => {
+    // "Office Expense 18%" existed only in FY 2024-25 (closed before this
+    // year), so it has no entry in this year's coaMapping (never existed) and
+    // was never individually mapped inside the PY-shell engagement either
+    // (pyCoaMap has no key for it) -- direct name lookup fails on both sides.
+    // Every OTHER ledger sharing its Tally parent_group ("Indirect Expenses")
+    // is consistently mapped to NCE_OTH_EXP, so group inheritance is the only
+    // way to classify it -- exactly how nceAutoPopulate's own note-population
+    // walk and PipelineStage3.tsx's pyShellPLAmounts already resolve it. Before
+    // this fix, computeCOATotals had no group-inheritance tier at all, so this
+    // real ₹8,240 ledger silently dropped out of its PY total -- the exact
+    // shortfall the PY-safety-reconcile pass "corrected" by plugging a
+    // spurious "Other (prior year)" (8,240) row onto an already-correct note.
+    const coaMapping = {
+      "Freight P":       { code: "NCE_OTH_EXP" },
+      "ISI Testing":     { code: "NCE_OTH_EXP" },
+    };
+    const tb = [
+      { ledger_name: "Freight P",   closing_balance: 59801, balance_type: "Dr", parent_group: "Indirect Expenses" },
+      { ledger_name: "ISI Testing", closing_balance: 30700, balance_type: "Dr", parent_group: "Indirect Expenses" },
+    ];
+    const pyTb = [
+      { ledger_name: "Freight P",           closing_balance: 178900, balance_type: "Dr", parent_group: "Indirect Expenses" },
+      { ledger_name: "Office Expense 18%",  closing_balance: 8240,   balance_type: "Dr", parent_group: "Indirect Expenses" },
+    ];
+
+    const result = computeCOATotals(tb, pyTb, coaMapping, {});
+    expect(result["NCE_OTH_EXP"]).toBeDefined();
+    expect(result["NCE_OTH_EXP"].py).toBe(178900 + 8240);
+  });
 });

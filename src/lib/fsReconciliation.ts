@@ -369,6 +369,7 @@ export interface TBRowLike {
   balance_type?:    string | null;
   opening_balance?: number | null;
   opening_type?:    string | null;
+  parent_group?:    string | null;
 }
 
 export interface COAMappingLike {
@@ -488,11 +489,52 @@ export function computeCOATotals(
   // Case-insensitive index for the PY-specific mapping (when supplied) — same
   // RC-16 rationale as the CY index above.
   const lookupPyMapping = pyCoaMap ? buildLedgerMapMatcher(pyCoaMap) : undefined;
+
+  // 2026-08-08 fix (AMBICA "Other (prior year)" (8,240) residual): a ledger
+  // that closed / was renamed after last year (e.g. "Office Expense 18%",
+  // present only in the PY-shell TB) has no entry in EITHER coaMapping (never
+  // existed this year) or pyCoaMap (PY-shell engagement was never mapped
+  // ledger-by-ledger for it either) under any name-matched key — direct
+  // lookup above returns undefined and the ledger silently drops out of this
+  // total. But nceAutoPopulate's own note-population PY-only walk, and the
+  // COA Mapping screen's own pyShellPLAmounts (PipelineStage3.tsx), BOTH
+  // already inherit the FS code from the ledger's Tally parent_group when no
+  // direct mapping is found (exactly how a human auditor would classify a
+  // renamed/closed ledger). Without the same fallback here, this function —
+  // the one the PY-safety-reconcile pass treats as ground truth — undercounts
+  // any note containing such a ledger, and the reconcile pass then plugs a
+  // residual to force the (correct) note DOWN to match this (wrong,
+  // artificially low) total. Mirrors the exact majority-vote-per-group
+  // construction used in both of those call sites.
+  const groupToCode: Record<string, string> = {};
+  {
+    const groupCodeCount: Record<string, Record<string, number>> = {};
+    for (const row of tb) {
+      const mapped = lookupMapping(String(row.ledger_name ?? ""));
+      const grp = String(row.parent_group ?? "").toLowerCase().trim();
+      if (!mapped?.code || !grp) continue;
+      const code = CANONICAL_NCE_CODE[mapped.code] ?? mapped.code;
+      (groupCodeCount[grp] ||= {})[code] = (groupCodeCount[grp][code] ?? 0) + 1;
+    }
+    for (const [grp, codeCounts] of Object.entries(groupCodeCount)) {
+      let bestCode = "", bestN = 0, tie = false;
+      for (const [code, n] of Object.entries(codeCounts)) {
+        if (n > bestN) { bestCode = code; bestN = n; tie = false; }
+        else if (n === bestN && code !== bestCode) { tie = true; }
+      }
+      if (bestCode && !tie) groupToCode[grp] = bestCode;
+    }
+  }
+
   if (hasPyTb) {
     for (const row of dedupe(pyTb)) {
       const nm = (row.ledger_name || "").trim();
       if (!nm) continue;
-      const mapped = lookupPyMapping?.(nm) ?? lookupMapping(nm);
+      let mapped = lookupPyMapping?.(nm) ?? lookupMapping(nm);
+      if (!mapped?.code) {
+        const grp = String(row.parent_group ?? "").toLowerCase().trim();
+        if (grp && groupToCode[grp]) mapped = { code: groupToCode[grp] };
+      }
       if (!mapped?.code) continue;
       const code = CANONICAL_NCE_CODE[mapped.code] ?? mapped.code;
       const noteType = CODE_TO_NOTE_TYPE[code] ?? code;
