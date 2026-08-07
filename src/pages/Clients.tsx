@@ -62,7 +62,10 @@ interface GroupInfo {
   color: string | null;
 }
 
-const ENTITY_TYPES = ["Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
+// "Individual" was missing entirely — the single largest entity_type bucket
+// in real data (368 of 647 clients for V J Desai & Co.) had no way to be
+// filtered to. Added at the front since it's the most common value.
+const ENTITY_TYPES = ["Individual", "Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
 const PAGE_SIZE = 20;
 
 type ViewMode = "it" | "table" | "card" | "classify" | "grouped" | "services";
