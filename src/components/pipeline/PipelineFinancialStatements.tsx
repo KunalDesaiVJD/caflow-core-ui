@@ -8864,6 +8864,32 @@ export default function PipelineFinancialStatements({
         );
       })()}
 
+      {/* 2026-08-06 — Recompute Notes: unlike the staleness banner (only offered
+           when the TB was re-synced after the notes were built), this is
+           always available so the auditor can force a rebuild after a
+           nceAutoPopulate logic fix ships even with no TB change. Gated only
+           on write-protection. Deliberately kept OUTSIDE FsHealthDock below —
+           that dock collapses (and its toggle disables) once issueCount hits
+           0, which would make this button unreachable exactly when the page
+           is "FS Health — all checks pass". */}
+      {isNonCorporate && (
+        <div className="flex items-center gap-2 mb-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={recomputingNotes || !!notesStalenessRaw?.notesFinalized}
+            onClick={recomputeNotesNow}
+            title={
+              notesStalenessRaw?.notesFinalized
+                ? "Notes are finalized (write-protected). Unlock notes to recompute."
+                : "Re-run note auto-population against the current TB + COA mapping — use this after a bug fix ships, even if the TB hasn't changed."
+            }
+          >
+            {recomputingNotes ? "Recomputing…" : "Recompute Notes"}
+          </Button>
+        </div>
+      )}
+
       {/* ── FS Health dock ───────────────────────────────────────────────
            Every diagnostic surface below lives inside one collapsible dock so
            the statements get the full working area. Collapsed by default; the
@@ -8970,29 +8996,6 @@ export default function PipelineFinancialStatements({
             )}
           </AlertDescription>
         </Alert>
-      )}
-
-      {/* 2026-08-06 — Recompute Notes: unlike the banner above (only offered
-           when the TB was re-synced after the notes were built), this is
-           always available so the auditor can force a rebuild after a
-           nceAutoPopulate logic fix ships even with no TB change. Gated only
-           on write-protection. */}
-      {isNonCorporate && (
-        <div className="flex items-center gap-2 mb-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={recomputingNotes || !!notesStalenessRaw?.notesFinalized}
-            onClick={recomputeNotesNow}
-            title={
-              notesStalenessRaw?.notesFinalized
-                ? "Notes are finalized (write-protected). Unlock notes to recompute."
-                : "Re-run note auto-population against the current TB + COA mapping — use this after a bug fix ships, even if the TB hasn't changed."
-            }
-          >
-            {recomputingNotes ? "Recomputing…" : "Recompute Notes"}
-          </Button>
-        </div>
       )}
 
       <FsHealthPanel
