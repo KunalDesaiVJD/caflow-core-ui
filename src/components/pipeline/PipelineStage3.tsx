@@ -2137,17 +2137,23 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
   const pyShellPLAmounts: Record<string, number> = useMemo(() => {
     if (!pyShellTbData?.tbRows?.length) return {};
     const amounts: Record<string, number> = {};
-    // Build a case-insensitive CY mapping index so PY shell ledgers that
-    // differ in case ("SALES" vs "Sales") still resolve to a CY FS code.
-    const cyMappingLowerIndex: Record<string, { code: string }> = {};
-    for (const [k, v] of Object.entries(coaMapping || {})) {
-      if (v?.code) cyMappingLowerIndex[k.toLowerCase().trim()] = v;
-    }
     const pyShellMapping = (pyShellTbData?.coaMapping as Record<string, any>) || {};
-    const pyShellMappingLowerIndex: Record<string, { code: string }> = {};
-    for (const [k, v] of Object.entries(pyShellMapping)) {
-      if (v?.code) pyShellMappingLowerIndex[k.toLowerCase().trim()] = v;
-    }
+    // 2026-08-08 fix (AMBICA "Other (prior year)" ₹8,240 residual surviving
+    // Recompute Notes): this walk used to resolve ledger names via raw
+    // exact/trim/lowercase indices only — no cleanTallyName() tier. That's
+    // the RC-21 bug class (already fixed in computeCOATotals, notesAutoPopulate,
+    // and ~15 other hand-rolled matchers across this file and nceAutoPopulate.ts):
+    // a ledger name carrying a Tally control char or numeric HTML entity
+    // matches fine wherever cleanTallyName is used, but silently fails here —
+    // so THIS number (shown directly to the auditor on the COA Mapping screen)
+    // could disagree with computeCOATotals' PY total for the same code, which
+    // is exactly what the PY-safety-reconcile pass in nceAutoPopulate.ts
+    // compares the note against. That produces a phantom "Other (prior year)"
+    // plug that recomputing can never clear, because it's correctly matching
+    // the note to the WRONG of the two totals. Now uses the same shared
+    // matcher, in the same PY-shell-first-then-CY order, as computeCOATotals.
+    const lookupPyShell = buildLedgerMapMatcher(pyShellMapping);
+    const lookupCy      = buildLedgerMapMatcher(coaMapping || {});
 
     // ROOT-CAUSE FIX (Issue 1 — round 3): build a parent_group → FS code map
     // from the CY engagement. When a PY-shell ledger is NOT directly mapped
@@ -2181,19 +2187,12 @@ export default function PipelineStage3({ engagementId, engagement, onStageComple
     for (const row of pyShellTbData.tbRows) {
       const name = String(row.ledger_name || "").trim();
       if (!name) continue;
-      const lower = name.toLowerCase();
       const grp   = String((row as any).parent_group || "").toLowerCase().trim();
-      // Resolution order:
-      //   1. PY-shell exact
-      //   2. PY-shell lowercase
-      //   3. CY exact
-      //   4. CY lowercase
-      //   5. Group-level inheritance (PY-shell ledger's parent_group → CY group code)
-      let mapping: any =
-        pyShellMapping[name] ||
-        pyShellMappingLowerIndex[lower] ||
-        (coaMapping as Record<string, any>)[name] ||
-        cyMappingLowerIndex[lower];
+      // Resolution order (matches computeCOATotals' PY pass exactly):
+      //   1. PY-shell mapping (exact → trim → CI → cleanTallyName)
+      //   2. CY mapping (exact → trim → CI → cleanTallyName)
+      //   3. Group-level inheritance (PY-shell ledger's parent_group → CY group code)
+      let mapping: any = lookupPyShell(name) ?? lookupCy(name);
       if (!mapping?.code && grp && groupToCode[grp]) {
         mapping = { code: groupToCode[grp] };
       }
