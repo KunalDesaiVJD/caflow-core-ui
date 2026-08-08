@@ -57,13 +57,16 @@ const ITD_PORTAL_URL = "https://www.incometax.gov.in/iec/foportal/";
 // #/sessionExpire, which has no Login ID field at all and isn't something
 // the extension can fill. Going straight to /login sidesteps that third
 // state entirely and is the one URL confirmed reliable across all of them.
-const ITD_LOGIN_URL = "https://eportal.incometax.gov.in/iec/foservices/#/login";
+export const ITD_LOGIN_URL = "https://eportal.incometax.gov.in/iec/foservices/#/login";
 const TRACES_PORTAL_URL = "https://www.tdscpc.gov.in/app/login.xhtml";
 
 /** Set at document_start by content-caflow.js once the extension is
  *  installed and enabled — absent otherwise, including for every user who
- *  hasn't installed it, which is the expected default until it's rolled out. */
-const hasItdAutofillExtension = () =>
+ *  hasn't installed it, which is the expected default until it's rolled out.
+ *  Exported for TdsChallanDownloadValidation.tsx's own "Download Challan"
+ *  button, which gates on the same extension presence this file already
+ *  checks for "Auto-fill ITD Login". */
+export const hasItdAutofillExtension = () =>
   typeof document !== "undefined" && document.documentElement.hasAttribute("data-caflow-itd-extension");
 
 interface Props {

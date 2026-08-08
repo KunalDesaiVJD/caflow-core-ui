@@ -226,3 +226,109 @@ function showBanner(text, kind) {
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 8000);
 }
+
+/**
+ * START_CHALLAN_DOWNLOAD — Stage-2 challan-download automation, requested by
+ * TdsChallanDownloadValidation.tsx's "Download Challan" button and relayed
+ * here via background.js's RELAY_CHALLAN_DOWNLOAD.
+ *
+ * FIRST DRAFT, UNVERIFIED (2026-08-08): unlike the login flow above — whose
+ * selectors were confirmed live against a real account — none of the
+ * selectors/text patterns below have been checked against the actual
+ * Payment History page, because no authenticated portal session was
+ * available while writing this. This is expected to need at least one live
+ * iteration: load the extension, log into ITD, click Download Challan in
+ * CAFlow, and see which step's banner fires — then adjust the text pattern
+ * for that specific step. Every step below follows the same fail-loud rule
+ * as the login flow: if a step can't find what it's looking for, it shows a
+ * banner naming exactly which step got stuck and STOPS, rather than
+ * guessing or clicking something that might be wrong.
+ *
+ * Whatever this reaches, the actual hand-off into CAFlow always ends at a
+ * manual "Upload Downloaded Report" step in the app — a content script
+ * cannot read a file the OS just saved to Downloads, that's a browser
+ * security boundary, not something worth trying to route around.
+ */
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg?.type !== "START_CHALLAN_DOWNLOAD") return;
+  runChallanDownload(msg.fyStartDate, msg.fyEndDate);
+});
+
+/** Same idea as findButtonByText, but for site NAVIGATION/MENU items, which
+ *  on most Angular admin UIs (this portal included, per the login flow's own
+ *  DOM) are as likely to be <li>/<a>/[role=menuitem]/[role=tab] as an actual
+ *  <button> — broadened here rather than reusing findButtonByText's tighter
+ *  selector, which was deliberately scoped to the login form's own controls. */
+function findClickableByText(pattern) {
+  const candidates = document.querySelectorAll(
+    "button, a, a[role='button'], li, [role='menuitem'], [role='tab'], [role='link'], span, div",
+  );
+  for (const el of candidates) {
+    if (el.offsetParent === null) continue; // hidden — same reasoning as findButtonByText
+    const text = (el.textContent || "").trim();
+    // Exact-ish match on a SHORT leaf label — a broad selector like this can
+    // otherwise match a big container div whose combined textContent happens
+    // to contain the pattern somewhere deep inside it. Capping length avoids
+    // clicking the wrong (much bigger) ancestor.
+    if (text.length > 60) continue;
+    if (pattern.test(text)) return el;
+  }
+  return null;
+}
+
+async function runChallanDownload(fyStartDate, fyEndDate) {
+  showBanner("CAFlow: attempting to fetch this quarter's challans from Payment History…", "info");
+
+  const steps = [
+    { label: "e-File", pattern: /^e-file$/i },
+    { label: "e-Pay Tax", pattern: /^e-pay tax$/i },
+    { label: "Income Tax Act, 2025", pattern: /income tax act,?\s*2025/i },
+    { label: "Payment History", pattern: /payment history/i },
+  ];
+  for (const step of steps) {
+    const el = await waitFor(() => findClickableByText(step.pattern), 10_000);
+    if (!el) {
+      showBanner(`CAFlow: couldn't find "${step.label}" — please continue from here manually (Payment History → Actions → Download for this quarter).`, "info");
+      return;
+    }
+    el.click();
+    // Angular re-renders the next step asynchronously — give it a beat
+    // before the next waitFor starts polling, same reasoning as the login
+    // flow's own between-step waits.
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  // Best-effort date-range fill, ONLY if the page actually offers one — not
+  // every Payment History layout necessarily has a filter, so this doesn't
+  // block the rest of the sequence if it's missing.
+  if (fyStartDate && fyEndDate) {
+    const dateInputs = await waitFor(() => {
+      const inputs = [...document.querySelectorAll('input[type="date"], input[placeholder*="date" i], input[placeholder*="from" i]')].filter((i) => i.offsetParent !== null);
+      return inputs.length ? inputs : null;
+    }, 4_000);
+    if (dateInputs && dateInputs[0]) setNativeValue(dateInputs[0], fyStartDate);
+    if (dateInputs && dateInputs[1]) setNativeValue(dateInputs[1], fyEndDate);
+  }
+
+  // Page-level "Actions" control, then "Download" inside whatever it opens
+  // (dropdown/menu). If Payment History instead exposes a per-ROW Actions
+  // control (one per challan, not one for the whole page), this first draft
+  // won't find it — that's exactly the kind of thing the live-iteration
+  // loop is for.
+  const actionsEl = await waitFor(() => findClickableByText(/^actions$/i), 8_000);
+  if (!actionsEl) {
+    showBanner('CAFlow: reached Payment History but couldn\'t find "Actions" — please click Actions → Download yourself for this quarter.', "info");
+    return;
+  }
+  actionsEl.click();
+  await new Promise((r) => setTimeout(r, 300));
+
+  const downloadEl = await waitFor(() => findClickableByText(/^download$/i), 5_000);
+  if (!downloadEl) {
+    showBanner('CAFlow: opened Actions but couldn\'t find "Download" — please click it yourself.', "info");
+    return;
+  }
+  downloadEl.click();
+
+  showBanner("CAFlow: clicked Download — check your Downloads folder, then upload the file in CAFlow's Challan Validation step.", "success");
+}

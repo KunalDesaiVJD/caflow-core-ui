@@ -14,7 +14,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { sanitizeStorageName } from "@/lib/storagePath";
 
-export type TdsImportStageFolder = "recon" | "pan-verification" | "tally" | "challan-csi";
+export type TdsImportStageFolder = "recon" | "pan-verification" | "tally" | "challan-csi" | "challan-download";
 
 export async function uploadTdsImportFile(file: File, filingId: string, stage: TdsImportStageFolder): Promise<string | null> {
   try {
