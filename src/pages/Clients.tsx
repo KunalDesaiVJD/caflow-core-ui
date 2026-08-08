@@ -17,11 +17,12 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw, BadgeCheck, Layers, ChevronDown, ChevronUp } from "lucide-react";
+import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw, BadgeCheck, Layers, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CustomerSyncDialog } from "@/components/client-sync/CustomerSyncDialog";
 import { ClassificationByFYView } from "@/components/clients/ClassificationByFYView";
 import { GroupedView } from "@/components/clients/GroupedView";
+import { ServiceMatrixView } from "@/components/clients/ServiceMatrixView";
 
 interface Client {
   id: string;
@@ -61,10 +62,13 @@ interface GroupInfo {
   color: string | null;
 }
 
-const ENTITY_TYPES = ["Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
+// "Individual" was missing entirely — the single largest entity_type bucket
+// in real data (368 of 647 clients for V J Desai & Co.) had no way to be
+// filtered to. Added at the front since it's the most common value.
+const ENTITY_TYPES = ["Individual", "Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
 const PAGE_SIZE = 20;
 
-type ViewMode = "it" | "table" | "card" | "classify" | "grouped";
+type ViewMode = "it" | "table" | "card" | "classify" | "grouped" | "services";
 
 const VIEW_KEY = "caflow_client_view";
 
@@ -699,9 +703,16 @@ const Clients = () => {
             <button
               onClick={() => setViewMode("classify")}
               title="Classification by FY"
-              className={`px-2.5 py-1.5 text-xs font-medium rounded-r-md transition-colors ${viewMode === "classify" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+              className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${viewMode === "classify" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
             >
               <BadgeCheck className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => setViewMode("services")}
+              title="Service-wise"
+              className={`px-2.5 py-1.5 text-xs font-medium rounded-r-md transition-colors ${viewMode === "services" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}
+            >
+              <BarChart3 className="h-3.5 w-3.5" />
             </button>
           </div>
           <Button variant="outline" size="sm" onClick={handleExportExcel} className="gap-1.5"><Download className="h-4 w-4" /> Export</Button>
@@ -1283,6 +1294,20 @@ const Clients = () => {
           showAllFirms={showAllFirms}
           canEdit={canEdit}
           search={search}
+        />
+      ) : viewMode === "services" ? (
+        /* SERVICE-WISE VIEW — matrix of which clients have which service
+           categories active. Self-contained data fetching (client_services
+           + service_categories), same pattern as ClassificationByFYView.
+           Reuses the shared search/entity filters above; clicking a
+           service tile or column header filters the table to that
+           service. */
+        <ServiceMatrixView
+          firmId={effectiveFirmId}
+          showAllFirms={showAllFirms}
+          search={search}
+          entityFilter={entityFilter}
+          onOpenClient={(id) => navigate(`/clients/${id}`)}
         />
       ) : null}
 

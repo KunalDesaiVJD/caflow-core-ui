@@ -3,13 +3,26 @@
  *
  * SECURITY (enterprise audit, 2026-08): this hook used to embed the eofficeportal
  * access token directly in client-side source (shipped to every visitor's
- * browser via the JS bundle) and fall back to fetching eofficeportal.com
- * DIRECTLY from the browser if the Supabase edge function was unavailable —
- * both removed. The ONLY path now is the authenticated Supabase edge function
- * `customer-sync`, which holds the token as a server-side secret and requires
- * a valid CAFlow session. If that function isn't deployed/reachable, sync
- * fails with a clear error instead of silently falling back to an insecure,
- * token-in-browser direct fetch.
+ * browser) and fall back to fetching eofficeportal.com DIRECTLY from the
+ * browser — both removed for good, replaced with two authenticated,
+ * server-side-only proxies:
+ *
+ *   Tier 0 — Vercel serverless function /api/eoffice (Node.js). Tried FIRST
+ *            because it's the only environment that can actually reach
+ *            eofficeportal.com: the host's TLS certificate is expired, and
+ *            Node's https.Agent({rejectUnauthorized:false}) genuinely
+ *            bypasses that (scoped to this one request, not process-wide).
+ *   Tier 1 — Supabase edge function `customer-sync` (Deno). Kept as a
+ *            fallback, but Deno's TLS stack does NOT honour
+ *            rejectUnauthorized:false — confirmed via edge function logs,
+ *            every fetch strategy there fails with "invalid peer
+ *            certificate: Expired" — so this tier only helps once
+ *            eofficeportal.com's certificate is actually renewed.
+ *
+ * Both require a valid CAFlow session (Bearer token) and read the
+ * eofficeportal access token from a server-side secret
+ * (EOFFICE_CUSTOMER_GROUP_ID — a Vercel env var for Tier 0, a Supabase
+ * secret for Tier 1), never from client-bundled source.
  *
  * To deploy the Edge Function:
  *   npx supabase functions deploy customer-sync --project-ref hubyywmodekfdzhwiumb
@@ -218,26 +231,55 @@ export function useCustomerSync() {
     try {
       let records: ApiRecord[] | null = null;
 
-      // Supabase Edge Function proxy — the ONLY path now. It calls eofficeportal
-      // server-side (no CORS/TLS issues in the browser) and holds the access
-      // token as a server-side secret; a direct-from-browser fallback used to
-      // exist here but shipped the token in the JS bundle and has been removed.
-      const { data: fnData, error: fnError } = await supabase.functions.invoke(
-        "customer-sync",
-        { method: "GET" },
-      );
-      if (fnError) {
-        edgeFnAvailable = !!(fnError as any).context?.status;
-        throw new Error(fnError.message || "Edge Function error — is 'customer-sync' deployed?");
+      // ── Tier 0: Vercel /api/eoffice (Node.js — can actually bypass the
+      // expired cert). Tried first; any failure here (network, 401, 500,
+      // 502 from upstream) falls through to Tier 1 rather than surfacing
+      // immediately, so a Vercel-side misconfiguration doesn't block sync
+      // if the edge function happens to work (e.g. once the cert is
+      // eventually renewed and Deno's verified-TLS tier starts succeeding).
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData?.session?.access_token;
+        if (accessToken) {
+          const res = await fetch("/api/eoffice", {
+            method: "GET",
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          const body = await res.json().catch(() => null);
+          if (res.ok && body?.records && Array.isArray(body.records)) {
+            records = body.records as ApiRecord[];
+            console.log("[Sync] Records via Vercel proxy (Tier 0):", records.length);
+          } else {
+            console.warn("[Sync] Tier 0 (Vercel) failed, falling back to edge function:", body?.error || res.status);
+          }
+        }
+      } catch (tier0Err) {
+        console.warn("[Sync] Tier 0 (Vercel) threw, falling back to edge function:", tier0Err);
       }
-      if (fnData?.error) {
-        edgeFnAvailable = true;
-        throw new Error(fnData.error);
-      }
-      if (fnData?.records && Array.isArray(fnData.records)) {
-        records         = fnData.records as ApiRecord[];
-        edgeFnAvailable = true;
-        console.log("[Sync] Records via Edge Function:", records.length);
+
+      // ── Tier 1: Supabase Edge Function proxy. Calls eofficeportal
+      // server-side (no CORS/TLS issues in the browser) and holds the
+      // access token as a server-side secret; a direct-from-browser
+      // fallback used to exist here but shipped the token in the JS
+      // bundle and has been removed for good.
+      if (!records) {
+        const { data: fnData, error: fnError } = await supabase.functions.invoke(
+          "customer-sync",
+          { method: "GET" },
+        );
+        if (fnError) {
+          edgeFnAvailable = !!(fnError as any).context?.status;
+          throw new Error(fnError.message || "Edge Function error — is 'customer-sync' deployed?");
+        }
+        if (fnData?.error) {
+          edgeFnAvailable = true;
+          throw new Error(fnData.error);
+        }
+        if (fnData?.records && Array.isArray(fnData.records)) {
+          records         = fnData.records as ApiRecord[];
+          edgeFnAvailable = true;
+          console.log("[Sync] Records via Edge Function (Tier 1):", records.length);
+        }
       }
 
       if (!records) throw new Error("Could not retrieve customer list from API.");

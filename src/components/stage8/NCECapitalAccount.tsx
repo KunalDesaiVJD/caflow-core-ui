@@ -11,6 +11,7 @@ import {
 import { toast } from "sonner";
 import { AlertTriangle, Loader2, Save, Plus, Trash2, Lock, CheckCircle2, Wand2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isProprietorshipEntityType } from "@/lib/entityType";
 
 // Paginated TB fetch (Supabase caps at 1000 rows/range) — used to re-derive the
 // COA-mapped Owners' Capital (NCE_CAP) closing total that the breakup must tie to.
@@ -179,7 +180,12 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   // Single source of truth (matches PipelineFinancialStatements.tsx): engagement-
   // level entity_type first, falling back to the client record.
   const entityType: string = (eng?.entity_type || eng?.clients?.entity_type || "").trim();
-  const isProprietorship = entityType.toLowerCase() === "proprietorship";
+  // 2026-08-06 fix (LALJIBHAI VADIWALA): entity_type is written in two
+  // incompatible vocabularies depending on which screen created the
+  // engagement — AuditPipeline.tsx's wizard writes short codes ("individual"
+  // for a Proprietorship), while this exact-string check only recognised the
+  // full word "Proprietorship". See src/lib/entityType.ts.
+  const isProprietorship = isProprietorshipEntityType(entityType);
 
   // ── Load saved rows ───────────────────────────────────────────────────────
   useEffect(() => {

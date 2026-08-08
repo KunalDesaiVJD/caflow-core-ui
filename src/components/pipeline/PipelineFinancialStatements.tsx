@@ -63,6 +63,7 @@ import { evaluateNotesStaleness } from "@/lib/notesStaleness";
 import { NCE_RESYNC_DELETE_FIRST, FS_NO_CAPITAL_PLUG, FS_CORP_PY_FACE_FROM_NOTE, FS_CORP_EXPORT_GATE, FS_NO_MANUAL_NOTE_ADD, FS_NCE_CONSTRAINED_NOTES } from "@/lib/nceFeatureFlags";
 import { validateFSReconciliation, validateCorporateFSReconciliation, logReconciliationDrift, NCE_LIAB_CODE_SET, computeCOATotals, validateOpeningVsPriorClose } from "@/lib/fsReconciliation";
 import { buildLedgerMapMatcher, cleanTallyName } from "@/lib/tallyText";
+import { isNonCorporateEntityType } from "@/lib/entityType";
 import { computeNceCoaAnchoredFace } from "@/lib/nceFaceAnchor";
 import { isTallyPLAccount, currentYearProfitAlreadyInReserves } from "@/lib/tallyDetection";
 
@@ -179,23 +180,15 @@ const INV_PL_CODES = new Set(Object.values(INV_DUAL_MAP));
 
 // ═══════════════════════════════════════
 // Non-Corporate Entity detection
-// Exact values stored in audit_engagements.entity_type  (see StepBasicInfo.tsx)
+// 2026-08-06 fix (LALJIBHAI VADIWALA): this used to be its own exact-match
+// list against only the full-word entity_type vocabulary ("Proprietorship",
+// "Partnership", ...). AuditPipeline.tsx's "New Engagement" wizard writes a
+// SEPARATE short-code vocabulary instead ("individual", "firm", "llp", ...) —
+// "firm" (its value for Partnership) was never in this list, so a Partnership
+// engagement created via that wizard silently routed to the CORPORATE FS
+// engine. Now routed through the single shared classifier — see
+// src/lib/entityType.ts, which documents both vocabularies.
 // ═══════════════════════════════════════
-const NON_CORPORATE_TYPES: string[] = [
-  "Individual",
-  "Proprietorship",
-  "Sole Proprietorship",
-  "Partnership",
-  "LLP",
-  "Limited Liability Partnership",
-  "HUF",
-  "Hindu Undivided Family",
-  "Trust",
-  "AOP",
-  "Association of Persons",
-  "BOI",
-  "Body of Individuals",
-];
 
 // ── NCE_FS_ITEMS imported from shared config (src/config/nceLineItems.ts) ──
 // One source of truth — also used by Stage 6 COA Mapping (PipelineStage3.tsx).
@@ -1890,6 +1883,9 @@ export default function PipelineFinancialStatements({
   const [recorrectingFromCOA, setRecorrectingFromCOA] = useState(false);
   // Phase 1 (re-sync flow): non-destructive, finalization-gated notes refresh.
   const [refreshingNotes, setRefreshingNotes] = useState(false);
+  // 2026-08-06 — Recompute Notes (bug-fix path): same rebuild, gated only on
+  // write-protection (not TB staleness) — see recomputeNotesNow below.
+  const [recomputingNotes, setRecomputingNotes] = useState(false);
   // 2026-06-05 Phase 2 — instrumentation for the loading-timer modal that
   // wraps the Re-correct handler. recorrectStartedAt is the timestamp the
   // run kicked off; recorrectElapsedSec ticks every 500ms while the run is
@@ -1930,9 +1926,7 @@ export default function PipelineFinancialStatements({
   // then falls back to clients.entity_type (set on the client record).
   const entityType: string =
     (engagement?.entity_type || engagement?.clients?.entity_type || "").trim();
-  const isNonCorporate: boolean = NON_CORPORATE_TYPES.some(
-    t => t.toLowerCase() === entityType.toLowerCase()
-  );
+  const isNonCorporate: boolean = isNonCorporateEntityType(entityType);
   // Cash-Flow Statement applicability — driven by Stage 1 questionnaire answer
   // ("Does the company prepare Cash Flow Statement?"). When set to "no", the
   // Cash Flow tab is hidden in the Financial Statements view. Default = true.
@@ -5638,6 +5632,83 @@ export default function PipelineFinancialStatements({
   // It re-runs nceAutoPopulate, which rebuilds ONLY the TB-derived auto rows
   // while preserving every manual custom row, and persists both cy_data and
   // py_data — so the revised figures flow TB → Notes → BS/PL face for CY & PY.
+  // Shared core: rebuild NCE notes' auto rows from the current TB + COA
+  // mapping and persist. Used by both refreshNotesFromTB (gated on the TB
+  // having been re-synced since notes were built) and recomputeNotesNow
+  // (gated only on write-protection, for forcing a rebuild after a
+  // nceAutoPopulate logic fix ships with no TB change) — same safe, tested
+  // rebuild logic; the caller owns the gate + confirm dialog.
+  const rebuildAndPersistNceNotes = async () => {
+    // 1. Load currently-saved notes so manual rows pass through untouched.
+    const { data: existingRows } = await (supabase.from as any)("nce_financial_notes")
+      .select("note_type, cy_data, py_data")
+      .eq("engagement_id", engagementId)
+      .eq("financial_year", engagement?.financial_year ?? "");
+    const built: Record<string, any> = {};
+    for (const r of (existingRows ?? []) as any[]) {
+      const cy = (r.cy_data ?? {}) as Record<string, any>;
+      const py = (r.py_data ?? {}) as Record<string, any>;
+      const customRows = Array.isArray(cy._custom_rows) ? cy._custom_rows : [];
+      const cleanCy: Record<string, number> = {};
+      const cleanPy: Record<string, number> = {};
+      for (const [k, v] of Object.entries(cy)) {
+        if (k === "_custom_rows") continue;
+        if (typeof v === "number") cleanCy[k] = v;
+      }
+      for (const [k, v] of Object.entries(py)) {
+        if (k === "_custom_rows") continue;
+        if (typeof v === "number") cleanPy[k] = v;
+      }
+      built[r.note_type] = { cy: cleanCy, py: cleanPy, customRows };
+    }
+
+    // 2. Rebuild auto rows from the live TB + COA mapping — always the
+    //    CURRENT nceAutoPopulate logic, so this is also how an already-built
+    //    note snapshot picks up a bug fix shipped after it was last built.
+    const populated = await nceAutoPopulate(engagementId, built);
+
+    // 3. Persist both cy_data and py_data.
+    const rows = Object.entries(populated).map(([noteType, d]) => {
+      const { cy_data, py_data } = serialiseNoteData(d);
+      return {
+        engagement_id:  engagementId,
+        financial_year: engagement?.financial_year ?? "",
+        note_type:      noteType,
+        cy_data:        cy_data as any,
+        py_data:        py_data as any,
+        updated_at:     new Date().toISOString(),
+      };
+    });
+    // BUG 2 fix: delete-first rebuild so the persisted notes are a pure
+    // function of (TB × COA) + the in-memory manual overlay; removes orphan
+    // note_type rows. OFF = legacy upsert-merge.
+    if (NCE_RESYNC_DELETE_FIRST) {
+      await supabase
+        .from("nce_financial_notes")
+        .delete()
+        .eq("engagement_id", engagementId)
+        .eq("financial_year", engagement?.financial_year ?? "");
+    }
+    const { error: saveErr } = await supabase
+      .from("nce_financial_notes")
+      .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
+    if (saveErr) throw saveErr;
+
+    // 4. Drop non-manual FS rows so the Stage-2 fallback in nceAutoPopulate
+    //    doesn't re-inject stale FS totals next time. Manual overrides kept.
+    await supabase
+      .from("fa_financial_statements")
+      .delete()
+      .eq("engagement_id", engagementId)
+      .eq("is_manual", false);
+
+    // 5. Invalidate the dependent queries so the face + staleness banner refresh.
+    queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
+    queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
+    queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
+    queryClient.invalidateQueries({ queryKey: ["notes-staleness", engagementId] });
+  };
+
   const refreshNotesFromTB = async () => {
     if (!isNonCorporate) {
       toast.error("Notes refresh is only supported for non-corporate (NCE) entities.");
@@ -5662,79 +5733,50 @@ export default function PipelineFinancialStatements({
     if (!ok) return;
     setRefreshingNotes(true);
     try {
-      // 1. Load currently-saved notes so manual rows pass through untouched.
-      const { data: existingRows } = await (supabase.from as any)("nce_financial_notes")
-        .select("note_type, cy_data, py_data")
-        .eq("engagement_id", engagementId)
-        .eq("financial_year", engagement?.financial_year ?? "");
-      const built: Record<string, any> = {};
-      for (const r of (existingRows ?? []) as any[]) {
-        const cy = (r.cy_data ?? {}) as Record<string, any>;
-        const py = (r.py_data ?? {}) as Record<string, any>;
-        const customRows = Array.isArray(cy._custom_rows) ? cy._custom_rows : [];
-        const cleanCy: Record<string, number> = {};
-        const cleanPy: Record<string, number> = {};
-        for (const [k, v] of Object.entries(cy)) {
-          if (k === "_custom_rows") continue;
-          if (typeof v === "number") cleanCy[k] = v;
-        }
-        for (const [k, v] of Object.entries(py)) {
-          if (k === "_custom_rows") continue;
-          if (typeof v === "number") cleanPy[k] = v;
-        }
-        built[r.note_type] = { cy: cleanCy, py: cleanPy, customRows };
-      }
-
-      // 2. Rebuild auto rows from the live (re-synced) TB + COA mapping.
-      const populated = await nceAutoPopulate(engagementId, built);
-
-      // 3. Persist both cy_data and py_data.
-      const rows = Object.entries(populated).map(([noteType, d]) => {
-        const { cy_data, py_data } = serialiseNoteData(d);
-        return {
-          engagement_id:  engagementId,
-          financial_year: engagement?.financial_year ?? "",
-          note_type:      noteType,
-          cy_data:        cy_data as any,
-          py_data:        py_data as any,
-          updated_at:     new Date().toISOString(),
-        };
-      });
-      // BUG 2 fix: delete-first rebuild so the persisted notes are a pure
-      // function of (TB × COA) + the in-memory manual overlay; removes orphan
-      // note_type rows. OFF = legacy upsert-merge.
-      if (NCE_RESYNC_DELETE_FIRST) {
-        await supabase
-          .from("nce_financial_notes")
-          .delete()
-          .eq("engagement_id", engagementId)
-          .eq("financial_year", engagement?.financial_year ?? "");
-      }
-      const { error: saveErr } = await supabase
-        .from("nce_financial_notes")
-        .upsert(rows, { onConflict: "engagement_id,financial_year,note_type" });
-      if (saveErr) throw saveErr;
-
-      // 4. Drop non-manual FS rows so the Stage-2 fallback in nceAutoPopulate
-      //    doesn't re-inject stale FS totals next time. Manual overrides kept.
-      await supabase
-        .from("fa_financial_statements")
-        .delete()
-        .eq("engagement_id", engagementId)
-        .eq("is_manual", false);
-
-      // 5. Invalidate the dependent queries so the face + staleness banner refresh.
-      queryClient.invalidateQueries({ queryKey: ["nce-financial-notes", engagementId] });
-      queryClient.invalidateQueries({ queryKey: ["fs-rows", engagementId] });
-      queryClient.invalidateQueries({ queryKey: ["engagement", engagementId] });
-      queryClient.invalidateQueries({ queryKey: ["notes-staleness", engagementId] });
-
+      await rebuildAndPersistNceNotes();
       toast.success("Notes refreshed from the re-synced trial balance");
     } catch (e: any) {
       console.error("[refreshNotesFromTB]", e);
       toast.error(e?.message || "Notes refresh failed");
     } finally {
       setRefreshingNotes(false);
+    }
+  };
+
+  // ─── Recompute Notes (bug-fix / logic-update path) ────────────────────────
+  // 2026-08-06 — refreshNotesFromTB only offers itself when the TB was
+  // re-synced after the notes were last built. That leaves NO way to force an
+  // already-built note snapshot to pick up a nceAutoPopulate logic fix (e.g. a
+  // corrected ledger matcher) when the TB itself hasn't changed — exactly the
+  // AMBICA "Other (prior year)" residual case: the fix is live in code, but
+  // the persisted note snapshot predates it and is never re-read. This action
+  // runs the identical safe rebuild, gated ONLY on write-protection (not TB
+  // staleness), so the auditor can force a recompute on demand.
+  const recomputeNotesNow = async () => {
+    if (!isNonCorporate) {
+      toast.error("Recompute is only supported for non-corporate (NCE) entities.");
+      return;
+    }
+    if (notesStalenessRaw?.notesFinalized) {
+      toast.error("Notes are finalized (write-protected). Unlock notes before recomputing.");
+      return;
+    }
+    const ok = window.confirm(
+      "Recompute Notes to Accounts from the current Trial Balance and COA mapping?\n\n" +
+      "This re-applies the latest note-population logic — useful after a product fix — " +
+      "even though the trial balance hasn't changed. Auto rows are rebuilt; manual rows " +
+      "and any values you typed are PRESERVED.\n\nClick OK to continue.",
+    );
+    if (!ok) return;
+    setRecomputingNotes(true);
+    try {
+      await rebuildAndPersistNceNotes();
+      toast.success("Notes recomputed");
+    } catch (e: any) {
+      console.error("[recomputeNotesNow]", e);
+      toast.error(e?.message || "Notes recompute failed");
+    } finally {
+      setRecomputingNotes(false);
     }
   };
 
@@ -8821,6 +8863,32 @@ export default function PipelineFinancialStatements({
           </div>
         );
       })()}
+
+      {/* 2026-08-06 — Recompute Notes: unlike the staleness banner (only offered
+           when the TB was re-synced after the notes were built), this is
+           always available so the auditor can force a rebuild after a
+           nceAutoPopulate logic fix ships even with no TB change. Gated only
+           on write-protection. Deliberately kept OUTSIDE FsHealthDock below —
+           that dock collapses (and its toggle disables) once issueCount hits
+           0, which would make this button unreachable exactly when the page
+           is "FS Health — all checks pass". */}
+      {isNonCorporate && (
+        <div className="flex items-center gap-2 mb-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={recomputingNotes || !!notesStalenessRaw?.notesFinalized}
+            onClick={recomputeNotesNow}
+            title={
+              notesStalenessRaw?.notesFinalized
+                ? "Notes are finalized (write-protected). Unlock notes to recompute."
+                : "Re-run note auto-population against the current TB + COA mapping — use this after a bug fix ships, even if the TB hasn't changed."
+            }
+          >
+            {recomputingNotes ? "Recomputing…" : "Recompute Notes"}
+          </Button>
+        </div>
+      )}
 
       {/* ── FS Health dock ───────────────────────────────────────────────
            Every diagnostic surface below lives inside one collapsible dock so

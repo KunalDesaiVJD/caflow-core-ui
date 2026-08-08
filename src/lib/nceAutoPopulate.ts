@@ -26,7 +26,7 @@ import { supabase } from "@/integrations/supabase/client";
 // 2026-06-05 Phase 3 — every getNCENoteFaceTotal call now reads from the
 // canonical computeNoteTotals helper instead of its own leaf-sum algorithm.
 // NOTES_CONFIG is needed to resolve note_type → NoteConfig at call time.
-import { NOTES_CONFIG } from "@/config/nceNotesConfig";
+import { NOTES_CONFIG, type NoteConfig } from "@/config/nceNotesConfig";
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import { buildNoteFsMap } from "@/lib/nceNoteRegistry";
 import { buildLedgerMapMatcher, cleanTallyName } from "@/lib/tallyText";
@@ -280,6 +280,19 @@ export interface NCECustomRow {
    *  purged by the per-ledger-breakup stale-artifact cleanup in
    *  nceAutoPopulate — they represent intentional user placements. */
   userMoved?: boolean;
+  /** 2026-08-06 — set when this row is `tbDerived: true` (it originated from
+   *  a matched TB ledger) but that ledger no longer resolves to any code on
+   *  the CURRENT trial balance / PY-shell (renamed, closed, or the auditor
+   *  simply hasn't re-synced since it changed). The row's stored amount is
+   *  therefore frozen at whatever it was when last computed and CANNOT be
+   *  refreshed automatically — auto-zeroing it would be just as wrong as
+   *  leaving it stale, since a genuinely hand-typed adjustment can also fail
+   *  to match a TB ledger. Surfaced as a visible badge so the auditor can
+   *  decide: delete the row if the ledger is gone, or leave it if it's a
+   *  deliberate adjustment. See resolveCodeAll / tbAmountForAll below —
+   *  this is the exact mechanism behind the AMBICA "Other Expenses" ₹8,240
+   *  PY residual that survived a "Recompute Notes" re-run untouched. */
+  staleTbMissing?: boolean;
 }
 
 export type NceEditCol = "lt" | "st";
@@ -3221,6 +3234,19 @@ export async function nceAutoPopulate(
     // shows the row only in the side COA mapping says it belongs in,
     // matching the BS face exactly. CY and PY are normalised independently
     // because a settled-in-CY loan (e.g. AU SFB) lives in PY only.
+    // 2026-08-06 fix: hoisted above both the noteFs.lt/st block and the
+    // noteFs.all block below — resolveCodeAll (inside the noteFs.all block)
+    // referenced these as if they were in scope there, but they were
+    // previously declared INSIDE the noteFs.lt/st block only, a sibling
+    // scope. Any Pattern-B note (noteFs.all — cash_bank, other_cl,
+    // trade_payables, inventories, trade_receivables, etc., the majority of
+    // NCE notes) with a manual custom row threw
+    // "ReferenceError: lookupCyLtSt is not defined" the instant
+    // resolveCodeAll ran, crashing the entire nceAutoPopulate() call —
+    // including the initial note-generation path and both the "Refresh
+    // notes from TB" and "Recompute Notes" rebuild actions.
+    const lookupCyLtSt = buildLedgerMapMatcher(coaMapping || {});
+    const lookupPyLtSt = buildLedgerMapMatcher(pyCoaMap || {});
     if ((noteFs.lt && noteFs.lt.length > 0) || (noteFs.st && noteFs.st.length > 0)) {
       const ltCodes = new Set(noteFs.lt ?? []);
       const stCodes = new Set(noteFs.st ?? []);
@@ -3230,8 +3256,6 @@ export async function nceAutoPopulate(
       // 2026-08-06 fix: was coaMapping[ejected] ?? pyCoaMap[ejected] — exact
       // bracket, no cleanTallyName/CI fallback. buildLedgerMapMatcher matches
       // the RC-21 pattern already used elsewhere in this file.
-      const lookupCyLtSt = buildLedgerMapMatcher(coaMapping || {});
-      const lookupPyLtSt = buildLedgerMapMatcher(pyCoaMap || {});
       const resolveCode = (cr: NCECustomRow): string | undefined => {
         const ejected = ((cr as any).ejectedSource as string | undefined)?.trim();
         if (ejected) {
@@ -3284,7 +3308,14 @@ export async function nceAutoPopulate(
       for (const cr of leakFreeCustomRows) {
         if (cr.source !== "manual") continue;
         const code = resolveCode(cr);
-        if (!code) continue;            // auditor-typed row with no TB match — leave alone
+        if (!code) {
+          // 2026-08-06 fix (AMBICA, Pattern-A mirror) — see the identical
+          // staleTbMissing flag in the Pattern-B block (resolveCodeAll)
+          // below for the full explanation.
+          if (cr.tbDerived) (cr as any).staleTbMissing = true;
+          continue;            // auditor-typed row with no TB match — leave alone
+        }
+        if (cr.tbDerived && (cr as any).staleTbMissing) (cr as any).staleTbMissing = false;
         const side: "lt" | "st" | null =
           ltCodes.has(code) ? "lt" :
           stCodes.has(code) ? "st" : null;
@@ -3375,7 +3406,18 @@ export async function nceAutoPopulate(
       for (const cr of leakFreeCustomRows) {
         if (cr.source !== "manual") continue;
         const code = resolveCodeAll(cr);
-        if (!code) continue;            // auditor-typed row with no TB match — leave alone
+        if (!code) {
+          // 2026-08-06 fix (AMBICA): a row that genuinely originated from a
+          // TB ledger (tbDerived) but no longer resolves to ANY code this
+          // year — renamed, closed, or simply un-synced — has no live value
+          // to refresh from, so its stored amount is frozen forever with no
+          // other mechanism ever revisiting it. Flag it (never auto-correct:
+          // a hand-typed adjustment with tbDerived unset also lands here and
+          // must be left alone) so the auditor can see and resolve it.
+          if (cr.tbDerived) (cr as any).staleTbMissing = true;
+          continue;            // auditor-typed row with no TB match — leave alone
+        }
+        if (cr.tbDerived && (cr as any).staleTbMissing) (cr as any).staleTbMissing = false;
         if (!ourCodes.has(code)) continue;  // ledger no longer ours — purge above handled it
         const cyVal = tbAmountForAll(cr, "cy");
         const pyVal = tbAmountForAll(cr, "py");

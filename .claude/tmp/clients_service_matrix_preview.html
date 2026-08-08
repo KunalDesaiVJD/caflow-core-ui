@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Clients — Service-wise view (preview)</title>
+<style>
+  :root {
+    --bg: hsl(220 14% 96%);
+    --card: hsl(0 0% 100%);
+    --fg: hsl(215 28% 10%);
+    --muted: hsl(220 14% 92%);
+    --muted-fg: hsl(215 12% 46%);
+    --border: hsl(220 13% 88%);
+    --primary: hsl(42 52% 50%);
+    --primary-fg: hsl(0 0% 100%);
+    --primary-wash: hsl(42 60% 94%);
+    --active: hsl(152 45% 38%);
+    --active-wash: hsl(152 45% 94%);
+    --inactive-dot: hsl(220 10% 82%);
+    --header-row: hsl(220 16% 98%);
+    --row-alt: hsl(220 16% 98.5%);
+    --shadow: 0 1px 2px hsl(220 20% 20% / 0.04), 0 8px 24px hsl(220 20% 20% / 0.05);
+  }
+
+  :root[data-theme="dark"] {
+    --bg: hsl(222 22% 9%);
+    --card: hsl(222 19% 12.5%);
+    --fg: hsl(220 20% 93%);
+    --muted: hsl(220 15% 18%);
+    --muted-fg: hsl(220 10% 64%);
+    --border: hsl(220 14% 21%);
+    --primary: hsl(42 62% 60%);
+    --primary-fg: hsl(222 30% 8%);
+    --primary-wash: hsl(42 40% 20%);
+    --active: hsl(152 48% 52%);
+    --active-wash: hsl(152 35% 16%);
+    --inactive-dot: hsl(220 10% 30%);
+    --header-row: hsl(222 20% 11%);
+    --row-alt: hsl(222 19% 13.3%);
+    --shadow: 0 1px 2px hsl(0 0% 0% / 0.3), 0 8px 24px hsl(0 0% 0% / 0.35);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: hsl(222 22% 9%);
+      --card: hsl(222 19% 12.5%);
+      --fg: hsl(220 20% 93%);
+      --muted: hsl(220 15% 18%);
+      --muted-fg: hsl(220 10% 64%);
+      --border: hsl(220 14% 21%);
+      --primary: hsl(42 62% 60%);
+      --primary-fg: hsl(222 30% 8%);
+      --primary-wash: hsl(42 40% 20%);
+      --active: hsl(152 48% 52%);
+      --active-wash: hsl(152 35% 16%);
+      --inactive-dot: hsl(220 10% 30%);
+      --header-row: hsl(222 20% 11%);
+      --row-alt: hsl(222 19% 13.3%);
+      --shadow: 0 1px 2px hsl(0 0% 0% / 0.3), 0 8px 24px hsl(0 0% 0% / 0.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page { max-width: 1360px; margin: 0 auto; padding: 28px 28px 56px; }
+
+  /* ── Preview banner ─────────────────────────────────────────────── */
+  .preview-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--primary-wash);
+    border: 1px solid var(--primary);
+    color: var(--fg);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 12.5px;
+    margin-bottom: 20px;
+  }
+  .preview-banner strong { color: var(--primary); }
+  .preview-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--primary); flex-shrink: 0;
+    box-shadow: 0 0 0 3px color-mix(in hsl, var(--primary) 25%, transparent);
+  }
+
+  /* ── Header ──────────────────────────────────────────────────────── */
+  .header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
+  .header h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .header p { margin: 0; color: var(--muted-fg); font-size: 13px; }
+
+  .toolbar { display: flex; align-items: center; gap: 10px; }
+
+  .view-toggle {
+    display: inline-flex; align-items: center;
+    border: 1px solid var(--border); border-radius: 7px;
+    overflow: hidden; background: var(--card);
+  }
+  .view-toggle button {
+    display: flex; align-items: center; justify-content: center;
+    width: 34px; height: 30px; border: none; background: transparent;
+    color: var(--muted-fg); cursor: pointer; border-right: 1px solid var(--border);
+    transition: background 0.12s, color 0.12s;
+  }
+  .view-toggle button:last-child { border-right: none; }
+  .view-toggle button:hover { background: var(--muted); color: var(--fg); }
+  .view-toggle button.active { background: var(--primary); color: var(--primary-fg); }
+  .view-toggle button svg { width: 15px; height: 15px; }
+  .view-toggle button.is-new { position: relative; }
+  .view-toggle button.is-new::after {
+    content: "";
+    position: absolute; top: 4px; right: 4px;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: var(--active);
+  }
+  .view-toggle button.active.is-new::after { background: var(--primary-fg); }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 12px; border-radius: 7px;
+    border: 1px solid var(--border); background: var(--card);
+    color: var(--fg); font-size: 12.5px; font-weight: 500; cursor: pointer;
+  }
+  .btn:hover { background: var(--muted); }
+
+  /* ── Summary strip ───────────────────────────────────────────────── */
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .summary-tile {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 11px 12px;
+    cursor: pointer;
+    transition: border-color 0.12s, box-shadow 0.12s, transform 0.12s;
+  }
+  .summary-tile:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
+  .summary-tile.picked { border-color: var(--primary); box-shadow: 0 0 0 1px var(--primary); }
+  .summary-tile .label {
+    font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--muted-fg); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .summary-tile .count { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .summary-tile .bar { height: 3px; border-radius: 2px; background: var(--muted); margin-top: 8px; overflow: hidden; }
+  .summary-tile .bar > span { display: block; height: 100%; background: var(--active); border-radius: 2px; }
+
+  /* ── Filter bar ──────────────────────────────────────────────────── */
+  .filters { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .search-wrap { position: relative; flex: 1; min-width: 220px; max-width: 320px; }
+  .search-wrap svg { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--muted-fg); }
+  .search-wrap input {
+    width: 100%; height: 32px; padding: 0 10px 0 30px;
+    border: 1px solid var(--border); border-radius: 7px;
+    background: var(--card); color: var(--fg); font-size: 12.5px;
+  }
+  .search-wrap input:focus { outline: none; border-color: var(--primary); }
+  .select {
+    height: 32px; padding: 0 10px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--card); color: var(--fg); font-size: 12.5px;
+  }
+  .filter-hint { margin-left: auto; font-size: 12px; color: var(--muted-fg); }
+  .filter-hint b { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .clear-pick {
+    display: none; align-items: center; gap: 5px;
+    font-size: 12px; color: var(--primary); background: none; border: none; cursor: pointer; padding: 0;
+  }
+  .clear-pick.show { display: inline-flex; }
+
+  /* ── Table ───────────────────────────────────────────────────────── */
+  .table-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    overflow: hidden; box-shadow: var(--shadow);
+  }
+  .table-scroll { overflow-x: auto; }
+  table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 980px; }
+
+  thead th {
+    background: var(--header-row);
+    border-bottom: 1px solid var(--border);
+    padding: 0;
+    text-align: left;
+    position: sticky; top: 0; z-index: 2;
+  }
+  thead th.corner { position: sticky; left: 0; z-index: 3; }
+
+  .th-static {
+    padding: 10px 12px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted-fg);
+    white-space: nowrap;
+  }
+
+  .th-service {
+    width: 42px; min-width: 42px; text-align: center; vertical-align: bottom;
+    padding: 8px 0 10px;
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .th-service:hover { background: var(--muted); }
+  .th-service.picked { background: var(--primary-wash); }
+  .th-service-label {
+    display: inline-block;
+    transform: rotate(-38deg);
+    transform-origin: left bottom;
+    font-size: 11px; font-weight: 600; color: var(--muted-fg);
+    white-space: nowrap; letter-spacing: 0.01em;
+  }
+  .th-service.picked .th-service-label { color: var(--primary); }
+  .th-service-count {
+    display: block; margin-top: 2px;
+    font-size: 9.5px; color: var(--muted-fg); font-variant-numeric: tabular-nums;
+    transform: none;
+  }
+
+  td.name-cell {
+    position: sticky; left: 0; z-index: 1;
+    background: inherit;
+    padding: 9px 12px; white-space: nowrap;
+    border-bottom: 1px solid var(--border);
+  }
+  td.name-cell a { color: var(--primary); text-decoration: none; font-weight: 600; font-size: 12.5px; }
+  td.name-cell a:hover { text-decoration: underline; }
+  td.name-cell .badge {
+    display: inline-block; margin-left: 7px; font-size: 9.5px; font-weight: 700;
+    padding: 1px 5px; border-radius: 4px; background: var(--muted); color: var(--muted-fg);
+    vertical-align: middle;
+  }
+
+  td.meta-cell {
+    padding: 9px 10px; border-bottom: 1px solid var(--border);
+    color: var(--muted-fg); font-size: 12px; white-space: nowrap;
+  }
+
+  td.svc-cell {
+    text-align: center; border-bottom: 1px solid var(--border); padding: 9px 0;
+  }
+  .dot {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 16px; height: 16px; border-radius: 50%;
+  }
+  .dot.on { background: var(--active-wash); }
+  .dot.on svg { width: 10px; height: 10px; color: var(--active); }
+  .dot.off { width: 4px; height: 4px; background: var(--inactive-dot); border-radius: 50%; }
+
+  td.total-cell {
+    padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap;
+  }
+  .total-pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+    background: var(--muted); color: var(--fg);
+  }
+
+  tbody tr:nth-child(even) td { background: var(--row-alt); }
+  tbody tr:nth-child(even) td.name-cell { background: var(--row-alt); }
+  tbody tr:hover td { background: var(--primary-wash); }
+  tbody tr:hover td.name-cell { background: var(--primary-wash); }
+
+  tbody tr.hide { display: none; }
+
+  .table-foot {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; border-top: 1px solid var(--border);
+    font-size: 12px; color: var(--muted-fg);
+  }
+  .legend { display: flex; align-items: center; gap: 14px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="preview-banner">
+    <span class="preview-dot"></span>
+    <span><strong>Preview only</strong> — sample data, not wired to Supabase yet. This is issue&nbsp;2 from the Clients page: a new "Service-wise" view. Say the word and it gets built for real.</span>
+  </div>
+
+  <div class="header">
+    <div>
+      <h1>Clients</h1>
+      <p>Manage your client directory.</p>
+    </div>
+    <div class="toolbar">
+      <div class="view-toggle" role="group" aria-label="View mode">
+        <button title="IT Returns view">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+        </button>
+        <button title="Table view">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        </button>
+        <button title="Card view">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        </button>
+        <button title="Group-wise">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+        </button>
+        <button title="Classification by FY">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 12l2 2 4-4"/><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/></svg>
+        </button>
+        <button class="active is-new" title="Service-wise (new)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="4" height="18"/><rect x="10" y="8" width="4" height="13"/><rect x="17" y="5" width="4" height="16"/></svg>
+        </button>
+      </div>
+      <button class="btn">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export
+      </button>
+    </div>
+  </div>
+
+  <!-- Summary strip — click a tile to isolate that service's column -->
+  <div class="summary" id="summary"></div>
+
+  <div class="filters">
+    <div class="search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="search" type="text" placeholder="Search by name or PAN…" />
+    </div>
+    <select class="select" id="entityFilter">
+      <option value="">All Entity Types</option>
+      <option>Private Ltd</option>
+      <option>Partnership</option>
+      <option>Individual</option>
+      <option>HUF</option>
+    </select>
+    <button class="clear-pick" id="clearPick">
+      <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      Clear service filter
+    </button>
+    <span class="filter-hint" id="filterHint"></span>
+  </div>
+
+  <div class="table-card">
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th class="corner"><div class="th-static">Client Name</div></th>
+            <th><div class="th-static">PAN</div></th>
+            <th><div class="th-static">Constitution</div></th>
+            <th id="svcHeadRow"></th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div class="table-foot">
+      <span id="rowCount"></span>
+      <div class="legend">
+        <div class="legend-item"><span class="dot on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span> Active</div>
+        <div class="legend-item"><span class="dot off"></span> Not subscribed</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const SERVICES = [
+    { key: "gst",     label: "GST" },
+    { key: "tds",     label: "TDS" },
+    { key: "sa",      label: "Statutory Audit" },
+    { key: "ta",      label: "Tax Audit (44AB)" },
+    { key: "itr",     label: "IT Returns" },
+    { key: "roc",     label: "ROC / MCA" },
+    { key: "books",   label: "Bookkeeping" },
+    { key: "payroll", label: "Payroll" },
+    { key: "msme",    label: "MSME 43B(h)" },
+  ];
+
+  const CLIENTS = [
+    { name: "AARTH INDUSTRIES",                 pan: "ABMFA7993F", ent: "Partnership", svc: ["gst","tds","itr","books"] },
+    { name: "ACCUPANELS ENERGY PRIVATE LIMITED", pan: "AAOCA0780G", ent: "Private Ltd", svc: ["gst","tds","sa","ta","itr","roc","books","msme"] },
+    { name: "ACCURATE PMS PVT. LTD",             pan: "AAMCA2528C", ent: "Private Ltd", svc: ["gst","tds","sa","ta","itr","roc"] },
+    { name: "ACS ENGITECH PRIVATE LIMITED",      pan: "AAQCA1784C", ent: "Private Ltd", svc: ["gst","itr","roc"] },
+    { name: "AKSY ENERGY PVT LTD",               pan: "AAGCA1920C", ent: "Private Ltd", svc: ["gst","tds","sa","ta","itr","roc","payroll"] },
+    { name: "AMADIUS REALTY",                    pan: "ABPFA2154C", ent: "Partnership", svc: ["gst","itr"] },
+    { name: "AMBER DYE TRADE PRIVATE LIMITED",   pan: "AACCA3373G", ent: "Private Ltd", svc: ["gst","tds","itr","roc","books"] },
+    { name: "AMBER GUM INDUSTRIES",              pan: "ABVFA0344A", ent: "Partnership", svc: ["gst","itr","books"] },
+    { name: "AMBICA PLASTIC INDUSTRIES",         pan: "AALFA5018A", ent: "Partnership", svc: ["gst","tds","itr"] },
+    { name: "ASHUTOSH DILIPBHAI KAKADIYA",       pan: "DTTPK3287E", ent: "Individual",  svc: ["itr"] },
+    { name: "HITESH SOMANI HUF",                 pan: "AAFHH0815K", ent: "HUF",         svc: ["itr","gst"] },
+    { name: "HITESH CHATTAR LAL SOMANI",         pan: "AUTPS4337B", ent: "Individual",  svc: ["itr","msme"] },
+    { name: "SURBHI HITESHKUMAR SOMANI",         pan: "AMYPM9213F", ent: "Individual",  svc: ["itr"] },
+    { name: "SOHAM SHRIKANT JOSHI",              pan: "CTTPJ3978J", ent: "Individual",  svc: ["itr","gst"] },
+    { name: "SARKHEJ MOTOR TRANSPORT",           pan: "AABFS1122K", ent: "Partnership", svc: ["gst","tds","sa","itr","payroll","msme"] },
+    { name: "PRIYANSHI HIREN RAMANI",            pan: "IZZPS6625H", ent: "Individual",  svc: ["itr","gst"] },
+    { name: "UNITED BUILDCON",                   pan: "AAIFU7398F", ent: "Partnership", svc: ["gst","tds","sa","ta","itr","roc"] },
+    { name: "TRUPEN ASHWINBHAI PATEL HUF",       pan: "AAEHT2318G", ent: "HUF",         svc: ["itr"] },
+  ];
+
+  const svcHead = document.getElementById("svcHeadRow");
+  svcHead.outerHTML = SERVICES.map(s => `
+    <th class="th-service" data-key="${s.key}">
+      <span class="th-service-label">${s.label}</span>
+    </th>`).join("") + `<th><div class="th-static" style="text-align:right">Active</div></th>`;
+
+  const tbody = document.getElementById("tbody");
+  function render() {
+    const q = document.getElementById("search").value.trim().toLowerCase();
+    const ent = document.getElementById("entityFilter").value;
+    tbody.innerHTML = CLIENTS.map(c => {
+      const total = c.svc.length;
+      const cells = SERVICES.map(s => {
+        const on = c.svc.includes(s.key);
+        return `<td class="svc-cell" data-key="${s.key}">` +
+          (on
+            ? `<span class="dot on"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg></span>`
+            : `<span class="dot off"></span>`) +
+          `</td>`;
+      }).join("");
+      const match = c.name.toLowerCase().includes(q) || c.pan.toLowerCase().includes(q);
+      const entMatch = !ent || c.ent === ent;
+      const svcMatch = !picked || c.svc.includes(picked);
+      return `<tr class="${match && entMatch && svcMatch ? "" : "hide"}" data-svc="${c.svc.join(",")}">
+        <td class="name-cell"><a href="#">${c.name}</a></td>
+        <td class="meta-cell">${c.pan}</td>
+        <td class="meta-cell">${c.ent}</td>
+        ${cells}
+        <td class="total-cell" style="text-align:right"><span class="total-pill">${total} active</span></td>
+      </tr>`;
+    }).join("");
+    updateCounts();
+  }
+
+  function updateCounts() {
+    const rows = [...tbody.querySelectorAll("tr")];
+    const visible = rows.filter(r => !r.classList.contains("hide"));
+    document.getElementById("rowCount").textContent = `Showing ${visible.length} of ${CLIENTS.length} clients`;
+  }
+
+  document.getElementById("search").addEventListener("input", render);
+  document.getElementById("entityFilter").addEventListener("change", render);
+
+  // Summary strip
+  const summary = document.getElementById("summary");
+  function serviceCount(key) { return CLIENTS.filter(c => c.svc.includes(key)).length; }
+  const maxCount = Math.max(...SERVICES.map(s => serviceCount(s.key)));
+  summary.innerHTML = SERVICES.map(s => {
+    const n = serviceCount(s.key);
+    const pct = Math.round((n / CLIENTS.length) * 100);
+    return `<div class="summary-tile" data-key="${s.key}">
+      <div class="label">${s.label}</div>
+      <div class="count">${n}</div>
+      <div class="bar"><span style="width:${pct}%"></span></div>
+    </div>`;
+  }).join("");
+
+  let picked = null;
+  function setPicked(key) {
+    picked = picked === key ? null : key;
+    document.querySelectorAll(".summary-tile").forEach(t => t.classList.toggle("picked", t.dataset.key === picked));
+    document.querySelectorAll(".th-service").forEach(t => t.classList.toggle("picked", t.dataset.key === picked));
+    document.getElementById("clearPick").classList.toggle("show", !!picked);
+    const hint = document.getElementById("filterHint");
+    if (picked) {
+      const label = SERVICES.find(s => s.key === picked).label;
+      const n = serviceCount(picked);
+      hint.innerHTML = `Filtered to <b>${label}</b> — <b>${n}</b> of ${CLIENTS.length} clients`;
+    } else {
+      hint.textContent = "";
+    }
+    render(); // re-apply row visibility now that the service filter changed
+  }
+  summary.addEventListener("click", (e) => {
+    const tile = e.target.closest(".summary-tile");
+    if (tile) setPicked(tile.dataset.key);
+  });
+  document.addEventListener("click", (e) => {
+    const th = e.target.closest(".th-service");
+    if (th) setPicked(th.dataset.key);
+  });
+  document.getElementById("clearPick").addEventListener("click", () => setPicked(null));
+
+  render();
+</script>
+</body>
+</html>
