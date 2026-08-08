@@ -1269,7 +1269,7 @@ export function TdsValidateFinalise({
     setAuditStatusFilter("all"); setAuditErrorTypeFilter("all"); setCollapsedStages(new Set());
     setAttestChecked(false); setSignature(null);
     setPanStatus(PAN_STATUS_BLOCKED);
-    setChallanCsiStatus({ filingId: null, loaded: false, applicable: false, ran: false, issues: 0 });
+    setChallanDownloadStatus({ filingId: null, loaded: false, applicable: false, ran: false, issues: 0 });
     setTallyStatus({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 });
   }, [selClient, selFy, selQuarter, selForm]);
 
