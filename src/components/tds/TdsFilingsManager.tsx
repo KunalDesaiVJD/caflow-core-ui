@@ -141,12 +141,16 @@ interface Props {
   users: UserOption[];
   isSuperadmin: boolean;
   resolveFirmId: () => Promise<string | null>;
-  onNavigateDataEntry?: (filingId?: string) => void;
+  // Navigate to a SPECIFIC filing's Data Entry tab — fired by the row's own
+  // "Go to Data Entry" action. Carries the full selection (same shape as
+  // onNavigateStage1 below) so the correct client/FY/quarter/form is
+  // pre-selected on arrival instead of leaving whatever was last selected in
+  // the Workspace, forcing the user to pick the same filing again.
+  onNavigateDataEntry?: (sel: { clientId: string; financialYear: string; quarter: string; formType: string }) => void;
   // Navigate to a SPECIFIC filing's Stage 1 (Validate & Finalise) in the TDS
   // Workspace — fired by the "Validate & Finalise" summary column's Ready
-  // link. Unlike onNavigateDataEntry (which only switches tabs, relying on
-  // whatever client/FY/quarter was already selected), this carries the full
-  // selection so the correct filing is pre-selected on arrival.
+  // link. Carries the full selection so the correct filing is pre-selected
+  // on arrival.
   onNavigateStage1?: (sel: { clientId: string; financialYear: string; quarter: string; formType: string }) => void;
   // When embedded elsewhere (e.g. the Dashboard's Client Filing Summary card),
   // the host already provides its own title — suppress this component's own.
@@ -2147,7 +2151,10 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
                         <Button variant="ghost" size="icon" className="h-7 w-7" title="History" onClick={() => openHistory(f)}>
                           <Clock size={14} />
                         </Button>
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Go to Data Entry" onClick={() => onNavigateDataEntry?.(f.id)}>
+                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Go to Data Entry" onClick={() => onNavigateDataEntry?.({
+                          clientId: f.client_id, financialYear: f.financial_year, quarter: f.quarter,
+                          formType: (f.tds_forms && f.tds_forms[0]) || "26Q",
+                        })}>
                           <ArrowRight size={14} />
                         </Button>
                       </div>

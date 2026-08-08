@@ -381,7 +381,19 @@ const TdsFilings = () => {
               resolveFirmId={resolveFirmId} refreshKey={dashRefreshKey}
               onNavigate={(section, filters) => {
                 // CP-02: "data-entry" and "validate" deep-links now open workspace
-                if (section === "data-entry") { setWorkspaceTab("data-entry"); setActiveSection("workspace"); }
+                if (section === "data-entry") {
+                  // A specific filing's "Go to Data Entry" action carries its own
+                  // client/FY/quarter/form (TdsFilingsManager's row action) — pre-select
+                  // the SAME filing here instead of leaving whatever was last selected/
+                  // viewed in the Workspace, which used to force re-picking it by hand.
+                  if (filters?.clientId) {
+                    setCtxClient(filters.clientId);
+                    if (filters.financialYear) setCtxFy(filters.financialYear);
+                    if (filters.quarter) setCtxQuarter(filters.quarter);
+                    if (filters.formType) setCtxForm(filters.formType);
+                  }
+                  setWorkspaceTab("data-entry"); setActiveSection("workspace");
+                }
                 else if (section === "validate") {
                   // A specific filing's "Ready" link (Dashboard's Validate & Finalise
                   // column) carries its own client/FY/quarter/form — pre-select the

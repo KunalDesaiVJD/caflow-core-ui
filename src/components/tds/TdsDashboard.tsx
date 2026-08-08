@@ -392,7 +392,9 @@ export function TdsDashboard({ clients, users, isSuperadmin, resolveFirmId, onNa
             users={users}
             isSuperadmin={isSuperadmin}
             resolveFirmId={resolveFirmId}
-            onNavigateDataEntry={() => onNavigate?.("data-entry")}
+            onNavigateDataEntry={(sel) => onNavigate?.("data-entry", {
+              clientId: sel.clientId, financialYear: sel.financialYear, quarter: sel.quarter, formType: sel.formType,
+            })}
             onNavigateStage1={(sel) => onNavigate?.("validate", {
               clientId: sel.clientId, financialYear: sel.financialYear, quarter: sel.quarter, formType: sel.formType,
             })}
