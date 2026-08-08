@@ -20,6 +20,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 interface ServiceCat {
   id: string;
@@ -56,6 +57,41 @@ async function fetchAllPages<T>(builder: (from: number, to: number) => any): Pro
   return out;
 }
 
+// "" = Current (live is_active snapshot). Otherwise "YYYY-YY" — filters to
+// services that were active AT ANY POINT overlapping that financial year
+// (Apr 1 – Mar 31), using activated_at/deactivated_at, not just today's
+// is_active flag. Lets the auditor see what a client's service line-up
+// looked like in a past FY, not only right now.
+const CURRENT_FY_VALUE = "";
+const FY_OPTIONS = (() => {
+  const today = new Date();
+  const cur = today.getMonth() >= 3 ? today.getFullYear() : today.getFullYear() - 1;
+  return Array.from({ length: 6 }, (_, i) => {
+    const s = cur - i;
+    return `${s}-${String(s + 1).slice(-2)}`;
+  });
+})();
+
+function fyWindow(fy: string): { start: string; end: string } {
+  const [startYearStr] = fy.split("-");
+  const startYear = Number(startYearStr);
+  return { start: `${startYear}-04-01`, end: `${startYear + 1}-03-31` };
+}
+
+/** Did a client_services row overlap the given FY window? A row with no
+ *  activated_at predates timestamp tracking — treated as "not active" for
+ *  historical purposes rather than guessing. */
+function wasActiveInWindow(
+  activatedAt: string | null,
+  deactivatedAt: string | null,
+  win: { start: string; end: string },
+): boolean {
+  if (!activatedAt) return false;
+  if (activatedAt > win.end) return false;
+  if (deactivatedAt && deactivatedAt < win.start) return false;
+  return true;
+}
+
 export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, onOpenClient }: Props) {
   const [services, setServices] = useState<ServiceCat[]>([]);
   const [clients, setClients] = useState<ClientRow[]>([]);
@@ -63,6 +99,7 @@ export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, 
   const [activeSet, setActiveSet] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
+  const [fy, setFy] = useState<string>(CURRENT_FY_VALUE);
 
   const fetchData = useCallback(async () => {
     if (!firmId && !showAllFirms) return;
@@ -91,21 +128,35 @@ export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, 
 
       const clientIds = clientRows.map(c => c.id);
       const validServiceIds = new Set(svcList.map(s => s.id));
+      const isHistorical = fy !== CURRENT_FY_VALUE;
+      const win = isHistorical ? fyWindow(fy) : null;
       const CHUNK = 500;
       const pairs: string[] = [];
       for (let i = 0; i < clientIds.length; i += CHUNK) {
         const idsChunk = clientIds.slice(i, i + CHUNK);
 
-        // Direct per-service assignments.
-        const csRows = await fetchAllPages<{ client_id: string; service_category_id: string }>((from, to) =>
-          supabase
+        // Direct per-service assignments. For "Current" we filter is_active
+        // at the DB level (cheap, matches the old behaviour exactly). For a
+        // past FY we pull activated_at/deactivated_at too and test overlap
+        // client-side, since a service deactivated after that FY ended
+        // should still show as held during it — today's is_active flag
+        // alone can't answer that.
+        const csRows = await fetchAllPages<{
+          client_id: string; service_category_id: string;
+          is_active: boolean; activated_at: string | null; deactivated_at: string | null;
+        }>((from, to) => {
+          let q = supabase
             .from("client_services")
-            .select("client_id, service_category_id")
+            .select("client_id, service_category_id, is_active, activated_at, deactivated_at")
             .in("client_id", idsChunk)
-            .eq("is_active", true)
-            .range(from, to)
-        );
-        for (const r of csRows) pairs.push(`${r.client_id}::${r.service_category_id}`);
+            .range(from, to);
+          if (!isHistorical) q = q.eq("is_active", true);
+          return q;
+        });
+        for (const r of csRows) {
+          const active = isHistorical ? wasActiveInWindow(r.activated_at, r.deactivated_at, win!) : true;
+          if (active) pairs.push(`${r.client_id}::${r.service_category_id}`);
+        }
 
         // Package billing — a client on an active package has every service
         // in that package's service_category_ids array, even with NO
@@ -114,6 +165,9 @@ export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, 
         // (confirmed: 2 clients had IT Returns via package only, causing
         // the "517 vs 519" mismatch against the IT Returns module, which
         // already unions both sources — see resolveClassification there).
+        // NOTE: client_service_packages has no activated_at/deactivated_at,
+        // so package-billed services always reflect CURRENT status even
+        // when a past FY is selected — surfaced as a caveat note in the UI.
         const pkgRows = await fetchAllPages<{ client_id: string; service_category_ids: string[] | null }>((from, to) =>
           supabase
             .from("client_service_packages")
@@ -132,7 +186,7 @@ export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, 
     } finally {
       setLoading(false);
     }
-  }, [firmId, showAllFirms]);
+  }, [firmId, showAllFirms, fy]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -178,6 +232,25 @@ export function ServiceMatrixView({ firmId, showAllFirms, search, entityFilter, 
 
   return (
     <div className="space-y-4">
+      {/* ── Financial Year selector ── */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-sm font-medium text-muted-foreground">Financial Year:</span>
+        <Select value={fy || "current"} onValueChange={v => setFy(v === "current" ? CURRENT_FY_VALUE : v)}>
+          <SelectTrigger className="w-36 h-8 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="current">Current</SelectItem>
+            {FY_OPTIONS.map(f => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+          </SelectContent>
+        </Select>
+        {fy !== CURRENT_FY_VALUE && (
+          <span className="text-xs text-muted-foreground">
+            Showing services held at any point during FY {fy}. Package-billed services always reflect current status (no historical tracking for those).
+          </span>
+        )}
+      </div>
+
       {/* ── Summary strip — click a tile to filter the table to that service ── */}
       <div
         className="grid gap-2.5"
