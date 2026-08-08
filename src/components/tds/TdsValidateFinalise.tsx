@@ -46,7 +46,7 @@ import {
 import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import { TdsPanVerification, type PanStageStatus } from "./TdsPanVerification";
-import { TdsChallanCsiValidation, type ChallanCsiStageStatus } from "./TdsChallanCsiValidation";
+import { TdsChallanDownloadValidation, type ChallanDownloadStageStatus } from "./TdsChallanDownloadValidation";
 import { TdsTallyRecon, type TallyStageStatus } from "./TdsTallyRecon";
 
 interface ClientOption {
@@ -1125,7 +1125,7 @@ export function TdsValidateFinalise({
   // with no unresolved PAN issue. Until then the button stays disabled and the UI
   // states the exact reason.
   const [panStatus, setPanStatus] = useState<PanStageStatus>(PAN_STATUS_BLOCKED);
-  const [challanCsiStatus, setChallanCsiStatus] = useState<ChallanCsiStageStatus>({ filingId: null, loaded: false, applicable: false, ran: false, issues: 0 });
+  const [challanDownloadStatus, setChallanDownloadStatus] = useState<ChallanDownloadStageStatus>({ filingId: null, loaded: false, applicable: false, ran: false, issues: 0 });
   const [tallyStatus, setTallyStatus] = useState<TallyStageStatus>({ filingId: null, loaded: false, applicable: false, ran: false, total: 0, matched: 0, issues: 0, overridden: 0 });
   const stage1Ran = (results?.length ?? 0) > 0;
   const stage1Ready = stage1Ran && summary.mismatched === 0;
@@ -1137,8 +1137,8 @@ export function TdsValidateFinalise({
   // applicable (nothing imported yet) or run-clean before the stage counts as done.
   const stage2PanReported = panStatus.loaded && panStatus.filingId != null && panStatus.filingId === (filing?.id ?? null);
   const stage2PanReady = stage2PanReported && (!panStatus.applicable || (panStatus.ran && panStatus.issues === 0));
-  const stage2ChallanReported = challanCsiStatus.loaded && challanCsiStatus.filingId != null && challanCsiStatus.filingId === (filing?.id ?? null);
-  const stage2ChallanReady = stage2ChallanReported && (!challanCsiStatus.applicable || (challanCsiStatus.ran && challanCsiStatus.issues === 0));
+  const stage2ChallanReported = challanDownloadStatus.loaded && challanDownloadStatus.filingId != null && challanDownloadStatus.filingId === (filing?.id ?? null);
+  const stage2ChallanReady = stage2ChallanReported && (!challanDownloadStatus.applicable || (challanDownloadStatus.ran && challanDownloadStatus.issues === 0));
   const stage2Reported = stage2PanReported && stage2ChallanReported;
   const stage2Ready = stage2PanReady && stage2ChallanReady;
   const stage3Reported = tallyStatus.loaded && tallyStatus.filingId != null && tallyStatus.filingId === (filing?.id ?? null);
@@ -1159,10 +1159,10 @@ export function TdsValidateFinalise({
     ? "A TRACES file is imported — run Stage-2 PAN Verification to complete the audit."
     : (panStatus.applicable && panStatus.issues > 0)
     ? `${panStatus.issues} Stage-2 PAN issue${panStatus.issues === 1 ? "" : "s"} still unresolved — override or resolve each one to continue.`
-    : (challanCsiStatus.applicable && !challanCsiStatus.ran)
-    ? "A CSI file is imported — validate it to complete Stage-2 Challan Validation."
-    : (challanCsiStatus.applicable && challanCsiStatus.issues > 0)
-    ? `Stage-2 Challan Validation: ${challanCsiStatus.issues} mismatch${challanCsiStatus.issues === 1 ? "" : "es"} against the CSI file — resolve before continuing.`
+    : (challanDownloadStatus.applicable && !challanDownloadStatus.ran)
+    ? "A challan report is imported — validate it to complete Stage-2 Challan Validation."
+    : (challanDownloadStatus.applicable && challanDownloadStatus.issues > 0)
+    ? `Stage-2 Challan Validation: ${challanDownloadStatus.issues} challan${challanDownloadStatus.issues === 1 ? "" : "s"} not matched against the portal report — resolve before continuing.`
     : (tallyStatus.applicable && !tallyStatus.ran)
     ? "A Tally ledger is imported — run Stage-3 reconciliation to complete it."
     : (tallyStatus.applicable && tallyStatus.issues > 0)
@@ -1616,8 +1616,8 @@ export function TdsValidateFinalise({
               <TabsTrigger value="1" className="text-xs h-7 gap-1.5 px-3"><FileSpreadsheet size={13} /> Stage 1 · Data{stage1Ran && <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", summary.mismatched === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>{summary.mismatched === 0 ? "OK" : summary.mismatched}</span>}</TabsTrigger>
               <TabsTrigger value="2" className="text-xs h-7 gap-1.5 px-3">
                 <BadgeCheck size={13} /> Stage 2 · PAN &amp; Challan
-                {(panStatus.ran || challanCsiStatus.ran) && (() => {
-                  const combinedIssues = (panStatus.ran ? panStatus.issues : 0) + (challanCsiStatus.ran ? challanCsiStatus.issues : 0);
+                {(panStatus.ran || challanDownloadStatus.ran) && (() => {
+                  const combinedIssues = (panStatus.ran ? panStatus.issues : 0) + (challanDownloadStatus.ran ? challanDownloadStatus.issues : 0);
                   return (
                     <span className={cn("ml-0.5 rounded px-1 text-[10px] font-semibold", combinedIssues === 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300" : "bg-destructive/10 text-destructive")}>
                       {combinedIssues === 0 ? "OK" : combinedIssues}
@@ -1877,14 +1877,14 @@ export function TdsValidateFinalise({
 
           <div className="space-y-2 pt-2 border-t">
             <h4 className="text-xs font-semibold text-muted-foreground pt-2">Challan Validation</h4>
-            <TdsChallanCsiValidation
+            <TdsChallanDownloadValidation
               filing={filing}
               selClient={selClient}
               selForm={selForm}
               clientTan={selectedClient?.tan_number}
               resolveFirmId={resolveFirmId}
               disabled={isLocked}
-              onStatusChange={setChallanCsiStatus}
+              onStatusChange={setChallanDownloadStatus}
               onActivity={bumpUnderProcess}
             />
           </div>
@@ -2199,12 +2199,12 @@ export function TdsValidateFinalise({
                               </span>
                             </div>
                             <div className="flex items-center gap-1.5">
-                              {!challanCsiStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage2ChallanReady ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
-                              <span className={!challanCsiStatus.applicable ? "text-muted-foreground" : stage2ChallanReady ? "text-foreground" : "text-muted-foreground"}>
+                              {!challanDownloadStatus.applicable ? <Info size={13} className="text-muted-foreground shrink-0" /> : stage2ChallanReady ? <CheckCircle2 size={13} className="text-emerald-600 shrink-0" /> : <X size={13} className="text-destructive shrink-0" />}
+                              <span className={!challanDownloadStatus.applicable ? "text-muted-foreground" : stage2ChallanReady ? "text-foreground" : "text-muted-foreground"}>
                                 Stage 2 · Challan validation{
-                                  !challanCsiStatus.applicable ? " — optional (no CSI file imported)"
-                                  : !challanCsiStatus.ran ? " — not run"
-                                  : challanCsiStatus.issues > 0 ? ` — ${challanCsiStatus.issues} unresolved`
+                                  !challanDownloadStatus.applicable ? " — optional (no challan report imported)"
+                                  : !challanDownloadStatus.ran ? " — not run"
+                                  : challanDownloadStatus.issues > 0 ? ` — ${challanDownloadStatus.issues} unresolved`
                                   : " — complete"}
                               </span>
                             </div>

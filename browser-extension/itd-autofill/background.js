@@ -18,6 +18,13 @@
  * appears to reject script-generated clicks on that button specifically, on
  * purpose, and defeating that crosses a line this project isn't willing to
  * cross regardless of how many times it's requested.
+ *
+ * RELAY_CHALLAN_DOWNLOAD (added for the Stage-2 challan-download flow) is a
+ * plain broadcast, not a credential handoff — no storage, no TTL. It just
+ * forwards the requested FY date range to whichever eportal.incometax.gov.in
+ * tab(s) are currently open. No new manifest permission needed: querying/
+ * messaging tabs by URL is already covered by the existing host_permissions
+ * entry for that origin, without needing the broader "tabs" permission.
  */
 
 const CREDENTIAL_TTL_MS = 2 * 60 * 1000;
@@ -42,6 +49,23 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         return;
       }
       sendResponse({ ok: true, loginId: record.loginId, password: record.password });
+    });
+    return true; // async response
+  }
+
+  if (msg?.type === "RELAY_CHALLAN_DOWNLOAD") {
+    chrome.tabs.query({ url: "https://eportal.incometax.gov.in/*" }, (tabs) => {
+      for (const tab of tabs) {
+        if (tab.id == null) continue;
+        // No response expected/awaited per tab — the ITD tab reports its own
+        // progress via an on-page banner, same as content-itd.js's login flow.
+        chrome.tabs.sendMessage(tab.id, {
+          type: "START_CHALLAN_DOWNLOAD",
+          fyStartDate: msg.fyStartDate ?? null,
+          fyEndDate: msg.fyEndDate ?? null,
+        }, () => void chrome.runtime.lastError); // swallow "no receiver" if the tab hasn't loaded content-itd.js yet
+      }
+      sendResponse({ ok: true, tabCount: tabs.length });
     });
     return true; // async response
   }

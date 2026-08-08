@@ -7,6 +7,18 @@ saved there, whatever it is (PAN, Aadhaar, or another registered User ID;
 CAflow doesn't assume or validate which) — then confirms the Secure Access
 Message. **You click the final Continue yourself** to actually sign in.
 
+**v0.3.0** also attempts, on request from Stage 2's "Download Challan"
+button (TdsChallanDownloadValidation.tsx), the post-login click path
+e-File → e-Pay Tax → Income Tax Act, 2025 → Payment History → Actions →
+Download for the filing's selected quarter. **This part is a first draft,
+unverified against the live portal** — see `content-itd.js`'s own
+`runChallanDownload` doc. It never fails silently: watch for its on-page
+banner and finish manually from wherever it stops if a selector doesn't
+match. Whatever it reaches, the app-side hand-off always ends at CAFlow's
+own "Upload Downloaded Report" file picker — a content script cannot read a
+file the OS just saved to Downloads, so that step stays manual regardless of
+how well the click automation ends up working.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser
