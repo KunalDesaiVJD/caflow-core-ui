@@ -6,6 +6,7 @@ import {
   PAN_4TH_CHAR_MAP, isValidPan, isIndividualRateType, getRateForSection as getRateForSectionPure,
   calcAutoInterest, isChallanOverApplied, isChallanFullyUtilised, computeApplied, balanceColorClass,
   sectionDropdownLabel, withKasarVatav, computeChallanPooled,
+  isSupersededSectionCode, is194CaDisabledFor, is194CbDisabledFor,
   type RateEntry,
 } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
@@ -2052,9 +2053,48 @@ export function TdsDataEntry({
   // Issue 1: Row-level read-only check
   const isRowReadOnly = (d: Deductee) => isFilingLocked || (filing ? d.filing_id !== filing.id : false);
 
+  // A plain code (no "(a)"/"(b)" suffix, e.g. "194C") is superseded once the
+  // Section 393 reform has ALSO seeded its own bifurcated siblings in this
+  // exact rate master set (e.g. "194C(a)"/"194C(b)"). The plain row stays
+  // is_active=true in the DB deliberately — deactivating it broke the Section
+  // dropdown for every EXISTING entry already saved against it, rendering
+  // blank instead of the real value (see migration
+  // 20260730170000_tds_reactivate_bifurcated_base_codes.sql) — so it can't be
+  // filtered out at the data layer. Excluded from the OFFERED list here
+  // instead: a brand new entry should always pick the more precise (a)/(b)
+  // variant, and this is purely a display-layer filter, so it doesn't risk
+  // that same regression. sectionOptionsFor (below) still surfaces the plain
+  // code for a row whose OWN stored value already is one, so nothing renders
+  // blank.
   const sectionOptions = useMemo(() => {
-    return rateMaster.map(r => ({ value: r.section_code, label: sectionDropdownLabel(r) }));
+    return rateMaster
+      .filter(r => !isSupersededSectionCode(r.section_code, rateMaster))
+      .map(r => ({ value: r.section_code, label: sectionDropdownLabel(r) }));
   }, [rateMaster]);
+
+  /** sectionOptions with the CURRENT value spliced back in if it's a
+   *  superseded plain code sectionOptions itself excludes — e.g. a deductee
+   *  row already saved as "194C" keeps showing "194C — Contractor /
+   *  Sub-contractor" as its selected value, but that option is never OFFERED
+   *  when adding a new row or changing a different one. When deducteeType is
+   *  passed (the deductee-row Select, not the challan-level default-section
+   *  one — a challan isn't tied to one deductee's type), 194C(a)/194C(b)
+   *  come back with `disabled` set on whichever side doesn't apply, so the
+   *  user physically cannot pick the wrong sub-section. */
+  const sectionOptionsFor = (currentCode: string | null | undefined, deducteeType?: string | null) => {
+    const base = (!currentCode || sectionOptions.some(o => o.value === currentCode))
+      ? sectionOptions
+      : (() => {
+          const match = rateMaster.find(r => r.section_code === currentCode);
+          return match ? [{ value: match.section_code, label: sectionDropdownLabel(match) }, ...sectionOptions] : sectionOptions;
+        })();
+    if (deducteeType === undefined) return base.map(o => ({ ...o, disabled: false }));
+    return base.map(o => ({
+      ...o,
+      disabled: (o.value === "194C(a)" && is194CaDisabledFor(deducteeType))
+        || (o.value === "194C(b)" && is194CbDisabledFor(deducteeType)),
+    }));
+  };
 
   // Quarter-wise usage breakdown helper (Issue 7B)
   const getQuarterWiseUsage = (challanId: string) => {
@@ -3329,7 +3369,7 @@ export function TdsDataEntry({
                                             <Select value={d.section_code || ""} onValueChange={v => updateDeducteeField(d.id, "section_code", v)}>
                                               <SelectTrigger className="h-7 text-xs w-[160px]"><SelectValue placeholder="Select" /></SelectTrigger>
                                               <SelectContent>
-                                                {sectionOptions.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                                                {sectionOptionsFor(d.section_code, d.deductee_type).map(o => <SelectItem key={o.value} value={o.value} disabled={o.disabled}>{o.label}</SelectItem>)}
                                               </SelectContent>
                                             </Select>
                                           )}
@@ -3695,7 +3735,7 @@ export function TdsDataEntry({
                   <SelectTrigger><SelectValue placeholder="Select" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">— None —</SelectItem>
-                    {sectionOptions.map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
+                    {sectionOptionsFor(challanForm.section_code).map(o => <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>

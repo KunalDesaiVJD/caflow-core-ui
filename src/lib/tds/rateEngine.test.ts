@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, computeChallanOverApplied, computeChallanPooled, getRateForSection, type RateEntry } from "./rateEngine";
+import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, computeChallanOverApplied, computeChallanPooled, getRateForSection, isSupersededSectionCode, is194CaDisabledFor, is194CbDisabledFor, type RateEntry } from "./rateEngine";
 
 /**
  * Regression: TdsDataEntry.tsx's "Unconsumed Amount" (and the underlying
@@ -319,5 +319,72 @@ describe("computeChallanPooled — cross-utilization between TDS, Interest, and 
     expect(r.effectiveApplied).toBe(5300);
     expect(r.overApplied).toBe(true);
     expect(r.unconsumed).toBe(0);
+  });
+});
+
+describe("isSupersededSectionCode — the plain code once its (a)/(b) siblings exist", () => {
+  const rateMaster: RateEntry[] = [
+    { section_code: "194C", nature_of_payment: "Contractor / Sub-contractor", rate_individual: 1, rate_company: 2, rate_no_pan: 20, threshold_individual: 30000, threshold_company: 30000, effective_from: "2025-04-01", effective_to: null },
+    { section_code: "194C(a)", nature_of_payment: "Contractor / Sub-contractor - Individual/HUF", rate_individual: 1, rate_company: 1, rate_no_pan: 20, threshold_individual: 30000, threshold_company: 30000, effective_from: "2026-04-01", effective_to: null },
+    { section_code: "194C(b)", nature_of_payment: "Contractor / Sub-contractor - Others", rate_individual: 2, rate_company: 2, rate_no_pan: 20, threshold_individual: 30000, threshold_company: 30000, effective_from: "2026-04-01", effective_to: null },
+    { section_code: "194J", nature_of_payment: "Professional/Technical", rate_individual: 10, rate_company: 10, rate_no_pan: 20, threshold_individual: 50000, threshold_company: 50000, effective_from: "2025-04-01", effective_to: null },
+  ];
+
+  it("flags the plain code once its (a)/(b) siblings exist in the same set", () => {
+    expect(isSupersededSectionCode("194C", rateMaster)).toBe(true);
+  });
+
+  it("does not flag a plain code with no bifurcated siblings", () => {
+    expect(isSupersededSectionCode("194J", rateMaster)).toBe(false);
+  });
+
+  it("never flags an (a)/(b) code itself — a suffixed code can't be 'superseded' by itself", () => {
+    expect(isSupersededSectionCode("194C(a)", rateMaster)).toBe(false);
+    expect(isSupersededSectionCode("194C(b)", rateMaster)).toBe(false);
+  });
+});
+
+/**
+ * 194C(a) (Individual/HUF, 1%) vs 194C(b) (Others, 2%) must be mutually
+ * exclusive by deductee type in the UI — the real-world incident this closes
+ * is a Ltd company entered under 194C(a), deducting at 1% instead of 2%.
+ */
+describe("is194CaDisabledFor / is194CbDisabledFor — 194C(a)/(b) mutual exclusivity by deductee type", () => {
+  it("disables 194C(a) for a Company — the real-world bug", () => {
+    expect(is194CaDisabledFor("Company")).toBe(true);
+  });
+
+  it("disables 194C(a) for Firm/LLP/Trust/AOP too — none of those are Individual/HUF either", () => {
+    for (const type of ["Firm", "LLP", "Trust", "AOP"]) expect(is194CaDisabledFor(type)).toBe(true);
+  });
+
+  it("keeps 194C(a) enabled for Individual and HUF", () => {
+    expect(is194CaDisabledFor("Individual")).toBe(false);
+    expect(is194CaDisabledFor("HUF")).toBe(false);
+  });
+
+  it("disables 194C(b) for Individual or HUF", () => {
+    expect(is194CbDisabledFor("Individual")).toBe(true);
+    expect(is194CbDisabledFor("HUF")).toBe(true);
+  });
+
+  it("keeps 194C(b) enabled for Company/Firm/LLP/Trust/AOP", () => {
+    for (const type of ["Company", "Firm", "LLP", "Trust", "AOP"]) expect(is194CbDisabledFor(type)).toBe(false);
+  });
+
+  it("'Non-Company' — the government's own Form 26Q status code — stays eligible for BOTH, disabled by neither", () => {
+    // Ambiguous at this app's data-model level (could be a genuine Individual/
+    // HUF, or a non-individual non-company) — 344 live rows rely on it
+    // staying eligible for 194C(a) specifically; blocking it would be the
+    // exact regression the original getRateForSection fix deliberately avoided.
+    expect(is194CaDisabledFor("Non-Company")).toBe(false);
+    expect(is194CbDisabledFor("Non-Company")).toBe(false);
+  });
+
+  it("neither side is disabled when the type is not yet known", () => {
+    expect(is194CaDisabledFor(null)).toBe(false);
+    expect(is194CaDisabledFor(undefined)).toBe(false);
+    expect(is194CbDisabledFor(null)).toBe(false);
+    expect(is194CbDisabledFor(undefined)).toBe(false);
   });
 });
