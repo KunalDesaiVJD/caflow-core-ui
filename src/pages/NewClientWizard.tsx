@@ -1537,6 +1537,7 @@ const NewClientWizard = () => {
               warnings={crossStepWarnings}
               onGoToStep={(idx) => setStep(idx)}
               firmId={loadedClientFirmId || effectiveFirmId || undefined}
+              clientId={isEditMode ? clientId : undefined}
             />
           )}
           {currentStepDef?.id === "audit" && (

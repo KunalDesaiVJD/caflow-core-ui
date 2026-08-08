@@ -19,6 +19,7 @@ import {
 import { AlertTriangle, Info, Eye, EyeOff, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { DEFAULT_TDS_START_FY, DEFAULT_TDS_START_QUARTER, getQuarterPeriodNumber } from "@/lib/tdsQuarter";
+import { TdsReminderSettingsDialog } from "@/components/tds/TdsReminderSettingsDialog";
 
 /* ───── Types ───── */
 
@@ -142,10 +143,15 @@ interface Props {
   onGoToStep?: (stepIndex: number) => void;
   /** Override firm_id for loading service categories (used when superadmin edits a client) */
   firmId?: string;
+  /** The real client id — undefined until the wizard's first save (edit mode
+   *  only). Gates the Reminder Settings button the same way Portal Login
+   *  Credentials is gated on cfg.id: reminders are keyed by client_id, so
+   *  there is nothing to configure for a client that doesn't exist yet. */
+  clientId?: string;
 }
 
 export const StepServiceBilling = ({
-  data, onChange, errors, gstins, tanNumber, workGroupType, warnings, onGoToStep, firmId: propFirmId,
+  data, onChange, errors, gstins, tanNumber, workGroupType, warnings, onGoToStep, firmId: propFirmId, clientId,
 }: Props) => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -489,6 +495,17 @@ export const StepServiceBilling = ({
                 {cfg.credentials_updated_at && ` Last updated ${new Date(cfg.credentials_updated_at).toLocaleDateString("en-IN")}.`}
               </p>
             </>
+          )}
+        </div>
+
+        {/* TDS Data Reminders — client_id-keyed, same gate as Portal Login
+            Credentials above: nothing to configure before the client exists. */}
+        <div className="pt-3 border-t border-border space-y-2">
+          <Label className="text-xs font-medium">Email Reminders</Label>
+          {!clientId ? (
+            <p className="text-[11px] text-muted-foreground">Save this client first to configure data reminders.</p>
+          ) : (
+            <TdsReminderSettingsDialog clientId={clientId} />
           )}
         </div>
       </div>

@@ -40,6 +40,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { enqueueConfirmation } from "@/lib/tdsReminders";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null; deleted_at?: string | null;
@@ -1559,6 +1560,24 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
       if (updatePayload.preparer_id) await logAuditEntry(filing.id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
       if (updatePayload.checker_id) await logAuditEntry(filing.id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
       if (updatePayload.default_reason) await logAuditEntry(filing.id, "DEFAULT_REASON_SET", null, updatePayload.default_reason, "Marked Processed with Default");
+      // Filing-confirmation email — fires once, on FIRST arrival at Filed/NIL
+      // (never on a later Processed transition, which isn't a new filing
+      // event). Best-effort and non-blocking: enqueueConfirmation never
+      // throws, and the DB's own unique index makes a second call for the
+      // same client/form/FY/quarter a safe no-op.
+      if (newStatus === "Filed" || newStatus === "NIL") {
+        void enqueueConfirmation({
+          clientId: filing.client_id,
+          formType: (filing.tds_forms && filing.tds_forms[0]) || "26Q",
+          financialYear: filing.financial_year,
+          quarter: filing.quarter,
+          ackNo: filing.acknowledgment_number,
+          filedDate: updatePayload.date_of_filing || new Date().toISOString().split("T")[0],
+          filingId: filing.id,
+          isNil: newStatus === "NIL",
+          staffName: actingUserName,
+        });
+      }
       fetchFilings();
       onFilingsChanged?.();
     }
@@ -1618,6 +1637,20 @@ export function TdsFilingsManager({ clients, users, isSuperadmin, resolveFirmId,
           await logAuditEntry(id, "STATUS_CHANGE", filing.work_status, newStatus);
           if (payload.preparer_id) await logAuditEntry(id, "PREPARED_BY_SET", null, actingUserName, "Auto-set: status moved to Reviewed");
           if (payload.checker_id) await logAuditEntry(id, "FILED_BY_SET", null, actingUserName, "Auto-set: status moved to Filed");
+          // Same confirmation trigger as the per-row status change — see its own doc.
+          if (newStatus === "Filed" || newStatus === "NIL") {
+            void enqueueConfirmation({
+              clientId: filing.client_id,
+              formType: (filing.tds_forms && filing.tds_forms[0]) || "26Q",
+              financialYear: filing.financial_year,
+              quarter: filing.quarter,
+              ackNo: filing.acknowledgment_number,
+              filedDate: new Date().toISOString().split("T")[0],
+              filingId: filing.id,
+              isNil: newStatus === "NIL",
+              staffName: actingUserName,
+            });
+          }
         }
       }
       const updated = ids.length - skippedNotReady - skippedNoAck - skippedLocked;

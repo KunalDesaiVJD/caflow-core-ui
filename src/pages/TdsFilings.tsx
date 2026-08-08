@@ -7,7 +7,7 @@ import { format } from "date-fns";
 import {
   LayoutDashboard, PenLine,
   ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw, Repeat2,
-  FileEdit,
+  FileEdit, Mail,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
@@ -19,6 +19,7 @@ import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
 import { TdsOverrides } from "@/components/tds/TdsOverrides";
 import { TdsCorrectionsModule } from "@/components/tds/TdsCorrectionsModule";
 import { TdsPortalLoginButtons } from "@/components/tds/TdsPortalLoginButtons";
+import { TdsEmailSettingsPage } from "@/pages/TdsEmailSettingsPage";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -49,8 +50,9 @@ const NAV_ITEMS = [
   // which records manual verdict overrides during validation.
   { key: "corrections",label: "Recommendations & Corrections",    icon: FileEdit },
   { key: "rate-master",label: "Rate Master",    icon: Settings },
+  { key: "email-settings", label: "Email Settings", icon: Mail },
   // Reports sits last — everything above it is data entry/compliance
-  // workflow (Dashboard through Rate Master); Reports is the read-only
+  // workflow (Dashboard through Email Settings); Reports is the read-only
   // reporting layer over all of it.
   { key: "reports",    label: "Reports",        icon: BarChart3 },
 ] as const;
@@ -601,6 +603,7 @@ const TdsFilings = () => {
 
           {activeSection === "reports" && <TdsReports clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
           {activeSection === "rate-master" && <TdsRateMaster resolveFirmId={resolveFirmId} isSuperadmin={isSuperadmin} />}
+          {activeSection === "email-settings" && <TdsEmailSettingsPage />}
 
           {/* ── Audit & Overrides — Audit Log + Overrides in one tab ────────── */}
           {activeSection === "activity" && (
