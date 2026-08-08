@@ -58,24 +58,41 @@ export function isSupersededSectionCode(code: string, rateMaster: RateEntry[]): 
  * rate, and it happened for real (see getRateForSection's
  * sectionRestrictedToIndividual guard, pinned against a return that got
  * 194C(a) @ 1% on a Ltd company). "Company" — and, by the same statutory
- * logic, Firm/LLP/Trust/AOP — can never be Individual/HUF, so 194C(a) is
- * disabled for those. Deliberately NOT "Non-Company": that's the
- * government's own Form 26Q status code (Genius import maps status "02" to
- * it) and this app's pre-existing, correct stand-in for the Individual/HUF
- * rate — 344 live rows depend on it staying eligible for 194C(a). It's an
- * ambiguous bucket at this app's data-model level (could be a genuine
- * Individual/HUF, or a non-individual non-company), so it's left eligible
- * for BOTH sides — only a definite, known type disables either one.
+ * logic, every other definite non-Individual/HUF constitution PAN_4TH_CHAR_MAP
+ * can produce (Firm/LLP, AOP, Trust, BOI, Local Authority, AJP, Government) —
+ * can never be Individual/HUF, so 194C(a) is disabled for those. Deliberately
+ * NOT "Non-Company": that's the government's own Form 26Q status code
+ * (Genius import maps status "02" to it) and this app's pre-existing, correct
+ * stand-in for the Individual/HUF rate — 344 live rows depend on it staying
+ * eligible for 194C(a). It's an ambiguous bucket at this app's data-model
+ * level (could be a genuine Individual/HUF, or a non-individual
+ * non-company), so it's left eligible for BOTH sides — only a definite,
+ * known type disables either one.
  */
-const NON_INDIVIDUAL_194C_TYPES = new Set(["Company", "Firm", "LLP", "Trust", "AOP"]);
+const NON_INDIVIDUAL_194C_TYPES = new Set([
+  "Company", "Firm", "Firm/LLP", "LLP", "Trust", "AOP", "BOI",
+  "Local Authority", "AJP", "Government",
+]);
 export const is194CaDisabledFor = (deducteeType: string | null | undefined): boolean =>
   !!deducteeType && NON_INDIVIDUAL_194C_TYPES.has(deducteeType);
 export const is194CbDisabledFor = (deducteeType: string | null | undefined): boolean =>
   isIndividualRateType(deducteeType ?? null);
 
+/**
+ * The 4th character of a PAN encodes the holder's statutory constitution
+ * (CBDT's own PAN structure, not app-specific) — this must stay in sync with
+ * the same mapping baked into the "Deductee Type" column of the downloadable
+ * Excel template (see TDS_Data_Entry_Simple_Template.xlsx's Instructions
+ * sheet). "L" is Local Authority, NOT LLP — an LLP's 4th character is "F",
+ * the same code Firms use, because CBDT treats Firm and LLP as one PAN
+ * constitution ("Firm/LLP" here rather than a bare "Firm" to make that
+ * explicit). Previously missing "B"/"J"/"G" entries meant a PAN with one of
+ * those 4th characters resolved deductee_type to nothing at all.
+ */
 export const PAN_4TH_CHAR_MAP: Record<string, string> = {
-  P: "Individual", H: "HUF", C: "Company", F: "Firm",
-  L: "LLP", T: "Trust", A: "AOP",
+  P: "Individual", H: "HUF", C: "Company", F: "Firm/LLP",
+  A: "AOP", T: "Trust", B: "BOI", L: "Local Authority",
+  J: "AJP", G: "Government",
 };
 
 export const isValidPan = (pan: string): boolean => /^[A-Z]{5}[0-9]{4}[A-Z]$/.test(pan.toUpperCase());

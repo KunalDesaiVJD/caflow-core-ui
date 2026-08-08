@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, computeChallanOverApplied, computeChallanPooled, getRateForSection, isSupersededSectionCode, is194CaDisabledFor, is194CbDisabledFor, type RateEntry } from "./rateEngine";
+import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, computeChallanOverApplied, computeChallanPooled, getRateForSection, isSupersededSectionCode, is194CaDisabledFor, is194CbDisabledFor, PAN_4TH_CHAR_MAP, type RateEntry } from "./rateEngine";
 
 /**
  * Regression: TdsDataEntry.tsx's "Unconsumed Amount" (and the underlying
@@ -354,8 +354,10 @@ describe("is194CaDisabledFor / is194CbDisabledFor — 194C(a)/(b) mutual exclusi
     expect(is194CaDisabledFor("Company")).toBe(true);
   });
 
-  it("disables 194C(a) for Firm/LLP/Trust/AOP too — none of those are Individual/HUF either", () => {
-    for (const type of ["Firm", "LLP", "Trust", "AOP"]) expect(is194CaDisabledFor(type)).toBe(true);
+  it("disables 194C(a) for every other definite non-Individual/HUF constitution too", () => {
+    for (const type of ["Firm", "Firm/LLP", "LLP", "Trust", "AOP", "BOI", "Local Authority", "AJP", "Government"]) {
+      expect(is194CaDisabledFor(type)).toBe(true);
+    }
   });
 
   it("keeps 194C(a) enabled for Individual and HUF", () => {
@@ -386,5 +388,39 @@ describe("is194CaDisabledFor / is194CbDisabledFor — 194C(a)/(b) mutual exclusi
     expect(is194CaDisabledFor(undefined)).toBe(false);
     expect(is194CbDisabledFor(null)).toBe(false);
     expect(is194CbDisabledFor(undefined)).toBe(false);
+  });
+});
+
+/**
+ * All 10 CBDT-defined PAN 4th-character constitutions must resolve to a
+ * deductee type — a missing entry silently left deductee_type unset (the
+ * real-world "B" bug report), and "L" was wrongly mapped to "LLP" instead of
+ * Local Authority (an LLP's actual 4th character is "F", shared with Firm).
+ */
+describe("PAN_4TH_CHAR_MAP — all 10 CBDT PAN constitution codes", () => {
+  it("maps every official 4th-character code to its correct constitution", () => {
+    expect(PAN_4TH_CHAR_MAP).toEqual({
+      P: "Individual", C: "Company", H: "HUF", F: "Firm/LLP",
+      A: "AOP", T: "Trust", B: "BOI", L: "Local Authority",
+      J: "AJP", G: "Government",
+    });
+  });
+
+  it("'L' is Local Authority, never LLP", () => {
+    expect(PAN_4TH_CHAR_MAP.L).toBe("Local Authority");
+    expect(PAN_4TH_CHAR_MAP.L).not.toBe("LLP");
+  });
+
+  it("'B' (Body of Individuals) resolves instead of being silently missing", () => {
+    expect(PAN_4TH_CHAR_MAP.B).toBe("BOI");
+  });
+
+  it("'F' covers both Firm and LLP, since CBDT gives them the same PAN code", () => {
+    expect(PAN_4TH_CHAR_MAP.F).toBe("Firm/LLP");
+  });
+
+  it("'J' (Artificial Juridical Person) and 'G' (Government) resolve instead of being missing", () => {
+    expect(PAN_4TH_CHAR_MAP.J).toBe("AJP");
+    expect(PAN_4TH_CHAR_MAP.G).toBe("Government");
   });
 });
