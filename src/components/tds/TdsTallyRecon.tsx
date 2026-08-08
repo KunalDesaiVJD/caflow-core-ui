@@ -672,8 +672,8 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const dualLedgerMode = salaryLedgerRows.length > 0;
     let audited: TallyReconRow[]; let surplusLedger: TallyRow[];
     if (dualLedgerMode) {
-      const tdsResult = reconcileTallyFull(parties, tdsLedgerRows, null, maps);
-      const salaryResult = reconcileTallyFull(partiesForAmount, salaryLedgerRows, null, maps);
+      const tdsResult = reconcileTallyFull(parties, tdsLedgerRows, null, maps, selForm);
+      const salaryResult = reconcileTallyFull(partiesForAmount, salaryLedgerRows, null, maps, selForm);
       audited = mergeDualLedgerResults(tdsResult.rows, salaryResult.rows);
       // Ledger-side surplus from EACH pass is tagged by which ledger it came
       // from (rather than the generic single-ledger "Office Data Not Found")
@@ -684,7 +684,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       // re-tagging needed, just concatenate both passes' leftovers.
       surplusLedger = [...tdsResult.surplusLedger, ...salaryResult.surplusLedger];
     } else {
-      const single = reconcileTallyFull(parties, tally, null, maps);
+      const single = reconcileTallyFull(parties, tally, null, maps, selForm);
       audited = single.rows; surplusLedger = single.surplusLedger;
     }
     // preserve overrides keyed by office_deductee_id

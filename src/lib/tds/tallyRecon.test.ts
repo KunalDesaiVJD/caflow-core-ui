@@ -119,3 +119,74 @@ describe("reconcileTallyFull — split-entry fold reason never claims a false 'e
     for (const r of folded) expect(r.reason).toContain("exactly.");
   });
 });
+
+/**
+ * Real client pattern (M J Surgical): a "Provision Ledger" print interleaves
+ * several TDS sections in ONE file, including "UNPAID TDS-26/27-SALARY"
+ * (canonicalises to "192") alongside genuine 26Q sections (194A/194C/194J/
+ * 194Q). Importing it into a 26Q filing stored the Salary rows there too, and
+ * since a 26Q return's own Office Data never has a Section 192 record (a
+ * salaried employee is never entered as 26Q Office Data), every one of those
+ * rows surfaced as "Office Data Not Found" — a wall of false mismatches for
+ * deductions that are 24Q's business, not 26Q's. `formType` scopes the ledger
+ * rows a reconciliation run is even allowed to consider claiming/surplus-ing.
+ */
+describe("reconcileTallyFull — formType scopes ledger rows to their own return (192 is 24Q-only)", () => {
+  const salaryRow = (party: string, credit: number): TallyRow => ({
+    row_index: 1, date: "30-04-2026", iso: "2026-04-30", party,
+    debit: null, credit, vch_no: null, vch_type: null, section: "192",
+  });
+  const nonSalaryRow = (party: string, credit: number): TallyRow => ({
+    row_index: 2, date: "30-04-2026", iso: "2026-04-30", party,
+    debit: null, credit, vch_no: null, vch_type: null, section: "194C",
+  });
+  // A real 26Q filing's own office data — no Section 192 records, ever.
+  const OFFICE_26Q: OfficeTxn[] = [
+    { deductee_id: "v1", name: "Bhavin Engineers", date_iso: "2026-04-30", amount: 78992, tds: 790, section: "194C", pan: "AMQPP5814M" },
+  ];
+  // A real 24Q filing's own office data — no non-192 records, ever.
+  const OFFICE_24Q: OfficeTxn[] = [
+    { deductee_id: "e1", name: "Alsi Nirav Balochiya", date_iso: "2026-04-30", amount: null, tds: 9280, section: "192", pan: "DQHPK5501A" },
+  ];
+
+  it("without formType (omitted), a Salary row still pollutes a 26Q run as surplus — pre-existing behaviour, unchanged", () => {
+    const tally = [nonSalaryRow("Bhavin Engineers", 790), salaryRow("Alsi Nirav Balochiya", 9280)];
+    const { surplusLedger } = reconcileTallyFull(OFFICE_26Q, tally, null);
+    expect(surplusLedger.map((r) => r.party)).toContain("Alsi Nirav Balochiya");
+  });
+
+  it("formType 'ONLY': a Salary (192) row never becomes 26Q surplus — the real M J Surgical bug", () => {
+    const tally = [nonSalaryRow("Bhavin Engineers", 790), salaryRow("Alsi Nirav Balochiya", 9280)];
+    const { rows, surplusLedger } = reconcileTallyFull(OFFICE_26Q, tally, null, {}, "26Q");
+    expect(surplusLedger.map((r) => r.party)).not.toContain("Alsi Nirav Balochiya");
+    // the genuine 194C row still reconciles normally — scoping isn't a blanket suppression
+    expect(rows.find((r) => r.office_name === "Bhavin Engineers")?.result).toBe("Matched");
+  });
+
+  it("formType '24Q': a non-Salary (194C) row never becomes 24Q surplus — the symmetric case", () => {
+    const tally = [salaryRow("Alsi Nirav Balochiya", 9280), nonSalaryRow("Bhavin Engineers", 790)];
+    const { rows, surplusLedger } = reconcileTallyFull(OFFICE_24Q, tally, null, {}, "24Q");
+    expect(surplusLedger.map((r) => r.party)).not.toContain("Bhavin Engineers");
+    expect(rows.find((r) => r.office_name === "Alsi Nirav Balochiya")?.result).toBe("Matched");
+  });
+
+  it("192A/192B/192C sub-codes are still recognised as Salary, not just the bare '192'", () => {
+    const tally = [
+      { ...salaryRow("Director A", 5000), section: "192B" },
+      nonSalaryRow("Bhavin Engineers", 790),
+    ];
+    const { surplusLedger } = reconcileTallyFull(OFFICE_26Q, tally, null, {}, "26Q");
+    expect(surplusLedger.map((r) => r.party)).not.toContain("Director A");
+  });
+
+  it("a row with NO identifiable section is never excluded on absence of evidence", () => {
+    const unknownSectionRow: TallyRow = {
+      row_index: 3, date: "30-04-2026", iso: "2026-04-30", party: "Mystery Vendor",
+      debit: null, credit: 500, vch_no: null, vch_type: null, section: null,
+    };
+    // No office record at all to claim it — the only way it can end up as
+    // surplus is if the scoping filter LEFT it in `scoped` to begin with.
+    const { surplusLedger } = reconcileTallyFull([], [unknownSectionRow], null, {}, "26Q");
+    expect(surplusLedger.map((r) => r.party)).toContain("Mystery Vendor");
+  });
+});

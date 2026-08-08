@@ -239,8 +239,11 @@ const days = (n: number) => `${n} day${n === 1 ? "" : "s"}`;
  * site always passes null; sections ride per row) but is kept for the tests and as
  * the fallback for rows imported before per-row section existed.
  */
-export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSection: string | null, partyMap: PartyMap = {}): TallyReconRow[] {
-  return reconcileTallyFull(office, tally, ledgerSection, partyMap).rows;
+export function reconcileTally(
+  office: OfficeTxn[], tally: TallyRow[], ledgerSection: string | null, partyMap: PartyMap = {},
+  formType?: string | null,
+): TallyReconRow[] {
+  return reconcileTallyFull(office, tally, ledgerSection, partyMap, formType).rows;
 }
 
 /**
@@ -254,11 +257,42 @@ export function reconcileTally(office: OfficeTxn[], tally: TallyRow[], ledgerSec
  */
 export function reconcileTallyFull(
   office: OfficeTxn[], tally: TallyRow[], ledgerSection: string | null, partyMap: PartyMap = {},
+  // The FORM this reconciliation run is FOR ("24Q"/"26Q"/"27Q"/"27EQ") —
+  // optional and, when omitted, changes nothing (every existing caller/test
+  // keeps behaving exactly as before this parameter existed).
+  //
+  // Section 192 (Salary, and its 192A/192B/192C sub-codes) is 24Q's ALONE;
+  // every other TDS section is 26Q/27Q/27EQ's. A single uploaded ledger PDF
+  // can legitimately interleave both — a client's combined "Provision
+  // Ledger" prints "UNPAID TDS-26/27-194 C" and "UNPAID TDS-26/27-SALARY" as
+  // two blocks of ONE file (see expertPdf.ts's own doc on the real M J
+  // Surgical print this was built against) — so importing it into a 26Q
+  // filing stored the Salary block's rows there too. Nothing before this
+  // parameter existed ever excluded them from THIS filing's matching: each
+  // one was a real credit with no 26Q office record able to claim it (a
+  // salaried employee is never entered as 26Q Office Data), so every single
+  // one surfaced as "Office Data Not Found" — a wall of false mismatches for
+  // deductions that simply aren't this return's business. A row whose
+  // section cannot be identified at all is deliberately left IN SCOPE (never
+  // excluded on absence of evidence) — same fallback philosophy as
+  // `sectionScoped` below.
+  formType?: string | null,
 ): { rows: TallyReconRow[]; surplusLedger: TallyRow[] } {
+  const isSalaryCanon = (s: string | null) => !!s && /^192[ABC]?$/.test(s);
+  const inScopeForForm = (t: TallyRow): boolean => {
+    const sec = canonicalSection(t.section) ?? canonicalSection(ledgerSection);
+    if (!sec) return true;
+    return formType === "24Q" ? isSalaryCanon(sec) : !isSalaryCanon(sec);
+  };
+  const scoped = formType ? tally.filter(inScopeForForm) : tally;
+
   // Each ledger entry may be claimed by at most ONE office record. The engine keys on
   // POSITION IN THIS ARRAY, never row_index — see AsgLedger.pos for the bug that
-  // caused (row_index is unique only within its own file).
-  const credits = tally
+  // caused (row_index is unique only within its own file). `scoped`, not the raw
+  // `tally` param, is that array from here on — rowAt below must read from the
+  // SAME array credits/k was built from, or a position would resolve to the
+  // wrong (unfiltered-index) row.
+  const credits = scoped
     .map((t, i) => ({ t, k: i }))
     .filter((c) => c.t.credit != null && c.t.credit !== 0);
 
@@ -303,7 +337,7 @@ export function reconcileTallyFull(
   const asgLedger: AsgLedger[] = credits.map(({ t, k }) => ({
     pos: k, party: t.party, iso: t.iso, credit: t.credit, section: sectionOf(t),
   }));
-  const rowAt = (pos: number) => tally[pos];
+  const rowAt = (pos: number) => scoped[pos];
 
   const { outcomes, surplus, basisFor } = assign(asgOffice, asgLedger, partyMap);
 
