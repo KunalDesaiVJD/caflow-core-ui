@@ -98,6 +98,32 @@ describe("nameCompare — spelling variants vs genuinely different names", () =>
     expect(nameCompare("Jayant Kantilal Jagani", "Jayant Jagani Kantilal")).toBe("match");
     expect(nameCompare("KONE ELEVATOR INDIA PRIVATE LIMITED", "Kone Elevator India Pvt Ltd")).toBe("match");
   });
+
+  // Same real client (Accurate PMS Pvt Ltd), the SAME bug one abbreviation rule
+  // wider: "SHEETALBEN DUSHYANTKUMAR PRAJAPATI" — an employee whose own
+  // patronymic middle name happens to start with "DUSHYANT" — auto-matched
+  // against "Dushyant Prajapati - Salary", a DIFFERENT PERSON's (a director's)
+  // own ledger row, because tokenRule's compound-suffix rule ("DUSHYANT" +
+  // "KUMAR" ↔ "DUSHYANTKUMAR") can't tell whose name "DUSHYANTKUMAR" actually
+  // is — it only checks that one string is the other's prefix plus a
+  // recognised suffix. SHEETALBEN, her own real first name, sat unmatched and
+  // unconsidered, exactly like HIRAL did for the bare-initial case above. Put
+  // her office record into genuine competition with Dushyant's own for his
+  // own ledger row, surfacing BOTH as "Multiple Possible Matches" in Stage 3
+  // even though TDS had already matched cleanly for both on the separate
+  // TDS-liability ledger, and a human reads the two names as obviously
+  // different people.
+  it("never lets an unrelated person's own patronymic middle name stand in for a different first name via the compound-suffix rule", () => {
+    expect(nameCompare("SHEETALBEN DUSHYANTKUMAR PRAJAPATI", "Dushyant Prajapati - Salary")).not.toBe("match");
+    expect(nameCompare("DUSHYANT JASHVANTBHAI PRAJAPATI", "Dushyant Prajapati - Salary")).toBe("match");   // his own real name, unaffected
+    expect(nameCompare("SHEETALBEN DUSHYANTKUMAR PRAJAPATI", "Sheetalben D Prajapati")).toBe("match");     // her own real name (initial for her own middle name), unaffected
+  });
+
+  it("keeps the compound-suffix rule for the SAME person's own name written two ways", () => {
+    // The rule's actual purpose — no stray token on either side, so nothing objects.
+    expect(nameCompare("RAMESH PATEL", "Rameshbhai Patel")).toBe("match");
+    expect(nameCompare("KIRIT PANCHABHAI SUKHADIA", "Kirit Sukhadia")).toBe("match");
+  });
 });
 
 describe("reconcileTally — identical entries pair 1:1 without asking the user", () => {
@@ -339,6 +365,38 @@ describe("reconcileTallyFull — ledger row index must resolve to POS, never the
     expect(byId.o2.tally_party).toBe("Dushyant Prajapati - Exp.");
     expect(byId.o3.tally_party).toBe("Pinnag Rathod - Exp.");
     expect(byId.o4.tally_party).toBe("Jatinbhai Patel - Exp.");
+  });
+});
+
+/**
+ * Same real client (Accurate PMS Pvt Ltd), reproduced at the full
+ * reconcileTallyFull level: a 24Q dual-ledger Salary/Remuneration pass, where
+ * office.tds/section are forced null and only office.amount (Taxable Income)
+ * is left to distinguish candidates (see TdsTallyRecon.tsx's runAudit — this
+ * mirrors that shape directly). "SHEETALBEN DUSHYANTKUMAR PRAJAPATI" and
+ * "DUSHYANT JASHVANTBHAI PRAJAPATI" are two unrelated people whose ledger
+ * credits never land on the SAME amount as each other's office record, so
+ * nothing here is a genuine ambiguity — before the compound-suffix fix above,
+ * the name tier alone put them in competition for "Dushyant Prajapati -
+ * Salary" and both surfaced as "Multiple Possible Matches" in production.
+ */
+describe("reconcileTallyFull — a director's own ledger row is never contested by an unrelated employee's patronymic middle name", () => {
+  const office: OfficeTxn[] = [
+    { deductee_id: "dush", name: "DUSHYANT JASHVANTBHAI PRAJAPATI", date_iso: "2026-05-31", amount: 213000, tds: null, section: null },
+    { deductee_id: "sheetal", name: "SHEETALBEN DUSHYANTKUMAR PRAJAPATI", date_iso: "2026-05-31", amount: 123000, tds: null, section: null },
+  ];
+  const tally: TallyRow[] = [
+    { row_index: 0, date: "31-May-26", iso: "2026-05-31", party: "Dushyant Prajapati - Salary", debit: null, credit: 248500, vch_no: "225", vch_type: "Journal", section: "192" },
+    { row_index: 1, date: "31-May-26", iso: "2026-05-31", party: "Sheetalben D Prajapati", debit: null, credit: 158400, vch_no: "230", vch_type: "Journal", section: "192" },
+  ];
+
+  it("pairs each office record with its OWN ledger row, never 'Multiple Possible Matches'", () => {
+    const { rows } = reconcileTallyFull(office, tally, null, {}, "24Q");
+    const byId = Object.fromEntries(rows.map((r) => [r.office_deductee_id, r]));
+    expect(byId.dush.result).not.toBe("Multiple Possible Matches");
+    expect(byId.dush.tally_party).toBe("Dushyant Prajapati - Salary");
+    expect(byId.sheetal.result).not.toBe("Multiple Possible Matches");
+    expect(byId.sheetal.tally_party).toBe("Sheetalben D Prajapati");
   });
 });
 

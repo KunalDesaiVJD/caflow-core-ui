@@ -221,42 +221,73 @@ function alignTokens(ta: string[], tb: string[], compat: (x: string, y: string) 
   const matchedShort = new Set(pairs.map((p) => p.s));
   const unmatchedShort = short.filter((s) => !matchedShort.has(s));
   const unmatchedLong = long.filter((_, i) => !used.has(i));
-  return { hits, fullHits, union, accepted, weakestRule, pairs, aIsShort, unmatchedShort, unmatchedLong };
+  // The array's OWN first token — an Indian name's given name, after
+  // NAME_STOPWORDS/titles are already stripped above. Exposed so a caller can
+  // tell "this side's own given name never took part in the match" (a real
+  // identity gap) apart from "a LATER middle/patronymic name got dropped"
+  // (routine — see hasStrayAbbrevLeftover's own doc for why that distinction
+  // is load-bearing).
+  return { hits, fullHits, union, accepted, weakestRule, pairs, aIsShort, unmatchedShort, unmatchedLong, firstShort: short[0], firstLong: long[0] };
 }
 
 const hasLegalStatusLeftover = (r: { unmatchedShort: string[]; unmatchedLong: string[] }): boolean =>
   r.unmatchedShort.some((w) => NAME_LEGAL_STATUS_TOKENS.has(w)) || r.unmatchedLong.some((w) => NAME_LEGAL_STATUS_TOKENS.has(w));
 
 /**
- * A BARE INITIAL BELONGS TO WHOEVER'S NAME IT'S STANDING NEXT TO, NOT TO
- * WHOEVER ELSE HAPPENS TO SHARE ITS FIRST LETTER.
+ * AN ABBREVIATION BELONGS TO WHOEVER'S NAME IT'S STANDING NEXT TO, NOT TO
+ * WHOEVER ELSE HAPPENS TO SHARE ITS PREFIX.
  *
- * tokenRule()'s initial rule ("S" ↔ "SURESHBHAI") exists for the SAME person's
- * own name written two ways. It has no way to see WHOSE initial "S" actually
- * is — it just checks the first letter — so nothing stops it aligning "J"
- * from "Hiral J Patel" against an entirely unrelated "Jatin Patel": PATEL
+ * tokenRule()'s rule-2 pairings — a bare initial ("S" ↔ "SURESHBHAI") or a
+ * compound Indian suffix ("RAMESH" ↔ "RAMESHBHAI") — exist for the SAME
+ * person's own name written two ways. Neither has any way to see WHOSE name
+ * the abbreviated token actually belongs to — an initial only checks the
+ * first letter, and the compound-suffix rule only checks that one string is
+ * the other's prefix plus a recognised suffix like "KUMAR"/"BHAI"/"BEN".
+ *
+ * The bare-initial case bit for real: nothing stopped it aligning "J" from
+ * "Hiral J Patel" against an entirely unrelated "Jatin Patel" — PATEL
  * matches PATEL, J "matches" JATIN by first letter, and the alignment
  * accepts on two hits — while HIRAL, this ledger row's own real, distinctive
- * first name, sits unmatched and unconsidered. Two people who share a
- * surname (PATEL, SHAH, MEHTA... ) and where one happens to have a middle
- * initial starting with the other's first letter is not a coincidence this
- * engine may treat as identity — a real 24Q filing paired Jatin Patel's
- * office record to Hiral J Patel's Tally voucher this exact way, reporting
- * a fabricated ₹62,230 "Taxable Income Amount Mismatch" against a total
- * stranger's salary.
+ * first name, sits unmatched and unconsidered. A real 24Q filing paired
+ * Jatin Patel's office record to Hiral J Patel's Tally voucher this exact
+ * way, reporting a fabricated ₹62,230 "Taxable Income Amount Mismatch"
+ * against a total stranger's salary.
  *
- * Scoped narrowly: only fires when an initial rule pairing (one token of the
- * pair is a single letter) was load-bearing for acceptance AND a REAL name
- * token (not a suffix/stopword/legal-status word this file already treats as
- * decoration) is left stranded on that SAME side. A harmless unconsumed
- * initial sitting beside an otherwise-complete match (e.g. "Hiral Patel" vs
- * "Hiral J Patel", where HIRAL and PATEL already align exactly) never
- * triggers this — the initial there did no work, so nothing here objects to it.
+ * The compound-suffix case bit the SAME way, just one name-token wider: a
+ * real 24Q client has both "DUSHYANT JASHVANTBHAI PRAJAPATI" (a director)
+ * and "SHEETALBEN DUSHYANTKUMAR PRAJAPATI" (an unrelated employee whose OWN
+ * patronymic middle name happens to start with "DUSHYANT"). Sheetalben's
+ * office record aligned against Dushyant's own ledger row "Dushyant
+ * Prajapati" — DUSHYANTKUMAR "matches" DUSHYANT via the compound-suffix
+ * rule, PRAJAPATI matches PRAJAPATI — while SHEETALBEN, her own real first
+ * name, sits unmatched. That put her in genuine competition with Dushyant's
+ * own record for his own ledger row, surfacing both as "Multiple Possible
+ * Matches" even though a human reads the two names as obviously different
+ * people and TDS already matched cleanly on the separate TDS-liability
+ * ledger for both.
+ *
+ * Scoped narrowly, to the array's OWN GIVEN NAME specifically — not any
+ * dropped token. A real Indian name routinely omits a MIDDLE (patronymic)
+ * token on one side ("KETANKUMAR HARIBHAI PARMAR" vs "Ketan Parmar", where
+ * HARIBHAI is simply absent from the shorter form) — that is a completely
+ * routine abbreviation, not a stolen identity, and must stay accepted. The
+ * tell is POSITION: in every real false-match this closed, it was the
+ * array's own FIRST token (its given name — the identity-bearing one) that
+ * went unmatched while a LATER token did the rule-2 work instead (HIRAL
+ * unmatched while J "matched" JATIN; SHEETALBEN unmatched while
+ * DUSHYANTKUMAR "matched" DUSHYANT). A dropped MIDDLE name never triggers
+ * this, because the given name itself was already accounted for by an exact
+ * or rule-2 pairing of its own.
  */
 const isRealNameToken = (w: string) => w.length >= 3 && !NAME_COMPOUND_SUFFIXES.has(w) && !NAME_STOPWORDS.has(w) && !NAME_LEGAL_STATUS_TOKENS.has(w);
-const hasStrayInitialLeftover = (r: { pairs: { s: string; l: string; rule: number }[]; unmatchedShort: string[]; unmatchedLong: string[] }): boolean =>
-  r.pairs.some((p) => (p.s.length === 1 && r.unmatchedShort.some(isRealNameToken))
-    || (p.l.length === 1 && r.unmatchedLong.some(isRealNameToken)));
+const hasStrayAbbrevLeftover = (r: {
+  pairs: { s: string; l: string; rule: number }[]; unmatchedShort: string[]; unmatchedLong: string[];
+  firstShort: string | undefined; firstLong: string | undefined;
+}): boolean =>
+  r.pairs.some((p) => p.rule === 2 && (
+    (r.firstShort != null && isRealNameToken(r.firstShort) && r.unmatchedShort.includes(r.firstShort))
+    || (r.firstLong != null && isRealNameToken(r.firstLong) && r.unmatchedLong.includes(r.firstLong))
+  ));
 
 /**
  * How strongly two names are related, as a TIER of decreasing evidence.
@@ -346,7 +377,7 @@ export function nameEvidence(a: string | null | undefined, b: string | null | un
   // clear this exact acceptance clause ("KULBIR SINGH" absorbing "- LABOUR" is fine;
   // "RAMESH PATEL" absorbing "HUF" is a DIFFERENT ASSESSEE). Demoted below instead of
   // accepted here — same treatment as any other unrescuable remainder.
-  if (base.accepted && !hasLegalStatusLeftover(base) && !hasStrayInitialLeftover(base)) {
+  if (base.accepted && !hasLegalStatusLeftover(base) && !hasStrayAbbrevLeftover(base)) {
     // Same tokens in a different order is a PERMUTATION, not a weakening — it is
     // tier 1 however the greedy pass happened to align them. Anything else leaned on
     // an abbreviation or dropped a token, which is tier 2 at best.
