@@ -17,7 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, List, FileText, ChevronLeft, ChevronRight, RefreshCw, BadgeCheck, Layers, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
+import { Users, Eye, Pencil, Plus, Search, Trash2, FolderOpen, MoreVertical, Download, X, Tags, LayoutGrid, FileText, ChevronLeft, ChevronRight, RefreshCw, BadgeCheck, Layers, ChevronDown, ChevronUp, BarChart3 } from "lucide-react";
 import * as XLSX from "xlsx";
 import { CustomerSyncDialog } from "@/components/client-sync/CustomerSyncDialog";
 import { ClassificationByFYView } from "@/components/clients/ClassificationByFYView";
@@ -68,7 +68,7 @@ interface GroupInfo {
 const ENTITY_TYPES = ["Individual", "Proprietorship", "Partnership", "LLP", "Private Ltd", "Public Ltd", "HUF", "Trust", "AOP", "BOI"];
 const PAGE_SIZE = 20;
 
-type ViewMode = "it" | "table" | "card" | "classify" | "grouped" | "services";
+type ViewMode = "it" | "card" | "classify" | "grouped" | "services";
 
 const VIEW_KEY = "caflow_client_view";
 
@@ -222,7 +222,13 @@ const Clients = () => {
   const [archivedSearch, setArchivedSearch] = useState("");
   const [deleteClient, setDeleteClient] = useState<Client | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>(() => (localStorage.getItem(VIEW_KEY) as ViewMode) || "it");
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    // "table" view was removed — fall back to "it" for anyone whose
+    // localStorage still has that stale value from before this change.
+    const stored = localStorage.getItem(VIEW_KEY);
+    const valid: ViewMode[] = ["it", "card", "classify", "grouped", "services"];
+    return valid.includes(stored as ViewMode) ? (stored as ViewMode) : "it";
+  });
   const [currentPage, setCurrentPage] = useState(1);
 
   const [groups, setGroups] = useState<GroupInfo[]>([]);
@@ -687,9 +693,6 @@ const Clients = () => {
             <button onClick={() => setViewMode("it")} className={`px-2.5 py-1.5 text-xs font-medium rounded-l-md transition-colors ${viewMode === "it" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               <FileText className="h-3.5 w-3.5" />
             </button>
-            <button onClick={() => setViewMode("table")} className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${viewMode === "table" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
-              <List className="h-3.5 w-3.5" />
-            </button>
             <button onClick={() => setViewMode("card")} className={`px-2.5 py-1.5 text-xs font-medium transition-colors ${viewMode === "card" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted"}`}>
               <LayoutGrid className="h-3.5 w-3.5" />
             </button>
@@ -1151,61 +1154,6 @@ const Clients = () => {
                             <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
                             {canEdit && <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>}
                             <DropdownMenuItem onClick={() => setManageGroupsClient(client)}><Tags className="h-4 w-4 mr-2" /> Groups</DropdownMenuItem>
-                            {canDelete && <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-          <PaginationControls />
-        </>
-      ) : viewMode === "table" ? (
-        /* TABLE VIEW */
-        <>
-          <div className="rounded-md border border-border overflow-auto">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-xs">Name</TableHead>
-                  <TableHead className="text-xs">PAN</TableHead>
-                  <TableHead className="text-xs">Entity Type</TableHead>
-                  {showAllFirms && <TableHead className="text-xs">Firm</TableHead>}
-                  <TableHead className="text-xs">CIN</TableHead>
-                  <TableHead className="text-xs">GSTIN</TableHead>
-                  <TableHead className="text-xs">Groups</TableHead>
-                  <TableHead className="text-xs w-12"></TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {paginatedItems.map(client => {
-                  const clientGroups = clientGroupMap[client.id] || [];
-                  return (
-                    <TableRow key={client.id} className="cursor-pointer hover:bg-muted/50" onClick={() => navigate(`/clients/${client.id}`)}>
-                      <TableCell className="font-medium text-sm">{client.name || "Unnamed"}</TableCell>
-                      <TableCell className="text-xs font-mono">{client.pan || "—"}</TableCell>
-                      <TableCell className="text-xs">{client.entity_type || "—"}</TableCell>
-                      {showAllFirms && <TableCell className="text-xs text-muted-foreground">{client.firm_name || "—"}</TableCell>}
-                      <TableCell className="text-xs font-mono">{client.cin || "—"}</TableCell>
-                      <TableCell className="text-xs font-mono">{(client.gstin || []).join(", ") || "—"}</TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {clientGroups.length > 0 ? clientGroups.map(g => (
-                            <Badge key={g.id} variant="outline" className="text-[10px]" style={{ borderColor: g.color || "#6B7280", color: g.color || "#6B7280" }}>{g.name}</Badge>
-                          )) : <span className="text-[10px] text-muted-foreground">—</span>}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild onClick={e => e.stopPropagation()}>
-                            <Button variant="ghost" size="icon" className="h-7 w-7"><MoreVertical className="h-4 w-4" /></Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" onClick={e => e.stopPropagation()}>
-                            <DropdownMenuItem onClick={() => navigate(`/clients/${client.id}`)}><Eye className="h-4 w-4 mr-2" /> View</DropdownMenuItem>
-                            {canEdit && <DropdownMenuItem onClick={() => navigate(`/clients/edit/${client.id}`)}><Pencil className="h-4 w-4 mr-2" /> Edit</DropdownMenuItem>}
                             {canDelete && <DropdownMenuItem className="text-destructive" onClick={() => setDeleteClient(client)}><Trash2 className="h-4 w-4 mr-2" /> Archive Client</DropdownMenuItem>}
                           </DropdownMenuContent>
                         </DropdownMenu>
