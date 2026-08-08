@@ -150,9 +150,18 @@ export function TdsChallanCsiValidation({ filing, selClient, selForm, clientTan,
 
   // Office side: tds_challans for THIS filing directly — never the
   // correction-aware ledger. See this file's own header doc.
+  //
+  // Archived challans are excluded, matching every other "office total"
+  // computation in the TDS module (getChallanBreakdownAll,
+  // fetchCarryForwardChallans, getEffectiveClientLedger) — an archived
+  // challan is deliberately put away and must not count toward validations,
+  // per the Archive feature's own stated purpose. Omitting this filter here
+  // would silently re-include a challan the user archived specifically to
+  // stop it affecting checks like this one.
   const fetchOfficeTotals = useCallback(async () => {
     if (!filingId) return { count: 0, total: 0 };
-    const { data } = await supabase.from("tds_challans").select("total_challan_amount").eq("filing_id", filingId);
+    const { data } = await supabase.from("tds_challans")
+      .select("total_challan_amount").eq("filing_id", filingId).eq("is_archived", false);
     const rows = data || [];
     return { count: rows.length, total: rows.reduce((s: number, r: any) => s + (r.total_challan_amount || 0), 0) };
   }, [filingId]);
