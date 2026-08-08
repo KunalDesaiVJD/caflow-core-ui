@@ -80,6 +80,9 @@ export function crossCheckVendor(
     for (const t of led.txns) {
       const c = classifyTxn(t);
       if (t.credit > cfg.toleranceRupees) {
+        // Mirrors engine.ts: a provision is not an invoice from the supplier,
+        // so it never originates a bill under the default 'ignore' profile.
+        if (c.type === 'PROVISION' && treatmentOf(c.type, cfg) === 'ignore') continue;
         const ratio = cfg.disallowanceBase === 'taxableValue'
           ? splitGst(t.credit, t, declaredGstRate).taxableRatio
           : 1;

@@ -92,6 +92,14 @@ export interface Msme43bConfig {
   advanceTreatment: Treatment;
   /** journal set-off / contra / netting against another ledger */
   contraTreatment: Treatment;
+  /**
+   * Book provisions / accruals (e.g. "Provision for expenses" credited at
+   * year-end without a supplier invoice behind it). 'ignore' (default): a
+   * provision does not originate a bill s.43B(h) can test, and its reversal
+   * is not a real settlement either — both sides are excluded from the base
+   * entirely rather than treated as a payable or a payment.
+   */
+  provisionTreatment: Treatment;
   /** first assessment year the section applies from (guards against pre-FY24 runs) */
   firstApplicableFy: string; // "2023-24"
 }
@@ -111,6 +119,7 @@ export const DEFAULT_CONFIG: Msme43bConfig = {
   roundOffTreatment: 'nonCash',
   advanceTreatment: 'cashTiming',
   contraTreatment: 'cashTiming',
+  provisionTreatment: 'ignore',
   firstApplicableFy: '2023-24',
 };
 
@@ -151,6 +160,15 @@ export const SETTLEMENT_SYNONYMS: Array<{ type: SettlementType; keywords: string
   {
     type: 'CREDIT_NOTE',
     keywords: ['credit note', 'cr note', 'c/note', 'sales return', 'return inward'],
+  },
+  {
+    type: 'PROVISION',
+    // Deliberately narrow: "provision" alone is specific enough that it should
+    // not also match ordinary purchase/expense narrations, which is the risk
+    // with broader words like "accrued"/"accrual" (also used for routine
+    // accrued-expense purchases). Tested BEFORE 'PURCHASE' so a credit-side
+    // "Provision for expenses" entry is excluded rather than counted as a bill.
+    keywords: ['provision', 'prov.', 'provisional entry', 'provision for exp'],
   },
   {
     type: 'PURCHASE',
@@ -294,6 +312,7 @@ export function treatmentOf(type: SettlementType, cfg: Msme43bConfig): Treatment
     case 'CREDIT_NOTE': return cfg.notesTreatment;
     case 'ADVANCE_ADJ': return cfg.advanceTreatment;
     case 'CONTRA_JV': return cfg.contraTreatment;
+    case 'PROVISION': return cfg.provisionTreatment;
     default: return 'cashTiming'; // PAYMENT and anything unclassified
   }
 }

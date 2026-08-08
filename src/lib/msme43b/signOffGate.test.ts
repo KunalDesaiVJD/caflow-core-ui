@@ -124,7 +124,7 @@ describe('deriveBlockers is a pure function of the vendor results', () => {
     cyReconciled: true, fyReconciled: true,
     cyClosing: 0, fyOpening: 0, continuityOk: true,
     bills: [], totalDisallowedCY: 0, totalAllowedFY: 0, totalStillOutstanding: 0,
-    warnings: [], reviewCount: 0, gstExcluded: 0, gstUnidentifiedValue: 0,
+    warnings: [], reviewCount: 0, gstExcluded: 0, gstUnidentifiedValue: 0, provisionExcluded: 0,
     ...over,
   });
 

@@ -106,6 +106,35 @@ describe('43B(h) two-year engine', () => {
     expect(r.continuityOk).toBe(false);
   });
 
+  it('excludes a book provision from the disallowance base — it is not an invoice', () => {
+    // A real bill (100000, paid on time → 0 disallowance) plus a year-end
+    // "Provision for expenses" credit (20000) that was never an actual invoice
+    // from the supplier. The provision must not become a bill the section can
+    // disallow, and its reversal (if narrated as one) must not consume a real
+    // settlement either.
+    const cy = ledger('2025-26', 0, [
+      txn('2026-03-20', 'Purchase A/c', 100000, 0),
+      txn('2026-03-31', 'Provision for expenses', 20000, 0),
+    ]);
+    const fy = ledger('2026-27', 100000, [txn('2026-04-10', 'HDFC Bank', 0, 100000)]);
+    const r = analyzeVendor(cy, fy);
+    expect(r.totalDisallowedCY).toBe(0);
+    expect(r.provisionExcluded).toBe(20000);
+    expect(r.warnings.some((w) => /book provisions?\/accruals? excluded/i.test(w))).toBe(true);
+    expect(r.verified).not.toBe(false); // the independent cross-check must agree
+  });
+
+  it('does not let a provision-only credit inflate the payable cross-checked between engines', () => {
+    // Same scenario as above, isolated to confirm the primary engine and the
+    // independent cross-check (crosscheck.ts) agree the provision is excluded
+    // — if only one engine excluded it, this vendor would fail sign-off with a
+    // spurious "failed the cross-check" blocker.
+    const cy = ledger('2025-26', 0, [txn('2026-03-31', 'Provision for expenses', 20000, 0)]);
+    const r = analyzeVendor(cy, null);
+    expect(r.totalDisallowedCY).toBe(0);
+    expect(r.verified).not.toBe(false);
+  });
+
   it('buildReport pairs CY/FY by vendor name and aggregates', () => {
     const cy = ledger('2025-26', 0, [txn('2026-03-20', 'Purchase A/c', 100000, 0)]);
     const fy = ledger('2026-27', 100000, [txn('2026-06-20', 'HDFC Bank', 0, 100000)]);

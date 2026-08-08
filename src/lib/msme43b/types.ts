@@ -34,6 +34,8 @@ export type SettlementType =
   | 'CONTRA_JV'       // journal set-off / netting / contra
   | 'ADVANCE_ADJ'     // advance adjusted against bill
   | 'OTHER_CREDIT'    // a credit to party that is not a purchase (rare)
+  | 'PROVISION'       // book provision / accrual — not an actual bill, and its
+                       // reversal is not a real settlement (credit or debit)
   | 'UNKNOWN';
 
 /** A contra breakup line under a Tally "as per details" voucher. */
@@ -224,6 +226,13 @@ export interface VendorResult {
   // ── GST ──
   /** total GST excluded from the disallowance across this vendor's bills */
   gstExcluded: number;
+  /**
+   * Gross value of book provisions/accruals excluded from this vendor's
+   * disallowance base — a provision is not an actual bill from a registered
+   * supplier, so s.43B(h) has nothing to test it against (see PROVISION in
+   * SettlementType and config.provisionTreatment).
+   */
+  provisionExcluded: number;
   /**
    * Gross value of bills where the GST split could NOT be established — their
    * disallowance is stated on gross and is therefore overstated by the tax.
