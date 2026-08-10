@@ -27,7 +27,14 @@ describe("parseChallanPaymentHistoryPages", () => {
   it("extracts serial, date, and amount from a challan row (BSR+serial CIN convention)", () => {
     const page = challanRow(700, { bsr: "0123456", serial: "347", date: "07-07-2026", amount: 10523.79 });
     const rows = parseChallanPaymentHistoryPages([page]);
-    expect(rows).toEqual([{ serialNo: "347", depositDate: "2026-07-07", amount: 10523.79 }]);
+    expect(rows).toEqual([{ serialNo: "347", depositDate: "2026-07-07", amount: 10523.79, bsrCode: "0123456" }]);
+  });
+
+  it("extracts the BSR code as its own field, not folded into the serial number", () => {
+    const page = challanRow(700, { bsr: "0180002", serial: "4880", date: "06-06-2026", amount: 124881 });
+    const rows = parseChallanPaymentHistoryPages([page]);
+    expect(rows[0].bsrCode).toBe("0180002");
+    expect(rows[0].serialNo).toBe("4880");
   });
 
   it("parses a dd-mmm-yyyy date", () => {

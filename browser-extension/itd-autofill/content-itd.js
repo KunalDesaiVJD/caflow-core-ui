@@ -232,16 +232,26 @@ function showBanner(text, kind) {
  * TdsChallanDownloadValidation.tsx's "Download Challan" button and relayed
  * here via background.js's RELAY_CHALLAN_DOWNLOAD.
  *
- * STILL PARTIALLY UNVERIFIED (2026-08-10): the e-File -> e-Pay Tax ->
- * Income Tax Act, 2025 -> Payment History click-path was confirmed correct
- * from a real screenshot of the live page. The "Actions" step, however, was
- * confirmed WRONG the same way: Payment History has no page-level "Actions"
- * button at all — each ROW carries its own small icon-only "..." control
- * (rightmost column, header literally says "Action"), which opens a
- * per-transaction menu with the real "Download" item inside it. That is
- * exactly the shape this file's own class doc already flagged as the likely
- * failure mode ("If Payment History instead exposes a per-ROW Actions
- * control ... this first draft won't find it").
+ * STILL PARTIALLY UNVERIFIED (2026-08-10, second pass): the e-File -> e-Pay
+ * Tax step is confirmed from a real screenshot. What follows it is NOT one
+ * click straight to Payment History, as first assumed — e-Pay Tax lands on
+ * an intermediate ACT-SELECTION page ("e-Pay Tax -2025": Income-tax Act,
+ * 2025 vs 1961, 2025 pre-selected) that only advances once its own
+ * "Continue" button is clicked; the earlier version clicked the Act radio
+ * label (harmless, already selected) but never Continue, so it silently sat
+ * on that page forever and never reached Payment History no matter how long
+ * it polled. Confirmed from a second real screenshot showing that exact
+ * page. Continue lands on the real e-Pay Tax dashboard (Saved Drafts /
+ * Generated Challans / Payment History / CSI File tabs), where the
+ * Payment History tab click was already correct.
+ *
+ * The "Actions" step was ALSO confirmed wrong the same way: Payment History
+ * has no page-level "Actions" button at all — each ROW carries its own
+ * small icon-only "..." control (rightmost column, header literally says
+ * "Action"), which opens a per-transaction menu with the real "Download"
+ * item inside it. That is exactly the shape this file's own class doc
+ * already flagged as the likely failure mode ("If Payment History instead
+ * exposes a per-ROW Actions control ... this first draft won't find it").
  *
  * findRowActionTrigger() below targets that per-row control instead of a
  * page-level button. Its exact selector (icon-only control in a table row's
@@ -325,10 +335,24 @@ function findRowActionTrigger() {
 async function runChallanDownload(fyStartDate, fyEndDate) {
   showBanner("CAFlow: attempting to fetch this quarter's challans from Payment History…", "info");
 
+  // Click path CONFIRMED (2026-08-10) from real screenshots of the live
+  // portal, replacing the earlier guessed sequence:
+  //   e-File (top nav, opens a dropdown) -> e-Pay Tax (item in that dropdown)
+  //   -> lands on "e-Pay Tax -2025", an ACT-SELECTION page ("Select
+  //      Applicable Income Tax Act": 2025 vs 1961, 2025 pre-selected) that
+  //      does NOT navigate on its own -> Continue (separate button) is what
+  //      actually advances past it
+  //   -> lands on the real e-Pay Tax dashboard (Saved Drafts / Generated
+  //      Challans / Payment History / CSI File tabs) -> Payment History tab
+  // The previous version clicked the "Income Tax Act, 2025" radio label
+  // (harmless — it's already selected) but never clicked Continue, so it
+  // never actually left the Act-selection page — Payment History was never
+  // reachable no matter how long it polled for it.
   const steps = [
     { label: "e-File", pattern: /^e-file$/i },
     { label: "e-Pay Tax", pattern: /^e-pay tax$/i },
     { label: "Income Tax Act, 2025", pattern: /income tax act,?\s*2025/i },
+    { label: "Continue", pattern: /^continue$/i },
     { label: "Payment History", pattern: /payment history/i },
   ];
   for (const step of steps) {

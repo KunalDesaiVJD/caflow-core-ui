@@ -27,6 +27,15 @@ control (`findRowActionTrigger` in `content-itd.js`). Its exact selector is
 a reasoned best guess from the screenshot, not something clicked live yet —
 still watch the on-page banner and report back what it says if it stops.
 
+**v0.3.2 (2026-08-10, same day)**: e-Pay Tax does NOT go straight to
+Payment History — it lands on an intermediate "e-Pay Tax -2025" page
+("Select Applicable Income Tax Act", 2025 pre-selected) that only advances
+once its own **Continue** button is clicked. The extension previously
+clicked the Act radio label (harmless, already selected) but never
+Continue, so it silently sat on that page and never reached Payment History
+at all. Fixed from a second real screenshot showing that exact page — the
+step list now clicks Continue before looking for Payment History.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser

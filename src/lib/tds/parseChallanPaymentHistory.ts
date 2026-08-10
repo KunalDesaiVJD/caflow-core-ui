@@ -29,6 +29,14 @@ export interface PortalChallanRow {
   serialNo: string;
   depositDate: string; // normalized to yyyy-mm-dd, matching tds_challans.deposit_date's own format
   amount: number;
+  // null when the row's BSR code couldn't be isolated (the digit-token
+  // fallback path below doesn't determine one) — never treated as a
+  // mismatch by matchChallanDownload.ts in that case, only compared when
+  // actually present. See this file's own top-of-file "first pass" note:
+  // whether the real PDF exposes BSR as its own reliably-extractable token
+  // (vs. folded into a combined CIN) is not yet confirmed against a real
+  // downloaded export.
+  bsrCode: string | null;
 }
 
 const ROW_BAND_TOL = 3;
@@ -83,18 +91,23 @@ function extractRow(row: PdfTextItem[]): PortalChallanRow | null {
   // or part of an amount — whatever's left is treated as the serial no.
   const bsrIdx = tokens.findIndex((t) => BSR_RE.test(t) && t.length === 7);
   let serialNo: string | null = null;
+  let bsrCode: string | null = null;
   if (bsrIdx !== -1 && tokens[bsrIdx + 1] && /^\d{1,5}$/.test(tokens[bsrIdx + 1])) {
     serialNo = tokens[bsrIdx + 1];
+    bsrCode = tokens[bsrIdx];
   } else {
     const amountStrs = new Set(amounts.map((m) => m[1]));
     const digitTokens = tokens.filter(
       (t) => /^\d{1,5}$/.test(t) && !amountStrs.has(t) && t !== dateMatch[1] && t !== dateMatch[3],
     );
     serialNo = digitTokens.length ? digitTokens[digitTokens.length - 1] : null;
+    // No BSR determined on this fallback path — the row didn't contain a
+    // recognisable standalone 7-digit BSR token, so bsrCode stays null
+    // rather than guessing.
   }
   if (!serialNo) return null;
 
-  return { serialNo, depositDate, amount };
+  return { serialNo, depositDate, amount, bsrCode };
 }
 
 /** Pure page-level parse — takes pdfjs's own positioned text runs directly,
