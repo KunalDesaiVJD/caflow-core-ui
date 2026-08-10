@@ -10,14 +10,22 @@ Message. **You click the final Continue yourself** to actually sign in.
 **v0.3.0** also attempts, on request from Stage 2's "Download Challan"
 button (TdsChallanDownloadValidation.tsx), the post-login click path
 e-File → e-Pay Tax → Income Tax Act, 2025 → Payment History → Actions →
-Download for the filing's selected quarter. **This part is a first draft,
-unverified against the live portal** — see `content-itd.js`'s own
-`runChallanDownload` doc. It never fails silently: watch for its on-page
-banner and finish manually from wherever it stops if a selector doesn't
-match. Whatever it reaches, the app-side hand-off always ends at CAFlow's
-own "Upload Downloaded Report" file picker — a content script cannot read a
-file the OS just saved to Downloads, so that step stays manual regardless of
-how well the click automation ends up working.
+Download for the filing's selected quarter. It never fails silently: watch
+for its on-page banner and finish manually from wherever it stops if a
+selector doesn't match. Whatever it reaches, the app-side hand-off always
+ends at CAFlow's own "Upload Downloaded Report" file picker — a content
+script cannot read a file the OS just saved to Downloads, so that step stays
+manual regardless of how well the click automation ends up working.
+
+**v0.3.1 (2026-08-10)**: the e-File → e-Pay Tax → Income Tax Act, 2025 →
+Payment History steps were confirmed correct against a real screenshot of
+the live page. The "Actions" step was confirmed WRONG the same way —
+Payment History has no page-level "Actions" button; each row has its own
+small icon-only control (rightmost column, header says "Action") that opens
+a per-transaction menu. `runChallanDownload` now targets that per-row
+control (`findRowActionTrigger` in `content-itd.js`). Its exact selector is
+a reasoned best guess from the screenshot, not something clicked live yet —
+still watch the on-page banner and report back what it says if it stops.
 
 ## What this is NOT
 

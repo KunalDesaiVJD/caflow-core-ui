@@ -232,17 +232,27 @@ function showBanner(text, kind) {
  * TdsChallanDownloadValidation.tsx's "Download Challan" button and relayed
  * here via background.js's RELAY_CHALLAN_DOWNLOAD.
  *
- * FIRST DRAFT, UNVERIFIED (2026-08-08): unlike the login flow above — whose
- * selectors were confirmed live against a real account — none of the
- * selectors/text patterns below have been checked against the actual
- * Payment History page, because no authenticated portal session was
- * available while writing this. This is expected to need at least one live
- * iteration: load the extension, log into ITD, click Download Challan in
- * CAFlow, and see which step's banner fires — then adjust the text pattern
- * for that specific step. Every step below follows the same fail-loud rule
- * as the login flow: if a step can't find what it's looking for, it shows a
- * banner naming exactly which step got stuck and STOPS, rather than
- * guessing or clicking something that might be wrong.
+ * STILL PARTIALLY UNVERIFIED (2026-08-10): the e-File -> e-Pay Tax ->
+ * Income Tax Act, 2025 -> Payment History click-path was confirmed correct
+ * from a real screenshot of the live page. The "Actions" step, however, was
+ * confirmed WRONG the same way: Payment History has no page-level "Actions"
+ * button at all — each ROW carries its own small icon-only "..." control
+ * (rightmost column, header literally says "Action"), which opens a
+ * per-transaction menu with the real "Download" item inside it. That is
+ * exactly the shape this file's own class doc already flagged as the likely
+ * failure mode ("If Payment History instead exposes a per-ROW Actions
+ * control ... this first draft won't find it").
+ *
+ * findRowActionTrigger() below targets that per-row control instead of a
+ * page-level button. Its exact selector (icon-only control in a table row's
+ * last cell) is a reasoned best guess from the screenshot, not something
+ * confirmed by clicking it live — a stable, authenticated portal session
+ * was not available while writing this fix either. If it still can't find
+ * the control, or finds it but "Download" doesn't appear afterward, it
+ * fails loud with a banner exactly like every other step here — finish
+ * manually (Payment History -> the row's own Action icon -> Download) and
+ * report back what the banner said so the next iteration can target the
+ * right thing.
  *
  * Whatever this reaches, the actual hand-off into CAFlow always ends at a
  * manual "Upload Downloaded Report" step in the app — a content script
@@ -272,6 +282,42 @@ function findClickableByText(pattern) {
     // clicking the wrong (much bigger) ancestor.
     if (text.length > 60) continue;
     if (pattern.test(text)) return el;
+  }
+  return null;
+}
+
+/**
+ * Payment History's per-row "Action" control — an icon-only button (a
+ * three-dot "more options" glyph, per the real page's own "Action" column
+ * header) in the LAST cell of a transaction table row, not a page-level
+ * text button. Targeted by shape rather than text, since an icon-only
+ * control has none: a small (<=32px either side, generous but excludes a
+ * full download/actions bar), clickable element that is the LAST
+ * interactive/leaf node in its row, and itself carries no meaningful text
+ * (an icon glyph or empty label, not a sentence). Picks the FIRST such row
+ * top-to-bottom — good enough for a first pass; a more precise "the row
+ * matching this quarter's date/amount" match is a refinement for once this
+ * is confirmed to find the control at all.
+ */
+function findRowActionTrigger() {
+  const rows = document.querySelectorAll("tr, [role='row']");
+  for (const row of rows) {
+    if (row.offsetParent === null) continue;
+    const cells = row.querySelectorAll("td, [role='cell'], [role='gridcell']");
+    if (!cells.length) continue;
+    const lastCell = cells[cells.length - 1];
+    const candidates = lastCell.querySelectorAll("button, [role='button'], a, svg, [class*='icon' i]");
+    for (const el of candidates) {
+      if (el.offsetParent === null) continue;
+      const rect = el.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0 || rect.width > 32 || rect.height > 32) continue;
+      const text = (el.textContent || "").trim();
+      if (text.length > 3) continue; // an icon control has no sentence-length label
+      // Prefer the clickable ANCESTOR (button/role=button) over a bare <svg>
+      // glyph inside it, since the glyph itself often isn't the click target.
+      const clickable = el.closest("button, [role='button'], a") || el;
+      return clickable;
+    }
   }
   return null;
 }
@@ -310,14 +356,13 @@ async function runChallanDownload(fyStartDate, fyEndDate) {
     if (dateInputs && dateInputs[1]) setNativeValue(dateInputs[1], fyEndDate);
   }
 
-  // Page-level "Actions" control, then "Download" inside whatever it opens
-  // (dropdown/menu). If Payment History instead exposes a per-ROW Actions
-  // control (one per challan, not one for the whole page), this first draft
-  // won't find it — that's exactly the kind of thing the live-iteration
-  // loop is for.
-  const actionsEl = await waitFor(() => findClickableByText(/^actions$/i), 8_000);
+  // Payment History's real "Action" control is per-ROW and icon-only (no
+  // text) — see this function's own header doc. Try that first; fall back to
+  // a page-level "Actions" text button in case a different account/layout
+  // genuinely has one, rather than assuming only one shape ever exists.
+  const actionsEl = await waitFor(() => findRowActionTrigger() || findClickableByText(/^actions$/i), 8_000);
   if (!actionsEl) {
-    showBanner('CAFlow: reached Payment History but couldn\'t find "Actions" — please click Actions → Download yourself for this quarter.', "info");
+    showBanner('CAFlow: reached Payment History but couldn\'t find the row\'s Action control — please click it yourself (rightmost column) → Download.', "info");
     return;
   }
   actionsEl.click();
