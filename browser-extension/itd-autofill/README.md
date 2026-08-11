@@ -48,6 +48,17 @@ now stored (`chrome.storage.session`) and content-itd.js polls for it
 (up to 5 minutes) so it fires reliably once login is actually done,
 whenever that happens to be.
 
+**v0.3.4 (2026-08-11)**: with the request no longer getting lost, a real
+run confirmed the NEXT stuck point live: it reached e-Pay Tax fine, then
+banner'd "couldn't find Income Tax Act, 2025" and gave up. Root cause:
+`findClickableByText`'s own 60-char cap (there to avoid grabbing an
+oversized container div) very likely excludes this radio's label once its
+adjacent description sentence ("TDS/TCS payments for Tax Year 2026-27 and
+onwards.") is counted as part of the same text node. Dropped the click
+entirely rather than patch the selector — Income-tax Act, 2025 is
+pre-selected by default anyway (confirmed from a real screenshot of this
+page), so the click was always harmless-but-redundant, never load-bearing.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser

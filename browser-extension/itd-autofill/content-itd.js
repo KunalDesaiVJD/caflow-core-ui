@@ -387,14 +387,25 @@ async function runChallanDownload(fyStartDate, fyEndDate) {
   //      actually advances past it
   //   -> lands on the real e-Pay Tax dashboard (Saved Drafts / Generated
   //      Challans / Payment History / CSI File tabs) -> Payment History tab
-  // The previous version clicked the "Income Tax Act, 2025" radio label
-  // (harmless — it's already selected) but never clicked Continue, so it
-  // never actually left the Act-selection page — Payment History was never
-  // reachable no matter how long it polled for it.
+  //
+  // 2026-08-11: DROPPED the "click the 'Income Tax Act, 2025' radio label"
+  // step that sat between e-Pay Tax and Continue. Confirmed failing live —
+  // a real run reached the Dashboard/e-Pay Tax stage fine (login relay
+  // worked) but then banner'd "couldn't find Income Tax Act, 2025" and gave
+  // up. Most likely cause: findClickableByText caps matched text at 60
+  // chars specifically to avoid grabbing an oversized container div (see
+  // its own doc) — but this radio's own label sits right above a full
+  // description sentence ("TDS/TCS payments for Tax Year 2026-27 and
+  // onwards."), and if both live under one text node the combined string
+  // clears 60 chars and the cap silently excludes the only element that
+  // matches the pattern at all. The click was always harmless-but-redundant
+  // anyway (2025 is pre-selected by default, confirmed from a real
+  // screenshot of this exact page) — removing it is strictly safer than
+  // trying to patch the selector to survive a description sentence whose
+  // exact wording isn't confirmed either.
   const steps = [
     { label: "e-File", pattern: /^e-file$/i },
     { label: "e-Pay Tax", pattern: /^e-pay tax$/i },
-    { label: "Income Tax Act, 2025", pattern: /income tax act,?\s*2025/i },
     { label: "Continue", pattern: /^continue$/i },
     { label: "Payment History", pattern: /payment history/i },
   ];
