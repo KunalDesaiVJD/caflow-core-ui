@@ -225,6 +225,22 @@ PDF-upload path used, now fully automatic. Pagination on Payment History is
 UNCONFIRMED — only the currently-visible page's rows are read; flag this if
 a quarter's challan count exceeds what fits on one page.
 
+**v0.4.1 (2026-08-11)**: rebuilt per explicit instruction — the summary
+table's CIN string alone wasn't the plan; each candidate challan's own
+"⋮" → "View Details" page has BSR code, Challan Number, Date of Payment,
+and Amount explicitly labeled (confirmed from a live screenshot of that
+exact page), so this now opens that page per challan instead of parsing
+CIN. Also discovered live that Payment History shows this TAN's ENTIRE
+history (73 pages @ 5 rows in one real account), not scoped to a quarter —
+added a Stage 1 fast summary-table scan (relying on the newest-first sort
+order, confirmed live, to stop scanning once dates fall below the quarter's
+start) so only in-range challans get their detail page opened, capped at 30
+as a safety net regardless. UNVERIFIED FIRST PASS: the per-row "⋮" trigger,
+the "View Details" menu item, the Challan Receipt's labeled-field layout,
+and the "‹ Back" return button are all reasoned from live screenshots, not
+yet clicked through end to end — expect this to need the same live-console
+iteration the navigation steps above needed.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser

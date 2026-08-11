@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "CAFlow — ITD Portal Autofill",
-  "version": "0.4.0",
-  "description": "Fills the Income Tax e-Filing login and confirms the Secure Access Message (stops at the final submit — that click, and CAPTCHA/OTP if one appears, stay manual). Also attempts, on request from CAFlow's Verify on ITD Portal button, the Payment History click-path and reads the challan table directly — no download, no upload.",
+  "version": "0.4.1",
+  "description": "Fills the Income Tax e-Filing login and confirms the Secure Access Message (stops at the final submit — that click, and CAPTCHA/OTP if one appears, stay manual). Also attempts, on request from CAFlow's Verify on ITD Portal button, the Payment History click-path, then opens each in-quarter challan's own View Details page to read its authoritative fields — no download, no upload.",
   "permissions": ["storage"],
   "host_permissions": [
     "https://caflow-core-ui.vercel.app/*",

@@ -295,21 +295,12 @@ function showBanner(text, kind) {
  * already flagged as the likely failure mode ("If Payment History instead
  * exposes a per-ROW Actions control ... this first draft won't find it").
  *
- * findRowActionTrigger() below targets that per-row control instead of a
- * page-level button. Its exact selector (icon-only control in a table row's
- * last cell) is a reasoned best guess from the screenshot, not something
- * confirmed by clicking it live — a stable, authenticated portal session
- * was not available while writing this fix either. If it still can't find
- * the control, or finds it but "Download" doesn't appear afterward, it
- * fails loud with a banner exactly like every other step here — finish
- * manually (Payment History -> the row's own Action icon -> Download) and
- * report back what the banner said so the next iteration can target the
- * right thing.
- *
- * Whatever this reaches, the actual hand-off into CAFlow always ends at a
- * manual "Upload Downloaded Report" step in the app — a content script
- * cannot read a file the OS just saved to Downloads, that's a browser
- * security boundary, not something worth trying to route around.
+ * 2026-08-11: no longer downloads anything at all — findRowMenuTrigger,
+ * openViewDetailsForCin, and scrapeChallanReceiptDetail (further down this
+ * file) read each candidate challan's own "View Details" page directly
+ * instead, per explicit instruction. See runChallanDownload's own inline
+ * doc, right where it switches from navigation into this scraping phase,
+ * for the full account of why and how.
  *
  * Triggered by the poll loop further up this file (search
  * GET_CHALLAN_DOWNLOAD_REQUEST), not a chrome.runtime.onMessage listener —
@@ -374,42 +365,6 @@ function findClickableByText(pattern) {
     if (clickable) return clickable;
   }
   return matches[0];
-}
-
-/**
- * Payment History's per-row "Action" control — an icon-only button (a
- * three-dot "more options" glyph, per the real page's own "Action" column
- * header) in the LAST cell of a transaction table row, not a page-level
- * text button. Targeted by shape rather than text, since an icon-only
- * control has none: a small (<=32px either side, generous but excludes a
- * full download/actions bar), clickable element that is the LAST
- * interactive/leaf node in its row, and itself carries no meaningful text
- * (an icon glyph or empty label, not a sentence). Picks the FIRST such row
- * top-to-bottom — good enough for a first pass; a more precise "the row
- * matching this quarter's date/amount" match is a refinement for once this
- * is confirmed to find the control at all.
- */
-function findRowActionTrigger() {
-  const rows = document.querySelectorAll("tr, [role='row']");
-  for (const row of rows) {
-    if (row.offsetParent === null) continue;
-    const cells = row.querySelectorAll("td, [role='cell'], [role='gridcell']");
-    if (!cells.length) continue;
-    const lastCell = cells[cells.length - 1];
-    const candidates = lastCell.querySelectorAll("button, [role='button'], a, svg, [class*='icon' i]");
-    for (const el of candidates) {
-      if (el.offsetParent === null) continue;
-      const rect = el.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0 || rect.width > 32 || rect.height > 32) continue;
-      const text = (el.textContent || "").trim();
-      if (text.length > 3) continue; // an icon control has no sentence-length label
-      // Prefer the clickable ANCESTOR (button/role=button) over a bare <svg>
-      // glyph inside it, since the glyph itself often isn't the click target.
-      const clickable = el.closest("button, [role='button'], a") || el;
-      return clickable;
-    }
-  }
-  return null;
 }
 
 async function runChallanDownload(fyStartDate, fyEndDate) {
@@ -645,23 +600,67 @@ async function runChallanDownload(fyStartDate, fyEndDate) {
     if (dateInputs && dateInputs[1]) setNativeValue(dateInputs[1], fyEndDate);
   }
 
-  // 2026-08-11: switched from clicking Actions -> Download (which only ever
-  // hands off to CAFlow's manual "Upload Downloaded Report" file input,
-  // since a content script cannot read a file the OS just saved) to reading
-  // the table directly. The user was explicit: no file, no download, just
-  // read what's already rendered and verify it against the office's own
-  // challan entries — see scrapePaymentHistoryTable's own doc for how.
-  const scraped = await waitFor(() => scrapePaymentHistoryTable(), 10_000);
-  if (!scraped || !scraped.rows.length) {
-    showBanner('CAFlow: reached Payment History but couldn\'t read the table — please verify the challans yourself against Data Entry. Details logged to this tab\'s console.', "info");
-    console.log("CAFlow: Payment History table scrape failed —", scraped);
+  // 2026-08-11 (second pass, per explicit instruction): reading only the
+  // summary table's CIN wasn't enough — the user wants each candidate
+  // challan opened via its own "⋮" -> "View Details" (the authoritative
+  // Challan Receipt page: PAN, BSR code, Challan Number, Date of Payment,
+  // Amount — all explicitly labeled, no parsing a packed CIN string needed)
+  // and compared against Data Entry, with a real screen warning on any
+  // mismatch. Payment History shows this TAN's ENTIRE history (confirmed
+  // live: 73 pages @ 5 rows), not scoped to one quarter, so opening every
+  // row's details would be both impractical and pointless — Stage 1 below
+  // scans the summary table (fast, no navigation) to find just this
+  // quarter's rows, relying on the list being sorted newest-first (confirmed
+  // from a live screenshot) to stop scanning as soon as dates fall below the
+  // quarter's start rather than walking all 73 pages. Stage 2 then opens
+  // View Details only for those candidates.
+  const MAX_DETAIL_VIEWS = 30; // safety cap — a full quarter's challans for one TAN should never approach this
+  const MAX_SCAN_PAGES = 40;   // safety cap on Stage 1's page-by-page scan, well under the 73 seen live
+
+  const candidates = await collectQuarterCandidates(fyStartDate, fyEndDate, MAX_SCAN_PAGES);
+  if (candidates.reason) {
+    showBanner(`CAFlow: couldn't read the Payment History table — ${candidates.reason}. Details logged to this tab's console.`, "info");
+    console.log("CAFlow: Stage 1 (summary scan) failed —", candidates);
+    return;
+  }
+  if (!candidates.rows.length) {
+    showBanner(fyStartDate
+      ? "CAFlow: scanned Payment History but found no challans in this quarter's date range — please verify manually if this is unexpected."
+      : "CAFlow: scanned Payment History but found no challans at all.", "info");
     return;
   }
 
-  chrome.runtime.sendMessage({ type: "STORE_CHALLAN_SCRAPE_RESULT", rows: scraped.rows });
-  console.log(`CAFlow: scraped ${scraped.rows.length} challan row(s) from Payment History —`);
-  console.table(scraped.rows);
-  showBanner(`CAFlow: read ${scraped.rows.length} challan(s) from Payment History — switch back to the CAFlow tab, verification results will appear there automatically.`, "success");
+  const toOpen = candidates.rows.slice(0, MAX_DETAIL_VIEWS);
+  if (candidates.rows.length > MAX_DETAIL_VIEWS) {
+    console.log(`CAFlow: found ${candidates.rows.length} candidate challans, opening only the first ${MAX_DETAIL_VIEWS} (safety cap) —`, candidates.rows);
+  }
+
+  const detailed = [];
+  const failedCins = [];
+  for (const cand of toOpen) {
+    const opened = await openViewDetailsForCin(cand.cin);
+    if (!opened) { failedCins.push(cand.cin); continue; }
+    const detail = await waitFor(() => scrapeChallanReceiptDetail(), 6_000);
+    if (detail) detailed.push(detail); else failedCins.push(cand.cin);
+    await returnToPaymentHistory();
+  }
+
+  console.log(`CAFlow: opened View Details for ${detailed.length}/${toOpen.length} candidate challan(s) —`);
+  console.table(detailed);
+  if (failedCins.length) console.log("CAFlow: couldn't open/read View Details for these CINs —", failedCins);
+
+  if (!detailed.length) {
+    showBanner('CAFlow: found candidate challans but couldn\'t open any of their View Details pages — please verify manually. Details logged to this tab\'s console.', "info");
+    return;
+  }
+
+  chrome.runtime.sendMessage({ type: "STORE_CHALLAN_SCRAPE_RESULT", rows: detailed });
+  showBanner(
+    failedCins.length
+      ? `CAFlow: verified ${detailed.length} challan(s), but ${failedCins.length} couldn't be opened — switch back to the CAFlow tab for results. [v${EXTENSION_VERSION}]`
+      : `CAFlow: verified ${detailed.length} challan(s) from Payment History — switch back to the CAFlow tab, results are there automatically. [v${EXTENSION_VERSION}]`,
+    "success",
+  );
 }
 
 const MONTH_ABBR = {
@@ -685,70 +684,215 @@ function normalizePortalDate(raw) {
   return null;
 }
 
-/** CIN convention: BSR Code (7 digits) + Date of Deposit (DDMMYYYY, 8
- *  digits) + Challan Serial No (up to 5 digits), concatenated with no
- *  separator — see parseChallanPaymentHistory.ts's own doc for the same
- *  convention applied to a downloaded PDF. Returns nulls rather than
- *  guessing if the CIN doesn't look like that shape (e.g. it's masked or
- *  formatted differently than expected). */
-function parseCin(cin) {
-  const digitsOnly = (cin || "").replace(/\s+/g, "");
-  if (!/^\d{15,20}$/.test(digitsOnly)) return { bsrCode: null, serialNo: null, cinDate: null };
-  const bsrCode = digitsOnly.slice(0, 7);
-  const dd = digitsOnly.slice(7, 9), mm = digitsOnly.slice(9, 11), yyyy = digitsOnly.slice(11, 15);
-  const serialNo = digitsOnly.slice(15) || null;
-  return { bsrCode, serialNo, cinDate: `${yyyy}-${mm}-${dd}` };
+/**
+ * Finds the Payment History <table> and its header cells' text, by looking
+ * for a header containing "CIN" — the one label confirmed stable across
+ * this portal's own real screenshots — rather than a guessed class name, so
+ * this survives styling/markup changes a class-name selector wouldn't.
+ * Prefers a genuine HTMLTableElement's own `.rows` collection (which always
+ * correctly separates header/body rows regardless of whether the table
+ * actually has explicit <thead>/<tbody> wrapper tags, unlike manually
+ * querying "thead tr" which returns nothing if that wrapper is missing —
+ * confirmed to be exactly what broke the first version of this scraper
+ * live: the table rendered fine, this just failed to find it).
+ */
+function findPaymentHistoryTable() {
+  const candidates = [...document.querySelectorAll("table, [role='table'], [role='grid']")].filter((t) => t.offsetParent !== null);
+  for (const t of candidates) {
+    const allRows = t.rows ? [...t.rows] : [...t.querySelectorAll("[role='row']")];
+    if (!allRows.length) continue;
+    // The header is whichever row's cells include something reading just
+    // "CIN" (loosened from an exact match — a sort icon or extra
+    // whitespace next to the label is plausible and shouldn't break this).
+    for (const headerRow of allRows) {
+      const cells = [...headerRow.querySelectorAll("th, [role='columnheader'], td, [role='cell']")];
+      const texts = cells.map((c) => (c.textContent || "").trim());
+      if (texts.some((c) => /^cin\b/i.test(c) && c.length <= 10)) {
+        return { table: t, allRows, headerRow, headerCells: texts };
+      }
+    }
+  }
+  return null;
 }
 
-/**
- * Reads the Payment History table directly from the DOM — CIN, Amount, and
- * Payment Date per row — instead of downloading anything. Finds the table
- * by its own header row (looking for a "CIN" column, rather than a guessed
- * class name, since that's the one label confirmed stable across this
- * portal's own real screenshots) so this survives styling/markup changes
- * that wouldn't survive a class-name selector.
- *
- * PAGINATION IS UNCONFIRMED (2026-08-11, first pass): no live page with
- * more than one page of Payment History rows was available while writing
- * this. If a "rows per page" control exists nearby, this tries to switch it
- * to its largest option so everything lands on one page; if that doesn't
- * exist or doesn't help, only the CURRENTLY VISIBLE page's rows are
- * returned — expect to extend this with real pagination handling once a
- * multi-page account confirms the control's actual shape.
- */
-function scrapePaymentHistoryTable() {
-  const tables = [...document.querySelectorAll("table, [role='table'], [role='grid']")].filter((t) => t.offsetParent !== null);
-  let table = null;
-  let headerCells = [];
-  for (const t of tables) {
-    const headerRow = t.querySelector("thead tr, [role='row']");
-    if (!headerRow) continue;
-    const cells = [...headerRow.querySelectorAll("th, [role='columnheader'], td")].map((c) => (c.textContent || "").trim());
-    if (cells.some((c) => /^cin$/i.test(c))) { table = t; headerCells = cells; break; }
-  }
-  if (!table) return { rows: [], reason: "no table with a CIN column found" };
+function columnIndexes(headerCells) {
+  return {
+    cinIdx: headerCells.findIndex((c) => /^cin\b/i.test(c) && c.length <= 10),
+    amountIdx: headerCells.findIndex((c) => /amount/i.test(c)),
+    dateIdx: headerCells.findIndex((c) => /payment date/i.test(c)),
+  };
+}
 
-  const cinIdx = headerCells.findIndex((c) => /^cin$/i.test(c));
-  const amountIdx = headerCells.findIndex((c) => /amount/i.test(c));
-  const dateIdx = headerCells.findIndex((c) => /payment date/i.test(c));
+/** Reads whichever page of Payment History is CURRENTLY visible — CIN,
+ *  Amount, and Payment Date per row — without navigating anywhere. Used by
+ *  collectQuarterCandidates below to scan page by page. */
+function readVisibleSummaryRows() {
+  const found = findPaymentHistoryTable();
+  if (!found) return { rows: [], reason: "no table with a CIN column found" };
+  const { allRows, headerRow, headerCells } = found;
+  const { cinIdx, amountIdx, dateIdx } = columnIndexes(headerCells);
   if (cinIdx === -1 || amountIdx === -1 || dateIdx === -1) {
     return { rows: [], reason: `couldn't find all needed columns among: ${headerCells.join(" | ")}` };
   }
-
-  const bodyRows = [...table.querySelectorAll("tbody tr, [role='row']")].filter((r) => r !== table.querySelector("thead tr"));
   const rows = [];
-  for (const r of bodyRows) {
+  for (const r of allRows) {
+    if (r === headerRow) continue;
     const cells = [...r.querySelectorAll("td, [role='cell'], [role='gridcell']")];
-    if (cells.length <= Math.max(cinIdx, amountIdx, dateIdx)) continue; // header/footer/summary row, not a data row
+    if (cells.length <= Math.max(cinIdx, amountIdx, dateIdx)) continue; // not a data row
     const cinRaw = (cells[cinIdx]?.textContent || "").trim();
     const amountRaw = (cells[amountIdx]?.textContent || "").trim();
     const dateRaw = (cells[dateIdx]?.textContent || "").trim();
     if (!cinRaw) continue;
-    const { bsrCode, serialNo, cinDate } = parseCin(cinRaw);
     const amount = parseFloat(amountRaw.replace(/[₹,\s]/g, ""));
-    const depositDate = normalizePortalDate(dateRaw) || cinDate;
-    if (!serialNo || !Number.isFinite(amount) || !depositDate) continue;
-    rows.push({ serialNo, depositDate, amount, bsrCode, cin: cinRaw });
+    const depositDate = normalizePortalDate(dateRaw);
+    if (!Number.isFinite(amount) || !depositDate) continue;
+    rows.push({ cin: cinRaw, amount, depositDate });
   }
   return { rows };
+}
+
+/** Angular Material's built-in <mat-paginator> always labels its nav
+ *  buttons "Next page" / "Previous page" via aria-label — a stable,
+ *  documented Material Design convention, not a guess specific to this
+ *  portal (already confirmed to be built on Angular Material elsewhere in
+ *  this file, e.g. the e-File menu's own mat-mdc-menu-item class). */
+function findPaginatorNextButton() {
+  return document.querySelector('button[aria-label="Next page" i]:not([disabled])')
+    || document.querySelector('button[aria-label*="next" i]:not([disabled])');
+}
+
+/**
+ * Scans Payment History page by page (fast — reading the summary table
+ * only, no per-row navigation) collecting rows whose date falls within
+ * [fyStartDate, fyEndDate]. Relies on the list being sorted newest-first
+ * (confirmed live) to stop as soon as an entire page is older than the
+ * range start, rather than walking all of a TAN's history — this portal
+ * showed 73 pages live, and this quarter's data should only ever be in the
+ * first handful.
+ */
+async function collectQuarterCandidates(fyStartDate, fyEndDate, maxPages) {
+  const rows = [];
+  for (let page = 0; page < maxPages; page++) {
+    const pageResult = await waitFor(() => {
+      const r = readVisibleSummaryRows();
+      return r.rows.length || r.reason ? r : null;
+    }, 8_000);
+    if (!pageResult) return { rows: [], reason: "timed out waiting for the Payment History table to render" };
+    if (pageResult.reason) return { rows: [], reason: pageResult.reason };
+
+    for (const r of pageResult.rows) {
+      if (!fyStartDate || !fyEndDate || (r.depositDate >= fyStartDate && r.depositDate <= fyEndDate)) rows.push(r);
+    }
+    // Sorted newest-first: once every row on this page is older than the
+    // range start, nothing on a later page can be in range either.
+    if (fyStartDate && pageResult.rows.length && pageResult.rows.every((r) => r.depositDate < fyStartDate)) break;
+
+    const next = findPaginatorNextButton();
+    if (!next) break; // last page
+    next.click();
+    await new Promise((r) => setTimeout(r, 700)); // let the next page's rows render
+  }
+  return { rows };
+}
+
+/** Finds a specific row's own "⋮" (more options) trigger — same shape
+ *  reasoning as the old findRowActionTrigger (icon-only, ≤40px, last cell),
+ *  generalized here to take a row instead of always picking the first one,
+ *  since each candidate challan needs its OWN menu opened. */
+function findRowMenuTrigger(row) {
+  const cells = row.querySelectorAll("td, [role='cell'], [role='gridcell']");
+  if (!cells.length) return null;
+  const lastCell = cells[cells.length - 1];
+  const candidates = lastCell.querySelectorAll("button, [role='button'], a, svg, [class*='icon' i]");
+  for (const el of candidates) {
+    if (el.offsetParent === null) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 || rect.height === 0 || rect.width > 40 || rect.height > 40) continue;
+    const text = (el.textContent || "").trim();
+    if (text.length > 3) continue;
+    return el.closest("button, [role='button'], a") || el;
+  }
+  return null;
+}
+
+/** Re-locates the row for a specific CIN on whatever page of Payment
+ *  History is currently showing, opens its "⋮" menu, and clicks
+ *  "View Details". Returns false (never throws) if any step doesn't find
+ *  what it's looking for, so the caller can skip this one challan and
+ *  continue with the rest rather than aborting the whole run. */
+async function openViewDetailsForCin(cin) {
+  const found = findPaymentHistoryTable();
+  if (!found) return false;
+  const { cinIdx } = columnIndexes(found.headerCells);
+  if (cinIdx === -1) return false;
+  const row = found.allRows.find((r) => {
+    if (r === found.headerRow) return false;
+    const cells = r.querySelectorAll("td, [role='cell'], [role='gridcell']");
+    return cells[cinIdx] && (cells[cinIdx].textContent || "").trim() === cin;
+  });
+  if (!row) return false;
+  const trigger = findRowMenuTrigger(row);
+  if (!trigger) return false;
+  trigger.click();
+  await new Promise((r) => setTimeout(r, 400));
+  const viewDetails = await waitFor(() => findClickableByText(/^view details$/i), 3_000);
+  if (!viewDetails) return false;
+  viewDetails.click();
+  await new Promise((r) => setTimeout(r, 600));
+  return true;
+}
+
+/** Finds the value associated with a labeled field on the Challan Receipt
+ *  page (e.g. "BSR code" -> "6390031") by locating a short leaf element
+ *  whose own text matches the label, then reading whichever of its own
+ *  next sibling / parent's next sibling actually has text — the Challan
+ *  Receipt's own layout stacks a muted label directly above its value, per
+ *  a live screenshot, but the exact wrapper nesting wasn't confirmed, so
+ *  this tries the two most likely shapes rather than assuming one. */
+function findLabeledValue(labelPattern, excludePattern) {
+  const leaves = [...document.querySelectorAll("*")].filter((el) => el.children.length === 0 && el.offsetParent !== null);
+  for (const el of leaves) {
+    const text = (el.textContent || "").trim();
+    if (text.length > 40 || !labelPattern.test(text)) continue;
+    if (excludePattern && excludePattern.test(text)) continue;
+    const fromSibling = (el.nextElementSibling?.textContent || "").trim();
+    if (fromSibling) return fromSibling;
+    const parent = el.parentElement;
+    const fromParentSibling = (parent?.nextElementSibling?.textContent || "").trim();
+    if (fromParentSibling) return fromParentSibling;
+  }
+  return null;
+}
+
+/** Scrapes the authoritative fields off a Challan Receipt ("View Details")
+ *  page — BSR code, Challan Number, Date of Payment, Amount, and CIN — all
+ *  explicitly labeled, confirmed from a live screenshot of this exact page,
+ *  rather than parsed out of a packed CIN string. Returns null if the page
+ *  doesn't look like a Challan Receipt at all (e.g. a slow load, or the
+ *  portal's own layout differs from the one screenshot this was built
+ *  against). */
+function scrapeChallanReceiptDetail() {
+  const bsrCode = findLabeledValue(/^bsr code$/i);
+  const challanNumber = findLabeledValue(/^challan number$/i);
+  const dateOfPaymentRaw = findLabeledValue(/^date of payment$/i);
+  const amountRaw = findLabeledValue(/^amount/i, /word/i);
+  const cin = findLabeledValue(/^cin$/i);
+  if (!bsrCode || !challanNumber || !dateOfPaymentRaw || !amountRaw) return null;
+  const depositDate = normalizePortalDate(dateOfPaymentRaw);
+  const amount = parseFloat((amountRaw || "").replace(/[₹,\s]/g, ""));
+  if (!depositDate || !Number.isFinite(amount)) return null;
+  return { serialNo: challanNumber.trim(), depositDate, amount, bsrCode: bsrCode.trim(), cin: cin || null };
+}
+
+/** Returns from a Challan Receipt page back to the Payment History list —
+ *  the page shows its own "‹ Back" button, confirmed from a live
+ *  screenshot. Falls back to the browser's own history.back() if that
+ *  control can't be found, since this portal's routing is client-side
+ *  (Angular hash routes), so a plain back-navigation should land on the
+ *  same place the button would. */
+async function returnToPaymentHistory() {
+  const backBtn = findClickableByText(/back/i);
+  if (backBtn) { backBtn.click(); } else { history.back(); }
+  await waitFor(() => findPaymentHistoryTable(), 8_000);
+  await new Promise((r) => setTimeout(r, 300));
 }
