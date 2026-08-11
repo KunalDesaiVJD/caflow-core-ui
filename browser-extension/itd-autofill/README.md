@@ -36,6 +36,18 @@ Continue, so it silently sat on that page and never reached Payment History
 at all. Fixed from a second real screenshot showing that exact page — the
 step list now clicks Continue before looking for Payment History.
 
+**v0.3.3 (2026-08-10, same day)**: "Download Challan" was reported as
+"stuck at the dashboard" after logging in — the real bug was upstream of
+the click-path itself. The request to start the automation used to be a
+one-shot browser message fired the instant the button was clicked, before
+content-itd.js had even been injected into the freshly-opened ITD tab, and
+with no way to wait for the human login that follows — so it was very
+often simply lost, silently, well before the user ever saw the login page.
+Fixed the same way the credential handoff already works: the request is
+now stored (`chrome.storage.session`) and content-itd.js polls for it
+(up to 5 minutes) so it fires reliably once login is actually done,
+whenever that happens to be.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser

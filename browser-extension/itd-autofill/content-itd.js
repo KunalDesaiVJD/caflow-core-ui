@@ -145,6 +145,48 @@
   showBanner("CAFlow: login ID, password, and confirmation filled — click Continue yourself to finish signing in.", "success");
 })();
 
+/**
+ * START_CHALLAN_DOWNLOAD polling — runs concurrently with (independent of)
+ * the login-autofill IIFE above. v0.3.3: this replaced a one-shot message
+ * relay that was fired the instant "Download Challan" was clicked in
+ * CAFlow — before content-itd.js even had time to be injected on the fresh
+ * ITD tab, and with no way to wait for the manual login that follows. See
+ * background.js's own header doc on RELAY_CHALLAN_DOWNLOAD for the full
+ * account of why a stored, polled request replaces it.
+ *
+ * eportal.incometax.gov.in is an Angular SPA — login, dashboard, and every
+ * page of the e-Pay Tax flow are all client-side hash-route changes within
+ * ONE real page load, which never re-injects a content script. So a single
+ * poll loop started here, at this initial injection, stays alive through
+ * the whole manual login + all of runChallanDownload's own navigation —
+ * there is no need to re-trigger this per hash-route change the way a
+ * fresh full-page load would need to.
+ */
+(async () => {
+  const requestChallanDownload = () => new Promise((resolve) => {
+    chrome.runtime.sendMessage({ type: "GET_CHALLAN_DOWNLOAD_REQUEST" }, (response) => resolve(response));
+  });
+  // Mirrors background.js's own CHALLAN_DOWNLOAD_REQUEST_TTL_MS — this loop
+  // gives up on its own once the stored request would have expired anyway,
+  // rather than polling forever on a tab nobody ever logs into.
+  const deadline = Date.now() + 5 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const req = await requestChallanDownload();
+    if (req?.ok) {
+      // Consume BEFORE running — if this poll loop somehow saw the request
+      // twice (a second content-itd.js instance from an unrelated reload,
+      // for instance), only the first CONSUME to actually reach
+      // background.js wins; the shared chrome.storage.session record
+      // decides that, not a local flag racing another tab's own copy of
+      // this same script.
+      chrome.runtime.sendMessage({ type: "CONSUME_CHALLAN_DOWNLOAD_REQUEST" });
+      await runChallanDownload(req.fyStartDate, req.fyEndDate);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1_500));
+  }
+})();
+
 /** Polls for a truthy result from `check` every 150ms until `timeoutMs`. */
 function waitFor(check, timeoutMs) {
   return new Promise((resolve) => {
@@ -268,11 +310,12 @@ function showBanner(text, kind) {
  * manual "Upload Downloaded Report" step in the app — a content script
  * cannot read a file the OS just saved to Downloads, that's a browser
  * security boundary, not something worth trying to route around.
+ *
+ * Triggered by the poll loop further up this file (search
+ * GET_CHALLAN_DOWNLOAD_REQUEST), not a chrome.runtime.onMessage listener —
+ * see that loop's own doc, and background.js's, for why a one-shot message
+ * listener here couldn't survive the manual login this has to wait through.
  */
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.type !== "START_CHALLAN_DOWNLOAD") return;
-  runChallanDownload(msg.fyStartDate, msg.fyEndDate);
-});
 
 /** Same idea as findButtonByText, but for site NAVIGATION/MENU items, which
  *  on most Angular admin UIs (this portal included, per the login flow's own

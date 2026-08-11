@@ -19,15 +19,46 @@
  * purpose, and defeating that crosses a line this project isn't willing to
  * cross regardless of how many times it's requested.
  *
- * RELAY_CHALLAN_DOWNLOAD (added for the Stage-2 challan-download flow) is a
- * plain broadcast, not a credential handoff — no storage, no TTL. It just
- * forwards the requested FY date range to whichever eportal.incometax.gov.in
- * tab(s) are currently open. No new manifest permission needed: querying/
- * messaging tabs by URL is already covered by the existing host_permissions
- * entry for that origin, without needing the broader "tabs" permission.
+ * RELAY_CHALLAN_DOWNLOAD (added for the Stage-2 challan-download flow) —
+ * v0.3.3 (2026-08-10): CHANGED from a plain one-shot chrome.tabs.sendMessage
+ * broadcast to a chrome.storage.session record, same pattern as the
+ * credential handoff and for the identical reason.
+ *
+ * The one-shot broadcast was fired the INSTANT "Download Challan" was
+ * clicked — the same tick window.open() opened the ITD tab, before that
+ * tab's content-itd.js had even been injected yet (document_idle content
+ * scripts inject after the page's DOM is ready, which takes real time on a
+ * slow government portal). chrome.tabs.sendMessage delivers to a listener
+ * that's ALREADY registered; if nothing is listening yet, the message is
+ * simply dropped (background.js already swallowed the resulting "no
+ * receiver" error, which is what made this failure silent instead of
+ * logged). And even on the rare occasion the timing DID line up, the
+ * message would only reach the login page's own instance of content-itd.js
+ * — but the manual login that follows takes real human time, and the whole
+ * point of runChallanDownload is that it must fire only once THAT is done.
+ * A one-shot message delivered (or dropped) at click-time has no way to
+ * "wait" for a human to finish logging in.
+ *
+ * Storing it instead means content-itd.js can POLL for it — same as it
+ * already does for login credentials — so it doesn't matter whether the
+ * request arrives before, during, or after login: whichever loop finds it
+ * first (this poll typically runs far longer than the credential one, since
+ * a human logging in takes much longer than an edge function decrypting a
+ * password) fires it exactly once. Real page navigation (not just an
+ * Angular hash-route change within eportal.incometax.gov.in's own SPA,
+ * which never re-injects a content script) would still lose an in-flight
+ * poll, but a fresh injection on THAT reload starts its own poll and picks
+ * the same stored request straight back up — the request is safe to poll
+ * for repeatedly since it's read-once (consumed on GET) only when actually
+ * acted on, never when merely checked.
  */
 
 const CREDENTIAL_TTL_MS = 2 * 60 * 1000;
+// Generous: covers the FULL manual login (ID, Continue, password, Secure
+// Access Message checkbox, the human's own final Continue click) — unlike
+// the credential handoff, which only has to survive an edge-function
+// round-trip, this has to survive an actual person typing.
+const CHALLAN_DOWNLOAD_REQUEST_TTL_MS = 5 * 60 * 1000;
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "STORE_ITD_CREDENTIALS") {
@@ -54,19 +85,44 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === "RELAY_CHALLAN_DOWNLOAD") {
-    chrome.tabs.query({ url: "https://eportal.incometax.gov.in/*" }, (tabs) => {
-      for (const tab of tabs) {
-        if (tab.id == null) continue;
-        // No response expected/awaited per tab — the ITD tab reports its own
-        // progress via an on-page banner, same as content-itd.js's login flow.
-        chrome.tabs.sendMessage(tab.id, {
-          type: "START_CHALLAN_DOWNLOAD",
-          fyStartDate: msg.fyStartDate ?? null,
-          fyEndDate: msg.fyEndDate ?? null,
-        }, () => void chrome.runtime.lastError); // swallow "no receiver" if the tab hasn't loaded content-itd.js yet
-      }
-      sendResponse({ ok: true, tabCount: tabs.length });
+    const record = {
+      fyStartDate: msg.fyStartDate ?? null,
+      fyEndDate: msg.fyEndDate ?? null,
+      storedAt: Date.now(),
+    };
+    chrome.storage.session.set({ itdChallanDownloadRequest: record }, () => {
+      sendResponse({ ok: true });
     });
     return true; // async response
+  }
+
+  if (msg?.type === "GET_CHALLAN_DOWNLOAD_REQUEST") {
+    chrome.storage.session.get("itdChallanDownloadRequest", (data) => {
+      const record = data?.itdChallanDownloadRequest;
+      if (!record || Date.now() - record.storedAt > CHALLAN_DOWNLOAD_REQUEST_TTL_MS) {
+        // Expired or never set — clear a stale one if present, but do NOT
+        // consume a request that's still within its TTL just because this
+        // particular poll happened to miss it: content-itd.js polls
+        // repeatedly and must see the SAME pending request on every attempt
+        // until it's actually acted on.
+        if (record) chrome.storage.session.remove("itdChallanDownloadRequest");
+        sendResponse({ ok: false });
+        return;
+      }
+      sendResponse({ ok: true, fyStartDate: record.fyStartDate, fyEndDate: record.fyEndDate });
+    });
+    return true; // async response
+  }
+
+  if (msg?.type === "CONSUME_CHALLAN_DOWNLOAD_REQUEST") {
+    // Called once content-itd.js has actually started acting on the
+    // request (found "e-File" and begun the click-path) — consumed
+    // separately from GET so a request survives being merely POLLED
+    // (checked and not yet actionable, e.g. still on the login page)
+    // across many repeated checks, the same way the credential fetch
+    // above is consume-on-read but this one is consume-on-USE.
+    chrome.storage.session.remove("itdChallanDownloadRequest");
+    sendResponse({ ok: true });
+    return true;
   }
 });

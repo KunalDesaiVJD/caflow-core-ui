@@ -10,9 +10,13 @@
  *  2. Relay a credential handoff message from the app to the background
  *     worker when the user clicks "Auto-fill ITD Login".
  *  3. Relay a "start the challan-download automation" request from
- *     TdsChallanDownloadValidation.tsx's "Download Challan" button — see
- *     content-itd.js's own START_CHALLAN_DOWNLOAD listener for what this
- *     actually attempts on the portal side, and why it's a first draft.
+ *     TdsChallanDownloadValidation.tsx's "Download Challan" button —
+ *     forwarded to background.js, which STORES it (chrome.storage.session)
+ *     rather than messaging the ITD tab directly, so content-itd.js can
+ *     poll for it and pick it up whenever the human finishes logging in,
+ *     however long that takes. See background.js's own RELAY_CHALLAN_
+ *     DOWNLOAD doc for the full account, and content-itd.js's own
+ *     runChallanDownload for what this actually attempts on the portal side.
  */
 
 // Announce presence as early as possible (document_start) so the app's own
