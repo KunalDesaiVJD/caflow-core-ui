@@ -815,21 +815,42 @@ function findRowMenuTrigger(row) {
   return null;
 }
 
-/** Re-locates the row for a specific CIN on whatever page of Payment
- *  History is currently showing, opens its "⋮" menu, and clicks
- *  "View Details". Returns false (never throws) if any step doesn't find
- *  what it's looking for, so the caller can skip this one challan and
- *  continue with the rest rather than aborting the whole run. */
-async function openViewDetailsForCin(cin) {
+function findRowByCin(cin) {
   const found = findPaymentHistoryTable();
-  if (!found) return false;
+  if (!found) return null;
   const { cinIdx } = columnIndexes(found.headerCells);
-  if (cinIdx === -1) return false;
-  const row = found.allRows.find((r) => {
+  if (cinIdx === -1) return null;
+  return found.allRows.find((r) => {
     if (r === found.headerRow) return false;
     const cells = r.querySelectorAll("td, [role='cell'], [role='gridcell']");
     return cells[cinIdx] && (cells[cinIdx].textContent || "").trim() === cin;
-  });
+  }) || null;
+}
+
+/**
+ * Re-locates the row for a specific CIN, opens its "⋮" menu, and clicks
+ * "View Details". Returns false (never throws) if any step doesn't find
+ * what it's looking for, so the caller can skip this one challan and
+ * continue with the rest rather than aborting the whole run.
+ *
+ * 2026-08-11: Payment History always resets to PAGE 1 after the
+ * Back -> Act-Selection -> Continue round-trip (see returnToPaymentHistory's
+ * own doc) — confirmed live it does NOT preserve whatever page a later
+ * candidate might be sitting on. Pages forward (same Next-page control
+ * collectQuarterCandidates already uses) looking for this specific CIN
+ * before giving up, capped well under the 73-page total seen live since a
+ * quarter's own challans cluster near the top of a newest-first list.
+ */
+async function openViewDetailsForCin(cin, maxPages = 20) {
+  let row = null;
+  for (let page = 0; page < maxPages; page++) {
+    row = findRowByCin(cin);
+    if (row) break;
+    const next = findPaginatorNextButton();
+    if (!next) break;
+    next.click();
+    await new Promise((r) => setTimeout(r, 700));
+  }
   if (!row) return false;
   const trigger = findRowMenuTrigger(row);
   if (!trigger) return false;
@@ -884,15 +905,62 @@ function scrapeChallanReceiptDetail() {
   return { serialNo: challanNumber.trim(), depositDate, amount, bsrCode: bsrCode.trim(), cin: cin || null };
 }
 
-/** Returns from a Challan Receipt page back to the Payment History list —
- *  the page shows its own "‹ Back" button, confirmed from a live
- *  screenshot. Falls back to the browser's own history.back() if that
- *  control can't be found, since this portal's routing is client-side
- *  (Angular hash routes), so a plain back-navigation should land on the
- *  same place the button would. */
+/** Selects "Income-tax Act, 2025" on the Act-Selection interstitial by
+ *  POSITION (it's always listed first, per every screenshot of this page
+ *  seen so far) rather than by matching its own label text — that text is
+ *  already known to break findClickableByText's 60-char cap, since the
+ *  label sits directly above a full description sentence that gets counted
+ *  as the same text node (see the navigation steps' own "fourth pass" doc,
+ *  earlier in this file, for the original discovery of that exact issue). */
+function selectIncomeTaxAct2025() {
+  const radios = [...document.querySelectorAll("input[type='radio'], mat-radio-button, [role='radio']")].filter((r) => r.offsetParent !== null);
+  if (!radios.length) return false;
+  const first = radios[0];
+  (first.closest("mat-radio-button, [role='radio']") || first).click();
+  return true;
+}
+
+/**
+ * Returns from a Challan Receipt page to the Payment History list — NOT a
+ * single step. Confirmed live (2026-08-11): the page's own "‹ Back" button
+ * does not land back on Payment History directly — it goes back to the
+ * Act-Selection interstitial (the same page e-File -> e-Pay Tax always
+ * shows first), and it can default to "Income-tax Act, 1961" rather than
+ * "2025" this time (unlike the very first entry into e-Pay Tax, which
+ * always defaults to 2025 per every earlier screenshot) — so this
+ * explicitly re-selects 2025 rather than trusting the default, then clicks
+ * Continue again, then re-clicks the Payment History tab in case that also
+ * doesn't carry over from before Back was clicked.
+ */
 async function returnToPaymentHistory() {
   const backBtn = findClickableByText(/back/i);
   if (backBtn) { backBtn.click(); } else { history.back(); }
+  await new Promise((r) => setTimeout(r, 600));
+
+  if (!findPaymentHistoryTable()) {
+    const actRadioShowing = await waitFor(() => {
+      const radios = document.querySelectorAll("input[type='radio'], mat-radio-button, [role='radio']");
+      return [...radios].some((r) => r.offsetParent !== null) ? true : null;
+    }, 5_000);
+    if (actRadioShowing) {
+      selectIncomeTaxAct2025();
+      await new Promise((r) => setTimeout(r, 300));
+      const continueBtn = await waitFor(() => findClickableByText(/^continue\b/i), 5_000);
+      if (continueBtn) {
+        continueBtn.click();
+        await new Promise((r) => setTimeout(r, 900));
+      }
+    }
+  }
+
+  if (!findPaymentHistoryTable()) {
+    const paymentHistoryTab = await waitFor(() => findClickableByText(/payment history/i), 8_000);
+    if (paymentHistoryTab) {
+      paymentHistoryTab.click();
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  }
+
   await waitFor(() => findPaymentHistoryTable(), 8_000);
   await new Promise((r) => setTimeout(r, 300));
 }

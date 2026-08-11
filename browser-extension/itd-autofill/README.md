@@ -241,6 +241,19 @@ and the "‹ Back" return button are all reasoned from live screenshots, not
 yet clicked through end to end — expect this to need the same live-console
 iteration the navigation steps above needed.
 
+**v0.4.2 (2026-08-11)**: v0.4.1 correctly verified the FIRST candidate
+challan live (BSR/Challan Number/Date/Amount all read correctly), but
+couldn't open the second — confirmed live why: the Challan Receipt's "‹
+Back" button does not return straight to Payment History, it lands back on
+the Act-Selection interstitial, and can default to "Income-tax Act, 1961"
+rather than "2025" this time. `returnToPaymentHistory` now explicitly
+handles that round-trip: select "Income-tax Act, 2025" by POSITION (its
+label text is already known to break the 60-char match cap — see the
+navigation steps' own history further up this file), click Continue, then
+re-click the Payment History tab. Also fixed `openViewDetailsForCin` to
+re-paginate forward when looking for a later candidate, since Payment
+History resets to page 1 after that same round-trip.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser
