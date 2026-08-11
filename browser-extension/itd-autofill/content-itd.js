@@ -783,40 +783,35 @@ function dumpPaginatorButtonsOnce() {
 }
 
 /**
- * Angular Material's built-in <mat-paginator> is documented to label its
- * nav buttons "Next page" / "First page" via aria-label — but that
- * convention was CONFIRMED WRONG live (2026-08-11, third pass):
- * dumpPaginatorButtonsOnce showed every aria-labeled button on the page,
- * and none were pagination controls — only the per-row "⋮" triggers (whose
- * own aria-label just reads the generic "Example icon-button with a menu",
- * and whose actual glyph renders as literal text "more_vert" — a Material
- * Icons LIGATURE, the icon font rendering its own icon NAME as visible/
- * readable text rather than a real label). Given that same ligature pattern
- * is already confirmed live on this exact portal, the nav arrows are almost
- * certainly the same shape: "chevron_right"/"navigate_next" for Next,
- * "first_page" for First, as literal button text — not an aria-label at
- * all. Falls back to the aria-label guess first (harmless if wrong, cheap
- * to check) before trying the icon-ligature text.
+ * Angular Material's documented aria-label convention, AND the icon-ligature
+ * text pattern already confirmed for the per-row "⋮" triggers, were BOTH
+ * tried and BOTH confirmed wrong for these 4 buttons specifically
+ * (2026-08-11, third and fourth pass) — dumpPaginatorButtonsOnce's widened
+ * scope found exactly 4 visible buttons near the "Rows per page" label,
+ * matching the visible |< < > >| layout, but every one had aria-label:null
+ * AND text:"" — these render their icon as a bare SVG/CSS glyph, not a
+ * ligature font, unlike the row menu buttons. What IS confirmed live: all
+ * 4 share a class starting with "buttonPag" (this portal's own class, not a
+ * generic Material one), and their DOM order matches the visible left-to-
+ * right layout — First, Previous, Next, Last. Targets them by that class +
+ * position instead, since neither text nor aria-label is available at all.
  */
-function findPaginatorButtonByIconText(pattern) {
-  const buttons = [...document.querySelectorAll("button")].filter((b) => b.offsetParent !== null && !b.disabled);
-  return buttons.find((b) => pattern.test((b.textContent || "").trim())) || null;
+function findPaginatorButtons() {
+  return [...document.querySelectorAll("button[class*='buttonPag']")].filter((b) => b.offsetParent !== null);
 }
 
 function findPaginatorNextButton() {
-  const found = document.querySelector('button[aria-label="Next page" i]:not([disabled])')
-    || document.querySelector('button[aria-label*="next" i]:not([disabled])')
-    || findPaginatorButtonByIconText(/^(chevron_right|navigate_next|keyboard_arrow_right|arrow_forward_ios|arrow_forward)$/i);
-  if (!found) dumpPaginatorButtonsOnce();
-  return found;
+  const buttons = findPaginatorButtons();
+  const btn = buttons[2]; // First, Previous, Next, Last
+  if (!btn) { dumpPaginatorButtonsOnce(); return null; }
+  return btn.disabled ? null : btn; // disabled = genuinely on the last page, not a lookup failure
 }
 
 function findPaginatorFirstPageButton() {
-  const found = document.querySelector('button[aria-label="First page" i]:not([disabled])')
-    || document.querySelector('button[aria-label*="first" i]:not([disabled])')
-    || findPaginatorButtonByIconText(/^(first_page|skip_previous)$/i);
-  if (!found) dumpPaginatorButtonsOnce();
-  return found;
+  const buttons = findPaginatorButtons();
+  const btn = buttons[0];
+  if (!btn) { dumpPaginatorButtonsOnce(); return null; }
+  return btn.disabled ? null : btn; // disabled = already on page 1, not a lookup failure
 }
 
 /** Resets Payment History to page 1 — the "|<" control confirmed from a

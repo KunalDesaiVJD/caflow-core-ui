@@ -307,6 +307,17 @@ button text, not an aria-label. `findPaginatorNextButton` /
 `findPaginatorFirstPageButton` now also try matching
 "chevron_right"/"navigate_next" and "first_page" as literal text content.
 
+**v0.4.8 (2026-08-11)**: v0.4.7's icon-ligature guess also came back wrong
+live — the widened diagnostic scope found exactly 4 visible buttons near
+"Rows per page" (matching the |< < > >| layout) with aria-label:null AND
+text:"" on all of them (a bare SVG/CSS icon, not the ligature-font pattern
+the row menus use). What IS confirmed: all 4 share a class starting with
+"buttonPag" (this portal's own class), in stable DOM order matching the
+visible layout. `findPaginatorNextButton`/`findPaginatorFirstPageButton`
+now target that class directly and pick by position (index 0 = First,
+index 2 = Next) instead of text or aria-label, which aren't available at
+all on these specific buttons.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser
