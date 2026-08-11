@@ -1733,7 +1733,21 @@ function buildNoteSection(
   /** Sub-ledger name overrides, keyed `${staticRowId}::${ledger}` — mirrors
    *  NCEDetailedNotes sourceLabelOverrides so renamed Tally ledgers print. */
   sourceLabelOverrides?: Record<string, string>,
+  /** Row/particular rename overrides, keyed by static-row id or custom-row id —
+   *  mirrors NCEDetailedNotes labelOverrides (handleChangeLabel) so a renamed
+   *  particular prints its saved name instead of the static config / original
+   *  custom-row label. See BUG 1 fix note below. */
+  labelOverrides?: Record<string, string>,
 ): Table {
+  // BUG 1 FIX (2026-08-11) — the DOCX export previously read `row.label` /
+  // `cr.label` straight from the static NOTES_CONFIG template / the original
+  // (un-mutated) custom-row label, so a renamed particular showed correctly
+  // on screen (NCEDetailedNotes overlays labelOverrides[id] ?? label) but
+  // reverted to the old/default name in the exported Word file. Renames are
+  // persisted as a display-only overlay (cy_data._label_overrides, written by
+  // handleChangeLabel under NCE_RESYNC_DELETE_FIRST) rather than mutating the
+  // row, so every label emission site here must apply the same overlay.
+  const L = (id: string, fallback: string): string => labelOverrides?.[id] ?? fallback;
   // Auto/manual breakup rows are stored in cy_data._custom_rows; their amounts
   // live as ordinary keys (id or id+"_lt"/"_st") in rawCy/rawPy. For notes like
   // Borrowings the per-ledger amounts sit on custom rows ATTACHED to a static
@@ -1909,8 +1923,9 @@ function buildNoteSection(
         // though the on-screen note shows it (the renderer uses the same aggregate).
         const v = aggA(cr.id);
         if (!v.lt && !v.st && !v.ltP && !v.stP) continue;
-        const tableRow = noteRowA(cr.label || "—", v.lt, v.ltP, v.st, v.stP, 0, "data");
-        if (isFlatNote) flatRows.push({ label: cr.label || "—", emit: () => rows.push(tableRow) });
+        const crLabelA = L(cr.id, cr.label || "—");
+        const tableRow = noteRowA(crLabelA, v.lt, v.ltP, v.st, v.stP, 0, "data");
+        if (isFlatNote) flatRows.push({ label: crLabelA, emit: () => rows.push(tableRow) });
         else rows.push(tableRow);
       } else {
         // Issue 3 — see aggA note above; aggB already folds in descendants and
@@ -1918,8 +1933,9 @@ function buildNoteSection(
         // one-line-per-head format of flat notes such as Other Expenses).
         const v = aggB(cr.id);
         if (!v.c && !v.p) continue;
-        const tableRow = noteRowB(cr.label || "—", v.c, v.p, 0, "data");
-        if (isFlatNote) flatRows.push({ label: cr.label || "—", emit: () => rows.push(tableRow) });
+        const crLabelB = L(cr.id, cr.label || "—");
+        const tableRow = noteRowB(crLabelB, v.c, v.p, 0, "data");
+        if (isFlatNote) flatRows.push({ label: crLabelB, emit: () => rows.push(tableRow) });
         else rows.push(tableRow);
       }
     }
@@ -2043,13 +2059,13 @@ function buildNoteSection(
       }
       if (isA) {
         rows.push(noteRowA(
-          row.label,
+          L(row.id, row.label),
           cy[row.id + "_lt"] ?? 0, py[row.id + "_lt"] ?? 0,
           cy[row.id + "_st"] ?? 0, py[row.id + "_st"] ?? 0,
           row.indent ?? 0, style,
         ));
       } else {
-        rows.push(noteRowB(row.label, cy[row.id] ?? 0, py[row.id] ?? 0, row.indent ?? 0, style));
+        rows.push(noteRowB(L(row.id, row.label), cy[row.id] ?? 0, py[row.id] ?? 0, row.indent ?? 0, style));
       }
     } else {
       // Task 2 (doc6): when locked (hideBlankNoteRows=true), skip data rows
@@ -2084,7 +2100,7 @@ function buildNoteSection(
             if (!v.lt && !v.st && !v.ltP && !v.stP) continue;
             // Print this row at the collapsed aggregate so the parent indent
             // visually matches the renderer; recurse for its own children.
-            rows.push(noteRowA(cr.label || "—", v.lt, v.ltP, v.st, v.stP, depth, "data"));
+            rows.push(noteRowA(L(cr.id, cr.label || "—"), v.lt, v.ltP, v.st, v.stP, depth, "data"));
             emitDescendants(cr.id, depth + 1);
             // Optional: show the row's own amount when it differs from agg.
             // Skipped intentionally — children rows below already itemise it.
@@ -2092,7 +2108,7 @@ function buildNoteSection(
           } else {
             const v = aggB(cr.id);
             if (!v.c && !v.p) continue;
-            rows.push(noteRowB(cr.label || "—", v.c, v.p, depth, "data"));
+            rows.push(noteRowB(L(cr.id, cr.label || "—"), v.c, v.p, depth, "data"));
             emitDescendants(cr.id, depth + 1);
           }
         }
@@ -2123,9 +2139,10 @@ function buildNoteSection(
         const isExpandedA = (id: string) => !expandedRows || expandedRows.has(id);
         if (isFlatNote) {
           // Capture row + descendants as a unit; sort key is the row label.
-          const capturedRow = noteRowA(row.label, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data");
+          const rowLabelA = L(row.id, row.label);
+          const capturedRow = noteRowA(rowLabelA, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data");
           const capturedId  = row.id;
-          flatRows.push({ label: row.label, emit: () => {
+          flatRows.push({ label: rowLabelA, emit: () => {
             rows.push(capturedRow);
             if (isExpandedA(capturedId)) {
               if (hasSrcsA(capturedId)) emitSourcesA(capturedId, subIndent);
@@ -2133,7 +2150,7 @@ function buildNoteSection(
             }
           }});
         } else {
-          rows.push(noteRowA(row.label, v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data"));
+          rows.push(noteRowA(L(row.id, row.label), v.lt, v.ltP, v.st, v.stP, row.indent ?? 0, "data"));
           if (isExpandedA(row.id)) {
             if (hasSrcsA(row.id)) emitSourcesA(row.id, subIndent);
             emitDescendants(row.id, subIndent);
@@ -2166,10 +2183,11 @@ function buildNoteSection(
           const capturedId = row.id;
           const capturedCy = v.c;
           const capturedPy = v.p;
-          flatRows.push({ label: row.label, emit: () => {
+          const rowLabelB = L(row.id, row.label);
+          flatRows.push({ label: rowLabelB, emit: () => {
             // null → blank cell (no "—") when children already represent the total.
             const hide = hasChildrenB(capturedId);
-            rows.push(noteRowB(row.label, hide ? null : capturedCy, hide ? null : capturedPy, row.indent ?? 0, "data"));
+            rows.push(noteRowB(rowLabelB, hide ? null : capturedCy, hide ? null : capturedPy, row.indent ?? 0, "data"));
             if (isExpandedB(capturedId)) {
               if (hasSrcsB(capturedId)) emitSourcesB(capturedId, subIndent);
               emitDescendants(capturedId, subIndent);
@@ -2178,7 +2196,7 @@ function buildNoteSection(
         } else {
           const hide = hasChildrenB(row.id);
           // null → blank cell (no "—") when children already represent the total.
-          rows.push(noteRowB(row.label, hide ? null : v.c, hide ? null : v.p, row.indent ?? 0, "data"));
+          rows.push(noteRowB(L(row.id, row.label), hide ? null : v.c, hide ? null : v.p, row.indent ?? 0, "data"));
           if (isExpandedB(row.id)) {
             if (hasSrcsB(row.id)) emitSourcesB(row.id, subIndent);
             emitDescendants(row.id, subIndent);
@@ -2399,6 +2417,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // _source_label_overrides inside cy_data, keyed `${staticRowId}::${ledger}`.
   // Threaded into buildNoteSection so a corrected ledger name prints in DOCX.
   const savedSourceLabelOverrides: Record<string, Record<string, string>> = {};
+  // BUG 1 FIX — row/particular rename overlay, stored as _label_overrides
+  // inside the same cy_data blob (written by NCEDetailedNotes' handleChangeLabel
+  // under NCE_RESYNC_DELETE_FIRST). Keyed by static-row id or custom-row id.
+  const savedLabelOverrides: Record<string, Record<string, string>> = {};
   for (const row of notesData) {
     const key = String((row as any).note_type ?? "");
     if (!key) continue;
@@ -2418,6 +2440,9 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     // _source_label_overrides lives in the same blob — renamed sub-ledger names.
     if (rawCyData._source_label_overrides && typeof rawCyData._source_label_overrides === "object") {
       savedSourceLabelOverrides[key] = rawCyData._source_label_overrides as Record<string, string>;
+    }
+    if (rawCyData._label_overrides && typeof rawCyData._label_overrides === "object") {
+      savedLabelOverrides[key] = rawCyData._label_overrides as Record<string, string>;
     }
   }
 
@@ -2521,7 +2546,8 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
       noteCySources = Object.keys(filtered).length > 0 ? filtered : undefined;
     }
     const noteSourceOverrides = savedSourceLabelOverrides[sourceKey];
-    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows, noteCySources, noteSourceOverrides), noteSectionTag] as [number, Table, string]);
+    const noteLabelOverrides = savedLabelOverrides[sourceKey];
+    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows, noteCySources, noteSourceOverrides, noteLabelOverrides), noteSectionTag] as [number, Table, string]);
   }
   // Sort ascending by note number for correct sequential order in export
   noteTablePairs.sort((a, b) => a[0] - b[0]);

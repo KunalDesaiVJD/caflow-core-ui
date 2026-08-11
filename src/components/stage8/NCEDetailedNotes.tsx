@@ -3069,9 +3069,18 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     noteType: string,
     opts?: { section?: string; attachedTo?: string },
   ) => {
-    // NCE lock: no manual additions — figures come from COA mapping / Tally.
-    // (Within-note "Move to…" re-grouping of existing COA rows stays allowed.)
-    if (FS_NO_MANUAL_NOTE_ADD) {
+    // NCE lock: no manual AMOUNT rows — figures come from COA mapping / Tally.
+    // BUG 2 FIX (2026-08-11): a sub-group heading (opts.attachedTo set, from
+    // the "Add sub-group under this row" / "New group" actions) is exempt.
+    // Its own amount cell is ALWAYS locked regardless of this flag — see
+    // `amountLocked = FS_NO_MANUAL_NOTE_ADD || ...` in the row renderer below
+    // — so creating one can never introduce an untracked manual figure; it is
+    // a purely organizational container that existing COA-derived rows are
+    // reparented into via "Move to…". Only a bare top-level "+ Add row" (no
+    // attachedTo), which is a free-typed manual figure entry point, stays
+    // blocked. This applies uniformly to every NCE entity type (Proprietorship
+    // / Partnership / LLP / Trust) — no entity_type branching exists here.
+    if (FS_NO_MANUAL_NOTE_ADD && !opts?.attachedTo) {
       toast.error("Manual rows are disabled. Notes-to-Accounts figures come from COA mapping / Tally; reclassify in COA Mapping, or use “Move to…” to re-group existing rows within this note.");
       return;
     }
