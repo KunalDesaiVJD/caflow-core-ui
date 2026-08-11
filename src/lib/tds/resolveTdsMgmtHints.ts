@@ -2,11 +2,13 @@
  * resolveTdsMgmtHints — Phase 1 of the TDS Management -> TDS Analytics
  * integration.
  *
- * Pure, read-only, side-effect-free. Not called from anywhere yet — this
- * file exists to be reviewed and unit-tested in isolation before Phase 2
- * wires it into tds-ai-mapper's actual matching run (at which point it gets
- * a byte-identical Deno copy under supabase/functions/, the same pattern
- * match.ts and assignment.ts already follow — see sharedSync.test.ts).
+ * Pure, read-only, side-effect-free.
+ *
+ * Consumed by runAiMapper() in ./tdsEngine.ts — the ACTUAL live "Run AI
+ * Mapper" code path (the old supabase/functions/tds-ai-mapper Deno edge
+ * function was fully superseded by a client-side TS port some time ago;
+ * see tdsEngine.ts's own header comment — nothing invokes that edge
+ * function anymore, so this file deliberately has no Deno copy).
  *
  * Input:
  *   - tds_tally_party_maps rows (TDS Management's own confirmed
