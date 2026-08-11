@@ -753,16 +753,25 @@ export async function runAiMapper(params: {
           tds_filing_ids:    ded.filing_ids,
           match_confidence:  hint.confidence,
           match_method:      hint.outcome === "exact" ? "tds_mgmt_confirmed_exact" : "tds_mgmt_confirmed_fuzzy",
-          ai_reasoning:
-            `Resolved from TDS Management's confirmed party mapping: ` +
-            `"${hint.officeName}" → "${hint.tallyPartyRaw}" (${hint.outcome}, name tier ${hint.nameTier}). ` +
-            `Not re-derived by this mapper — TDS Management already confirmed this identity in its own ` +
-            `Tally Verification step; this only checked that it still resolves to a live Trial Balance ` +
-            `ledger this year.`,
-          // Never auto-"confirmed" on this pathway — a human reviews it
-          // once, same as any other suggestion, before it becomes
-          // authoritative, regardless of how confident the resolution is.
-          mapping_status: hint.outcome === "exact" ? "pending" : "needs_review",
+          ai_reasoning: hint.outcome === "exact"
+            ? `Automatically mapped from TDS Management's confirmed party mapping: ` +
+              `"${hint.officeName}" → "${hint.tallyPartyRaw}" — resolves EXACTLY (unambiguous string match) to ` +
+              `this Trial Balance ledger. Not re-derived by this mapper — TDS Management already confirmed this ` +
+              `identity in its own Tally Verification step; auto-confirmed here because the ledger resolution ` +
+              `itself carries no uncertainty. Still editable/rejectable like any other mapping.`
+            : `Resolved from TDS Management's confirmed party mapping: ` +
+              `"${hint.officeName}" → "${hint.tallyPartyRaw}" (fuzzy match, name tier ${hint.nameTier}) — the ` +
+              `IDENTITY is TDS Management's own confirmed call, but which live TB ledger it resolves to isn't an ` +
+              `exact string match, so this still needs a human look before it's authoritative.`,
+          // 2026-08-11 — per explicit instruction: a ledger TDS Management has
+          // ALREADY confirmed should be automatically mapped in TDS Analytics
+          // too, not merely suggested — but only when the RESOLUTION itself is
+          // unambiguous (exact string match to a live TB ledger). A fuzzy
+          // resolution still carries real "which ledger is this" uncertainty
+          // (TDS Management's identity call isn't in question, but the text
+          // match to THIS year's TB is a guess) — that stays needs_review, the
+          // one case this mapper still never silently guesses on.
+          mapping_status: hint.outcome === "exact" ? "confirmed" : "needs_review",
           mapped_by: "tds_mgmt",
         });
         tdsMgmtResolved++;
