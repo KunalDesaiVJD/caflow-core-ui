@@ -766,42 +766,55 @@ let paginatorDumpLogged = false;
 function dumpPaginatorButtonsOnce() {
   if (paginatorDumpLogged) return;
   paginatorDumpLogged = true;
-  const labeled = [...document.querySelectorAll("button[aria-label]")]
-    .filter((b) => b.offsetParent !== null)
-    .map((b) => ({ ariaLabel: b.getAttribute("aria-label"), text: (b.textContent || "").trim().slice(0, 20), disabled: b.disabled }));
-  const paginatorContainer = [...document.querySelectorAll("*")].find(
+  const near = [...document.querySelectorAll("*")].find(
     (el) => el.children.length === 0 && el.offsetParent !== null && /rows per page/i.test((el.textContent || "").trim()),
-  )?.closest("div")?.parentElement;
-  const nearPaginator = paginatorContainer
-    ? [...paginatorContainer.querySelectorAll("button")].map((b) => ({
-        ariaLabel: b.getAttribute("aria-label"), cls: (b.className || "").toString().slice(0, 50),
-        text: (b.textContent || "").trim().slice(0, 20), disabled: b.disabled,
-      }))
-    : [];
-  console.log("CAFlow: every visible button with an aria-label —");
-  console.table(labeled);
-  console.log("CAFlow: every button found inside the 'Rows per page' container specifically —");
-  console.table(nearPaginator);
+  );
+  // Widened from the "Rows per page" label's own immediate container (which
+  // came back empty — see the fourth-pass note below) to its outer
+  // ancestors, several levels up, since the nav arrows and that label may
+  // sit in sibling groups under a shared parent rather than one shared div.
+  let scope = near;
+  for (let i = 0; i < 4 && scope; i++) scope = scope.parentElement;
+  const buttons = (scope ? [...scope.querySelectorAll("button")] : [...document.querySelectorAll("button")])
+    .filter((b) => b.offsetParent !== null)
+    .map((b) => ({ ariaLabel: b.getAttribute("aria-label"), cls: (b.className || "").toString().slice(0, 40), text: (b.textContent || "").trim().slice(0, 20), disabled: b.disabled }));
+  console.log("CAFlow: every visible button near the 'Rows per page' label (widened scope) —");
+  console.table(buttons);
 }
 
-/** Angular Material's built-in <mat-paginator> always labels its nav
- *  buttons "Next page" / "Previous page" / "First page" / "Last page" via
- *  aria-label — a stable, documented Material Design convention, not a
- *  guess specific to this portal (already confirmed to be built on Angular
- *  Material elsewhere in this file, e.g. the e-File menu's own
- *  mat-mdc-menu-item class). UNCONFIRMED LIVE as of v0.4.5 — see
- *  dumpPaginatorButtonsOnce, called on failure, for why this is now in
- *  question rather than assumed correct. */
+/**
+ * Angular Material's built-in <mat-paginator> is documented to label its
+ * nav buttons "Next page" / "First page" via aria-label — but that
+ * convention was CONFIRMED WRONG live (2026-08-11, third pass):
+ * dumpPaginatorButtonsOnce showed every aria-labeled button on the page,
+ * and none were pagination controls — only the per-row "⋮" triggers (whose
+ * own aria-label just reads the generic "Example icon-button with a menu",
+ * and whose actual glyph renders as literal text "more_vert" — a Material
+ * Icons LIGATURE, the icon font rendering its own icon NAME as visible/
+ * readable text rather than a real label). Given that same ligature pattern
+ * is already confirmed live on this exact portal, the nav arrows are almost
+ * certainly the same shape: "chevron_right"/"navigate_next" for Next,
+ * "first_page" for First, as literal button text — not an aria-label at
+ * all. Falls back to the aria-label guess first (harmless if wrong, cheap
+ * to check) before trying the icon-ligature text.
+ */
+function findPaginatorButtonByIconText(pattern) {
+  const buttons = [...document.querySelectorAll("button")].filter((b) => b.offsetParent !== null && !b.disabled);
+  return buttons.find((b) => pattern.test((b.textContent || "").trim())) || null;
+}
+
 function findPaginatorNextButton() {
   const found = document.querySelector('button[aria-label="Next page" i]:not([disabled])')
-    || document.querySelector('button[aria-label*="next" i]:not([disabled])');
+    || document.querySelector('button[aria-label*="next" i]:not([disabled])')
+    || findPaginatorButtonByIconText(/^(chevron_right|navigate_next|keyboard_arrow_right|arrow_forward_ios|arrow_forward)$/i);
   if (!found) dumpPaginatorButtonsOnce();
   return found;
 }
 
 function findPaginatorFirstPageButton() {
   const found = document.querySelector('button[aria-label="First page" i]:not([disabled])')
-    || document.querySelector('button[aria-label*="first" i]:not([disabled])');
+    || document.querySelector('button[aria-label*="first" i]:not([disabled])')
+    || findPaginatorButtonByIconText(/^(first_page|skip_previous)$/i);
   if (!found) dumpPaginatorButtonsOnce();
   return found;
 }

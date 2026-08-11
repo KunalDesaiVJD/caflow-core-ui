@@ -297,6 +297,16 @@ either paginator lookup fails, it logs every visible button with an
 aria-label, plus every button specifically inside the "Rows per page"
 container, so the real convention is visible directly.
 
+**v0.4.7 (2026-08-11)**: v0.4.6's diagnostic proved the aria-label
+convention wrong live — every aria-labeled button on the page was either
+the main menu or a per-row "⋮" trigger (whose glyph renders as literal text
+"more_vert", a Material Icons ligature), none were pagination controls at
+all. Since that exact ligature pattern is already confirmed on this portal,
+the nav arrows are almost certainly the same shape — icon names as literal
+button text, not an aria-label. `findPaginatorNextButton` /
+`findPaginatorFirstPageButton` now also try matching
+"chevron_right"/"navigate_next" and "first_page" as literal text content.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser
