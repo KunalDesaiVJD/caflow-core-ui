@@ -318,6 +318,17 @@ now target that class directly and pick by position (index 0 = First,
 index 2 = Next) instead of text or aria-label, which aren't available at
 all on these specific buttons.
 
+**v0.4.9 (2026-08-11)**: v0.4.8 correctly matched 10 of 11 office challans
+live — real end-to-end success. The one holdout (paid 06-Jul, quarter
+ending 30-Jun) was never in the scraped candidate set at all, confirmed
+from the console's own array. Not a scraping bug: TDS deducted in a
+quarter's last month is due by the 7th of the following month, so a return
+legitimately includes challans paid a few days past the calendar quarter's
+end — the strict `fyEndDate` cutoff was simply too strict. Added a 10-day
+grace buffer (`addDays`) to the candidate-collection window only; matching
+itself still requires an exact office serial number, so the extra
+candidates this admits cost nothing if irrelevant.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser

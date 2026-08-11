@@ -617,7 +617,19 @@ async function runChallanDownload(fyStartDate, fyEndDate) {
   const MAX_DETAIL_VIEWS = 30; // safety cap — a full quarter's challans for one TAN should never approach this
   const MAX_SCAN_PAGES = 40;   // safety cap on Stage 1's page-by-page scan, well under the 73 seen live
 
-  const candidates = await collectQuarterCandidates(fyStartDate, fyEndDate, MAX_SCAN_PAGES);
+  // 2026-08-11: live-confirmed a real challan the office had entered for
+  // this quarter (paid 06-Jul, quarter ending 30-Jun) was never even
+  // attempted — TDS deducted in a quarter's last month is due by the 7th of
+  // the FOLLOWING month, so a return legitimately includes challans paid a
+  // few days past the calendar quarter's own end date; this isn't office
+  // data being wrong, it's the strict fyEndDate cutoff being too strict.
+  // Widens ONLY the candidate-collection window with a grace buffer —
+  // matching itself still requires an exact office serial number, so a few
+  // extra harmless candidates cost nothing.
+  const GRACE_DAYS = 10;
+  const scanEndDate = fyEndDate ? addDays(fyEndDate, GRACE_DAYS) : fyEndDate;
+
+  const candidates = await collectQuarterCandidates(fyStartDate, scanEndDate, MAX_SCAN_PAGES);
   if (candidates.reason) {
     showBanner(`CAFlow: couldn't read the Payment History table — ${candidates.reason}. Details logged to this tab's console.`, "info");
     console.log("CAFlow: Stage 1 (summary scan) failed —", candidates);
@@ -661,6 +673,16 @@ async function runChallanDownload(fyStartDate, fyEndDate) {
       : `CAFlow: verified ${detailed.length} challan(s) from Payment History — switch back to the CAFlow tab, results are there automatically. [v${EXTENSION_VERSION}]`,
     "success",
   );
+}
+
+/** Adds `days` to a yyyy-mm-dd string, returning yyyy-mm-dd. A real
+ *  `Date` is fine here — this runs in the browser content-script context,
+ *  not a workflow script — but the whole computation stays local (never
+ *  reads the actual current date), so nothing here depends on "now". */
+function addDays(yyyyMmDd, days) {
+  const d = new Date(`${yyyyMmDd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 const MONTH_ABBR = {
