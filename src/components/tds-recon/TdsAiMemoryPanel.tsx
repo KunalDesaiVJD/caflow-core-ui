@@ -68,6 +68,10 @@ interface LearnedPattern {
 function fmtValue(v: any): string {
   if (v == null) return "—";
   if (typeof v === "object") {
+    // ledger_selection pattern (Phase 4 — cross-year carry-forward)
+    if ("deductee_name" in v) {
+      return `${v.deductee_name}${v.section_code ? ` (${v.section_code})` : ""}`;
+    }
     if ("section" in v) return v.section ? String(v.section) : "(none)";
     return JSON.stringify(v);
   }
