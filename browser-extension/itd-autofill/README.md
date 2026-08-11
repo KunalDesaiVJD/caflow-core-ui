@@ -254,6 +254,14 @@ re-click the Payment History tab. Also fixed `openViewDetailsForCin` to
 re-paginate forward when looking for a later candidate, since Payment
 History resets to page 1 after that same round-trip.
 
+**v0.4.3 (2026-08-11)**: v0.4.2 verified its first 2 candidates correctly
+end to end (confirmed live in CAFlow's own match results), but the user
+wanted every office challan checked, and pointed out the fix directly:
+switch "Rows per page" from the default 05 to 100 first (confirmed live —
+that dropdown really does offer 05/10/25/50/75/100), cutting the 73-page
+scan down to roughly 4 pages. Added `selectMaxRowsPerPage`, called at the
+start of `collectQuarterCandidates` before any page-scanning begins.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser

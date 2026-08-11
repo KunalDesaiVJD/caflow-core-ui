@@ -761,6 +761,46 @@ function findPaginatorNextButton() {
     || document.querySelector('button[aria-label*="next" i]:not([disabled])');
 }
 
+/** Same idea as findClickableByText, but for a dropdown's OPEN OPTIONS
+ *  (Angular Material's mat-option, or a generic [role='option']) — a
+ *  narrower candidate set and shorter length cap than findClickableByText,
+ *  since an option label is always a short, standalone value like "100". */
+function findOptionByText(pattern) {
+  const candidates = [...document.querySelectorAll("[role='option'], mat-option, li, button, div, span")]
+    .filter((el) => el.offsetParent !== null);
+  const matches = candidates.filter((el) => {
+    const text = (el.textContent || "").trim();
+    return text.length <= 10 && pattern.test(text);
+  });
+  if (!matches.length) return null;
+  return matches.find((el) => el.getAttribute?.("role") === "option" || el.tagName === "MAT-OPTION") || matches[0];
+}
+
+/**
+ * Switches Payment History's "Rows per page" control to its largest option
+ * (100, confirmed from a live screenshot of this exact dropdown: 05 / 10 /
+ * 25 / 50 / 75 / 100) so the page-by-page scan below has far fewer pages to
+ * walk — this portal showed 73 pages at the default 5 rows/page, which
+ * drops to roughly 4 at 100. Best-effort: if the control can't be found or
+ * clicked, collectQuarterCandidates still works, just slower (more pages).
+ */
+async function selectMaxRowsPerPage() {
+  const label = [...document.querySelectorAll("*")].find(
+    (el) => el.children.length === 0 && el.offsetParent !== null && /rows per page/i.test((el.textContent || "").trim()),
+  );
+  if (!label) return false;
+  const scope = label.closest("div")?.parentElement || label.parentElement;
+  const trigger = scope?.querySelector("[role='combobox'], mat-select")
+    || label.parentElement?.querySelector("[role='combobox'], mat-select");
+  if (!trigger) return false;
+  trigger.click();
+  const option100 = await waitFor(() => findOptionByText(/^100$/), 3_000);
+  if (!option100) return false;
+  option100.click();
+  await new Promise((r) => setTimeout(r, 800)); // let the table reflow at the new page size
+  return true;
+}
+
 /**
  * Scans Payment History page by page (fast — reading the summary table
  * only, no per-row navigation) collecting rows whose date falls within
@@ -768,9 +808,11 @@ function findPaginatorNextButton() {
  * (confirmed live) to stop as soon as an entire page is older than the
  * range start, rather than walking all of a TAN's history — this portal
  * showed 73 pages live, and this quarter's data should only ever be in the
- * first handful.
+ * first handful. Switches to 100 rows/page FIRST (see selectMaxRowsPerPage)
+ * so even that "first handful" of pages is as small as possible.
  */
 async function collectQuarterCandidates(fyStartDate, fyEndDate, maxPages) {
+  await selectMaxRowsPerPage();
   const rows = [];
   for (let page = 0; page < maxPages; page++) {
     const pageResult = await waitFor(() => {
