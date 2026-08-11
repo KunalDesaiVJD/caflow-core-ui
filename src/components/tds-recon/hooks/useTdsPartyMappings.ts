@@ -123,7 +123,23 @@ export function useTdsPartyMappings(
           || methods.includes("manual_link")
           || methods.includes("pan_match")
           || methods.includes("zero_tds")
-          || methods.includes("194q_threshold");
+          || methods.includes("194q_threshold")
+          // 2026-08-11 — root cause of "Re-run All makes already-mapped
+          // deductees look unmapped": the TDS Management branch and the
+          // cross-year carry-forward branch (tdsEngine.ts) both write a
+          // SINGLE-token match_method with no other signal alongside it —
+          // "tds_mgmt_confirmed_exact"/"_fuzzy" or "prior_year_confirmed".
+          // None of those tokens were in this whitelist, so every row those
+          // branches created was silently dropped from `mappings` here —
+          // absent from the main table AND never counted into `covered`
+          // below, so a real (needs_review) mapping row still showed its
+          // deductee as "unmapped". These are resolved, evidence-backed
+          // pairings (a real Trial Balance name match or a client's own
+          // prior confirmation), not weak guesses — same trust tier as
+          // pan_match/manual_link above.
+          || methods.includes("tds_mgmt_confirmed_exact")
+          || methods.includes("tds_mgmt_confirmed_fuzzy")
+          || methods.includes("prior_year_confirmed");
       });
 
       // 2026-07-24 — Root cause of Issues 9 & 12: this read-time dedupe was
