@@ -7,6 +7,8 @@
  */
 import { supabase } from "@/integrations/supabase/client";
 import { discoverTdsLedgers, extractPartiesFromTdsVouchers, detect194QCandidates, SECTION_194Q_THRESHOLD } from "./tdsLedgerDiscovery";
+import { resolveTdsMgmtHints, type ResolvedHint, type TallyPartyMapRow } from "@/lib/tds/resolveTdsMgmtHints";
+import { normalizeName } from "@/lib/tds/match";
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -329,6 +331,10 @@ export interface MapperResult {
    *  bucket this run (voucher evidence + no matching deductee).
    *  Sulochana Manish Pandey lives here on Ray Wings. */
   books_only_written?:     number;
+  /** 2026-08-11 — ledgers resolved via TDS Management's own confirmed
+   *  party maps (tds_tally_party_maps) rather than the heuristics below.
+   *  Always pending/needs_review, never auto-confirmed. */
+  tds_mgmt_resolved?:      number;
 }
 
 export async function runAiMapper(params: {
@@ -624,6 +630,47 @@ export async function runAiMapper(params: {
   }
 
   const aggDeductees = aggregateDeducteesForMapper(deducteeRows);
+  // For the TDS Management branch below — group by normalized name so a
+  // deductee filed under two sections this FY (ambiguous) is detectable.
+  const aggByNormName = new Map<string, AggDeductee[]>();
+  for (const ded of aggDeductees) {
+    const key = normalizeName(ded.deductee_name);
+    if (!key) continue;
+    (aggByNormName.get(key) ?? aggByNormName.set(key, []).get(key)!).push(ded);
+  }
+
+  // 2b. TDS Management integration (read-only) — resolve TDS Management's
+  // own confirmed office<->Tally-party maps (tds_tally_party_maps, owned
+  // entirely by TdsTallyRecon.tsx, never written here) against this FY's
+  // live TB, so a ledger TDS Management has already identified doesn't
+  // need to be independently re-discovered by the heuristics below.
+  const { data: tallyPartyMapRows } = await (supabase as any)
+    .from("tds_tally_party_maps")
+    .select("office_name,tally_party")
+    .eq("client_id", client_id);
+  const tdsMgmtHints = resolveTdsMgmtHints(
+    (tallyPartyMapRows ?? []) as TallyPartyMapRow[],
+    expenseLedgers.map((l: any) => ({ ledger_name: l.ledger_name, parent_group: l.parent_group })),
+  );
+  const hintsByLedger = new Map<string, ResolvedHint>();
+  for (const h of tdsMgmtHints) {
+    if ((h.outcome === "exact" || h.outcome === "fuzzy") && h.resolvedLedgerName) {
+      hintsByLedger.set(h.resolvedLedgerName, h);
+    }
+  }
+  // SAFETY — fetched unconditionally (independent of force_rematch, unlike
+  // `alreadyMapped` below): a ledger with an existing CONFIRMED mapping this
+  // FY is never touched by the TDS Management branch, ever, even on a
+  // "Re-run All". Whoever/whatever confirmed it (auditor or a prior AI run)
+  // keeps standing.
+  const { data: confirmedRows } = await (supabase as any)
+    .from("tds_tb_party_mappings")
+    .select("tb_ledger_name")
+    .eq("client_id", client_id)
+    .eq("financial_year", financial_year)
+    .eq("mapping_status", "confirmed");
+  const confirmedLedgerNames = new Set<string>((confirmedRows ?? []).map((r: any) => r.tb_ledger_name));
+  let tdsMgmtResolved = 0;
 
   // 3. Already-mapped ledger names
   let alreadyMapped = new Set<string>();
@@ -654,6 +701,48 @@ export async function runAiMapper(params: {
     const hasVoucherEvidence = isVoucherDerived || (tb as any).__voucher_evidence === true;
     const voucherTds         = Number((tb as any).__voucher_tds_amount ?? 0);
     if (!isVoucherDerived && alreadyMapped.has(tb.ledger_name)) { skipped++; continue; }
+
+    // ── TDS Management branch — tried BEFORE the heuristics below, but
+    // NEVER for a ledger that already has a CONFIRMED mapping this FY
+    // (unconditional guard, checked fresh above, independent of
+    // force_rematch/alreadyMapped). Only fires when the resolved office
+    // name maps to exactly ONE deductee this FY — a name filed under two
+    // sections this year is ambiguous and falls through to the heuristics,
+    // same "never guess" principle as resolveTdsMgmtHints itself.
+    if (!isVoucherDerived && !confirmedLedgerNames.has(tb.ledger_name)) {
+      const hint = hintsByLedger.get(tb.ledger_name);
+      const candidates = hint ? aggByNormName.get(normalizeName(hint.officeName)) : undefined;
+      if (hint && candidates && candidates.length === 1) {
+        const ded = candidates[0];
+        upsertRows.push({
+          client_id, firm_id, financial_year,
+          tb_ledger_name:    tb.ledger_name,
+          tb_parent_group:   tb.parent_group,
+          tb_total_debit:    Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0) || null,
+          tds_deductee_name: ded.deductee_name,
+          tds_section_code:  ded.section_code,
+          tds_total_amount:  ded.total_amount_paid || null,
+          tds_tds_amount:    ded.total_tds || null,
+          tds_filing_ids:    ded.filing_ids,
+          match_confidence:  hint.confidence,
+          match_method:      hint.outcome === "exact" ? "tds_mgmt_confirmed_exact" : "tds_mgmt_confirmed_fuzzy",
+          ai_reasoning:
+            `Resolved from TDS Management's confirmed party mapping: ` +
+            `"${hint.officeName}" → "${hint.tallyPartyRaw}" (${hint.outcome}, name tier ${hint.nameTier}). ` +
+            `Not re-derived by this mapper — TDS Management already confirmed this identity in its own ` +
+            `Tally Verification step; this only checked that it still resolves to a live Trial Balance ` +
+            `ledger this year.`,
+          // Never auto-"confirmed" on this pathway — a human reviews it
+          // once, same as any other suggestion, before it becomes
+          // authoritative, regardless of how confident the resolution is.
+          mapping_status: hint.outcome === "exact" ? "pending" : "needs_review",
+          mapped_by: "tds_mgmt",
+        });
+        tdsMgmtResolved++;
+        continue;
+      }
+    }
+
     let best: {
       ded: AggDeductee; confidence: number; nameScore: number; amtScore: number;
       secScore: number; method: string; gstAdjusted: boolean;
@@ -980,6 +1069,7 @@ export async function runAiMapper(params: {
     discovered_tds_ledgers: discoveredTdsLedgers.length,
     voucher_parties_added:  voucherPartiesAdded,
     books_only_written:     booksOnlyWritten,
+    tds_mgmt_resolved:      tdsMgmtResolved,
   };
 }
 
