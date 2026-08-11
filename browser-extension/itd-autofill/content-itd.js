@@ -751,20 +751,59 @@ function readVisibleSummaryRows() {
   return { rows };
 }
 
+// 2026-08-11 (third pass): the aria-label convention this whole paginator
+// section assumed (findPaginatorNextButton / findPaginatorFirstPageButton)
+// has now failed identically across two separate live runs — resetting to
+// page 1 had ZERO effect on the result, which only makes sense if
+// findPaginatorNextButton was ALREADY failing before that fix too, not just
+// the "which page are we on" bookkeeping. Rather than guess a fourth
+// aria-label variant, dump every button with ANY aria-label (or inside
+// something that looks like a paginator container) the FIRST time this
+// fails, so the real convention is visible directly. Guarded by a
+// module-level flag so 9 near-simultaneous failures don't spam the console
+// with 9 identical dumps.
+let paginatorDumpLogged = false;
+function dumpPaginatorButtonsOnce() {
+  if (paginatorDumpLogged) return;
+  paginatorDumpLogged = true;
+  const labeled = [...document.querySelectorAll("button[aria-label]")]
+    .filter((b) => b.offsetParent !== null)
+    .map((b) => ({ ariaLabel: b.getAttribute("aria-label"), text: (b.textContent || "").trim().slice(0, 20), disabled: b.disabled }));
+  const paginatorContainer = [...document.querySelectorAll("*")].find(
+    (el) => el.children.length === 0 && el.offsetParent !== null && /rows per page/i.test((el.textContent || "").trim()),
+  )?.closest("div")?.parentElement;
+  const nearPaginator = paginatorContainer
+    ? [...paginatorContainer.querySelectorAll("button")].map((b) => ({
+        ariaLabel: b.getAttribute("aria-label"), cls: (b.className || "").toString().slice(0, 50),
+        text: (b.textContent || "").trim().slice(0, 20), disabled: b.disabled,
+      }))
+    : [];
+  console.log("CAFlow: every visible button with an aria-label —");
+  console.table(labeled);
+  console.log("CAFlow: every button found inside the 'Rows per page' container specifically —");
+  console.table(nearPaginator);
+}
+
 /** Angular Material's built-in <mat-paginator> always labels its nav
  *  buttons "Next page" / "Previous page" / "First page" / "Last page" via
  *  aria-label — a stable, documented Material Design convention, not a
  *  guess specific to this portal (already confirmed to be built on Angular
  *  Material elsewhere in this file, e.g. the e-File menu's own
- *  mat-mdc-menu-item class). */
+ *  mat-mdc-menu-item class). UNCONFIRMED LIVE as of v0.4.5 — see
+ *  dumpPaginatorButtonsOnce, called on failure, for why this is now in
+ *  question rather than assumed correct. */
 function findPaginatorNextButton() {
-  return document.querySelector('button[aria-label="Next page" i]:not([disabled])')
+  const found = document.querySelector('button[aria-label="Next page" i]:not([disabled])')
     || document.querySelector('button[aria-label*="next" i]:not([disabled])');
+  if (!found) dumpPaginatorButtonsOnce();
+  return found;
 }
 
 function findPaginatorFirstPageButton() {
-  return document.querySelector('button[aria-label="First page" i]:not([disabled])')
+  const found = document.querySelector('button[aria-label="First page" i]:not([disabled])')
     || document.querySelector('button[aria-label*="first" i]:not([disabled])');
+  if (!found) dumpPaginatorButtonsOnce();
+  return found;
 }
 
 /** Resets Payment History to page 1 — the "|<" control confirmed from a

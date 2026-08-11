@@ -287,6 +287,16 @@ exactly page 1's own rows, confirming this. Added `resetToFirstPage` (the
 "|<" control) called at the start of every `openViewDetailsForCin`, so
 each candidate search starts from the same known position.
 
+**v0.4.6 (2026-08-11)**: v0.4.5's page-1 reset had ZERO effect on the
+result (identical 2/11 outcome, same CINs), which only makes sense if
+`findPaginatorNextButton` was already failing before that fix too — the
+whole "Next page" / "First page" aria-label assumption is now in question,
+not just the page-tracking logic built on top of it. Rather than guess a
+fourth aria-label variant, added `dumpPaginatorButtonsOnce`: the first time
+either paginator lookup fails, it logs every visible button with an
+aria-label, plus every button specifically inside the "Rows per page"
+container, so the real convention is visible directly.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser
