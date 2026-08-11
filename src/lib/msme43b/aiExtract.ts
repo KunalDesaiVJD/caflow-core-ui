@@ -328,7 +328,8 @@ async function extractByPageImages(
   for (let p = 1; p <= pages; p += PAGES_PER_IMAGE_CHUNK) {
     const nums: number[] = [];
     for (let k = p; k < p + PAGES_PER_IMAGE_CHUNK && k <= pages; k++) nums.push(k);
-    for (const raw of await readPages(nums)) collected.push(mapLedger(raw, file.name, false));
+    const label = nums.length === 1 ? `page ${nums[0]}` : `pages ${nums[0]}–${nums[nums.length - 1]}`;
+    for (const raw of await readPages(nums)) collected.push(mapLedger(raw, file.name, false, label));
   }
 
   if (!collected.length) {
@@ -418,7 +419,7 @@ async function extractByLineChunks(
 
   for (let i = 0; i < lines.length; i += LINES_PER_CHUNK) {
     const group = lines.slice(i, i + LINES_PER_CHUNK);
-    for (const raw of await readChunk(group)) collected.push(mapLedger(raw, file.name, false));
+    for (const raw of await readChunk(group)) collected.push(mapLedger(raw, file.name, false, span(group)));
   }
 
   if (!collected.length) {
@@ -440,17 +441,46 @@ async function extractByLineChunks(
 const nameKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 /**
+ * Marker for a ledger fragment whose vendor name could not be read from its
+ * chunk. Each chunk call has NO memory of the vendor identified in a previous
+ * call (see readChunk/readPages — only that chunk's text is sent), so when a
+ * chunk boundary lands before the vendor header ever appears, the model
+ * genuinely cannot know the name.
+ *
+ * Previously this fell back to the UPLOADED FILE'S NAME, which looks like a
+ * confident, correct vendor name and is not one — on a merged multi-vendor
+ * export it silently mislabels the fragment as whatever the file happened to
+ * be called, and mergeLedgers() below then merges EVERY such fragment from the
+ * same file into one corrupted ledger (wrong party, missing transactions,
+ * unreliable disallowance) because they all share that same fallback name.
+ *
+ * An unresolved fragment must instead be visibly flagged and never silently
+ * merged with another unresolved fragment that likely belongs to a different
+ * real vendor.
+ */
+export const UNRESOLVED_VENDOR_PREFIX = 'UNRESOLVED VENDOR';
+
+/** True for a ledger whose vendor name is a placeholder, not a read name. */
+export const isUnresolvedVendor = (name: string): boolean => name.startsWith(UNRESOLVED_VENDOR_PREFIX);
+
+/**
  * Rejoin the pieces of a ledger that spanned several page ranges.
  *
  * Opening comes from the FIRST range that stated one and closing from the LAST,
  * because those are the only ranges that can have seen them. Transactions are
  * concatenated in date order, with exact duplicates dropped — a row can appear
  * twice when a bill's detail lines straddle a page break and both ranges report it.
+ *
+ * Unresolved fragments (see UNRESOLVED_VENDOR_PREFIX) are never grouped by name
+ * with one another — two fragments that both failed to read a vendor name are
+ * not evidence they are the SAME vendor, so each is kept separate and left for
+ * a human to identify and reassign.
  */
 function mergeLedgers(parts: VendorLedger[]): VendorLedger[] {
   const byVendor = new Map<string, VendorLedger[]>();
+  let unresolvedSeq = 0;
   for (const p of parts) {
-    const k = nameKey(p.vendorName);
+    const k = isUnresolvedVendor(p.vendorName) ? `__unresolved_${unresolvedSeq++}` : nameKey(p.vendorName);
     byVendor.set(k, [...(byVendor.get(k) ?? []), p]);
   }
 
@@ -512,7 +542,14 @@ export function rowFields(t: unknown): Record<string, unknown> {
   return out;
 }
 
-export function mapLedger(raw: unknown, sourceFile: string, reconcile = true): VendorLedger {
+/**
+ * @param contextLabel the page range / chunk this fragment was read from (e.g.
+ *   "page 3" or "pages 3–4"), included in the unresolved placeholder so two
+ *   different unresolved fragments never collide on the same name and so the
+ *   reviewer knows exactly where in the source PDF to look. Omitted for a
+ *   whole-document read, where there is only one fragment to begin with.
+ */
+export function mapLedger(raw: unknown, sourceFile: string, reconcile = true, contextLabel?: string): VendorLedger {
   const r = (raw ?? {}) as Record<string, unknown>;
   // "rows" is the compact form; "txns" is the older named form.
   const rawRows = Array.isArray(r.rows) ? r.rows : Array.isArray(r.txns) ? r.txns : [];
@@ -551,8 +588,19 @@ export function mapLedger(raw: unknown, sourceFile: string, reconcile = true): V
   }).filter((t) => t.date && (t.debit > 0 || t.credit > 0));
 
   const periodFrom = str(r.periodFrom) || undefined;
+  const rawVendorName = str(r.vendorName).trim();
+  const where = contextLabel ? ` (${contextLabel} of "${sourceFile}")` : ` (in "${sourceFile}")`;
+  const vendorName = rawVendorName || `${UNRESOLVED_VENDOR_PREFIX}${where}`;
+  const warnings: string[] = [];
+  if (!rawVendorName) {
+    warnings.push(
+      `The vendor name could not be read from${where} — the header may sit outside the chunk that was read. ` +
+      'These transactions have NOT been assumed to belong to any other vendor in this upload; identify the ' +
+      'correct party and re-run, or manually reassign this ledger before relying on its figures.',
+    );
+  }
   const led: VendorLedger = {
-    vendorName: str(r.vendorName) || sourceFile.replace(/\.[Pp][Dd][Ff]$/, ''),
+    vendorName,
     financialYear: str(r.financialYear) || (periodFrom ? fyFromStart(periodFrom) : undefined),
     periodFrom,
     periodTo: str(r.periodTo) || undefined,
@@ -561,7 +609,7 @@ export function mapLedger(raw: unknown, sourceFile: string, reconcile = true): V
     txns,
     format: 'ai',
     sourceFile,
-    warnings: [],
+    warnings,
   };
   return reconcile ? reconcileLedger(led) : led;
 }

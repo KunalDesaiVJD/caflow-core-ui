@@ -6,7 +6,7 @@ vi.mock('@/integrations/supabase/client', () => ({
   supabase: { functions: { invoke: vi.fn() } },
 }));
 
-const { rowFields, mapLedger } = await import('./aiExtract');
+const { rowFields, mapLedger, isUnresolvedVendor } = await import('./aiExtract');
 
 // The exact example given to the model in the system prompt. If the prompt and
 // the parser ever drift apart, this fails.
@@ -112,5 +112,30 @@ describe('compact positional rows', () => {
     }, 'f.pdf', false);
     expect(led.txns[0].credit).toBe(1000);
     expect(led.txns[0].debit).toBe(0);
+  });
+
+  it('flags a missing vendor name instead of guessing it from the filename', () => {
+    // A chunk that lost its header (e.g. the vendor row fell in an earlier
+    // chunk of a merged multi-vendor export) must NEVER be silently relabelled
+    // with the uploaded file's name — that produced exactly this bug: three
+    // unrelated vendors in "Amadius Realty.pdf" all showing up as "Amadius
+    // Realty" and getting merged into one corrupted ledger.
+    const led = mapLedger({
+      openingBalance: 0, closingBalance: 5000,
+      rows: [['2026-01-05', 'Purchase', '', '', 0, 5000, null, null, null]],
+    }, 'Amadius Realty.pdf', false, 'page 4');
+
+    expect(led.vendorName).not.toBe('Amadius Realty');
+    expect(isUnresolvedVendor(led.vendorName)).toBe(true);
+    expect(led.vendorName).toContain('page 4');
+    expect(led.warnings.some((w) => /could not be read/i.test(w))).toBe(true);
+  });
+
+  it('gives two unresolved fragments from different chunks distinct names', () => {
+    // Two vendors that both lost their header in the SAME file must not collide
+    // on one placeholder name — that would merge them into a single ledger.
+    const a = mapLedger({ openingBalance: 0, closingBalance: 1000, rows: [] }, 'f.pdf', false, 'page 1');
+    const b = mapLedger({ openingBalance: 0, closingBalance: 2000, rows: [] }, 'f.pdf', false, 'page 5');
+    expect(a.vendorName).not.toBe(b.vendorName);
   });
 });

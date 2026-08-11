@@ -35,9 +35,10 @@ function buildBillsAndSettlements(
   fy: VendorLedger | null,
   cfg: Msme43bConfig,
   declaredGstRate?: number,
-): { bills: WorkBill[]; settlements: Settlement[] } {
+): { bills: WorkBill[]; settlements: Settlement[]; provisionExcluded: number } {
   const bills: WorkBill[] = [];
   const settlements: Settlement[] = [];
+  let provisionExcluded = 0;
 
   const openingDate = cy.periodFrom || `${cy.financialYear?.slice(0, 4)}-04-01`;
   if (cfg.includeOpeningBalance && cy.openingBalance > cfg.toleranceRupees) {
@@ -53,6 +54,13 @@ function buildBillsAndSettlements(
       t.type = c.type;
       t.needsReview = c.needsReview;
       if (t.credit > cfg.toleranceRupees) {
+        // A provision is a book entry, not an invoice from the supplier — it
+        // never originates a "sum payable" for s.43B(h) to test, so (under the
+        // default 'ignore' profile) it is excluded rather than becoming a bill.
+        if (c.type === 'PROVISION' && treatmentOf(c.type, cfg) === 'ignore') {
+          provisionExcluded += r2(t.credit);
+          continue;
+        }
         bills.push(mkBill(led.vendorName, t.date, t.credit, c.type === 'PURCHASE' ? 'PURCHASE' : c.type, false, t, declaredGstRate));
       } else if (t.debit > cfg.toleranceRupees) {
         // 'ignore' settlements are not discharges under the current rule profile
@@ -71,7 +79,7 @@ function buildBillsAndSettlements(
 
   bills.sort((a, b) => a.billDate.localeCompare(b.billDate));
   settlements.sort((a, b) => a.date.localeCompare(b.date));
-  return { bills, settlements };
+  return { bills, settlements, provisionExcluded: r2(provisionExcluded) };
 }
 
 function mkBill(
@@ -260,7 +268,7 @@ export function analyzeVendor(
   /** the GST rate the firm has declared for this vendor's supplies, if any */
   declaredGstRate?: number,
 ): VendorResult {
-  const { bills, settlements } = buildBillsAndSettlements(cy, fy, cfg, declaredGstRate);
+  const { bills, settlements, provisionExcluded } = buildBillsAndSettlements(cy, fy, cfg, declaredGstRate);
   allocate(bills, settlements, cfg);
 
   const cyEnd = cy.periodTo || fyEndDate(cy.financialYear || '2025-26');
@@ -295,6 +303,12 @@ export function analyzeVendor(
   if (fy && !fy.balanceReconciled) warnings.push(`FY ledger did not reconcile (drift ₹${fy.reconDrift}).`);
   if (!continuityOk) warnings.push(`FY opening (₹${fy?.openingBalance}) ≠ CY closing (₹${cy.closingBalance}).`);
   if (!fy) warnings.push('Following-year ledger not provided — FY payment dates unknown; year-end outstanding shown as fully disallowed pending FY data.');
+  if (provisionExcluded > cfg.toleranceRupees) {
+    warnings.push(
+      `₹${provisionExcluded.toLocaleString('en-IN')} of book provisions/accruals excluded from this vendor's ` +
+      'disallowance base — a provision is not an invoice from the supplier, so s.43B(h) has nothing to test it against.',
+    );
+  }
   if (cfg.disallowanceBase === 'taxableValue' && gstUnidentifiedValue > cfg.toleranceRupees) {
     warnings.push(
       `GST could not be identified on ₹${gstUnidentifiedValue} of disallowed value — the ledger does not show the tax split. ` +
@@ -312,7 +326,7 @@ export function analyzeVendor(
     continuityOk,
     bills: results,
     totalDisallowedCY, totalAllowedFY, totalStillOutstanding,
-    gstExcluded, gstUnidentifiedValue, declaredGstRate,
+    gstExcluded, gstUnidentifiedValue, declaredGstRate, provisionExcluded,
     warnings, reviewCount,
   };
 
