@@ -274,6 +274,19 @@ found after N pages / found the row but no "⋮" trigger / clicked "⋮" but no
 "View Details" appeared) so the next run's console shows exactly where each
 failure happens instead of just "couldn't be opened."
 
+**v0.4.5 (2026-08-11)**: the v0.4.4 diagnostics found the real bug — every
+failed candidate showed "row not found after searching 1 page(s)," meaning
+`openViewDetailsForCin` gave up after a single check every time, never
+actually paginating forward. Root cause: `collectQuarterCandidates` itself
+pages FORWARD while building the candidate list and never returns to page
+1 afterward, so by the time candidate lookups start, the browser is sitting
+wherever that scan left off — anywhere from page 1 onward — and this
+function can only search forward from there, so any candidate on an
+earlier page could never be found. The 2 candidates that DID succeed were
+exactly page 1's own rows, confirming this. Added `resetToFirstPage` (the
+"|<" control) called at the start of every `openViewDetailsForCin`, so
+each candidate search starts from the same known position.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser

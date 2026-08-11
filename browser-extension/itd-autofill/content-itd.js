@@ -752,13 +752,29 @@ function readVisibleSummaryRows() {
 }
 
 /** Angular Material's built-in <mat-paginator> always labels its nav
- *  buttons "Next page" / "Previous page" via aria-label — a stable,
- *  documented Material Design convention, not a guess specific to this
- *  portal (already confirmed to be built on Angular Material elsewhere in
- *  this file, e.g. the e-File menu's own mat-mdc-menu-item class). */
+ *  buttons "Next page" / "Previous page" / "First page" / "Last page" via
+ *  aria-label — a stable, documented Material Design convention, not a
+ *  guess specific to this portal (already confirmed to be built on Angular
+ *  Material elsewhere in this file, e.g. the e-File menu's own
+ *  mat-mdc-menu-item class). */
 function findPaginatorNextButton() {
   return document.querySelector('button[aria-label="Next page" i]:not([disabled])')
     || document.querySelector('button[aria-label*="next" i]:not([disabled])');
+}
+
+function findPaginatorFirstPageButton() {
+  return document.querySelector('button[aria-label="First page" i]:not([disabled])')
+    || document.querySelector('button[aria-label*="first" i]:not([disabled])');
+}
+
+/** Resets Payment History to page 1 — the "|<" control confirmed from a
+ *  live screenshot of this exact paginator. Does nothing (not an error) if
+ *  already on page 1, since that button is disabled/absent there. */
+async function resetToFirstPage() {
+  const first = findPaginatorFirstPageButton();
+  if (!first) return;
+  first.click();
+  await new Promise((r) => setTimeout(r, 700));
 }
 
 /** Same idea as findClickableByText, but for a dropdown's OPEN OPTIONS
@@ -903,8 +919,21 @@ function findRowByCin(cin) {
  * collectQuarterCandidates already uses) looking for this specific CIN
  * before giving up, capped well under the 73-page total seen live since a
  * quarter's own challans cluster near the top of a newest-first list.
+ *
+ * 2026-08-11 (second pass): live diagnostics showed every failure stopping
+ * after searching exactly ONE page — Stage 1 (collectQuarterCandidates)
+ * itself pages FORWARD to build the candidate list and never returns to
+ * page 1 afterward, so by the time this function's first call runs, the
+ * browser is sitting wherever Stage 1 left off — anywhere from page 1 to
+ * however many pages it took to cover the quarter. This function can only
+ * go forward, so any candidate whose row sat on an EARLIER page than that
+ * could never be found. Explicitly resets to page 1 first (the "|<"
+ * control, findPaginatorFirstPageButton) so every search starts from the
+ * same known position instead of wherever a previous call happened to
+ * leave the paginator.
  */
 async function openViewDetailsForCin(cin, maxPages = 20) {
+  await resetToFirstPage();
   let row = null;
   let pagesSearched = 0;
   for (let page = 0; page < maxPages; page++) {
