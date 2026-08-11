@@ -59,6 +59,172 @@ entirely rather than patch the selector — Income-tax Act, 2025 is
 pre-selected by default anyway (confirmed from a real screenshot of this
 page), so the click was always harmless-but-redundant, never load-bearing.
 
+**v0.3.5 (2026-08-11)**: live-verified against a real logged-in session —
+e-File → e-Pay Tax was already correct; the NEXT stuck point was "couldn't
+find Continue" on the Act-selection page. A real screenshot showed why:
+that button's own text is "Continue ›" (a trailing chevron, same as the
+login flow's two Continue buttons), which fails the exact-text
+`/^continue$/i` match `runChallanDownload`'s step list used, while the
+login flow's own `findButtonByText(/continue/i)` — no anchors — already
+matches "Continue" successfully twice over. Relaxed the Continue step to
+the same loose pattern instead of guessing at a new one. Also captured a
+real screenshot of the actual Payment History table this run, confirming
+its columns (CIN, Bank Reference Number, Tax Year, Type of Payment,
+Amount, Payment Date & Time, Action) and that the rightmost "Action"
+column is cut off in a normal-width window — `findRowActionTrigger`'s
+per-row icon-only targeting is still unconfirmed live past this point.
+
+**v0.3.6 (2026-08-11)**: with v0.3.5's Continue fix live-verified, the next
+stuck point was "couldn't find Payment History" right after Continue.
+Live-inspected the real e-Pay Tax dashboard DOM through the browser console
+(same candidate selector, visibility check, 60-char cap, and pattern
+`findClickableByText` itself uses) and found four clean, exact "Payment
+History" matches — ruling out a text/selector bug entirely. Most likely
+cause: Continue navigates to a dashboard that has to fetch real payment
+records from the government backend before it renders, which can outrun the
+previous uniform 10s wait. Gave each step in `runChallanDownload`'s own list
+its own timeout instead of one shared value, and widened just this step's to
+25s, leaving the cheaper nav clicks at 10s so a genuine break there still
+fails fast.
+
+**v0.3.7 (2026-08-11)**: found the real root cause behind every "couldn't
+find X" banner in this flow so far — not a selector bug, not a slow data
+fetch. `runChallanDownload` started hunting for "e-File" the instant the
+queued download request was found, with no check that login had actually
+finished. Login's own final Continue click is deliberately manual (see this
+file's header doc), so the click-path was racing the human, not following
+them — confirmed live from a screenshot showing the "couldn't find e-File"
+banner sitting directly on top of the still-visible, not-yet-submitted login
+page. Every later-step failure in earlier versions was very likely the same
+race with luckier timing, not the timeout or selector issues those versions
+"fixed." Added a real wait (up to 5 minutes, human-paced) for the URL to
+actually reach `#/dashboard` before the click-path starts.
+
+**v0.3.8 (2026-08-11)**: with the login-race fix (v0.3.7) confirmed working
+live, "couldn't find Payment History" still happened — but the address bar
+at that point was still bare `#/dashboard`, not the real
+`#/dashboard/e-pay-tax/e-pay-tax-dashboard` route a successful run reaches.
+That means an earlier step is reporting success without producing the
+navigation it should, and a single pass/fail banner can't say which one.
+Added per-step logging to `window.__caflowStepLog` — each entry records
+whether the step's target was found, its tag/text, and the URL hash right
+before and after the click — readable straight from the console (`console.
+table(window.__caflowStepLog)`) instead of needing another manual trace
+script pasted in.
+
+**v0.3.9 (2026-08-11)**: v0.3.8's `window.__caflowStepLog` read back
+`undefined` even from the exact right tab. Root cause: this content script
+runs in Chrome's default ISOLATED WORLD — a separate JS global scope from
+the page's own, sharing only the DOM. Setting a property on this script's
+`window` never touches the page's `window`, which is what DevTools Console
+reads from by default when you type a command — two different objects both
+named `window`. Switched to calling `console.table` directly from inside
+the content script instead (console output isn't world-scoped the same
+way, so it still lands in the same visible panel) — the step table now
+prints itself automatically the moment a run finishes or fails, no command
+needed.
+
+**v0.3.10 (2026-08-11)**: with v0.3.9's step logging finally readable, a
+real run caught the bug directly — the "Continue" step's loose
+`/continue/i` match clicked a `<div>` reading "× Continue Session…", the
+portal's own session-timeout warning popup, instead of the Act-selection
+page's real "Continue ›" button. Dismissing that popup advances nothing,
+which is why "Payment History" always came up empty right after. Re-anchored
+the pattern to `/^continue\s*[›»>]?\s*$/i` — matches "Continue" / "Continue
+›" exactly (with optional trailing arrow/whitespace) but not "× Continue
+Session" or any other button with extra words around "Continue".
+
+**v0.3.11 (2026-08-11)**: v0.3.10's end-anchored Continue pattern (only
+accepting a specific chevron character after the word) came back "not
+found" — the real button's exact trailing character was never actually
+confirmed character-for-character. Dropped the end anchor; kept the start
+anchor + word boundary, since that's what the step log proved was doing the
+real work (excluding the session-timeout popup's "× Continue Session",
+which fails to match because it starts with "×", not "Continue").
+
+**v0.3.12 (2026-08-11)**: two Continue-pattern guesses in a row (v0.3.10's
+end-anchored version, v0.3.11's start-anchored version) both came back "not
+found" — enough guessing from screenshots. On any step failure, this
+version now also dumps every visible element whose text loosely contains
+that step's first word (tag, full text, length) via `console.table`, so the
+real candidate set is visible directly instead of inferred again.
+
+**v0.3.13 (2026-08-11)**: v0.3.12's full-candidate dump showed the real
+problem was upstream of "Continue" entirely — the URL was still bare
+`#/dashboard` at the moment it failed, meaning the earlier "e-Pay Tax" click
+(which reported success) never actually navigated anywhere.
+`findClickableByText`'s candidate selector includes bare `span`/`div` so it
+can match a menu item's inner text label instead of its real clickable
+wrapper (`<a>`/`<li>`/`[role=menuitem]`) — clicking that inner label doesn't
+reliably fire Angular's own navigation handler. Now climbs to the nearest
+real clickable ancestor via `closest()` before clicking, the same fix
+`findRowActionTrigger` already applies for the Payment History row icon.
+
+**v0.3.14 (2026-08-11)**: v0.3.13's ancestor-climb fixed "e-File" (a real
+`<a>`) but "e-Pay Tax" still only matched a bare `<span>` — live-inspected
+its real ancestor chain and found why: the e-File menu is Angular Material
+(`mat-menu`), and its actual clickable host is a plain
+`<div class="mat-mdc-menu-item...">` one level up — no `role="menuitem"`,
+not a button, not an `<a>`, so nothing in the previous ancestor selector
+could ever match it. Added a class-based fallback (`[class*='menu-item']`)
+checked first, specifically for this Material convention.
+
+**v0.3.15 (2026-08-11)**: v0.3.14's ancestor-climb was correct but "e-Pay
+Tax" still resolved to a bare span — a timing race, not a selector bug.
+"e-File" opens an Angular Material menu with its own brief open animation;
+the text can exist in the DOM before its wrapping `mat-mdc-menu-item` class
+is actually applied, and `waitFor` resolves on the first truthy result, so
+it can latch onto the not-yet-ready span before the animation settles.
+Widened the delay specifically after the "e-File" step (900ms vs the other
+steps' 400ms) so polling only starts once the menu's real DOM is stable.
+
+**v0.3.16 (2026-08-11)**: v0.3.15's 900ms animation-settle delay did NOT
+fix "e-Pay Tax" resolving to a bare span — same symptom, so timing wasn't
+the actual cause. Added a diagnostic that fires whenever a step resolves to
+a non-interactive element (span/div): it dumps every element that exactly
+matches that step's pattern (not just the first found), each with its own
+class and 3-level ancestor chain, printed to the console right before the
+click happens. This directly exposes whether there are multiple matching
+elements (e.g. a stale duplicate Angular's router left behind — the same
+category of bug this file already found once for "Continue" buttons)
+instead of guessing at a fifth fix.
+
+**v0.3.17 (2026-08-11)**: v0.3.16's diagnostic caught a different symptom
+on a different run — zero elements containing "e-pay" anywhere on the page
+right after clicking "e-File," not a wrong-element match. "e-File" is a
+toggle (click opens it, click again closes it) on a page that never fully
+reloads between attempts; if it was already open for any reason when a
+fresh run started, one blind click would close it instead of opening it.
+Replaced the single click with an open-and-verify loop: click, check the
+menu actually opened by testing for "e-Pay Tax," and if not, click again
+(undoing an accidental close) — up to 3 tries.
+
+**v0.3.18 (2026-08-11)**: the full candidate dump for "e-Pay Tax" proved a
+real `<button class="mat-mdc-menu-item...">` exists among the matches —
+Angular Material's actual menu-item element — yet the step log kept
+reporting a bare span. Root cause: `findClickableByText` returned on the
+first match in DOCUMENT ORDER, which isn't the same as the most correct
+element, and a nested span can precede its own button ancestor in the
+NodeList in ways the selector string's ordering doesn't control. Rewrote it
+to collect every match first, then explicitly rank a real button/link/li
+above a bare span/div, instead of trusting whichever happened to come first.
+
+**v0.4.0 (2026-08-11)**: with navigation to Payment History confirmed
+working live (v0.3.18), the download/upload flow was replaced entirely per
+explicit instruction — no file gets downloaded any more. `content-itd.js`
+now reads the Payment History table directly (`scrapePaymentHistoryTable`),
+parsing each row's CIN into BSR code + challan serial (OLTAS convention:
+7-digit BSR + 8-digit deposit date + up to 5-digit serial, concatenated),
+and relays the rows back to the CAFlow tab — the OPPOSITE direction from
+every other relay in this extension — via a new
+STORE/GET_CHALLAN_SCRAPE_RESULT pair in `background.js`, polled by
+`content-caflow.js` and posted into the page as
+`CHALLAN_PAYMENT_HISTORY_RESULT`. CAFlow's own `TdsChallanDownloadValidation.
+tsx` runs the SAME per-challan matching (date, amount, BSR, serial) the old
+PDF-upload path used, now fully automatic. Pagination on Payment History is
+UNCONFIRMED — only the currently-visible page's rows are read; flag this if
+a quarter's challan count exceeds what fits on one page.
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser

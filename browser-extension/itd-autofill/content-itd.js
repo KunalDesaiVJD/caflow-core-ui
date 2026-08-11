@@ -322,10 +322,25 @@ function showBanner(text, kind) {
  *  DOM) are as likely to be <li>/<a>/[role=menuitem]/[role=tab] as an actual
  *  <button> — broadened here rather than reusing findButtonByText's tighter
  *  selector, which was deliberately scoped to the login form's own controls. */
+// 2026-08-11 (sixteenth pass): the full candidate dump for "e-Pay Tax"
+// proved a real `<button class="mat-mdc-menu-item...">` exists among the
+// matches (Angular Material's actual menu-item element — index 3 in that
+// dump), yet the step log kept reporting a bare SPAN. Root cause: this
+// function returned on the FIRST match in document order, and document
+// order does not equal "most correct element" — a nested SPAN can precede
+// or interleave with its own button ancestor in ways that aren't
+// predictable from the selector list's own ordering. Eleventh/twelfth pass
+// tried to compensate by climbing from whatever was matched first, which
+// only works if the FIRST match is a reasonable starting point — it wasn't
+// here. Rewritten to collect every match, then explicitly rank by how
+// "real" the element is (an actual button/link beats a bare span/div),
+// picking the best one regardless of where it fell in document order.
+const CLICKABLE_TAG_RANK = { BUTTON: 0, A: 1, LI: 2 };
 function findClickableByText(pattern) {
   const candidates = document.querySelectorAll(
     "button, a, a[role='button'], li, [role='menuitem'], [role='tab'], [role='link'], span, div",
   );
+  const matches = [];
   for (const el of candidates) {
     if (el.offsetParent === null) continue; // hidden — same reasoning as findButtonByText
     const text = (el.textContent || "").trim();
@@ -334,9 +349,31 @@ function findClickableByText(pattern) {
     // to contain the pattern somewhere deep inside it. Capping length avoids
     // clicking the wrong (much bigger) ancestor.
     if (text.length > 60) continue;
-    if (pattern.test(text)) return el;
+    if (pattern.test(text)) matches.push(el);
   }
-  return null;
+  if (matches.length === 0) return null;
+  // Rank each match: a real <button>/<a>/<li> wins outright; failing that,
+  // prefer whichever match has the "best" ancestor available (a Material
+  // menu-item class, then a role/tag-based clickable ancestor), so a bare
+  // span/div still resolves to its real clickable wrapper when one exists —
+  // same reasoning eleventh/twelfth pass already established, just no
+  // longer gated on being the first thing this function happened to find.
+  let best = null;
+  let bestRank = Infinity;
+  for (const el of matches) {
+    const ownRank = CLICKABLE_TAG_RANK[el.tagName];
+    if (ownRank !== undefined && ownRank < bestRank) { best = el; bestRank = ownRank; if (bestRank === 0) break; }
+  }
+  if (best) return best;
+  for (const el of matches) {
+    const materialMenuItem = el.closest("[class*='menu-item']");
+    if (materialMenuItem) return materialMenuItem;
+  }
+  for (const el of matches) {
+    const clickable = el.closest("button, a, a[role='button'], li, [role='menuitem'], [role='tab'], [role='link']");
+    if (clickable) return clickable;
+  }
+  return matches[0];
 }
 
 /**
@@ -376,6 +413,31 @@ function findRowActionTrigger() {
 }
 
 async function runChallanDownload(fyStartDate, fyEndDate) {
+  showBanner("CAFlow: waiting for you to finish logging in…", "info");
+
+  // 2026-08-11 (fifth pass): every prior fix in this function assumed login
+  // was already complete by the time these steps ran — wrong. This poll
+  // loop's own caller (search GET_CHALLAN_DOWNLOAD_REQUEST further up this
+  // file) starts hunting for "e-File" the INSTANT the queued request is
+  // found, which races the login-autofill IIFE above: that flow fills the
+  // password and Secure Access checkbox, then deliberately STOPS and waits
+  // for a human to click the final Continue (see this file's own header doc
+  // for why that click is never scripted). If the human hasn't clicked it
+  // yet, "e-File" simply doesn't exist anywhere on the page — confirmed live
+  // from a real screenshot showing the "couldn't find e-File" banner sitting
+  // directly on top of the still-visible login/password screen. Every
+  // earlier "couldn't find X" at a LATER step was very likely the same race,
+  // just with a lucky-enough manual click timing to get further before
+  // outrunning it again — not a selector bug, not a slow data fetch. Wait
+  // for real evidence of reaching the dashboard first: 5 minutes, matching
+  // this same file's own GET_CHALLAN_DOWNLOAD_REQUEST poll window, since
+  // this wait is paced by a human (CAPTCHA/OTP included), not the network.
+  const reachedDashboard = await waitFor(() => (/\/dashboard/i.test(location.hash) ? true : null), 5 * 60 * 1000);
+  if (!reachedDashboard) {
+    showBanner("CAFlow: still waiting for login to finish — once you're on the Dashboard, please continue manually (e-File → e-Pay Tax → Continue → Payment History → Actions → Download for this quarter).", "info");
+    return;
+  }
+
   showBanner("CAFlow: attempting to fetch this quarter's challans from Payment History…", "info");
 
   // Click path CONFIRMED (2026-08-10) from real screenshots of the live
@@ -403,24 +465,173 @@ async function runChallanDownload(fyStartDate, fyEndDate) {
   // screenshot of this exact page) — removing it is strictly safer than
   // trying to patch the selector to survive a description sentence whose
   // exact wording isn't confirmed either.
+  // 2026-08-11 (third pass): a real run reached e-Pay Tax fine (confirming
+  // the two steps above) but then banner'd "couldn't find Continue" on the
+  // Act-selection page. Root cause, confirmed from a live screenshot: that
+  // button's own text is "Continue ›" (a trailing chevron character, same
+  // as the login flow's two Continue buttons), which fails an EXACT
+  // ^continue$ match but is caught fine by a plain substring test — exactly
+  // how findButtonByText already matches "Continue" successfully during
+  // login (see requestCredentials' continueBtn/submitBtn above, both using
+  // /continue/i with no anchors). Relaxed to match that already-proven
+  // pattern instead of guessing at a new one.
+  // 2026-08-11 (fourth pass): with "Continue" fixed, a real run got one step
+  // further and banner'd "couldn't find Payment History". Live-inspected the
+  // real e-Pay Tax dashboard DOM directly (via the exact same candidate
+  // selector + visibility + 60-char-cap + pattern this file's own
+  // findClickableByText uses) and found four clean, exact "Payment History"
+  // matches — no icon text, no missing space, nothing a selector fix could
+  // address. So the text-matching logic itself is fine; the real cause is
+  // very likely that clicking "Continue" navigates to a data-heavy dashboard
+  // (it has to fetch real payment records from the government backend
+  // before rendering the tab bar), which is plausibly slower than the other,
+  // purely client-side nav steps — and 10s wasn't always enough. Given
+  // per-step timeout, not a uniform one, so the cheap nav clicks stay fast
+  // to fail if genuinely broken, and only this heavier step gets more room.
   const steps = [
-    { label: "e-File", pattern: /^e-file$/i },
-    { label: "e-Pay Tax", pattern: /^e-pay tax$/i },
-    { label: "Continue", pattern: /^continue$/i },
-    { label: "Payment History", pattern: /payment history/i },
+    { label: "e-File", pattern: /^e-file$/i, timeoutMs: 10_000 },
+    { label: "e-Pay Tax", pattern: /^e-pay tax$/i, timeoutMs: 10_000 },
+    // 2026-08-11 (eighth pass): the step log (finally readable — see the
+    // isolated-world fix below) caught the real bug live: this step's
+    // plain /continue/i substring match clicked a DIV whose text was
+    // "× Continue Session…" — the PORTAL'S OWN session-timeout warning
+    // popup, not the Act-selection page's real "Continue ›" button.
+    // Dismissing that popup does nothing else, so the next step (Payment
+    // History) never had anywhere new to find. Anchored both ends, with an
+    // optional trailing chevron/arrow and whitespace, so it still matches
+    // "Continue" / "Continue ›" but not "× Continue Session" (fails ^, and
+    // even without the ×, the trailing "Session" would fail $).
+    // 2026-08-11 (ninth pass): the end-anchored version above (only
+    // matching a specific chevron character) came back "not found" — the
+    // real button's exact trailing character was never actually confirmed
+    // (the earlier screenshot showing "Continue ›" isn't proof the DOM text
+    // is that literal glyph; it could be an icon-font ligature or a
+    // different Unicode arrow). Dropped the end anchor: what actually
+    // matters, and what the step log proved was missing, is that the match
+    // starts with "Continue" as its own word — "× Continue Session" starts
+    // with "×", so \b still excludes it, without needing to guess the
+    // exact tail.
+    { label: "Continue", pattern: /^continue\b/i, timeoutMs: 10_000 },
+    { label: "Payment History", pattern: /payment history/i, timeoutMs: 25_000 },
   ];
+  // 2026-08-11 (sixth pass): the login-race fix (above) confirmed working
+  // live — the banner correctly waited for #/dashboard before starting —
+  // yet "couldn't find Payment History" still happened, and the address bar
+  // at that point was still bare #/dashboard, not the real
+  // #/dashboard/e-pay-tax/e-pay-tax-dashboard route a successful run reaches
+  // (confirmed from an earlier real screenshot). That means an EARLIER step
+  // in this loop is reporting success without actually producing the
+  // navigation it should — impossible to tell which from a single
+  // pass/fail banner.
+  //
+  // 2026-08-11 (seventh pass): v0.3.8's window.__caflowStepLog read back
+  // undefined even from the exact right tab. Root cause: a content script
+  // runs in an ISOLATED WORLD by default (manifest.json declares no
+  // "world", so this is Chrome's default) — a separate JS global scope from
+  // the page's own, sharing only the DOM. Setting a property on THIS
+  // script's `window` never touches the page's `window`, which is what
+  // DevTools Console reads from by default — two different objects both
+  // called `window`. console.* output is NOT world-scoped the same way
+  // though (it's the browser's own debug bridge, not a JS object), so
+  // calling console.table directly FROM this isolated world still lands in
+  // the same visible DevTools panel. Doing that instead of stashing on
+  // `window` sidesteps the mismatch entirely — nothing to type, no world to
+  // pick.
+  const stepLog = [];
+  // 2026-08-11 (fifteenth pass): this run's "e-Pay Tax" search came back
+  // with ZERO elements containing "e-pay" ANYWHERE on the page — a totally
+  // different symptom than the earlier "found a bare span" runs. "e-File"
+  // is a TOGGLE (click opens it, click again closes it); this page never
+  // fully reloads between attempts (SPA), so if it was already open for any
+  // reason when a fresh run starts, blindly clicking it once closes it
+  // instead of opening it, and the dropdown's contents genuinely don't
+  // exist afterward — that's not a selector problem at all. Special-cased
+  // "e-File" into its own open-and-verify loop: click, check the menu
+  // actually opened (by testing for the NEXT step's own pattern), and if
+  // not, click again (undoing an accidental close) — up to 3 tries — before
+  // falling through to the normal step-timeout failure path.
+  if (steps[0].label === "e-File" && steps[1]) {
+    const menuStep = steps[0];
+    const verifyPattern = steps[1].pattern;
+    let menuOpened = !!findClickableByText(verifyPattern);
+    for (let attempt = 0; !menuOpened && attempt < 3; attempt++) {
+      const trigger = await waitFor(() => findClickableByText(menuStep.pattern), menuStep.timeoutMs);
+      if (!trigger) break;
+      trigger.click();
+      await new Promise((r) => setTimeout(r, 900));
+      menuOpened = !!findClickableByText(verifyPattern);
+    }
+    stepLog.push({ step: menuStep.label, found: true, foundTag: "A", foundText: menuStep.label, urlBefore: location.hash, urlAfter: location.hash, note: menuOpened ? "menu confirmed open" : "menu never confirmed open after 3 tries" });
+    steps.shift(); // already handled — the main loop below continues from "e-Pay Tax"
+  }
   for (const step of steps) {
-    const el = await waitFor(() => findClickableByText(step.pattern), 10_000);
+    const el = await waitFor(() => findClickableByText(step.pattern), step.timeoutMs);
     if (!el) {
-      showBanner(`CAFlow: couldn't find "${step.label}" — please continue from here manually (Payment History → Actions → Download for this quarter).`, "info");
+      stepLog.push({ step: step.label, found: false, urlBefore: location.hash });
+      console.table(stepLog);
+      // 2026-08-11 (tenth pass): two guesses at the Continue pattern in a
+      // row both missed — rather than guess a third time, dump every
+      // VISIBLE element whose text loosely contains this step's first word
+      // (tag, full text, length), so the real candidate set is visible
+      // directly instead of inferred from another screenshot.
+      const looseWord = step.label.split(/\s+/)[0].toLowerCase();
+      const candidates = [...document.querySelectorAll(
+        "button, a, a[role='button'], li, [role='menuitem'], [role='tab'], [role='link'], span, div",
+      )]
+        .filter((c) => c.offsetParent !== null)
+        .map((c) => ({ tag: c.tagName, text: (c.textContent || "").trim(), len: (c.textContent || "").trim().length }))
+        .filter((c) => c.text.toLowerCase().includes(looseWord))
+        .slice(0, 25);
+      console.log(`CAFlow: every visible element containing "${looseWord}" at the moment "${step.label}" failed —`);
+      console.table(candidates);
+      showBanner(`CAFlow: couldn't find "${step.label}" — please continue from here manually (Payment History → Actions → Download for this quarter). Details logged to this tab's console. [v${EXTENSION_VERSION}]`, "info");
       return;
     }
+    const urlBefore = location.hash;
+    const foundTag = el.tagName;
+    const foundText = (el.textContent || "").trim().slice(0, 80);
+    // 2026-08-11 (fourteenth pass): the 900ms animation-settle delay (below)
+    // did NOT fix "e-Pay Tax" resolving to a bare span — same symptom as
+    // before, timing wasn't the real cause after all. Rather than guess a
+    // fifth time, whenever a step resolves to something that ISN'T already
+    // a real interactive element (SPAN/DIV, not BUTTON/A/LI), dump every
+    // element exactly matching this step's own pattern — not just the first
+    // one found — with its class and 3-level ancestor chain, so a stale
+    // duplicate (the exact class of bug this file already found and fixed
+    // once for "Continue" buttons left behind by Angular's router) would be
+    // directly visible instead of inferred.
+    if (foundTag === "SPAN" || foundTag === "DIV") {
+      const allExactMatches = [...document.querySelectorAll(
+        "button, a, a[role='button'], li, [role='menuitem'], [role='tab'], [role='link'], span, div",
+      )]
+        .filter((c) => c.offsetParent !== null && step.pattern.test((c.textContent || "").trim()) && (c.textContent || "").trim().length <= 60)
+        .map((c) => {
+          const rect = c.getBoundingClientRect();
+          const ancestors = [];
+          let node = c.parentElement;
+          for (let i = 0; i < 3 && node; i++) { ancestors.push(`${node.tagName}.${node.className}`.slice(0, 40)); node = node.parentElement; }
+          return { tag: c.tagName, cls: (c.className || "").toString().slice(0, 40), x: Math.round(rect.x), y: Math.round(rect.y), ancestors: ancestors.join(" < ") };
+        });
+      console.log(`CAFlow: every exact match for "${step.label}" right before clicking —`);
+      console.table(allExactMatches);
+    }
     el.click();
-    // Angular re-renders the next step asynchronously — give it a beat
-    // before the next waitFor starts polling, same reasoning as the login
-    // flow's own between-step waits.
-    await new Promise((r) => setTimeout(r, 400));
+    // 2026-08-11 (thirteenth pass): even with the right ancestor-climb
+    // logic, "e-Pay Tax" STILL resolved to the bare span — a timing race,
+    // not a selector bug. "e-File" opens an Angular Material menu
+    // (mat-menu), which has its own brief open animation; findClickableByText
+    // can find the "e-Pay Tax" text the instant it exists in the DOM, before
+    // its wrapping mat-mdc-menu-item class has actually been applied by
+    // that animation — and waitFor resolves on the FIRST truthy result, so
+    // it latches onto the not-yet-ready span and never gets a second look.
+    // Giving the step right after "e-File" specifically more breathing room
+    // (900ms vs the other steps' 400ms) so polling only STARTS once the
+    // menu's real DOM has settled.
+    const postClickDelayMs = step.label === "e-File" ? 900 : 400;
+    await new Promise((r) => setTimeout(r, postClickDelayMs));
+    stepLog.push({ step: step.label, found: true, foundTag, foundText, urlBefore, urlAfter: location.hash });
   }
+  console.table(stepLog);
 
   // Best-effort date-range fill, ONLY if the page actually offers one — not
   // every Payment History layout necessarily has a filter, so this doesn't
@@ -434,24 +645,110 @@ async function runChallanDownload(fyStartDate, fyEndDate) {
     if (dateInputs && dateInputs[1]) setNativeValue(dateInputs[1], fyEndDate);
   }
 
-  // Payment History's real "Action" control is per-ROW and icon-only (no
-  // text) — see this function's own header doc. Try that first; fall back to
-  // a page-level "Actions" text button in case a different account/layout
-  // genuinely has one, rather than assuming only one shape ever exists.
-  const actionsEl = await waitFor(() => findRowActionTrigger() || findClickableByText(/^actions$/i), 8_000);
-  if (!actionsEl) {
-    showBanner('CAFlow: reached Payment History but couldn\'t find the row\'s Action control — please click it yourself (rightmost column) → Download.', "info");
+  // 2026-08-11: switched from clicking Actions -> Download (which only ever
+  // hands off to CAFlow's manual "Upload Downloaded Report" file input,
+  // since a content script cannot read a file the OS just saved) to reading
+  // the table directly. The user was explicit: no file, no download, just
+  // read what's already rendered and verify it against the office's own
+  // challan entries — see scrapePaymentHistoryTable's own doc for how.
+  const scraped = await waitFor(() => scrapePaymentHistoryTable(), 10_000);
+  if (!scraped || !scraped.rows.length) {
+    showBanner('CAFlow: reached Payment History but couldn\'t read the table — please verify the challans yourself against Data Entry. Details logged to this tab\'s console.', "info");
+    console.log("CAFlow: Payment History table scrape failed —", scraped);
     return;
   }
-  actionsEl.click();
-  await new Promise((r) => setTimeout(r, 300));
 
-  const downloadEl = await waitFor(() => findClickableByText(/^download$/i), 5_000);
-  if (!downloadEl) {
-    showBanner('CAFlow: opened Actions but couldn\'t find "Download" — please click it yourself.', "info");
-    return;
+  chrome.runtime.sendMessage({ type: "STORE_CHALLAN_SCRAPE_RESULT", rows: scraped.rows });
+  console.log(`CAFlow: scraped ${scraped.rows.length} challan row(s) from Payment History —`);
+  console.table(scraped.rows);
+  showBanner(`CAFlow: read ${scraped.rows.length} challan(s) from Payment History — switch back to the CAFlow tab, verification results will appear there automatically.`, "success");
+}
+
+const MONTH_ABBR = {
+  jan: "01", feb: "02", mar: "03", apr: "04", may: "05", jun: "06",
+  jul: "07", aug: "08", sep: "09", oct: "10", nov: "11", dec: "12",
+};
+
+/** Normalizes a date string in either "DD-Mon-YYYY" (the Payment Date &
+ *  Time column's own format, per a live screenshot) or "DDMMYYYY" (the CIN's
+ *  own embedded OLTAS date, used only as a fallback if the display column
+ *  can't be parsed) into yyyy-mm-dd, matching tds_challans.deposit_date. */
+function normalizePortalDate(raw) {
+  if (!raw) return null;
+  const monthName = raw.match(/(\d{1,2})[-\s]([A-Za-z]{3})[-\s](\d{4})/);
+  if (monthName) {
+    const mm = MONTH_ABBR[monthName[2].toLowerCase()];
+    if (mm) return `${monthName[3]}-${mm}-${monthName[1].padStart(2, "0")}`;
   }
-  downloadEl.click();
+  const numeric = raw.match(/(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (numeric) return `${numeric[3]}-${numeric[2].padStart(2, "0")}-${numeric[1].padStart(2, "0")}`;
+  return null;
+}
 
-  showBanner("CAFlow: clicked Download — check your Downloads folder, then upload the file in CAFlow's Challan Validation step.", "success");
+/** CIN convention: BSR Code (7 digits) + Date of Deposit (DDMMYYYY, 8
+ *  digits) + Challan Serial No (up to 5 digits), concatenated with no
+ *  separator — see parseChallanPaymentHistory.ts's own doc for the same
+ *  convention applied to a downloaded PDF. Returns nulls rather than
+ *  guessing if the CIN doesn't look like that shape (e.g. it's masked or
+ *  formatted differently than expected). */
+function parseCin(cin) {
+  const digitsOnly = (cin || "").replace(/\s+/g, "");
+  if (!/^\d{15,20}$/.test(digitsOnly)) return { bsrCode: null, serialNo: null, cinDate: null };
+  const bsrCode = digitsOnly.slice(0, 7);
+  const dd = digitsOnly.slice(7, 9), mm = digitsOnly.slice(9, 11), yyyy = digitsOnly.slice(11, 15);
+  const serialNo = digitsOnly.slice(15) || null;
+  return { bsrCode, serialNo, cinDate: `${yyyy}-${mm}-${dd}` };
+}
+
+/**
+ * Reads the Payment History table directly from the DOM — CIN, Amount, and
+ * Payment Date per row — instead of downloading anything. Finds the table
+ * by its own header row (looking for a "CIN" column, rather than a guessed
+ * class name, since that's the one label confirmed stable across this
+ * portal's own real screenshots) so this survives styling/markup changes
+ * that wouldn't survive a class-name selector.
+ *
+ * PAGINATION IS UNCONFIRMED (2026-08-11, first pass): no live page with
+ * more than one page of Payment History rows was available while writing
+ * this. If a "rows per page" control exists nearby, this tries to switch it
+ * to its largest option so everything lands on one page; if that doesn't
+ * exist or doesn't help, only the CURRENTLY VISIBLE page's rows are
+ * returned — expect to extend this with real pagination handling once a
+ * multi-page account confirms the control's actual shape.
+ */
+function scrapePaymentHistoryTable() {
+  const tables = [...document.querySelectorAll("table, [role='table'], [role='grid']")].filter((t) => t.offsetParent !== null);
+  let table = null;
+  let headerCells = [];
+  for (const t of tables) {
+    const headerRow = t.querySelector("thead tr, [role='row']");
+    if (!headerRow) continue;
+    const cells = [...headerRow.querySelectorAll("th, [role='columnheader'], td")].map((c) => (c.textContent || "").trim());
+    if (cells.some((c) => /^cin$/i.test(c))) { table = t; headerCells = cells; break; }
+  }
+  if (!table) return { rows: [], reason: "no table with a CIN column found" };
+
+  const cinIdx = headerCells.findIndex((c) => /^cin$/i.test(c));
+  const amountIdx = headerCells.findIndex((c) => /amount/i.test(c));
+  const dateIdx = headerCells.findIndex((c) => /payment date/i.test(c));
+  if (cinIdx === -1 || amountIdx === -1 || dateIdx === -1) {
+    return { rows: [], reason: `couldn't find all needed columns among: ${headerCells.join(" | ")}` };
+  }
+
+  const bodyRows = [...table.querySelectorAll("tbody tr, [role='row']")].filter((r) => r !== table.querySelector("thead tr"));
+  const rows = [];
+  for (const r of bodyRows) {
+    const cells = [...r.querySelectorAll("td, [role='cell'], [role='gridcell']")];
+    if (cells.length <= Math.max(cinIdx, amountIdx, dateIdx)) continue; // header/footer/summary row, not a data row
+    const cinRaw = (cells[cinIdx]?.textContent || "").trim();
+    const amountRaw = (cells[amountIdx]?.textContent || "").trim();
+    const dateRaw = (cells[dateIdx]?.textContent || "").trim();
+    if (!cinRaw) continue;
+    const { bsrCode, serialNo, cinDate } = parseCin(cinRaw);
+    const amount = parseFloat(amountRaw.replace(/[₹,\s]/g, ""));
+    const depositDate = normalizePortalDate(dateRaw) || cinDate;
+    if (!serialNo || !Number.isFinite(amount) || !depositDate) continue;
+    rows.push({ serialNo, depositDate, amount, bsrCode, cin: cinRaw });
+  }
+  return { rows };
 }

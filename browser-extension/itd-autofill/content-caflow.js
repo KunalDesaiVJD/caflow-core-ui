@@ -53,3 +53,29 @@ window.addEventListener("message", (event) => {
     });
   }
 });
+
+// 2026-08-11: the REVERSE direction of the same relay — content-itd.js
+// scrapes the Payment History table on the ITD tab and stores the result in
+// background.js (see its own STORE/GET_CHALLAN_SCRAPE_RESULT doc), since
+// the ITD tab and this CAFlow tab never share a JS context either. Polls
+// every 2s for up to 5 minutes after this script loads — matches the same
+// window content-itd.js's own download-request poll uses, generous enough
+// to cover the full manual-login-then-automation run happening in the other
+// tab. Starts unconditionally (not only after a "Download Challan" click)
+// since this tab and that automation are only ever loosely coupled through
+// storage, not a direct call-and-response.
+(function pollForChallanScrapeResult() {
+  const deadline = Date.now() + 5 * 60 * 1000;
+  const poll = () => {
+    chrome.runtime.sendMessage({ type: "GET_CHALLAN_SCRAPE_RESULT" }, (response) => {
+      if (response?.ok && response.rows) {
+        window.postMessage(
+          { source: "caflow-extension", type: "CHALLAN_PAYMENT_HISTORY_RESULT", rows: response.rows },
+          window.location.origin,
+        );
+      }
+      if (Date.now() < deadline) setTimeout(poll, 2_000);
+    });
+  };
+  poll();
+})();

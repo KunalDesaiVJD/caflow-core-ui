@@ -59,6 +59,14 @@ const CREDENTIAL_TTL_MS = 2 * 60 * 1000;
 // the credential handoff, which only has to survive an edge-function
 // round-trip, this has to survive an actual person typing.
 const CHALLAN_DOWNLOAD_REQUEST_TTL_MS = 5 * 60 * 1000;
+// The reverse direction of the same handoff: content-itd.js scrapes the
+// Payment History table (see its own scrapePaymentHistoryTable doc) and
+// stores the result here; content-caflow.js polls for it (below) since the
+// CAFlow tab and the ITD tab never share a JS context either. Shorter TTL
+// than the download request — this is the RESULT of an already-finished
+// scrape, not something waiting on a human, so it only needs to survive
+// content-caflow.js's own poll interval.
+const CHALLAN_SCRAPE_RESULT_TTL_MS = 2 * 60 * 1000;
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === "STORE_ITD_CREDENTIALS") {
@@ -124,5 +132,29 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     chrome.storage.session.remove("itdChallanDownloadRequest");
     sendResponse({ ok: true });
     return true;
+  }
+
+  if (msg?.type === "STORE_CHALLAN_SCRAPE_RESULT") {
+    const record = { rows: msg.rows || [], storedAt: Date.now() };
+    chrome.storage.session.set({ itdChallanScrapeResult: record }, () => {
+      sendResponse({ ok: true });
+    });
+    return true; // async response
+  }
+
+  if (msg?.type === "GET_CHALLAN_SCRAPE_RESULT") {
+    chrome.storage.session.get("itdChallanScrapeResult", (data) => {
+      const record = data?.itdChallanScrapeResult;
+      // Consume-on-read: the CAFlow tab's poll loop only needs to see this
+      // once — same reasoning as the credential fetch above, so a second
+      // poll tick (or a second CAFlow tab) never replays the same rows.
+      chrome.storage.session.remove("itdChallanScrapeResult");
+      if (!record || Date.now() - record.storedAt > CHALLAN_SCRAPE_RESULT_TTL_MS) {
+        sendResponse({ ok: false });
+        return;
+      }
+      sendResponse({ ok: true, rows: record.rows });
+    });
+    return true; // async response
   }
 });

@@ -3,20 +3,24 @@
  * old CSI upload flow (TdsChallanCsiValidation, removed). A CSI file turned
  * out to be hash-lines only, checkable at best as a coarse TAN/count/total
  * header comparison — see git history for that component's own header doc.
- * The ITD portal's own Payment History export (e-File → e-Pay Tax → Income
- * Tax Act, 2025 → Payment History → Actions → Download) is a genuine
- * per-challan report, so this does real per-challan matching: challan
- * serial number, deposit date, and amount — see matchChallanDownload.ts.
+ * The ITD portal's own Payment History table is a genuine per-challan
+ * source, so this does real per-challan matching: challan serial number,
+ * deposit date, amount, and BSR code — see matchChallanDownload.ts.
  *
- * "Download Challan" hands off to the browser extension
+ * "Verify on ITD Portal" hands off to the browser extension
  * (browser-extension/itd-autofill/) the same way TdsPortalLoginButtons.tsx's
  * "Auto-fill ITD Login" does — window.postMessage → content-caflow.js →
  * background.js → content-itd.js on the ITD tab, asking it to attempt the
- * portal click-path for this filing's quarter. That automation is a
- * best-effort first draft (see content-itd.js's own doc) — a script cannot
- * read a file the OS just saved to Downloads, so the actual hand-off into
- * CAFlow is always the "Upload Downloaded Report" file input below,
- * regardless of how far the click automation gets.
+ * portal click-path for this filing's quarter. 2026-08-11: switched from
+ * downloading a PDF (which always needed a manual "Upload Downloaded
+ * Report" step, since a content script can't read a file the OS just saved)
+ * to reading the Payment History table directly on the ITD tab and relaying
+ * the rows back the OPPOSITE direction — content-itd.js → background.js →
+ * content-caflow.js polls for it → window.postMessage into THIS page,
+ * caught by the CHALLAN_PAYMENT_HISTORY_RESULT listener below, which runs
+ * the exact same compareAndSave the manual upload path still uses (kept as
+ * a fallback for accounts without the extension, or if the automation
+ * genuinely can't complete).
  *
  * Deliberately independent of corrections, same as Stage 1/PAN/Tally — see
  * the project's own permanent rule that Validate & Finalise reads
@@ -176,6 +180,58 @@ export function TdsChallanDownloadValidation({ filing, selClient, selForm, clien
     return { matchedCount, unmatchedCount };
   }, [filingId, selClient, filing, resolveFirmId, fetchOfficeChallans, user?.id, loadBatch, onActivity]);
 
+  // 2026-08-11: the extension's "Download Challan" no longer downloads
+  // anything — it reads the Payment History table directly on the ITD tab
+  // (browser-extension/itd-autofill/content-itd.js's scrapePaymentHistoryTable)
+  // and relays the rows back here via content-caflow.js's poll loop, since
+  // this tab and the ITD tab never share a JS context. Listens the same way
+  // itdCredentialsRelay.ts's ACK does — window.postMessage from the
+  // "caflow-extension" source — and runs the SAME compareAndSave the manual
+  // PDF-upload path already uses, so both paths produce identical results
+  // and neither needs its own separate matching logic.
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      if (event.source !== window) return;
+      const msg = event.data;
+      if (msg?.source !== "caflow-extension" || msg?.type !== "CHALLAN_PAYMENT_HISTORY_RESULT") return;
+      if (!filingId) return;
+      const portalChallans: PortalChallanRow[] = (msg.rows || []).map((r: any) => ({
+        serialNo: r.serialNo, depositDate: r.depositDate, amount: r.amount, bsrCode: r.bsrCode ?? null,
+      }));
+      (async () => {
+        setRequestingDownload(true);
+        try {
+          // Auto-verified batches replace whatever's there, same "re-import
+          // replaces" convention the manual upload path already uses —
+          // there's no storage file to delete this time since nothing was
+          // ever downloaded.
+          if (batch) {
+            if (batch.file_url) removePublicDocumentByUrl(supabase, batch.file_url);
+            await supabase.from("tds_challan_download_batches" as any).delete().eq("id", batch.id);
+          }
+          const result = await compareAndSave(portalChallans, { name: "Auto-verified from ITD Portal (Payment History)", url: null });
+          const firmId = await resolveFirmId();
+          await logReconAudit({
+            filingId, firmId, userId: user?.id, userName: user?.name || user?.email || "Unknown",
+            actionType: batch ? "CHALLAN_DOWNLOAD_FILE_REPLACED" : "CHALLAN_DOWNLOAD_FILE_IMPORTED",
+            newValue: "Auto-verified from ITD Portal",
+            remark: result ? `${result.matchedCount} matched, ${result.unmatchedCount} not matched` : undefined,
+          });
+          toast({
+            title: portalChallans.length ? "Challan verification complete" : "No challans found on the portal",
+            description: portalChallans.length
+              ? `${portalChallans.length} challan(s) read directly from the ITD Portal and compared against Data Entry.`
+              : "The Payment History table appears to be empty for this account.",
+          });
+        } finally {
+          setRequestingDownload(false);
+        }
+      })();
+    };
+    window.addEventListener("message", handler);
+    return () => window.removeEventListener("message", handler);
+  }, [filingId, batch, compareAndSave, resolveFirmId, user?.id, toast]);
+
   const handleFile = async (file: File) => {
     if (!filingId) return;
     setUploading(true);
@@ -244,11 +300,13 @@ export function TdsChallanDownloadValidation({ filing, selClient, selForm, clien
    * itdCredentialsRelay.ts) — added 2026-08-11 after this button was
    * reported as opening a blank login form with no autofill at all, unlike
    * every other entry point into the portal. Whether or not the relay or the
-   * download-automation request actually lands, this also opens/focuses the
-   * ITD tab so the user can finish the download manually (log in, then
-   * Payment History → the row's Action icon → Download) if either stalls;
-   * the "Upload Downloaded Report" input below is the actual completion step
-   * either way.
+   * automation itself lands, this also opens/focuses the ITD tab so the user
+   * can finish manually if it stalls (log in, then e-File → e-Pay Tax →
+   * Payment History). Nothing gets downloaded any more — the extension reads
+   * the table directly and posts the result back (see the
+   * CHALLAN_PAYMENT_HISTORY_RESULT listener above); "Upload Downloaded
+   * Report" below stays only as a manual fallback for accounts without the
+   * extension, or if the automation genuinely can't complete on its own.
    */
   const requestDownload = () => {
     const range = quarterDateRange(filing?.financial_year, filing?.quarter);
@@ -279,10 +337,10 @@ export function TdsChallanDownloadValidation({ filing, selClient, selForm, clien
         window.location.origin,
       );
       toast({
-        title: loginRelayed ? "Sent your saved login and asked the extension to fetch this quarter's challans" : "Opened the ITD Portal",
+        title: loginRelayed ? "Sent your saved login and asked the extension to verify this quarter's challans" : "Opened the ITD Portal",
         description: loginRelayed
-          ? "Check the ITD tab — your login should be filled in; click Continue to finish signing in, and the rest continues automatically."
-          : "Log in on the ITD tab (no saved login found to auto-fill, or the extension didn't respond) — the download automation will pick up once you're in.",
+          ? "Check the ITD tab — your login should be filled in; click Continue to finish signing in. The rest runs automatically and results will appear back here, no download or upload needed."
+          : "Log in on the ITD tab (no saved login found to auto-fill, or the extension didn't respond) — verification will pick up automatically once you're in.",
       });
       setRequestingDownload(false);
     })();
@@ -305,7 +363,7 @@ export function TdsChallanDownloadValidation({ filing, selClient, selForm, clien
               <div className="flex items-center gap-1.5">
                 <Button size="sm" variant="outline" className="gap-1.5" disabled={requestingDownload} onClick={requestDownload}>
                   {requestingDownload ? <Loader2 size={13} className="animate-spin" /> : <CloudDownload size={13} />}
-                  Download Challan
+                  Verify on ITD Portal
                 </Button>
                 <input
                   ref={fileInputRef} type="file" accept=".pdf" className="hidden"
@@ -322,8 +380,9 @@ export function TdsChallanDownloadValidation({ filing, selClient, selForm, clien
 
           {!batch ? (
             <p className="text-xs text-muted-foreground">
-              No challan report imported yet. Click Download Challan to open the ITD Portal, then use Payment History →
-              Actions → Download for this quarter and upload the file here (PDF).
+              Not verified yet. Click "Verify on ITD Portal" to open the portal — with the browser extension installed,
+              it logs in (you finish the last click) and reads this quarter's challans automatically, no download or
+              upload needed. Without the extension, use Payment History → Actions → Download and upload the file below instead.
             </p>
           ) : (
             <div className="space-y-3">
