@@ -29,6 +29,7 @@ import { downloadStorageFile, removePublicDocumentByUrl } from "@/lib/openStorag
 import { parseChallanPaymentHistory, type PortalChallanRow } from "@/lib/tds/parseChallanPaymentHistory";
 import { matchChallanDownload, type ChallanMatchResult, type OfficeChallanForMatch } from "@/lib/tds/matchChallanDownload";
 import { hasItdAutofillExtension, ITD_LOGIN_URL } from "./TdsPortalLoginButtons";
+import { resolveTdsClientServiceId, relayItdLoginCredentials } from "@/lib/tds/itdCredentialsRelay";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
@@ -238,26 +239,53 @@ export function TdsChallanDownloadValidation({ filing, selClient, selForm, clien
 
   /**
    * Best-effort hand-off to the extension's post-login automation — see this
-   * file's own header doc. Whether or not the extension responds, this also
-   * opens/focuses the ITD tab so the user can finish the download manually
-   * (Payment History → Actions → Download) if automation doesn't complete;
-   * the "Upload Downloaded Report" input below is the actual completion
-   * step either way.
+   * file's own header doc. Also relays the client's SAVED ITD login the same
+   * way TdsPortalLoginButtons.tsx's "Auto-fill ITD Login" does (see
+   * itdCredentialsRelay.ts) — added 2026-08-11 after this button was
+   * reported as opening a blank login form with no autofill at all, unlike
+   * every other entry point into the portal. Whether or not the relay or the
+   * download-automation request actually lands, this also opens/focuses the
+   * ITD tab so the user can finish the download manually (log in, then
+   * Payment History → the row's Action icon → Download) if either stalls;
+   * the "Upload Downloaded Report" input below is the actual completion step
+   * either way.
    */
   const requestDownload = () => {
     const range = quarterDateRange(filing?.financial_year, filing?.quarter);
+    // window.open() FIRST, synchronously, before any await — a popup opened
+    // after even one microtask of async work loses the "direct response to
+    // a click" status Chrome requires and gets silently blocked. See
+    // TdsPortalLoginButtons.tsx's autofillItd for the same rule.
     window.open(ITD_LOGIN_URL, "_blank", "noopener,noreferrer");
     if (!hasItdAutofillExtension()) {
       toast({ title: "Portal opened", description: "The ITD Portal Autofill extension isn't detected — log in and download Payment History yourself for this quarter, then upload it below." });
       return;
     }
     setRequestingDownload(true);
-    window.postMessage(
-      { source: "caflow-web", type: "START_CHALLAN_DOWNLOAD", fyStartDate: range?.start ?? null, fyEndDate: range?.end ?? null },
-      window.location.origin,
-    );
-    toast({ title: "Asked the extension to fetch this quarter's challans", description: "Check the ITD tab. This automation is a first draft — if it stalls, finish manually (Payment History → Actions → Download) and upload the file below." });
-    setTimeout(() => setRequestingDownload(false), 3000);
+    (async () => {
+      let loginRelayed = false;
+      try {
+        const clientServiceId = await resolveTdsClientServiceId(selClient);
+        if (clientServiceId) {
+          const result = await relayItdLoginCredentials(clientServiceId);
+          loginRelayed = result.ok;
+        }
+      } catch {
+        // Non-fatal — the portal tab is already open regardless; worst case
+        // the user logs in manually, same as before this relay existed.
+      }
+      window.postMessage(
+        { source: "caflow-web", type: "START_CHALLAN_DOWNLOAD", fyStartDate: range?.start ?? null, fyEndDate: range?.end ?? null },
+        window.location.origin,
+      );
+      toast({
+        title: loginRelayed ? "Sent your saved login and asked the extension to fetch this quarter's challans" : "Opened the ITD Portal",
+        description: loginRelayed
+          ? "Check the ITD tab — your login should be filled in; click Continue to finish signing in, and the rest continues automatically."
+          : "Log in on the ITD tab (no saved login found to auto-fill, or the extension didn't respond) — the download automation will pick up once you're in.",
+      });
+      setRequestingDownload(false);
+    })();
   };
 
   const ran = !!batch && batch.matched_count !== null;
