@@ -855,11 +855,13 @@ function PatternBTable({
    *  state.  The flat Set spans all note types; only IDs present in this note's
    *  data will actually match anything. */
   initialExpandedRows?: Set<string>;
-  /** CLIENT-SCOPED (see nceFeatureFlags.ts) — when true AND noteType === "cogs",
-   *  unlocks the fixed Changes-in-Inventory opening/closing cells
-   *  (NCE_INVENTORY_OVERRIDE_ROW_IDS) for direct editing, bypassing the usual
-   *  FS_NO_MANUAL_NOTE_ADD lock for those specific rows only. Defaults to false
-   *  (unchanged behaviour) for every other note/client. */
+  /** CLIENT-SCOPED (see nceFeatureFlags.ts) — when true AND noteType === "cogs_c"
+   *  (the "Changes in Inventories of FG, WIP & Stock-in-Trade" DISPLAY note —
+   *  its data is stored under the "cogs" source note, see cfg.sourceNoteType),
+   *  unlocks the fixed opening/closing cells (NCE_INVENTORY_OVERRIDE_ROW_IDS)
+   *  for direct editing, bypassing the usual FS_NO_MANUAL_NOTE_ADD lock for
+   *  those specific rows only. Defaults to false (unchanged behaviour) for
+   *  every other note/client. */
   allowInventoryOverride?: boolean;
 }) {
   const { cy, py } = useMemo(
@@ -1370,7 +1372,7 @@ function PatternBTable({
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedB
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggCyB ? fmtNum(aggCyB) : "—"}</span>
-                        : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={(FS_NO_MANUAL_NOTE_ADD && !(allowInventoryOverride && noteType === "cogs" && NCE_INVENTORY_OVERRIDE_ROW_IDS.has(row.id))) || row.naAll} />}
+                        : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={(FS_NO_MANUAL_NOTE_ADD && !(allowInventoryOverride && noteType === "cogs_c" && NCE_INVENTORY_OVERRIDE_ROW_IDS.has(row.id))) || row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1">
                     {/* SHREE HARI FIX — see CY comment above.
@@ -1379,7 +1381,7 @@ function PatternBTable({
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedB
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggPyB ? fmtNum(aggPyB) : "—"}</span>
-                        : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={(FS_NO_MANUAL_NOTE_ADD && !(allowInventoryOverride && noteType === "cogs" && NCE_INVENTORY_OVERRIDE_ROW_IDS.has(row.id))) || row.naAll} />}
+                        : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={(FS_NO_MANUAL_NOTE_ADD && !(allowInventoryOverride && noteType === "cogs_c" && NCE_INVENTORY_OVERRIDE_ROW_IDS.has(row.id))) || row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <div className="flex items-center justify-end gap-1">
