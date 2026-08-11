@@ -17,7 +17,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase }    from "@/integrations/supabase/client";
-import { FS_NO_MANUAL_NOTE_ADD, nceInventoryOverrideEnabled, NCE_INVENTORY_OVERRIDE_ROW_IDS } from "@/lib/nceFeatureFlags";
+import { FS_NO_MANUAL_NOTE_ADD, nceInventoryOverrideEnabled, NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE } from "@/lib/nceFeatureFlags";
 import { Button }      from "@/components/ui/button";
 import { Input }       from "@/components/ui/input";
 import { Badge }       from "@/components/ui/badge";
@@ -855,13 +855,14 @@ function PatternBTable({
    *  state.  The flat Set spans all note types; only IDs present in this note's
    *  data will actually match anything. */
   initialExpandedRows?: Set<string>;
-  /** CLIENT-SCOPED (see nceFeatureFlags.ts) — when true AND noteType === "cogs_c"
-   *  (the "Changes in Inventories of FG, WIP & Stock-in-Trade" DISPLAY note —
-   *  its data is stored under the "cogs" source note, see cfg.sourceNoteType),
-   *  unlocks the fixed opening/closing cells (NCE_INVENTORY_OVERRIDE_ROW_IDS)
-   *  for direct editing, bypassing the usual FS_NO_MANUAL_NOTE_ADD lock for
-   *  those specific rows only. Defaults to false (unchanged behaviour) for
-   *  every other note/client. */
+  /** CLIENT-SCOPED (see nceFeatureFlags.ts) — when true AND this table's
+   *  noteType prop has an entry in NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE (today:
+   *  "cogs_c" — the Changes-in-Inventory DISPLAY note, whose data is stored
+   *  under the "cogs" source note; and "inventories" — the Balance Sheet Note
+   *  17, not split), unlocks that note's registered rows for direct editing,
+   *  bypassing the usual FS_NO_MANUAL_NOTE_ADD lock for those specific rows
+   *  only. Defaults to false (unchanged behaviour) for every other note/
+   *  client. */
   allowInventoryOverride?: boolean;
 }) {
   const { cy, py } = useMemo(
@@ -1372,7 +1373,7 @@ function PatternBTable({
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedB
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggCyB ? fmtNum(aggCyB) : "—"}</span>
-                        : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={(FS_NO_MANUAL_NOTE_ADD && !(allowInventoryOverride && noteType === "cogs_c" && NCE_INVENTORY_OVERRIDE_ROW_IDS.has(row.id))) || row.naAll} />}
+                        : <NumInput value={rawCy[row.id] ?? 0} onChange={v => onChangeCy(row.id, v)} disabled={(FS_NO_MANUAL_NOTE_ADD && !(allowInventoryOverride && (NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE[noteType ?? ""]?.has(row.id) ?? false))) || row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1">
                     {/* SHREE HARI FIX — see CY comment above.
@@ -1381,7 +1382,7 @@ function PatternBTable({
                       ? <span className="text-xs tabular-nums text-right block pr-1" />
                       : hasAttachedB
                         ? <span className="text-xs tabular-nums text-right block pr-1">{aggPyB ? fmtNum(aggPyB) : "—"}</span>
-                        : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={(FS_NO_MANUAL_NOTE_ADD && !(allowInventoryOverride && noteType === "cogs_c" && NCE_INVENTORY_OVERRIDE_ROW_IDS.has(row.id))) || row.naAll} />}
+                        : <NumInput value={rawPy[row.id] ?? 0} onChange={v => onChangePy(row.id, v)} disabled={(FS_NO_MANUAL_NOTE_ADD && !(allowInventoryOverride && (NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE[noteType ?? ""]?.has(row.id) ?? false))) || row.naAll} />}
                   </TableCell>
                   <TableCell className="p-1 text-center w-8">
                     <div className="flex items-center justify-end gap-1">
@@ -3060,14 +3061,16 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
     noteType: string, key: string, isCY: boolean, value: number,
   ) => {
     // CLIENT-SCOPED (see nceFeatureFlags.ts NCE_INVENTORY_MANUAL_OVERRIDE_
-    // CLIENT_IDS) — when this cell is one of the fixed Changes-in-Inventory
-    // opening/closing rows AND the client is allow-listed, ALSO record the
-    // typed value as an inventoryOverride so nceAutoPopulate re-applies it on
-    // every future re-sync/self-heal (which otherwise recomputes cy[key] from
-    // TB and would silently overwrite a plain cy-only edit). No-op for every
-    // other client/cell — those keep writing only cy/py exactly as before.
+    // CLIENT_IDS) — when this cell is registered for `noteType` in
+    // NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE (Changes-in-Inventory opening/
+    // closing rows, or the Balance Sheet Inventories note's leaf rows) AND
+    // the client is allow-listed, ALSO record the typed value as an
+    // inventoryOverride so nceAutoPopulate re-applies it on every future
+    // re-sync/self-heal (which otherwise recomputes cy[key] from TB and would
+    // silently overwrite a plain cy-only edit). No-op for every other client/
+    // cell — those keep writing only cy/py exactly as before.
     const isInventoryOverrideCell =
-      noteType === "cogs" && allowInventoryOverride && NCE_INVENTORY_OVERRIDE_ROW_IDS.has(key);
+      allowInventoryOverride && (NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE[noteType]?.has(key) ?? false);
     setNoteData(prev => {
       const cur = prev[noteType] ?? { cy: {}, py: {}, customRows: [] };
       const next = isCY

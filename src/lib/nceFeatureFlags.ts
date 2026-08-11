@@ -150,18 +150,27 @@ export const FS_NCE_CONSTRAINED_NOTES = true;  // ACTIVATED 2026-06-29 (parity 2
  * P&L / Stock Summary reports a genuine closing stock of ₹0 against an
  * opening of ₹18,75,000 (all stock sold during the year).
  *
- * Per explicit user instruction, a manual override for the cogs note's
- * opening/closing inventory cells (pc_open_*, pc_close_*, raw_*, pack_*,
- * other_*) is enabled ONLY for the client(s) in this allowlist — not rolled
- * out to the rest of the NCE book — so the auditor can type the TRUE closing
- * stock value (sourced from Tally's own report) while every other client's
- * Changes-in-Inventory note stays 100% auto-computed as before.
+ * Per explicit user instruction, a manual override is enabled ONLY for the
+ * client(s) in this allowlist — not rolled out to the rest of the NCE book —
+ * covering BOTH places this ledger's wrong figure surfaces:
+ *   - the "cogs" note's opening/closing inventory cells (pc_open_*,
+ *     pc_close_*, raw_*, pack_*, other_*) — P&L "Changes in Inventories";
+ *   - the "inventories" note's leaf rows (raw_mat/wip/finished/stock_trade/
+ *     stores/loose_tools/others) — Balance Sheet "Inventories" (Note 17),
+ *     which reads ₹0 for Raywings because the ledger's mapped COA code isn't
+ *     in that note's codeSet (a separate, COA-mapping-side symptom of the
+ *     same underlying data gap — see nceAutoPopulate.ts's generic Pattern-B
+ *     walk, gated on `codeSet.has(mapped.code)`).
+ * So the auditor can type the TRUE stock values (sourced from Tally's own
+ * report) in either note, while every other client's Inventories / Changes-
+ * in-Inventory notes stay 100% auto-computed as before.
  *
- * The override is stored separately (cy_data._inventory_overrides inside the
- * "cogs" note) and re-applied on top of the fresh auto-build on every
- * re-sync/self-heal — see nceAutoPopulate.ts — so it survives Re-sync exactly
- * like labelOverrides / hiddenRows do, without touching the pure auto layer
- * for anyone not in this Set.
+ * The override is stored separately per note (cy_data._inventory_overrides
+ * inside the "cogs" note, and inside the "inventories" note) and re-applied
+ * on top of the fresh auto-build on every re-sync/self-heal — see
+ * nceAutoPopulate.ts — so it survives Re-sync exactly like labelOverrides /
+ * hiddenRows do, without touching the pure auto layer for anyone not in this
+ * Set.
  *
  * TO REVERT ("restore to back"): clear this Set (or remove the client_id)
  * and redeploy. Every read site below (`nceInventoryOverrideEnabled`) checks
@@ -179,12 +188,33 @@ export function nceInventoryOverrideEnabled(clientId: string | null | undefined)
   return !!clientId && NCE_INVENTORY_MANUAL_OVERRIDE_CLIENT_IDS.has(clientId);
 }
 
-/** Static-row ids the inventory override may touch — the fixed Schedule III
- *  Changes-in-Inventory opening/closing rows (see nceAutoPopulate.ts's cogs
- *  special-case block). Kept as an explicit allowlist (not "any key") so a
- *  malformed override object can never leak into an unrelated note cell. */
-export const NCE_INVENTORY_OVERRIDE_ROW_IDS = new Set<string>([
+/**
+ * Static-row ids the inventory override may touch, keyed by noteType.
+ * Kept as an explicit per-note allowlist (not "any key") so a malformed
+ * override object can never leak into an unrelated note cell.
+ *
+ * Two entries are needed per logical note because the "cogs" note is split
+ * into separate DISPLAY sub-notes (cogs_a/b/c) while its data is stored
+ * under the single source noteType "cogs" (see nceNotesConfig.ts's
+ * `sourceNoteType`) — write-side code (handleChange in NCEDetailedNotes.tsx,
+ * and nceAutoPopulate.ts) is keyed by the DATA noteType ("cogs"), while the
+ * UI's PatternBTable read-side disabled-check is keyed by the DISPLAY
+ * noteType prop it actually receives ("cogs_c" — "Changes in Inventories of
+ * FG, WIP & Stock-in-Trade", nceNotesConfig.ts noteType: "cogs_c"). Both
+ * keys map to the identical row-id set so either lookup finds it.
+ * "inventories" (Balance Sheet Note 17) is NOT split, so a single key
+ * suffices there.
+ */
+const COGS_C_INVENTORY_ROW_IDS = new Set<string>([
   "pc_open_trade", "pc_open_wip", "pc_open_fg",
   "pc_close_trade", "pc_close_wip", "pc_close_fg",
   "raw_open", "raw_close", "pack_open", "pack_close", "other_open", "other_close",
 ]);
+const BS_INVENTORIES_ROW_IDS = new Set<string>([
+  "raw_mat", "wip", "finished", "stock_trade", "stores", "loose_tools", "others",
+]);
+export const NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE: Record<string, Set<string>> = {
+  cogs:        COGS_C_INVENTORY_ROW_IDS, // data noteType (nceAutoPopulate.ts / handleChange)
+  cogs_c:      COGS_C_INVENTORY_ROW_IDS, // display noteType (PatternBTable's noteType prop)
+  inventories: BS_INVENTORIES_ROW_IDS,   // data noteType === display noteType (not split)
+};

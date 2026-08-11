@@ -30,7 +30,7 @@ import { NOTES_CONFIG, type NoteConfig } from "@/config/nceNotesConfig";
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import { buildNoteFsMap } from "@/lib/nceNoteRegistry";
 import { buildLedgerMapMatcher, cleanTallyName } from "@/lib/tallyText";
-import { nceInventoryOverrideEnabled, NCE_INVENTORY_OVERRIDE_ROW_IDS } from "@/lib/nceFeatureFlags";
+import { nceInventoryOverrideEnabled, NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE } from "@/lib/nceFeatureFlags";
 
 // ── FS-code map ──────────────────────────────────────────────────────────────
 //
@@ -365,10 +365,12 @@ export interface NCENoteData {
    *  don't all have to set it. */
   manualEdits?: NceEdit[];
   /** CLIENT-SCOPED (see nceFeatureFlags.ts NCE_INVENTORY_MANUAL_OVERRIDE_CLIENT_IDS)
-   *  — auditor-entered opening/closing inventory figures for the "cogs" note's
-   *  Changes-in-Inventory rows (pc_open_trade/pc_close_trade/etc.), used when
-   *  the client's TB ledger balance cannot represent true stock movement (see
-   *  the flag's doc comment for the Raywings root cause). Persisted as
+   *  — auditor-entered inventory figures for whichever rows this NOTE has
+   *  registered in NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE (today: the "cogs"
+   *  note's Changes-in-Inventory opening/closing rows, and the "inventories"
+   *  note's Balance Sheet leaf rows), used when the client's TB ledger
+   *  balance cannot represent true stock movement (see the flag's doc
+   *  comment for the Raywings root cause). Persisted as
    *  cy_data._inventory_overrides and re-applied on every re-sync, on top of
    *  the fresh auto-build, only for allow-listed clients. Absent/empty for
    *  every other NCE client — behaviour is unchanged for the rest of the book. */
@@ -2211,29 +2213,6 @@ export async function nceAutoPopulate(
           }
         }
 
-        // CLIENT-SCOPED (see nceFeatureFlags.ts NCE_INVENTORY_MANUAL_OVERRIDE_
-        // CLIENT_IDS) — replay the auditor's saved opening/closing inventory
-        // override on top of the auto-computed pc_open_*/pc_close_*/raw_*/
-        // pack_*/other_* values above. Runs AFTER every auto-population path
-        // (CY-TB, PY-notes fallback, PY-shell-TB fallback) so the override
-        // always wins for the allow-listed client, and re-applies on every
-        // re-sync/self-heal (prev is this note's PRE-rebuild saved data, so
-        // the override survives the rebuild exactly like labelOverrides does).
-        // No-op (reads undefined) for every client not in the allowlist —
-        // behaviour for the rest of the NCE book is unchanged.
-        if (nceInventoryOverrideEnabled(clientId)) {
-          const invOv = prev.inventoryOverrides;
-          if (invOv?.cy) {
-            for (const [k, v] of Object.entries(invOv.cy)) {
-              if (NCE_INVENTORY_OVERRIDE_ROW_IDS.has(k) && typeof v === "number") newCy[k] = v;
-            }
-          }
-          if (invOv?.py) {
-            for (const [k, v] of Object.entries(invOv.py)) {
-              if (NCE_INVENTORY_OVERRIDE_ROW_IDS.has(k) && typeof v === "number") newPy[k] = v;
-            }
-          }
-        }
       }
 
     } else {
@@ -3588,6 +3567,36 @@ export async function nceAutoPopulate(
       // Only CY — PY may hold legitimate PY-shell values.
       for (const id of duplicateIds) {
         mergedCy[id] = 0;
+      }
+    }
+
+    // CLIENT-SCOPED (see nceFeatureFlags.ts NCE_INVENTORY_MANUAL_OVERRIDE_
+    // CLIENT_IDS) — replay the auditor's saved override for THIS note (if any
+    // of its rows are in NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE[noteType]) on top
+    // of the freshly auto-built mergedCy/mergedPy, right before they're
+    // committed. Covers both the "cogs" note (Changes-in-Inventory) and the
+    // "inventories" note (Balance Sheet Note 17) — same mechanism, keyed by
+    // noteType so it generalises to any future note without duplicating this
+    // logic. Runs LAST (after every auto-population + dedup step above) so
+    // the override always wins for the allow-listed client, and re-applies on
+    // every re-sync/self-heal (prev is this note's PRE-rebuild saved data, so
+    // the override survives the rebuild exactly like labelOverrides does).
+    // No-op for every note/client not covered by the map + allowlist —
+    // behaviour for the rest of the NCE book is unchanged.
+    {
+      const overrideRowIds = NCE_INVENTORY_OVERRIDE_ROWS_BY_NOTE[noteType];
+      if (overrideRowIds && nceInventoryOverrideEnabled(clientId)) {
+        const invOv = prev.inventoryOverrides;
+        if (invOv?.cy) {
+          for (const [k, v] of Object.entries(invOv.cy)) {
+            if (overrideRowIds.has(k) && typeof v === "number") mergedCy[k] = v;
+          }
+        }
+        if (invOv?.py) {
+          for (const [k, v] of Object.entries(invOv.py)) {
+            if (overrideRowIds.has(k) && typeof v === "number") mergedPy[k] = v;
+          }
+        }
       }
     }
 
