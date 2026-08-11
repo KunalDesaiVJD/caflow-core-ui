@@ -788,14 +788,35 @@ async function selectMaxRowsPerPage() {
   const label = [...document.querySelectorAll("*")].find(
     (el) => el.children.length === 0 && el.offsetParent !== null && /rows per page/i.test((el.textContent || "").trim()),
   );
-  if (!label) return false;
+  if (!label) { console.log("CAFlow: selectMaxRowsPerPage — no 'Rows per page' label found at all"); return false; }
   const scope = label.closest("div")?.parentElement || label.parentElement;
   const trigger = scope?.querySelector("[role='combobox'], mat-select")
     || label.parentElement?.querySelector("[role='combobox'], mat-select");
-  if (!trigger) return false;
+  if (!trigger) {
+    // 2026-08-11: live evidence showed this silently failing (the page
+    // still read "05" / "1 of 73 pages" afterward). Dump the label's own
+    // nearby DOM (up 2 ancestors, each with its direct children's tag+class)
+    // so the real trigger element's shape is visible instead of guessed at
+    // a second time.
+    const dump = [];
+    let node = label;
+    for (let i = 0; i < 3 && node; i++) {
+      dump.push({
+        level: i, tag: node.tagName, cls: (node.className || "").toString().slice(0, 60),
+        childTags: [...node.children].map((c) => `${c.tagName}.${(c.className || "").toString().slice(0, 30)}`).join(", "),
+      });
+      node = node.parentElement;
+    }
+    console.log("CAFlow: selectMaxRowsPerPage — found the label but no [role='combobox']/mat-select trigger nearby —");
+    console.table(dump);
+    return false;
+  }
   trigger.click();
   const option100 = await waitFor(() => findOptionByText(/^100$/), 3_000);
-  if (!option100) return false;
+  if (!option100) {
+    console.log("CAFlow: selectMaxRowsPerPage — clicked the trigger but no '100' option appeared");
+    return false;
+  }
   option100.click();
   await new Promise((r) => setTimeout(r, 800)); // let the table reflow at the new page size
   return true;
@@ -885,7 +906,9 @@ function findRowByCin(cin) {
  */
 async function openViewDetailsForCin(cin, maxPages = 20) {
   let row = null;
+  let pagesSearched = 0;
   for (let page = 0; page < maxPages; page++) {
+    pagesSearched = page + 1;
     row = findRowByCin(cin);
     if (row) break;
     const next = findPaginatorNextButton();
@@ -893,13 +916,22 @@ async function openViewDetailsForCin(cin, maxPages = 20) {
     next.click();
     await new Promise((r) => setTimeout(r, 700));
   }
-  if (!row) return false;
+  if (!row) {
+    console.log(`CAFlow: openViewDetailsForCin(${cin}) — row not found after searching ${pagesSearched} page(s)`);
+    return false;
+  }
   const trigger = findRowMenuTrigger(row);
-  if (!trigger) return false;
+  if (!trigger) {
+    console.log(`CAFlow: openViewDetailsForCin(${cin}) — found the row (page ${pagesSearched}) but no "⋮" trigger in its last cell`);
+    return false;
+  }
   trigger.click();
   await new Promise((r) => setTimeout(r, 400));
   const viewDetails = await waitFor(() => findClickableByText(/^view details$/i), 3_000);
-  if (!viewDetails) return false;
+  if (!viewDetails) {
+    console.log(`CAFlow: openViewDetailsForCin(${cin}) — clicked the "⋮" menu but "View Details" never appeared`);
+    return false;
+  }
   viewDetails.click();
   await new Promise((r) => setTimeout(r, 600));
   return true;

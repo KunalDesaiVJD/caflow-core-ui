@@ -262,6 +262,18 @@ that dropdown really does offer 05/10/25/50/75/100), cutting the 73-page
 scan down to roughly 4 pages. Added `selectMaxRowsPerPage`, called at the
 start of `collectQuarterCandidates` before any page-scanning begins.
 
+**v0.4.4 (2026-08-11)**: v0.4.3's rows-per-page switch silently failed live
+(the page still read "05" / "1 of 73 pages" afterward) — no error, since
+that whole function is deliberately best-effort. Added real diagnostics
+instead of guessing a third time: `selectMaxRowsPerPage` now logs exactly
+which step failed (no label found / no combobox trigger found nearby, with
+a DOM dump of what IS nearby / clicked but no "100" option appeared).
+Separately, 9 of 11 candidates found in Stage 1 failed to open in Stage 2 —
+`openViewDetailsForCin` now logs per-candidate which step failed (row never
+found after N pages / found the row but no "⋮" trigger / clicked "⋮" but no
+"View Details" appeared) so the next run's console shows exactly where each
+failure happens instead of just "couldn't be opened."
+
 ## What this is NOT
 
 This is a genuinely separate artifact from the CAFlow web app — a browser
