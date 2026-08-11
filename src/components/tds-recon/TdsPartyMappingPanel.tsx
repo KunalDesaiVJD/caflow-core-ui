@@ -24,7 +24,7 @@ import {
 import {
   Bot, RefreshCw, CheckCircle2, XCircle, Pencil, Save, X,
   ChevronDown, ChevronRight, Info, Loader2, Search, ExternalLink,
-  AlertTriangle, BadgeCheck, Rows3, Link2,
+  AlertTriangle, BadgeCheck, Rows3, Link2, Building2,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
@@ -35,6 +35,8 @@ import {
 import { usePartyExpenseLedgers } from "./hooks/usePartyExpenseLedgers";
 import { logTdsLearningEvent, normalizeTdsPatternFragment } from "./hooks/useTdsLearningLogger";
 import { runAiMapper } from "./tdsEngine";
+import { resolveTdsMgmtHints, type ResolvedHint, type TallyPartyMapRow } from "@/lib/tds/resolveTdsMgmtHints";
+import { normalizeName } from "@/lib/tds/match";
 import { SplitByVoucherPanel } from "./SplitByVoucherPanel";
 import { TdsLedgerSetupPanel } from "./TdsLedgerSetupPanel";
 
@@ -120,11 +122,29 @@ function MethodBadge({ method }: { method: string | null }) {
   const parts = (method || "").split("+");
   return (
     <div className="flex flex-wrap gap-0.5">
-      {parts.map(p => (
-        <span key={p} className="inline-flex items-center px-1 py-0.5 rounded bg-blue-50 border border-blue-100 text-[9px] text-blue-600 font-mono">
-          {p}
-        </span>
-      ))}
+      {parts.map(p => {
+        // Sourced from TDS Management's own confirmed party map
+        // (tds_tally_party_maps), resolved against the live TB — see
+        // resolveTdsMgmtHints. Distinct styling so it reads as "this came
+        // from a human decision already made elsewhere," not an AI guess.
+        if (p.startsWith("tds_mgmt_confirmed")) {
+          const exact = p.endsWith("exact");
+          return (
+            <span
+              key={p}
+              className="inline-flex items-center gap-0.5 px-1 py-0.5 rounded bg-purple-50 border border-purple-200 text-[9px] text-purple-700 font-medium"
+              title={exact ? "Exact match to TDS Management's confirmed party mapping" : "Fuzzy match to TDS Management's confirmed party mapping — verify"}
+            >
+              <Building2 size={8} /> TDS Mgmt {exact ? "(exact)" : "(fuzzy)"}
+            </span>
+          );
+        }
+        return (
+          <span key={p} className="inline-flex items-center px-1 py-0.5 rounded bg-blue-50 border border-blue-100 text-[9px] text-blue-600 font-mono">
+            {p}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -493,6 +513,42 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
       } catch { if (!cancelled) setTbCreditors([]); }
     })();
   }, [clientId, financialYear]);
+
+  // ── TDS Management integration (Phase 3 — read-only UI surfacing) ──────────
+  // tds_tally_party_maps is owned entirely by TDS Management (TdsTallyRecon.tsx)
+  // — fetched here purely to DISPLAY provenance/conflict information; nothing
+  // in this panel ever writes to it.
+  const [tallyPartyMaps, setTallyPartyMaps] = useState<TallyPartyMapRow[]>([]);
+  useEffect(() => {
+    if (!clientId) { setTallyPartyMaps([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await (supabase as any)
+          .from("tds_tally_party_maps")
+          .select("office_name,tally_party")
+          .eq("client_id", clientId);
+        if (!cancelled) setTallyPartyMaps((data ?? []) as TallyPartyMapRow[]);
+      } catch { if (!cancelled) setTallyPartyMaps([]); }
+    })();
+    return () => { cancelled = true; };
+  }, [clientId]);
+
+  // Resolved TDS Management hints, keyed by the TB ledger they resolve to —
+  // same computation runAiMapper() does, purely for display here (no writes).
+  const tdsMgmtHintsByLedger = useMemo(() => {
+    const hints = resolveTdsMgmtHints(
+      tallyPartyMaps,
+      tbCreditors.map(c => ({ ledger_name: c.ledger_name, parent_group: c.parent_group })),
+    );
+    const map = new Map<string, ResolvedHint>();
+    for (const h of hints) {
+      if ((h.outcome === "exact" || h.outcome === "fuzzy") && h.resolvedLedgerName) {
+        map.set(h.resolvedLedgerName, h);
+      }
+    }
+    return map;
+  }, [tallyPartyMaps, tbCreditors]);
 
   const [running,     setRunning]     = useState(false);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
@@ -915,6 +971,17 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
               const isSaving   = savingId === m.id;
               const isSplit    = splitId === m.id;
               const isLinkingMore = linkMoreId === m.id;
+              // TDS Management conflict — its own confirmed party map for
+              // this ledger names a DIFFERENT deductee than what's currently
+              // mapped here. Purely informational (never auto-applied, per
+              // Phase 2's safety rule — a confirmed row is never touched by
+              // that pathway); this just surfaces the disagreement for a
+              // human to look at.
+              const tdsMgmtHint = !String(m.match_method || "").startsWith("tds_mgmt_confirmed")
+                ? tdsMgmtHintsByLedger.get(m.tb_ledger_name)
+                : undefined;
+              const tdsMgmtConflict = tdsMgmtHint
+                && normalizeName(tdsMgmtHint.officeName) !== normalizeName(m.tds_deductee_name);
 
               return (
                 <div key={m.id} className="hover:bg-muted/10 transition-colors">
@@ -1129,6 +1196,21 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
                     {/* Status + Actions */}
                     <div className="flex flex-col gap-1 items-start">
                       <StatusBadge status={m.mapping_status} />
+                      {tdsMgmtConflict && (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className="inline-flex items-center gap-0.5 text-[9px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-1 py-0.5">
+                              <AlertTriangle size={9} /> TDS Mgmt differs
+                            </span>
+                          </TooltipTrigger>
+                          <TooltipContent side="bottom" className="text-xs max-w-[260px]">
+                            TDS Management's own confirmed mapping links this ledger to
+                            &quot;{tdsMgmtHint!.officeName}&quot; (via &quot;{tdsMgmtHint!.tallyPartyRaw}&quot;) —
+                            different from &quot;{m.tds_deductee_name}&quot; mapped here. Not auto-applied; review and
+                            decide which is correct.
+                          </TooltipContent>
+                        </Tooltip>
+                      )}
                       <div className="flex items-center gap-1">
                         {m.mapping_status !== "confirmed" && (
                           <Tooltip>
