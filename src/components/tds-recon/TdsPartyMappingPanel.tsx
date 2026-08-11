@@ -802,6 +802,18 @@ export function TdsPartyMappingPanel({ clientId, financialYear }: Props) {
         afterValue: { section: deductee.section_code },
         source: "manual",
       });
+      // Second event — ledger-keyed pattern (Phase 4 cross-year carry-
+      // forward): this exact TB ledger now has a confirmed deductee/section,
+      // reusable next FY even without a TDS Management hint.
+      logTdsLearningEvent({
+        clientId, firmId, financialYear,
+        eventType: "manual_override",
+        entityType: "tds_tb_party_mappings", entityId: savedId,
+        patternType: "ledger_selection",
+        patternKey: `ledger:${normalizeTdsPatternFragment(tbLedgerName)}`,
+        afterValue: { deductee_name: deductee.deductee_name, section_code: deductee.section_code },
+        source: "manual",
+      });
     }
     // Stage-1 follow-up (2026-08-04) — kill orphan books_only rows for the
     // same TB ledger so the panel stops showing the party twice after a

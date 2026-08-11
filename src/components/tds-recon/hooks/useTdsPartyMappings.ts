@@ -189,6 +189,20 @@ export function useTdsPartyMappings(
           aiMethod: m.match_method,
           source: isAiSuggested ? "ai_accepted" : "manual",
         });
+        // Second event, same confirm action — a distinct pattern keyed by
+        // the TB LEDGER (not the vendor) so next FY's mapper can carry this
+        // exact ledger's confirmed link forward even without a TDS
+        // Management hint. Phase 4 of the TDS Management/Analytics
+        // integration — consumed by runAiMapper() in ./tdsEngine.ts.
+        logTdsLearningEvent({
+          clientId: m.client_id, firmId: m.firm_id, financialYear: m.financial_year,
+          eventType: isAiSuggested ? "ai_suggestion_accepted" : "manual_override",
+          entityType: "tds_tb_party_mappings", entityId: m.id,
+          patternType: "ledger_selection",
+          patternKey: `ledger:${normalizeTdsPatternFragment(m.tb_ledger_name)}`,
+          afterValue: { deductee_name: m.tds_deductee_name, section_code: m.tds_section_code },
+          source: isAiSuggested ? "ai_accepted" : "manual",
+        });
       }
     }
   }, []);
@@ -235,6 +249,7 @@ export function useTdsPartyMappings(
       const newDeductee = patch.tds_deductee_name  !== undefined ? patch.tds_deductee_name   : before.tds_deductee_name;
       const sectionChanged  = patch.tds_section_code  !== undefined && patch.tds_section_code  !== before.tds_section_code;
       const deducteeChanged = patch.tds_deductee_name !== undefined && patch.tds_deductee_name !== before.tds_deductee_name;
+      const newLedger = patch.tb_ledger_name !== undefined ? patch.tb_ledger_name : before.tb_ledger_name;
       if (newSection && (sectionChanged || deducteeChanged)) {
         const isAiSuggested = !(before.match_method || "").includes("manual_link");
         logTdsLearningEvent({
@@ -249,6 +264,20 @@ export function useTdsPartyMappings(
           aiConfidence: isAiSuggested ? before.match_confidence : null,
           aiMethod: before.match_method,
           source: sectionChanged && isAiSuggested ? "ai_overridden" : "manual",
+        });
+        // Second event — ledger-keyed pattern for cross-year carry-forward
+        // (Phase 4). Also fires on a plain re-link (tb_ledger_name changed,
+        // deductee/section unchanged) since that's still a fresh confirmed
+        // fact about THIS ledger's identity.
+        logTdsLearningEvent({
+          clientId: before.client_id, firmId: before.firm_id, financialYear: before.financial_year,
+          eventType: deducteeChanged ? "party_mapping_change" : "section_override",
+          entityType: "tds_tb_party_mappings", entityId: id,
+          patternType: "ledger_selection",
+          patternKey: `ledger:${normalizeTdsPatternFragment(newLedger)}`,
+          beforeValue: { deductee_name: before.tds_deductee_name, section_code: before.tds_section_code },
+          afterValue: { deductee_name: newDeductee, section_code: newSection },
+          source: "manual",
         });
       }
     }

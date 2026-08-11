@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { discoverTdsLedgers, extractPartiesFromTdsVouchers, detect194QCandidates, SECTION_194Q_THRESHOLD } from "./tdsLedgerDiscovery";
 import { resolveTdsMgmtHints, type ResolvedHint, type TallyPartyMapRow } from "@/lib/tds/resolveTdsMgmtHints";
 import { normalizeName } from "@/lib/tds/match";
+import { normalizeTdsPatternFragment } from "./hooks/useTdsLearningLogger";
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -672,6 +673,32 @@ export async function runAiMapper(params: {
   const confirmedLedgerNames = new Set<string>((confirmedRows ?? []).map((r: any) => r.tb_ledger_name));
   let tdsMgmtResolved = 0;
 
+  // ── Phase 4 — cross-year carry-forward via the AI learning engine ────────
+  // tds_client_learned_patterns is client-scoped, NOT FY-scoped — a ledger
+  // confirmed in TDS Analytics last year (with no TDS Management hint
+  // involved at all) is still recognised this year. Same safety posture as
+  // the TDS Management branch: never touches a ledger with an existing
+  // CONFIRMED mapping, never auto-confirms, always requires an exact
+  // single-candidate match against THIS year's filed deductees.
+  const { data: learnedLedgerRows } = await (supabase as any)
+    .from("tds_client_learned_patterns")
+    .select("pattern_key,current_value,confidence_score")
+    .eq("client_id", client_id)
+    .eq("pattern_type", "ledger_selection")
+    .eq("is_active", true);
+  const learnedByLedger = new Map<string, { deductee_name: string; section_code: string | null; confidence: number }>();
+  for (const r of (learnedLedgerRows ?? []) as any[]) {
+    const key = String(r.pattern_key || "").replace(/^ledger:/, "");
+    const v = r.current_value;
+    if (key && v?.deductee_name) {
+      learnedByLedger.set(key, {
+        deductee_name: v.deductee_name,
+        section_code:  v.section_code ?? null,
+        confidence:    Number(r.confidence_score ?? 50),
+      });
+    }
+  }
+
   // 3. Already-mapped ledger names
   let alreadyMapped = new Set<string>();
   if (!force_rematch) {
@@ -739,6 +766,39 @@ export async function runAiMapper(params: {
           mapped_by: "tds_mgmt",
         });
         tdsMgmtResolved++;
+        continue;
+      }
+    }
+
+    // ── Cross-year carry-forward branch (Phase 4) — tried only when the TDS
+    // Management branch above didn't fire, still never for an already-
+    // CONFIRMED ledger. Same single-candidate-only guard.
+    if (!isVoucherDerived && !confirmedLedgerNames.has(tb.ledger_name)) {
+      const learned = learnedByLedger.get(normalizeTdsPatternFragment(tb.ledger_name));
+      const candidates = learned ? aggByNormName.get(normalizeName(learned.deductee_name)) : undefined;
+      if (learned && candidates && candidates.length === 1) {
+        const ded = candidates[0];
+        upsertRows.push({
+          client_id, firm_id, financial_year,
+          tb_ledger_name:    tb.ledger_name,
+          tb_parent_group:   tb.parent_group,
+          tb_total_debit:    Math.max(tb.debit_amount ?? 0, tb.credit_amount ?? 0) || null,
+          tds_deductee_name: ded.deductee_name,
+          tds_section_code:  ded.section_code,
+          tds_total_amount:  ded.total_amount_paid || null,
+          tds_tds_amount:    ded.total_tds || null,
+          tds_filing_ids:    ded.filing_ids,
+          match_confidence:  learned.confidence,
+          match_method:      "prior_year_confirmed",
+          ai_reasoning:
+            `Carried forward from a previously confirmed mapping for this exact Tally ledger in another ` +
+            `financial year (learned confidence ${learned.confidence.toFixed(0)}%) — no TDS Management hint ` +
+            `involved. Re-confirm to keep, or override if this year's facts differ.`,
+          // Same rule as the TDS Management branch — never auto-"confirmed",
+          // regardless of the learned confidence.
+          mapping_status: learned.confidence >= 85 ? "pending" : "needs_review",
+          mapped_by: "prior_year_link",
+        });
         continue;
       }
     }
