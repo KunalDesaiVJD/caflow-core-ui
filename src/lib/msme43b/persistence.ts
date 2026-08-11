@@ -8,11 +8,19 @@
 
 import { supabase } from '@/integrations/supabase/client';
 import { deriveBlockers } from './engine';
-import type { Msme43bReport } from './types';
+import type { Msme43bReport, VendorLedger } from './types';
+import type { PanelReview } from './panelReview';
 
 const TABLE = 'msme_43b_runs';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const db = () => (supabase as any).from(TABLE);
+
+/**
+ * Columns added by 20260730180000_msme_43b_run_session.sql. Everything that
+ * touches them degrades to the base columns when the migration has not been
+ * applied yet, so a stale schema costs the extras — never the run itself.
+ */
+const SESSION_COLUMNS = 'cy_ledgers, fy_ledgers, panel_review';
 
 export interface Msme43bRunSummary {
   id: string;
@@ -36,6 +44,21 @@ export interface SaveRunInput {
   userName?: string | null;
   label?: string | null;
   report: Msme43bReport;
+  /**
+   * The ledgers as extracted, stored with the run. They are what the accuracy
+   * loop and the calibration replay need, and re-creating them means paying for
+   * the Claude extraction of every PDF again.
+   */
+  cyLedgers?: VendorLedger[];
+  fyLedgers?: VendorLedger[];
+}
+
+/** A saved run, restored whole — the state the reviewer left the page in. */
+export interface Msme43bRunSession {
+  report: Msme43bReport;
+  cyLedgers: VendorLedger[];
+  fyLedgers: VendorLedger[];
+  panelReview: PanelReview | null;
 }
 
 export interface PersistResult<T> {
@@ -49,6 +72,19 @@ function isMissingTable(error: { code?: string; message?: string } | null): bool
   if (!error) return false;
   return error.code === '42P01' || /relation .*msme_43b_runs.* does not exist/i.test(error.message || '') ||
     /Could not find the table/i.test(error.message || '');
+}
+
+/**
+ * The run-session migration has not been applied to this project yet. Postgres
+ * says 42703; PostgREST answers from its schema cache with PGRST204 and a
+ * different wording, so both are matched.
+ */
+function isMissingColumn(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  const m = error.message || '';
+  return error.code === '42703' || error.code === 'PGRST204' ||
+    /column .* does not exist/i.test(m) ||
+    /Could not find the '.*' column/i.test(m);
 }
 
 export async function saveRun(input: SaveRunInput): Promise<PersistResult<string>> {
@@ -68,7 +104,17 @@ export async function saveRun(input: SaveRunInput): Promise<PersistResult<string
     created_by: input.userId ?? null,
     created_by_name: input.userName ?? null,
   };
-  const { data, error } = await db().insert(row).select('id').single();
+  const withLedgers = {
+    ...row,
+    cy_ledgers: input.cyLedgers ?? null,
+    fy_ledgers: input.fyLedgers ?? null,
+  };
+
+  let { data, error } = await db().insert(withLedgers).select('id').single();
+  // Older schema: keep the run rather than lose it over the extra columns.
+  if (error && isMissingColumn(error)) {
+    ({ data, error } = await db().insert(row).select('id').single());
+  }
   if (error) return { data: null, error: error.message, unavailable: isMissingTable(error) };
   return { data: data.id as string, error: null, unavailable: false };
 }
@@ -98,6 +144,51 @@ export async function loadRun(id: string): Promise<PersistResult<Msme43bReport>>
   if (error) return { data: null, error: error.message, unavailable: isMissingTable(error) };
   const raw = (data.report as Msme43bReport) ?? null;
   return { data: raw ? hydrateReport(raw) : null, error: null, unavailable: false };
+}
+
+/**
+ * Restore a run whole: the report, the ledgers it was computed from, and the
+ * review panel that was run on it. On a schema without the session columns this
+ * still returns the report, with the extras empty.
+ */
+export async function loadRunSession(id: string): Promise<PersistResult<Msme43bRunSession>> {
+  let { data, error } = await db().select(`report, ${SESSION_COLUMNS}`).eq('id', id).single();
+  if (error && isMissingColumn(error)) {
+    ({ data, error } = await db().select('report').eq('id', id).single());
+  }
+  if (error) return { data: null, error: error.message, unavailable: isMissingTable(error) };
+
+  const raw = (data?.report as Msme43bReport) ?? null;
+  if (!raw) return { data: null, error: 'The saved run has no report.', unavailable: false };
+  return {
+    data: {
+      report: hydrateReport(raw),
+      cyLedgers: (data.cy_ledgers as VendorLedger[]) ?? [],
+      fyLedgers: (data.fy_ledgers as VendorLedger[]) ?? [],
+      panelReview: (data.panel_review as PanelReview) ?? null,
+    },
+    error: null,
+    unavailable: false,
+  };
+}
+
+/**
+ * Attach a review-panel transcript to the run it reviewed. Called the moment
+ * the panel returns, so the two minutes it took are on file before anything
+ * else can go wrong.
+ */
+export async function savePanelReview(runId: string, panel: PanelReview): Promise<PersistResult<true>> {
+  const { error } = await db().update({ panel_review: panel }).eq('id', runId);
+  if (error) {
+    return {
+      data: null,
+      error: isMissingColumn(error)
+        ? 'The review panel could not be filed against the run — apply the run-session migration.'
+        : error.message,
+      unavailable: isMissingTable(error) || isMissingColumn(error),
+    };
+  }
+  return { data: true, error: null, unavailable: false };
 }
 
 export async function renameRun(id: string, label: string): Promise<PersistResult<true>> {
