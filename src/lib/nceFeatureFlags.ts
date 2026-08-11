@@ -133,3 +133,58 @@ export const FS_NO_MANUAL_NOTE_ADD = true;
  * Corporate is never affected (NCE-scoped throughout). FIGURE-MOVING when ON.
  */
 export const FS_NCE_CONSTRAINED_NOTES = true;  // ACTIVATED 2026-06-29 (parity 27/0; edge fn deployed; migration applied). Revert to false to roll back.
+
+/**
+ * NCE INVENTORY MANUAL OVERRIDE — CLIENT-SCOPED (2026-08-11, RAYWINGS SERVICES
+ * LLP, client_id 9205e109-dab4-4c96-a88d-e141f8b929d9).
+ *
+ * Root cause: Raywings keeps its stock ledger ("Opening Stock", parented under
+ * Stock-in-Hand) as a static Balance-Sheet control account that Tally never
+ * posts to during the year — the client's real stock movement lives only in
+ * Tally's inventory (stock-item) subsystem, which CAFlow's Tally sync does
+ * not ingest (only ledger-level Trial Balance is synced). Because this
+ * ledger's opening_balance == closing_balance (₹18,75,000 both ways — zero
+ * net movement on the LEDGER, by construction, not because nothing happened),
+ * nceAutoPopulate's Changes-in-Inventory walk (pc_open_trade / pc_close_trade
+ * in the "cogs" note) always nets to ₹0, even though the client's own Tally
+ * P&L / Stock Summary reports a genuine closing stock of ₹0 against an
+ * opening of ₹18,75,000 (all stock sold during the year).
+ *
+ * Per explicit user instruction, a manual override for the cogs note's
+ * opening/closing inventory cells (pc_open_*, pc_close_*, raw_*, pack_*,
+ * other_*) is enabled ONLY for the client(s) in this allowlist — not rolled
+ * out to the rest of the NCE book — so the auditor can type the TRUE closing
+ * stock value (sourced from Tally's own report) while every other client's
+ * Changes-in-Inventory note stays 100% auto-computed as before.
+ *
+ * The override is stored separately (cy_data._inventory_overrides inside the
+ * "cogs" note) and re-applied on top of the fresh auto-build on every
+ * re-sync/self-heal — see nceAutoPopulate.ts — so it survives Re-sync exactly
+ * like labelOverrides / hiddenRows do, without touching the pure auto layer
+ * for anyone not in this Set.
+ *
+ * TO REVERT ("restore to back"): clear this Set (or remove the client_id)
+ * and redeploy. Every read site below (`nceInventoryOverrideEnabled`) checks
+ * this allowlist directly — removing the id here removes the unlock in the
+ * UI (NCEDetailedNotes.tsx) and stops the override overlay in
+ * nceAutoPopulate.ts in one edit. Any already-saved override value stays
+ * harmlessly stored in cy_data (never read again) unless the client is
+ * re-added later.
+ */
+export const NCE_INVENTORY_MANUAL_OVERRIDE_CLIENT_IDS = new Set<string>([
+  "9205e109-dab4-4c96-a88d-e141f8b929d9", // RAYWINGS SERVICES LLP
+]);
+
+export function nceInventoryOverrideEnabled(clientId: string | null | undefined): boolean {
+  return !!clientId && NCE_INVENTORY_MANUAL_OVERRIDE_CLIENT_IDS.has(clientId);
+}
+
+/** Static-row ids the inventory override may touch — the fixed Schedule III
+ *  Changes-in-Inventory opening/closing rows (see nceAutoPopulate.ts's cogs
+ *  special-case block). Kept as an explicit allowlist (not "any key") so a
+ *  malformed override object can never leak into an unrelated note cell. */
+export const NCE_INVENTORY_OVERRIDE_ROW_IDS = new Set<string>([
+  "pc_open_trade", "pc_open_wip", "pc_open_fg",
+  "pc_close_trade", "pc_close_wip", "pc_close_fg",
+  "raw_open", "raw_close", "pack_open", "pack_close", "other_open", "other_close",
+]);

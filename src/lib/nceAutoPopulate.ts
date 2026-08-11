@@ -30,6 +30,7 @@ import { NOTES_CONFIG, type NoteConfig } from "@/config/nceNotesConfig";
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import { buildNoteFsMap } from "@/lib/nceNoteRegistry";
 import { buildLedgerMapMatcher, cleanTallyName } from "@/lib/tallyText";
+import { nceInventoryOverrideEnabled, NCE_INVENTORY_OVERRIDE_ROW_IDS } from "@/lib/nceFeatureFlags";
 
 // ── FS-code map ──────────────────────────────────────────────────────────────
 //
@@ -363,6 +364,15 @@ export interface NCENoteData {
    *  constructors may omit it. Optional so the ~40 existing NCENoteData literals
    *  don't all have to set it. */
   manualEdits?: NceEdit[];
+  /** CLIENT-SCOPED (see nceFeatureFlags.ts NCE_INVENTORY_MANUAL_OVERRIDE_CLIENT_IDS)
+   *  — auditor-entered opening/closing inventory figures for the "cogs" note's
+   *  Changes-in-Inventory rows (pc_open_trade/pc_close_trade/etc.), used when
+   *  the client's TB ledger balance cannot represent true stock movement (see
+   *  the flag's doc comment for the Raywings root cause). Persisted as
+   *  cy_data._inventory_overrides and re-applied on every re-sync, on top of
+   *  the fresh auto-build, only for allow-listed clients. Absent/empty for
+   *  every other NCE client — behaviour is unchanged for the rest of the book. */
+  inventoryOverrides?: { cy?: Record<string, number>; py?: Record<string, number> };
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -711,7 +721,7 @@ function hasAnyNonZero(perRow: Record<string, { cy?: number; py?: number; ltCy?:
 // when reading numeric values back into the cy/py maps.
 // NCE Task 7: added _source_label_overrides so user-edited source sub-ledger labels
 // survive page reload (previously this field was in NCENoteData but never persisted).
-const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides", "_cy_sources", "_ejected_ledgers", "_source_label_overrides", "_manual_edits"]);
+const META_KEYS = new Set(["_custom_rows", "_hidden_rows", "_label_overrides", "_cy_sources", "_ejected_ledgers", "_source_label_overrides", "_manual_edits", "_inventory_overrides"]);
 
 export function deserialiseNoteData(
   rawCy: Record<string, any>,
@@ -749,6 +759,14 @@ export function deserialiseNoteData(
     ? (rawCy._manual_edits as NceEdit[])
     : [];
 
+  // CLIENT-SCOPED (see nceFeatureFlags.ts) — Changes-in-Inventory manual
+  // override, read back verbatim. Absent for every client not in the
+  // allowlist, since only the allow-listed client's UI can ever write it.
+  const inventoryOverrides: { cy?: Record<string, number>; py?: Record<string, number> } | undefined =
+    rawCy._inventory_overrides && typeof rawCy._inventory_overrides === "object"
+      ? (rawCy._inventory_overrides as { cy?: Record<string, number>; py?: Record<string, number> })
+      : undefined;
+
   const cy: Record<string, number> = {};
   for (const [k, v] of Object.entries(rawCy)) {
     if (!META_KEYS.has(k) && typeof v === "number") cy[k] = v;
@@ -760,7 +778,7 @@ export function deserialiseNoteData(
     // for opposite-side ledgers (e.g. a Dr-balance ledger under Trade Payables).
     if (!META_KEYS.has(k) && typeof v === "number") py[k] = v;
   }
-  return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers, sourceLabelOverrides, manualEdits };
+  return { cy, py, customRows, hiddenRows, labelOverrides, cy_sources, ejectedLedgers, sourceLabelOverrides, manualEdits, inventoryOverrides };
 }
 
 export function serialiseNoteData(
@@ -786,6 +804,14 @@ export function serialiseNoteData(
       // through verbatim (NOT re-derived) so an older build reads byte-identical.
       ...(d.manualEdits && d.manualEdits.length > 0
         ? { _manual_edits: d.manualEdits }
+        : {}),
+      // CLIENT-SCOPED inventory override (see nceFeatureFlags.ts) — persisted
+      // verbatim, same conditional-emit pattern as the channels above.
+      ...(d.inventoryOverrides && (
+        Object.keys(d.inventoryOverrides.cy ?? {}).length > 0 ||
+        Object.keys(d.inventoryOverrides.py ?? {}).length > 0
+      )
+        ? { _inventory_overrides: d.inventoryOverrides }
         : {}),
     },
     py_data: d.py,
@@ -2184,6 +2210,30 @@ export async function nceAutoPopulate(
             }
           }
         }
+
+        // CLIENT-SCOPED (see nceFeatureFlags.ts NCE_INVENTORY_MANUAL_OVERRIDE_
+        // CLIENT_IDS) — replay the auditor's saved opening/closing inventory
+        // override on top of the auto-computed pc_open_*/pc_close_*/raw_*/
+        // pack_*/other_* values above. Runs AFTER every auto-population path
+        // (CY-TB, PY-notes fallback, PY-shell-TB fallback) so the override
+        // always wins for the allow-listed client, and re-applies on every
+        // re-sync/self-heal (prev is this note's PRE-rebuild saved data, so
+        // the override survives the rebuild exactly like labelOverrides does).
+        // No-op (reads undefined) for every client not in the allowlist —
+        // behaviour for the rest of the NCE book is unchanged.
+        if (nceInventoryOverrideEnabled(clientId)) {
+          const invOv = prev.inventoryOverrides;
+          if (invOv?.cy) {
+            for (const [k, v] of Object.entries(invOv.cy)) {
+              if (NCE_INVENTORY_OVERRIDE_ROW_IDS.has(k) && typeof v === "number") newCy[k] = v;
+            }
+          }
+          if (invOv?.py) {
+            for (const [k, v] of Object.entries(invOv.py)) {
+              if (NCE_INVENTORY_OVERRIDE_ROW_IDS.has(k) && typeof v === "number") newPy[k] = v;
+            }
+          }
+        }
       }
 
     } else {
@@ -3550,6 +3600,9 @@ export async function nceAutoPopulate(
       labelOverrides: prev.labelOverrides ?? {},
       ejectedLedgers: prev.ejectedLedgers ?? [],
       ...(Object.keys(cleanedSources).length > 0 ? { cy_sources: cleanedSources } : {}),
+      // CLIENT-SCOPED inventory override carry-forward (see nceFeatureFlags.ts) —
+      // undefined/omitted for every note type + client not using it.
+      ...(prev.inventoryOverrides ? { inventoryOverrides: prev.inventoryOverrides } : {}),
     };
   }
 
