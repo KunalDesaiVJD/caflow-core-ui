@@ -80,6 +80,18 @@ const SYSTEM_PROMPT =
   'rows as transactions — capture opening and closing in their own fields only.\n' +
   '- If the file contains multiple vendor ledgers, return one object per vendor in ' +
   '"ledgers".\n' +
+  '- VENDOR NAME SOURCE — READ THIS CAREFULLY: vendorName must come ONLY from what ' +
+  'is actually PRINTED as the party/ledger name inside this ledger (a heading like ' +
+  '"Ledger Account of X", "Party Name: X", or the name at the top of the statement). ' +
+  "This message may also tell you the uploaded source file's own name — that " +
+  'filename is NOT evidence of the vendor name and must never be copied into ' +
+  "vendorName. A single uploaded file commonly contains SEVERAL different vendors' " +
+  'ledgers merged together and named after only one of them (or after something ' +
+  "else entirely), so using the filename for a DIFFERENT vendor's ledger silently " +
+  "mislabels that vendor's figures as someone else's. If this ledger's own printed " +
+  'party name is not visible anywhere in the content you were given (e.g. this ' +
+  'chunk is a continuation with no header), leave vendorName as "" — do NOT fall ' +
+  'back to the filename or guess.\n' +
   '- If a value is unknown, use "" for strings and 0 for numbers. Output valid JSON only.';
 
 function parseJson(content: string) {
@@ -149,7 +161,7 @@ serve(async (req) => {
         {
           kind: "text",
           text:
-            `Scanned ledger${filename ? ` from "${filename}"` : ""}` +
+            `Scanned ledger${filename ? ` (source file: "${filename}" — filename only, not evidence of the vendor name)` : ""}` +
             `${page_range ? `, ${page_range}` : ""} — ${images.length} page image(s) follow, in order.`,
         },
         ...images.map((base64) => ({ kind: "image" as const, base64 })),
@@ -160,7 +172,7 @@ serve(async (req) => {
         {
           kind: "text",
           text:
-            `Ledger text${filename ? ` from "${filename}"` : ""}` +
+            `Ledger text${filename ? ` (source file: "${filename}" — filename only, not evidence of the vendor name)` : ""}` +
             `${page_range ? `, ${page_range}` : ""}:\n\n${String(text_content).slice(0, 600_000)}`,
         },
         { kind: "text", text: PARTIAL_NOTE },
@@ -168,7 +180,7 @@ serve(async (req) => {
     } else {
       parts = [
         { kind: "pdf", filename: filename || "ledger.pdf", base64: pdf_base64 },
-        { kind: "text", text: `Extract the ledger${filename ? ` from "${filename}"` : ""} into the JSON schema. Output JSON only.` },
+        { kind: "text", text: `Extract the ledger${filename ? ` (source file: "${filename}" — filename only, not evidence of the vendor name)` : ""} into the JSON schema. Output JSON only.` },
       ];
     }
 
