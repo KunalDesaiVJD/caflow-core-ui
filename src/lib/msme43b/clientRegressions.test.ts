@@ -144,10 +144,55 @@ describe('msme-extract-ledger prompt — anti-filename-anchoring guardrail (quer
     const here = dirname(fileURLToPath(import.meta.url));
     const path = resolve(here, '../../../supabase/functions/msme-extract-ledger/index.ts');
     const src = readFileSync(path, 'utf8');
-    expect(src).toMatch(/filename is NOT evidence of the vendor name/i);
+    expect(src).toMatch(/TRAP 2/);
+    expect(src).toMatch(/not evidence either/i);
     expect(src).toMatch(/leave vendorName as ""/);
     // The per-message filename mentions must also carry the caveat inline,
     // not just the system prompt — the model reads that context too.
     expect(src).toMatch(/filename only, not evidence of the vendor name/i);
+  });
+
+  // A real Amadius Realty / Elenza Callista / Revti Infra export prints the
+  // REPORTING COMPANY's own name and address FIRST, then the true vendor name
+  // right above the words "Ledger Account" — verified against 27 real ledger
+  // PDFs across 4 clients, and 100% consistent. This is a separate, more
+  // precise root cause than the filename-anchoring one above: the model was
+  // very likely picking the client's own prominent letterhead instead of the
+  // party name one line below it.
+  it('instructs the model to read the vendor name from the line before "Ledger Account", not the company letterhead above it', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const path = resolve(here, '../../../supabase/functions/msme-extract-ledger/index.ts');
+    const src = readFileSync(path, 'utf8');
+    expect(src).toMatch(/line immediately before "Ledger Account"/);
+    expect(src).toMatch(/reporting company/i);
+  });
+});
+
+describe('msme-extract-ledger prompt — opening/closing balance sign guardrail (V.J. Desai & Co. / Omega Elevator root cause)', () => {
+  // Verified against real Amadius Realty exports: Omega Elevator opens with
+  // "To Opening Balance 10,10,000.00" — printed in the DEBIT column (confirmed
+  // by x-coordinate against a known debit row) — meaning openingBalance must be
+  // NEGATIVE (-1010000), not the positive default a model would likely assume
+  // for a creditor ledger. Separately, V.J. Desai & Co. (recurring across
+  // Amadius, Skylark and Sweni) prints "To Closing Balance 4,61,340.00" — also
+  // on the debit side, but as Tally's BALANCING PLUG, which means the ledger
+  // truly closes CREDIT/payable (+461340), the OPPOSITE of what the "To"
+  // prefix would suggest for an ordinary transaction. Getting either sign
+  // wrong produces a large reconstructedClosing vs. printed-closingBalance
+  // drift — i.e. exactly the "ledger did not reconcile / could not run"
+  // failure reported for V.J. Desai & Co. in three different clients.
+  it('instructs the model on the To/By opening-balance convention, with the verified 10,10,000 example', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const path = resolve(here, '../../../supabase/functions/msme-extract-ledger/index.ts');
+    const src = readFileSync(path, 'utf8');
+    expect(src).toMatch(/openingBalance = -1010000/);
+  });
+
+  it('instructs the model that the closing-balance plug is inverted relative to its printed side, with the verified 4,61,340 example', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const path = resolve(here, '../../../supabase/functions/msme-extract-ledger/index.ts');
+    const src = readFileSync(path, 'utf8');
+    expect(src).toMatch(/BALANCING FIGURE, NOT A TRANSACTION/);
+    expect(src).toMatch(/closingBalance = \+461340/);
   });
 });

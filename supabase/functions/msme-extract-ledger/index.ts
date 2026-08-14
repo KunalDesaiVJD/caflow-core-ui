@@ -45,7 +45,8 @@ const SYSTEM_PROMPT =
   '"periodFrom":string,             // ISO yyyy-mm-dd if shown, else ""\n' +
   '"periodTo":string,               // ISO yyyy-mm-dd if shown, else ""\n' +
   '"openingBalance":number,         // signed: +ve = credit/payable, -ve = debit balance\n' +
-  '"closingBalance":number,         // signed the same way, exactly as printed\n' +
+  '"closingBalance":number,         // signed the same way, exactly as printed — see the\n' +
+  '                                  // "To"/"By" rule below; do NOT assume it is positive\n' +
   '"rows":[ [date, particulars, vchType, vchNo, debit, credit, taxableValue, gstAmount, gstRate] ]\n' +
   '}]}\n\n' +
   'EACH ROW IS AN ARRAY OF EXACTLY 9 ELEMENTS, ALWAYS IN THIS ORDER:\n' +
@@ -74,24 +75,61 @@ const SYSTEM_PROMPT =
   '- taxableValue + gstAmount must equal the credit amount when both are given.\n' +
   '- Each transaction has EITHER a debit OR a credit (the other is 0). Never put ' +
   'the same amount in both.\n' +
+  '- THE "To"/"By" PREFIX DECIDES THE COLUMN for an ordinary transaction row — use ' +
+  'it, do not guess from position. "To ..." names a DEBIT-column entry; "By ..." ' +
+  'names a CREDIT-column entry.\n' +
+  '- OPENING BALANCE — read directly, same rule as above. "To Opening Balance ₹X" ' +
+  'is a genuine DEBIT/advance balance carried in → openingBalance = -X, NOT +X, even ' +
+  'though a positive (payable) opening is far more common for a creditor ledger — ' +
+  'read the actual word on that line, never assume the usual case. Verified real ' +
+  'example: "1-Apr-25 To Opening Balance 10,10,000.00" → openingBalance = -1010000. ' +
+  '"By Opening Balance ₹X" → openingBalance = +X, the ordinary case.\n' +
+  '- CLOSING BALANCE IS DIFFERENT — IT IS A BALANCING FIGURE, NOT A TRANSACTION, AND ' +
+  'ITS SIGN IS THE OPPOSITE OF ITS PRINTED SIDE. Tally prints "To Closing Balance" or ' +
+  '"By Closing Balance" on whichever column needs a top-up to make the Debit and ' +
+  'Credit column TOTALS print equal — so its column is the OPPOSITE of what the ' +
+  'ledger actually closes at. "To Closing Balance ₹X" (on the debit side) means the ' +
+  'Credit-column total exceeded the Debit-column total by X, so the ledger truly ' +
+  'closes CREDIT/payable → closingBalance = +X, NOT -X. "By Closing Balance ₹X" (on ' +
+  'the credit side) means the ledger truly closes DEBIT/advance → closingBalance = ' +
+  '-X. Verified real example: a ledger whose debit-column total was 2,56,300 and ' +
+  'credit-column total was 7,17,640 printed "To Closing Balance 4,61,340.00" on the ' +
+  'debit side (2,56,300 + 4,61,340 = 7,17,640, balancing the columns) — the ledger ' +
+  'truly closes CREDIT/payable, so closingBalance = +461340.\n' +
   '- Copy amounts EXACTLY (strip currency symbols and thousands separators; keep ' +
   'paise). Never round or invent figures.\n' +
   '- Do NOT include opening/closing/"carried forward"/"brought forward"/grand-total ' +
   'rows as transactions — capture opening and closing in their own fields only.\n' +
   '- If the file contains multiple vendor ledgers, return one object per vendor in ' +
   '"ledgers".\n' +
-  '- VENDOR NAME SOURCE — READ THIS CAREFULLY: vendorName must come ONLY from what ' +
-  'is actually PRINTED as the party/ledger name inside this ledger (a heading like ' +
-  '"Ledger Account of X", "Party Name: X", or the name at the top of the statement). ' +
-  "This message may also tell you the uploaded source file's own name — that " +
-  'filename is NOT evidence of the vendor name and must never be copied into ' +
+  '- VENDOR NAME SOURCE — READ THIS CAREFULLY, TWO SEPARATE TRAPS: ' +
+  'vendorName must come ONLY from what is actually PRINTED as the party name inside ' +
+  'this specific ledger — never invented, never copied from anywhere else.\n' +
+  '  TRAP 1 — the header block has TWO names, and the wrong one is more prominent. ' +
+  'A Tally "Ledger Account" export prints the REPORTING COMPANY\'s own name FIRST ' +
+  '(often with its PAN, UDYAM number, CIN, registered address or email beneath it — ' +
+  'this is the CA firm\'s client, not a vendor), and the true VENDOR/PARTY name comes ' +
+  'immediately AFTER that block, on the line directly above the words "Ledger ' +
+  'Account". Example header, verified against real exports:\n' +
+  '    Accurate PMS Private Limited.        <- reporting company (its OWN books) — NOT the vendor\n' +
+  '    UDYAM : UDYAM-GJ-01-0052458 (Small)   <- more of the same company block\n' +
+  '    Enviro Technologies                  <- THIS is the vendor — the line right before "Ledger Account"\n' +
+  '    Ledger Account\n' +
+  '  vendorName is ALWAYS the line immediately before "Ledger Account", never the ' +
+  'company block above it — even though that company block is the first and most ' +
+  'prominent text on the page. Getting this backwards mislabels every vendor in the ' +
+  'file with the CA firm\'s own client name, which is a serious, confidence-destroying ' +
+  'error.\n' +
+  '  TRAP 2 — the uploaded file\'s name is not evidence either. This message may also ' +
+  'tell you the source file\'s own name — that filename must never be copied into ' +
   "vendorName. A single uploaded file commonly contains SEVERAL different vendors' " +
-  'ledgers merged together and named after only one of them (or after something ' +
-  "else entirely), so using the filename for a DIFFERENT vendor's ledger silently " +
-  "mislabels that vendor's figures as someone else's. If this ledger's own printed " +
-  'party name is not visible anywhere in the content you were given (e.g. this ' +
-  'chunk is a continuation with no header), leave vendorName as "" — do NOT fall ' +
-  'back to the filename or guess.\n' +
+  'ledgers merged together and named after only one of them (or after something else ' +
+  "entirely), so using the filename for a DIFFERENT vendor's ledger silently " +
+  "mislabels that vendor's figures as someone else's.\n" +
+  '  If neither the "Ledger Account" heading nor any other printed party name is ' +
+  'visible anywhere in the content you were given (e.g. this chunk is a continuation ' +
+  'with no header), leave vendorName as "" — do NOT fall back to the company name, ' +
+  'the filename, or a guess.\n' +
   '- If a value is unknown, use "" for strings and 0 for numbers. Output valid JSON only.';
 
 function parseJson(content: string) {
