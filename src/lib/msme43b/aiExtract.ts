@@ -28,6 +28,104 @@ const num = (v: unknown): number => {
 };
 const str = (v: unknown): string => (v == null ? '' : String(v));
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  Deterministic corrections — DO NOT depend on the model following an
+//  instruction. Verified against 41 real ledger exports across 6 clients
+//  (Amadius Realty, Elenza Calista, Revti Infra, Skylark Corporation, Sweni
+//  Corporation, Accurate PMS): the AI extraction was directly observed still
+//  mislabeling a vendor with the reporting company's own letterhead AFTER an
+//  explicit prompt instruction was added telling it not to — models do not
+//  reliably follow layout-disambiguation instructions on every call. Both
+//  patterns below are 100% mechanical (a fixed anchor word/phrase, not a
+//  judgement call), so they are corrected here in code instead, using only
+//  the model's read of the AMOUNTS (a reliable OCR-like task) — never its
+//  read of which name or which sign those amounts belong to.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A real Tally "Ledger Account" export prints the reporting company's own
+ * name (and often PAN/UDYAM/CIN/address) FIRST, then the true vendor name on
+ * the line immediately before the literal heading "Ledger Account". Returns
+ * every vendor name found, in order of appearance, for correlation against
+ * however many ledger objects the model returned for this chunk.
+ */
+export function detectLedgerAccountVendorNames(text: string): string[] {
+  const lines = text.split('\n').map((l) => l.trim());
+  const names: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] !== 'Ledger Account') continue;
+    for (let j = i - 1; j >= 0; j--) {
+      if (lines[j]) { names.push(lines[j]); break; }
+    }
+  }
+  return names;
+}
+
+/**
+ * The sign of a Tally opening/closing balance, from the "To"/"By" word
+ * printed immediately before it.
+ *
+ * OPENING is read directly: "To Opening Balance" is a real debit/advance
+ * balance carried in → negative. "By Opening Balance" → positive.
+ *
+ * CLOSING IS DIFFERENT: it is Tally's own balancing plug, printed on
+ * whichever column needs a top-up to make the two column TOTALS print equal
+ * — so its printed side is the OPPOSITE of what the ledger truly closes at.
+ * "To Closing Balance" means the credit-column total exceeded the debit
+ * total, so the ledger truly closes credit/payable → positive. "By Closing
+ * Balance" → negative. Verified by hand against three real V.J. Desai & Co.
+ * ledgers (Amadius Realty, Skylark Corporation, Sweni Corporation) and cross-
+ * checked against the following year's own independently-printed opening
+ * balance, which matched in every case.
+ *
+ * Returns undefined when the anchor text isn't present in this chunk (a
+ * continuation chunk with no header, or a non-Tally export) — the model's own
+ * figure is trusted as-is in that case.
+ */
+export function detectBalanceSign(text: string, which: 'Opening' | 'Closing'): 1 | -1 | undefined {
+  const m = text.match(new RegExp(`\\b(To|By)\\s+${which}\\s+Balance\\b`, 'i'));
+  if (!m) return undefined;
+  const isTo = m[1].toLowerCase() === 'to';
+  if (which === 'Opening') return isTo ? -1 : 1;
+  return isTo ? 1 : -1; // Closing: inverted relative to Opening
+}
+
+/**
+ * Apply both corrections to a chunk's raw model output IN PLACE, before
+ * mapLedger ever sees it — so the existing UNRESOLVED-vendor / warning logic
+ * downstream keeps working unchanged for whatever these detectors don't
+ * cover (scanned PDFs, non-Tally exports, genuinely ambiguous multi-vendor
+ * chunks).
+ *
+ * Vendor names are only overridden when the count of detected headers
+ * EXACTLY matches the count of ledger objects the model returned for this
+ * chunk — on a mismatch (a multi-vendor chunk this heuristic can't safely
+ * correlate) nothing is touched, which is no worse than before. The balance
+ * sign is only corrected when the chunk produced exactly one ledger, so
+ * there is no ambiguity about which ledger a single detected "Opening/
+ * Closing Balance" line belongs to.
+ */
+export function applyDeterministicCorrections(rawLedgers: unknown[], chunkText: string): void {
+  const names = detectLedgerAccountVendorNames(chunkText);
+  if (names.length && names.length === rawLedgers.length) {
+    rawLedgers.forEach((raw, i) => {
+      (raw as Record<string, unknown>).vendorName = names[i];
+    });
+  }
+
+  if (rawLedgers.length === 1) {
+    const raw = rawLedgers[0] as Record<string, unknown>;
+    const openSign = detectBalanceSign(chunkText, 'Opening');
+    if (openSign !== undefined && raw.openingBalance != null) {
+      raw.openingBalance = Math.abs(num(raw.openingBalance)) * openSign;
+    }
+    const closeSign = detectBalanceSign(chunkText, 'Closing');
+    if (closeSign !== undefined && raw.closingBalance != null) {
+      raw.closingBalance = Math.abs(num(raw.closingBalance)) * closeSign;
+    }
+  }
+}
+
 /**
  * An OPTIONAL number: null/undefined/"" stay undefined rather than collapsing to
  * 0. That distinction carries the whole GST safety story — "the document did not
@@ -419,7 +517,10 @@ async function extractByLineChunks(
 
   for (let i = 0; i < lines.length; i += LINES_PER_CHUNK) {
     const group = lines.slice(i, i + LINES_PER_CHUNK);
-    for (const raw of await readChunk(group)) collected.push(mapLedger(raw, file.name, false, span(group)));
+    const chunkText = render(group);
+    const rawLedgers = await readChunk(group);
+    applyDeterministicCorrections(rawLedgers, chunkText);
+    for (const raw of rawLedgers) collected.push(mapLedger(raw, file.name, false, span(group)));
   }
 
   if (!collected.length) {

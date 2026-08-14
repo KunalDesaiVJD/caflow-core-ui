@@ -11,6 +11,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { analyzeVendor } from './engine';
 import { classifyTxn } from './classify';
+import { detectLedgerAccountVendorNames, detectBalanceSign, applyDeterministicCorrections } from './aiExtract';
 import type { VendorLedger, LedgerTxn } from './types';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +38,63 @@ function ledger(fy: string, opening: number, txns: LedgerTxn[], vendorName = 'Te
     format: 'tally', reconstructedClosing: closing, balanceReconciled: true, reconDrift: 0,
   };
 }
+
+describe('deterministic corrections — verified against real client PDFs (round 2, still-failing-after-prompt-fix)', () => {
+  // These are NOT reconstructed approximations — this is the exact text (from
+  // pdfplumber) of the real ledger PDFs the client uploaded, after the prompt
+  // fix (#63) was deployed and the vendor name STILL came back as "AMADIUS
+  // REALTY" for the Omega Elevator ledger. A prompt instruction is not
+  // reliable enough for figures a CA firm signs off on, so these patterns are
+  // now enforced in code and tested against the literal real text — not a
+  // model's compliance with an instruction.
+
+  const OMEGA_ELEVATOR_HEADER =
+    'AMADIUS REALTY\n{PAN: ABYFA4842P}\nReg.Office No.FF/04, Ankur Shopping Center,\n' +
+    'Bh. VIP International School,Nikol,\nAhmedabad\nOMEGA ELEVATOR\nLedger Account\n' +
+    '1-Apr-25 to 31-Mar-26\nPage 1\nDate Particulars Vch Type Vch No. Debit Credit\n' +
+    '1-Apr-25 To Opening Balance 10,10,000.00\n';
+
+  const VJ_DESAI_SKYLARK_FOOTER =
+    '2,64,000.00 7,39,200.00\nTo Closing Balance 4,75,200.00\n7,39,200.00 7,39,200.00\n';
+
+  it('detects "OMEGA ELEVATOR" (not the "AMADIUS REALTY" letterhead) from the real header text', () => {
+    expect(detectLedgerAccountVendorNames(OMEGA_ELEVATOR_HEADER)).toEqual(['OMEGA ELEVATOR']);
+  });
+
+  it('detects the real Omega Elevator opening balance as debit/advance (negative)', () => {
+    expect(detectBalanceSign(OMEGA_ELEVATOR_HEADER, 'Opening')).toBe(-1);
+  });
+
+  it('detects the real Skylark V.J. Desai & Co. closing-balance plug as credit/payable (positive), not the negative a naive "To" reading would give', () => {
+    expect(detectBalanceSign(VJ_DESAI_SKYLARK_FOOTER, 'Closing')).toBe(1);
+  });
+
+  it('corrects a wrong vendorName the model returned, using only the real header text — proves the fix does not depend on the model complying', () => {
+    // Reproduces exactly what was observed in production after #63 deployed:
+    // the model returned the reporting company's own name despite the prompt
+    // instruction telling it not to.
+    const rawLedgers: Array<Record<string, unknown>> = [
+      { vendorName: 'AMADIUS REALTY', openingBalance: 1010000, closingBalance: 1400000, rows: [] },
+    ];
+    applyDeterministicCorrections(rawLedgers, OMEGA_ELEVATOR_HEADER);
+    expect(rawLedgers[0].vendorName).toBe('OMEGA ELEVATOR');
+    // The model also got the opening sign backwards (positive instead of the
+    // real debit/advance balance) — corrected from the text, not trusted.
+    expect(rawLedgers[0].openingBalance).toBe(-1010000);
+  });
+
+  it('does not touch vendorName when the chunk has more than one ledger and the header count does not line up (avoids a wrong correlation)', () => {
+    const rawLedgers: Array<Record<string, unknown>> = [
+      { vendorName: 'Model Guess A', openingBalance: 0, closingBalance: 0, rows: [] },
+      { vendorName: 'Model Guess B', openingBalance: 0, closingBalance: 0, rows: [] },
+    ];
+    // Only one "Ledger Account" heading in this text, but two ledger objects —
+    // an unsafe 1:2 correlation, so nothing should be overridden.
+    applyDeterministicCorrections(rawLedgers, OMEGA_ELEVATOR_HEADER);
+    expect(rawLedgers[0].vendorName).toBe('Model Guess A');
+    expect(rawLedgers[1].vendorName).toBe('Model Guess B');
+  });
+});
 
 describe('Amadius Realty — vendor mislabeling (query 1.1/1.2)', () => {
   it('never labels a header-less chunk with the uploaded file\'s name', async () => {
