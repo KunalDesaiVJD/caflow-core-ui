@@ -2403,13 +2403,36 @@ export async function nceAutoPopulate(
         }
       }
 
-      // Per-ledger rows (no parent_group wrapping).
+      // Per-ledger rows (no parent_group wrapping) — EXCEPT for "provisions"
+      // (see the dedicated branch below), where per-ledger rows attach under
+      // a synthetic group wrapper keyed by each ledger's own Tally parent_group.
       // Per user feedback: in Notes to Accounts, only ledgers should appear —
       // not synthetic group wrappers like "Unsecured Loans" derived from Tally
       // parent_group. Each TB ledger becomes its own customRow attached to
       // the appropriate static parent. This keeps Total (B) math correct and
       // matches the auditor's expectation that BS notes show ledger-level
       // detail rather than account-group categories.
+      //
+      // "provisions" has NO NOTE_SMART_MAP rules (unlike other_cl/employee_exp/
+      // etc.), and its only catch-all static row is "Other Provisions" — so
+      // EVERY provisions ledger previously landed there unattached, which
+      // (per computeNoteTotals) skips the "Other Provisions" row entirely and
+      // feeds the grand total directly as an unattached "extra". On an entity
+      // with many individually-named provision ledgers (e.g. one per worker,
+      // "ANIL", "ASHOK", "BHARAT" …) that rendered as one flat, unsorted list
+      // with no indication of which real Tally sub-group each came from —
+      // reported as "bifurcation not displaying / ledgers show in a haphazard
+      // manner". Since these entity-specific ledger names carry no reusable
+      // keyword signal (a NOTE_SMART_MAP rule can't generalise "ANIL"), the
+      // one durable signal Tally actually provides is each ledger's own
+      // parent_group — so group by that instead, mirroring the structure the
+      // Tally Sync group tree already shows. One wrapper customRow per
+      // distinct parent_group, attached to "other_prov"; individual ledgers
+      // attach to their wrapper. The wrapper carries no value of its own —
+      // computeNoteTotals' aggregate() sums only its children — so the grand
+      // total is byte-identical to the old unattached-extras total; only the
+      // display groups them.
+      const provisionsGroupRowId = new Map<string, string>();
       let idx = 0;
       for (const um of unmatchedA) {
         const label = um.ledger; // ledger name verbatim
@@ -2491,6 +2514,22 @@ export async function nceAutoPopulate(
           // For investments / loans_advances Pattern A notes, attach to the
           // smart-matched static row so per-ledger breakup renders beneath it.
           rowAttachedTo = um.smartTarget;
+        } else if (noteType === "provisions") {
+          // Bifurcate the "Other Provisions" catch-all by each ledger's own
+          // Tally parent_group (see comment above the loop). Ledgers with no
+          // parent_group on the TB row fall back to the old unattached
+          // behaviour (still counted via the grand-total's "extras" path).
+          const grpKey = cleanTallyName(um.parentGroup || "").trim();
+          if (grpKey) {
+            const dedupeKey = grpKey.toLowerCase();
+            let grpId = provisionsGroupRowId.get(dedupeKey);
+            if (!grpId) {
+              grpId = "custom_provgrp_" + dedupeKey.replace(/[^a-z0-9]+/g, "_").slice(0, 40);
+              provisionsGroupRowId.set(dedupeKey, grpId);
+              autoRows.push({ id: grpId, label: grpKey, source: "auto", attachedTo: "other_prov" });
+            }
+            rowAttachedTo = grpId;
+          }
         }
 
         autoRows.push({
