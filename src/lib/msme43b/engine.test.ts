@@ -142,5 +142,47 @@ describe('43B(h) two-year engine', () => {
     expect(rep.totalDisallowedCY).toBe(100000);
     expect(rep.vendors).toHaveLength(1);
     expect(rep.cyLabel).toBe('2025-26');
+    expect(rep.vendors[0].vendorMatchType).toBe('exact');
+    expect(rep.fuzzyMatchedVendors).toEqual([]);
+  });
+
+  it('fuzzy-pairs CY/FY vendors whose names differ only by legal suffix, and flags it', () => {
+    // "ABC & Co" (CY) vs "ABC and Company" (FY) — the exact pattern reported
+    // against real client ledgers, where one year's export spells the suffix
+    // out and the other abbreviates it. Both reduce to the same core name.
+    const cy = { ...ledger('2025-26', 0, [txn('2026-03-20', 'Purchase A/c', 100000, 0)]), vendorName: 'ABC & Co' };
+    const fy = { ...ledger('2026-27', 100000, [txn('2026-06-20', 'HDFC Bank', 0, 100000)]), vendorName: 'ABC and Company' };
+    const rep = buildReport([cy], [fy], DEFAULT_CONFIG, 'ACME');
+    const v = rep.vendors[0];
+    expect(v.totalDisallowedCY).toBe(100000); // FY payment still picked up — proves the pairing actually fired
+    expect(v.vendorMatchType).toBe('fuzzy');
+    expect(v.fyVendorName).toBe('ABC and Company');
+    expect(v.warnings.some((w) => /paired automatically/.test(w))).toBe(true);
+    expect(rep.fuzzyMatchedVendors).toEqual(['"ABC & Co" ↔ "ABC and Company"']);
+    expect(rep.blocksSignOff).toBe(true);
+    expect(rep.blockingReasons.some((r) => /core name only/.test(r))).toBe(true);
+  });
+
+  it('does NOT fuzzy-pair when two FY vendors share the same core name — ambiguous, left unmatched', () => {
+    // "Shree Ram Traders" and "Shree Ram Enterprises" both reduce to "shreeram"
+    // — in practice these are commonly unrelated businesses, so guessing
+    // between them would be worse than leaving the CY vendor unmatched.
+    const cy = { ...ledger('2025-26', 0, [txn('2026-01-10', 'Purchase A/c', 100000, 0)]), vendorName: 'Shree Ram & Co' };
+    const fy1 = { ...ledger('2026-27', 0, []), vendorName: 'Shree Ram Traders' };
+    const fy2 = { ...ledger('2026-27', 0, []), vendorName: 'Shree Ram Enterprises' };
+    const rep = buildReport([cy], [fy1, fy2], DEFAULT_CONFIG, 'ACME');
+    const v = rep.vendors[0];
+    expect(v.vendorMatchType).toBeUndefined();
+    expect(v.warnings.some((w) => /Following-year ledger not provided/.test(w))).toBe(true);
+    expect(rep.fuzzyMatchedVendors).toEqual([]);
+  });
+
+  it('does not fuzzy-pair on a too-short core name (avoids matching on a near-empty remainder)', () => {
+    // "A & Co" and "A Enterprises" both strip down to just "a" — far too
+    // short to trust as a match, so this must fall through unmatched.
+    const cy = { ...ledger('2025-26', 0, [txn('2026-01-10', 'Purchase A/c', 100000, 0)]), vendorName: 'A & Co' };
+    const fy = { ...ledger('2026-27', 0, []), vendorName: 'A Enterprises' };
+    const rep = buildReport([cy], [fy], DEFAULT_CONFIG, 'ACME');
+    expect(rep.vendors[0].vendorMatchType).toBeUndefined();
   });
 });

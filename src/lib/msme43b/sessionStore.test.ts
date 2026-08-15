@@ -21,6 +21,7 @@ const report = (extra = ''): Msme43bReport => ({
   blocksSignOff: false,
   blockingReasons: [],
   totalGstUnidentified: 0,
+  fuzzyMatchedVendors: [],
   clean: true,
   clientName: `Accu-Panels${extra}`,
 });

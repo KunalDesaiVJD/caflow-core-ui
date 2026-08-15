@@ -131,7 +131,7 @@ describe('deriveBlockers is a pure function of the vendor results', () => {
   it('reports nothing for a clean set', () => {
     expect(deriveBlockers([vendor({})])).toEqual({
       unreconciledVendors: [], unreconciledDisallowed: 0,
-      blocksSignOff: false, blockingReasons: [],
+      blocksSignOff: false, blockingReasons: [], fuzzyMatchedVendors: [],
     });
   });
 
