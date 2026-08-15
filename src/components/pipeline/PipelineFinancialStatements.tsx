@@ -550,14 +550,17 @@ export const NCE_CODE_TO_STATIC_REF: Readonly<Record<string, number>> = {
   // FA Schedule"), which NCENotesTab already special-cases to open PPE Schedule.
   NCE_PPE: 10, NCE_CWIP: 11, NCE_INTG: 10,
   NCE_NCINV: 13, NCE_LTLA: 14, NCE_ONCA: 15,
-  // 2026-08-06 fix: NCE_CINV (ref 16, "Current investments") and NCE_PART_REM
-  // (ref 31, "Partners' remuneration") also have no NOTE_META entry — no note
-  // card exists for either anywhere in NCEDetailedNotes.tsx. NCE_PART_REM was
-  // already documented as "intentionally absent" in NCE_CODE_TO_NOTE_KEY above
-  // but this map was never updated to match, so it stayed clickable-but-dead.
-  // Both are removed here so NoteCell's `label` resolves to undefined and the
-  // cell renders as a plain "—" (same as any other no-note line item) instead
-  // of a button that switches tabs and opens nothing.
+  // NCE_CINV (ref 16, "Current investments") now has a real note card —
+  // nceNotesConfig.ts's "investments" Pattern A note was split into
+  // investments_lt (13) / investments_st (16), mirroring borrowings_lt/st,
+  // so it earns its number here again like every other mapped code.
+  //
+  // NCE_PART_REM (ref 31, "Partners' remuneration") stays excluded — it
+  // genuinely has no note card anywhere in NCEDetailedNotes.tsx (already
+  // documented as "intentionally absent" in NCE_CODE_TO_NOTE_KEY above), so
+  // it's left out here too: NoteCell's `label` resolves to undefined and the
+  // cell renders as a plain "—" instead of a button that opens nothing.
+  NCE_CINV: 16,
   NCE_STCK: 17, NCE_TR: 18, NCE_CASH: 19, NCE_STLA: 20, NCE_OCA: 21,
   NCE_REV_OPS: 22, NCE_REV_OTH: 23,
   // Issue 1 — NCE Depreciation row shares the PPE note number (10) so the

@@ -82,7 +82,8 @@ export const NOTE_META: Record<string, NoteMeta> = {
   other_cl:          { noteNumber: "8",       shortName: "Other Current Liabilities",     section: "BS" },
   provisions_st:     { noteNumber: "9",       shortName: "Short-Term Provisions",         section: "BS" },
   cwip:              { noteNumber: "11",      shortName: "Capital Work-in-Progress",      section: "BS" },
-  investments:       { noteNumber: "13",      shortName: "Non-Current Investments",       section: "BS" },
+  investments_lt:    { noteNumber: "13",      shortName: "Non-Current Investments",       section: "BS" },
+  investments_st:    { noteNumber: "16",      shortName: "Current Investments",           section: "BS" },
   loans_advances_lt: { noteNumber: "14",       shortName: "Long-Term Loans and Advances",  section: "BS" },
   loans_advances_st: { noteNumber: "20",       shortName: "Short-Term Loans and Advances", section: "BS" },
   other_nc_assets:   { noteNumber: "15",      shortName: "Other Non-Current Assets",      section: "BS" },
@@ -185,6 +186,55 @@ const BORROWINGS_ROWS: NoteRowDef[] = [
                  "unsec_demand_other","unsec_deferred","unsec_related","unsec_other"],
   },
   { id: "total_ab", label: "Total", isTotal: true, formulaAdd: ["sec_total","unsec_total"] },
+];
+
+// ─── Shared row definitions for investments (used by both Non-Current and
+// Current split notes, mirrors BORROWINGS_ROWS above) ──────────────────────
+// Note 16 (Current Investments) previously had no NOTES_CONFIG/NOTE_META
+// entry, even though nceLineItems.ts (noteRef 16) and the NCE_CODE_TO_NOTE
+// aggregator (nceAutoPopulate.ts, NCE_CINV -> {note:"investments",col:"st"})
+// already treat it as a real, independently-numbered note — the DOCX export
+// (nceFinancialsDocx.ts) already prints "(a) Current investments" against
+// note number 16. Only the interactive Notes tab never grew a card for it,
+// so a note with real data (a ledger the auditor mapped to Current
+// Investments) had no number and no click target, and computeNceDynamicNoteMap
+// still reserved its sequence slot — producing a visible gap in the printed
+// note numbers (…7, 9, 10… with no 8) even though nothing was actually lost.
+// Completing the LT/ST split here (matching borrowings_lt/st, provisions_lt/st,
+// loans_advances_lt/st below) gives it a card, a number, and a working link.
+const INVESTMENTS_ROWS: NoteRowDef[] = [
+  { id: "quot_hdr",      label: "Quoted Investments",              isSectionHeader: true },
+  { id: "quot_property", label: "Investment in property",          indent: 1 },
+  { id: "quot_equity",   label: "Equity shares",                   indent: 1 },
+  { id: "quot_pref",     label: "Preference shares",               indent: 1 },
+  { id: "quot_govt",     label: "Govt & trust securities",         indent: 1 },
+  { id: "quot_deb",      label: "Debentures / bonds",              indent: 1 },
+  { id: "quot_mf",       label: "Mutual funds",                    indent: 1 },
+  { id: "quot_partner",  label: "Partnership interests",           indent: 1 },
+  { id: "quot_other",    label: "Other investments",               indent: 1 },
+  {
+    id: "quot_total", label: "Total Quoted", isTotal: true,
+    formulaAdd: ["quot_property","quot_equity","quot_pref","quot_govt",
+                 "quot_deb","quot_mf","quot_partner","quot_other"],
+  },
+  { id: "unquot_hdr",      label: "Unquoted Investments",            isSectionHeader: true },
+  { id: "unquot_property", label: "Investment in property",          indent: 1 },
+  { id: "unquot_equity",   label: "Equity shares",                   indent: 1 },
+  { id: "unquot_pref",     label: "Preference shares",               indent: 1 },
+  { id: "unquot_govt",     label: "Govt & trust securities",         indent: 1 },
+  { id: "unquot_deb",      label: "Debentures / bonds",              indent: 1 },
+  { id: "unquot_mf",       label: "Mutual funds",                    indent: 1 },
+  { id: "unquot_partner",  label: "Partnership interests",           indent: 1 },
+  { id: "unquot_other",    label: "Other investments",               indent: 1 },
+  {
+    id: "unquot_total", label: "Total Unquoted", isTotal: true,
+    formulaAdd: ["unquot_property","unquot_equity","unquot_pref","unquot_govt",
+                 "unquot_deb","unquot_mf","unquot_partner","unquot_other"],
+  },
+  {
+    id: "total_ab", label: "Total Investments", isTotal: true,
+    formulaAdd: ["quot_total","unquot_total"],
+  },
 ];
 
 export const NOTES_CONFIG: NoteConfig[] = [
@@ -308,45 +358,24 @@ export const NOTES_CONFIG: NoteConfig[] = [
     ],
   },
 
-  // ── Note: Non-Current Investments (Pattern A) ───────────────────────────
+  // ── Note: Non-Current Investments (split from investments Pattern A) ────
   {
-    noteType: "investments",
-    title: "Note 13: Non-Current Investments",
-    pattern: "A",
-    rows: [
-      { id: "quot_hdr",      label: "Quoted Investments",              isSectionHeader: true },
-      { id: "quot_property", label: "Investment in property",          indent: 1 },
-      { id: "quot_equity",   label: "Equity shares",                   indent: 1 },
-      { id: "quot_pref",     label: "Preference shares",               indent: 1 },
-      { id: "quot_govt",     label: "Govt & trust securities",         indent: 1 },
-      { id: "quot_deb",      label: "Debentures / bonds",              indent: 1 },
-      { id: "quot_mf",       label: "Mutual funds",                    indent: 1 },
-      { id: "quot_partner",  label: "Partnership interests",           indent: 1 },
-      { id: "quot_other",    label: "Other NC investments",            indent: 1 },
-      {
-        id: "quot_total", label: "Total Quoted", isTotal: true,
-        formulaAdd: ["quot_property","quot_equity","quot_pref","quot_govt",
-                     "quot_deb","quot_mf","quot_partner","quot_other"],
-      },
-      { id: "unquot_hdr",      label: "Unquoted Investments",            isSectionHeader: true },
-      { id: "unquot_property", label: "Investment in property",          indent: 1 },
-      { id: "unquot_equity",   label: "Equity shares",                   indent: 1 },
-      { id: "unquot_pref",     label: "Preference shares",               indent: 1 },
-      { id: "unquot_govt",     label: "Govt & trust securities",         indent: 1 },
-      { id: "unquot_deb",      label: "Debentures / bonds",              indent: 1 },
-      { id: "unquot_mf",       label: "Mutual funds",                    indent: 1 },
-      { id: "unquot_partner",  label: "Partnership interests",           indent: 1 },
-      { id: "unquot_other",    label: "Other NC investments",            indent: 1 },
-      {
-        id: "unquot_total", label: "Total Unquoted", isTotal: true,
-        formulaAdd: ["unquot_property","unquot_equity","unquot_pref","unquot_govt",
-                     "unquot_deb","unquot_mf","unquot_partner","unquot_other"],
-      },
-      {
-        id: "total_ab", label: "Total NC Investments", isTotal: true,
-        formulaAdd: ["quot_total","unquot_total"],
-      },
-    ],
+    noteType:       "investments_lt",
+    sourceNoteType: "investments",
+    splitSide:      "lt",
+    title:          "Note 13: Non-Current Investments",
+    pattern:        "B",
+    rows:           INVESTMENTS_ROWS,
+  },
+
+  // ── Note: Current Investments (split from investments Pattern A) ────────
+  {
+    noteType:       "investments_st",
+    sourceNoteType: "investments",
+    splitSide:      "st",
+    title:          "Note 16: Current Investments",
+    pattern:        "B",
+    rows:           INVESTMENTS_ROWS,
   },
 
   // ── Note: Loans & Advances — shared row definitions ─────────────────────
