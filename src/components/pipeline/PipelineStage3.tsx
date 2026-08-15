@@ -228,7 +228,7 @@ const LEAF_ITEMS = FLAT_ITEMS.filter(i => !i.children || i.children.length === 0
 // BEFORE keyword rules and is given a higher confidence weight.
 // Normalised to lower-case; match by full-string OR contains.
 // ═══════════════════════════════════════
-const PARENT_GROUP_MAP_CORP: { match: string[]; code: string; confidence: "high" | "medium" | "low" }[] = [
+export const PARENT_GROUP_MAP_CORP: { match: string[]; code: string; confidence: "high" | "medium" | "low" }[] = [
   { match: ["sundry debtors", "trade receivable", "debtors", "accounts receivable"], code: "BS_CA_TR",       confidence: "high" },
   { match: ["sundry creditors", "trade payable", "creditors for goods", "creditors for expenses", "accounts payable"], code: "BS_CL_TP", confidence: "high" },
   { match: ["bank accounts", "bank od", "cash-in-hand", "cash in hand"], code: "BS_CA_CCE",                  confidence: "high" },
@@ -241,6 +241,15 @@ const PARENT_GROUP_MAP_CORP: { match: string[]; code: string; confidence: "high"
   { match: ["current assets"],                                                code: "BS_CA_OCA",            confidence: "low" },
   { match: ["current liabilities"],                                           code: "BS_CL_OCL",            confidence: "low" },
   { match: ["duties & taxes", "duties and taxes"],                            code: "BS_CL_OCL",            confidence: "high" },
+  // Outstanding/accrued-expense sub-groups under Current Liabilities — Tally
+  // groups these separately from "Duties & Taxes"/"Provisions", but they had
+  // no parent_group entry here, so ledgers in them fell through to weaker
+  // ledger-name keyword rules below (e.g. an "Outstanding Salary" ledger
+  // could keyword-match "salary" -> Employee Benefits Expense, a P&L code,
+  // instead of the Other Current Liabilities balance it actually is).
+  { match: ["outstanding expenses", "outstanding liabilities", "expenses payable"], code: "BS_CL_OCL", confidence: "high" },
+  { match: ["outstanding salary", "salary payable", "wages payable"],        code: "BS_CL_OCL",            confidence: "high" },
+  { match: ["outstanding for labour", "outstanding labour", "labour charges payable"], code: "BS_CL_OCL", confidence: "high" },
   { match: ["provisions"],                                                    code: "BS_CL_STP",            confidence: "medium" },
   { match: ["secured loans"],                                                 code: "BS_NCL_LTB",           confidence: "high" },
   { match: ["unsecured loans"],                                               code: "BS_CL_STB",            confidence: "high" },
@@ -259,7 +268,7 @@ const PARENT_GROUP_MAP_CORP: { match: string[]; code: string; confidence: "high"
   { match: ["indirect expenses"],                                             code: "PL_EXP_OTH",           confidence: "medium" },
 ];
 
-const PARENT_GROUP_MAP_NCE: { match: string[]; code: string; confidence: "high" | "medium" | "low" }[] = [
+export const PARENT_GROUP_MAP_NCE: { match: string[]; code: string; confidence: "high" | "medium" | "low" }[] = [
   { match: ["sundry debtors", "trade receivable", "debtors", "accounts receivable"], code: "NCE_TR",         confidence: "high" },
   { match: ["sundry creditors", "trade payable", "creditors for goods", "creditors for expenses", "accounts payable"], code: "NCE_TP", confidence: "high" },
   { match: ["bank accounts", "cash-in-hand", "cash in hand"],                 code: "NCE_CASH",             confidence: "high" },
@@ -272,6 +281,15 @@ const PARENT_GROUP_MAP_NCE: { match: string[]; code: string; confidence: "high" 
   { match: ["current assets"],                                                code: "NCE_OCA",              confidence: "low" },
   { match: ["current liabilities"],                                           code: "NCE_OCL",              confidence: "low" },
   { match: ["duties & taxes", "duties and taxes"],                            code: "NCE_OCL",              confidence: "high" },
+  // Outstanding/accrued-expense sub-groups under Current Liabilities — Tally
+  // groups these separately from "Duties & Taxes"/"Provisions", but they had
+  // no parent_group entry here, so ledgers in them fell through to weaker
+  // ledger-name keyword rules below (e.g. an "Outstanding Salary" ledger
+  // could keyword-match "salary" -> Employee Benefits Expense, a P&L code,
+  // instead of the Other Current Liabilities balance it actually is).
+  { match: ["outstanding expenses", "outstanding liabilities", "expenses payable"], code: "NCE_OCL", confidence: "high" },
+  { match: ["outstanding salary", "salary payable", "wages payable"],        code: "NCE_OCL",              confidence: "high" },
+  { match: ["outstanding for labour", "outstanding labour", "labour charges payable"], code: "NCE_OCL", confidence: "high" },
   { match: ["provisions"],                                                    code: "NCE_STP",              confidence: "medium" },
   { match: ["secured loans"],                                                 code: "NCE_LTB",              confidence: "high" },
   { match: ["unsecured loans"],                                               code: "NCE_STB",              confidence: "high" },
@@ -289,7 +307,7 @@ const PARENT_GROUP_MAP_NCE: { match: string[]; code: string; confidence: "high" 
   { match: ["indirect expenses"],                                             code: "NCE_OTH_EXP",          confidence: "medium" },
 ];
 
-function matchParentGroup(
+export function matchParentGroup(
   parentGroup: string,
   table: { match: string[]; code: string; confidence: "high" | "medium" | "low" }[],
 ) {
