@@ -3674,9 +3674,12 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
   // Rebuilds notes from the CURRENT Trial Balance + COA mapping — the ONLY path
   // by which a COA change (e.g. moving a ledger Long-Term↔Short-Term) reaches the
   // notes and the FS face. Safety: hard-blocked when notes are finalized; shows a
-  // per-note change PREVIEW and writes ONLY on explicit confirmation; manual rows
-  // and edits are preserved by nceAutoPopulate. (The old persistNotes was a
-  // no-op — this is the explicit, confirmed, finalized-gated write.)
+  // per-note change PREVIEW and writes ONLY on explicit confirmation. While
+  // FS_NO_MANUAL_NOTE_ADD is on (current firm policy — manual note additions are
+  // not allowed), nceAutoPopulate DROPS hand-typed manual rows/overrides on every
+  // rebuild — they are NOT preserved. Only re-grouped, TB-ledger-derived rows
+  // survive. (The old persistNotes was a no-op — this is the explicit, confirmed,
+  // finalized-gated write.)
   const handleResync = useCallback(async () => {
     if (notesFinalizedRef.current) { toast.error("Notes are finalized — re-sync is locked."); return; }
     if (!engagementId || !financialYear) return;
@@ -3691,9 +3694,12 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
           ?? d.noteType;
         return `• ${label}: ${d.changes.length} row(s) change`;
       });
+      const manualNotice = FS_NO_MANUAL_NOTE_ADD
+        ? "Manual rows and hand-typed overrides in these notes will be REPLACED with auto-computed values — they are not preserved under current firm policy."
+        : "Manual rows and edits are preserved.";
       const msg = diff.length === 0
         ? "Re-sync from COA mapping?\n\nNo changes detected — notes already match the current Trial Balance + COA mapping.\n\nClick OK to refresh anyway, Cancel to keep current notes."
-        : `Re-sync from COA mapping?\n\n${diff.length} note(s), ${totalRows} row(s) will update from the current Trial Balance + COA mapping (this is how an LT↔ST mapping change reaches the statements). Manual rows and edits are preserved.\n\n`
+        : `Re-sync from COA mapping?\n\n${diff.length} note(s), ${totalRows} row(s) will update from the current Trial Balance + COA mapping (this is how an LT↔ST mapping change reaches the statements). ${manualNotice}\n\n`
           + lines.join("\n")
           + (diff.length > 20 ? `\n…and ${diff.length - 20} more note(s)` : "")
           + "\n\nClick OK to apply, Cancel to keep current notes.";
@@ -3780,7 +3786,9 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
       {/* "Re-sync from COA" is the SAFE gated path: it previews every per-note
           change and writes only on confirmation, and is hard-blocked when notes
           are finalized. It is the only way a COA mapping change (incl. moving a
-          ledger LT↔ST) reaches the notes + FS. */}
+          ledger LT↔ST) reaches the notes + FS. NOTE: while FS_NO_MANUAL_NOTE_ADD
+          is on, the rebuild drops hand-typed manual rows/overrides — see the
+          confirm-dialog / tooltip text in handleResync, which reflects this. */}
       {readOnly ? null : (
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[10px] text-muted-foreground">
@@ -3793,7 +3801,7 @@ export function NCEDetailedNotes({ engagementId, dynamicNoteMap, onExpansionStat
               onClick={handleResync}
               disabled={syncing || notesFinalizedRef.current}
               className="h-7 text-xs gap-1"
-              title="Rebuild notes from the current Trial Balance + COA mapping. You confirm a preview of every change before anything is saved; manual edits are preserved. Locked when notes are finalized."
+              title={`Rebuild notes from the current Trial Balance + COA mapping. You confirm a preview of every change before anything is saved. ${FS_NO_MANUAL_NOTE_ADD ? "Manual rows and hand-typed overrides are NOT preserved under current firm policy — they will be replaced." : "Manual edits are preserved."} Locked when notes are finalized.`}
             >
               <RefreshCw className={`w-3 h-3${syncing ? " animate-spin" : ""}`} /> {syncing ? "Re-syncing…" : "Re-sync from COA"}
             </Button>
