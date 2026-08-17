@@ -599,13 +599,16 @@ export default function AuditPipeline() {
       const fyParts = (form1A.financial_year as string).split("-");
       if (fyParts.length !== 2) return null;
       const prevFy = `${parseInt(fyParts[0]) - 1}-${String(parseInt(fyParts[0])).slice(-2)}`;
+      // NOTE: audit_engagements has no deleted_at column (confirmed against
+      // the live schema — PostgREST 42703 "column does not exist"); this
+      // table's soft-delete/archival state lives entirely in `status`, so
+      // .neq("status", "archived") alone is the correct exclusion.
       const { data } = await supabase
         .from("audit_engagements")
         .select("id, financial_year, status, is_finalized, stage_statuses")
         .eq("client_id", form1A.client_id)
         .eq("financial_year", prevFy)
         .neq("status", "archived")
-        .is("deleted_at" as any, null)
         .maybeSingle();
       return data as any;
     },
