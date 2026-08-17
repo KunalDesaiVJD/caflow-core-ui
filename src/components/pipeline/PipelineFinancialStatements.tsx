@@ -2147,6 +2147,31 @@ export default function PipelineFinancialStatements({
   // ─── Active tab (controlled so navigator buttons can switch programmatically) ─
   const [activeTab, setActiveTab] = useState("bs");
 
+  // ─── Keep the Notes tab mounted once visited (root-cause fix for "Note No."
+  // click navigation appearing broken) ───────────────────────────────────────
+  // Root cause: the "notes" TabsContent below (corporate NotesTab / NCE
+  // NCENotesTab) was NOT forceMount'ed, so Radix fully UNMOUNTS it whenever
+  // the user switches to Balance Sheet / P&L and remounts it FRESH on every
+  // return visit — including every "Note No." click navigation, which
+  // switches activeTab to "notes" as its first step. On remount, NCE's
+  // NCEDetailedNotes re-runs its full COA self-heal rebuild (a multi-second-
+  // to-multi-minute operation on a large trial balance) before the click's
+  // target note can scroll into view (correctly gated on `!loading`), so the
+  // click appears to do nothing on anything but the smallest engagements.
+  // Corporate's NotesTab re-runs loadStage5Notes on every remount too.
+  // Fix: track whether "notes" has EVER been the active tab this session; once
+  // true, forceMount keeps NotesTab/NCENotesTab mounted (Radix hides it via
+  // the native `hidden` attribute instead of unmounting) so the expensive
+  // load/self-heal runs at most ONCE per page load, not on every revisit.
+  // Before the first visit, behaviour is unchanged (lazy — not mounted until
+  // the user actually opens the tab), so initial Stage 7 load does no extra
+  // work. The same pattern is mirrored one level deeper inside NCENotesTab's
+  // own sub-tabs and NotesTab's own sub-tabs (see those files).
+  const [notesTabVisited, setNotesTabVisited] = useState(false);
+  useEffect(() => {
+    if (activeTab === "notes") setNotesTabVisited(true);
+  }, [activeTab]);
+
   // ─── Notes mismatch count (driven by NotesMismatchPanel callback) ─────────
   const [mismatchCount, setMismatchCount] = useState(0);
   // Save-gate: only Reserves & Surplus and Trade Receivables mismatches block
@@ -9766,7 +9791,7 @@ export default function PipelineFinancialStatements({
 
           {/* ── Notes to Accounts (corporate only) — Phase 8 / UI-6 ── */}
           {!isNonCorporate && (
-            <TabsContent value="notes" className="mt-3">
+            <TabsContent value="notes" className="mt-3" forceMount={notesTabVisited || undefined}>
               {/* UI-6 Phase 3 — full Notes UI lives in src/components/stage5/NotesTab.tsx
                   Renders 4 sub-tabs (Note BS-Liab → Note BS-Asset → FA → Note PL),
                   uses notesAutoPopulate service for auto-fill, persists on every edit. */}
@@ -9812,7 +9837,7 @@ export default function PipelineFinancialStatements({
 
           {/* ── NCE Notes (UI-7) — Capital Account / Notes to Accounts / PPE ── */}
           {isNonCorporate && (
-            <TabsContent value="notes" className="mt-3">
+            <TabsContent value="notes" className="mt-3" forceMount={notesTabVisited || undefined}>
               {/* Bug 1 fix: initialExpandedRows is only passed when locked so the
                   editor's readOnly flat-div layout (tabs→flat remount) restores
                   expansion state.  In edit mode, omit it to avoid a render loop

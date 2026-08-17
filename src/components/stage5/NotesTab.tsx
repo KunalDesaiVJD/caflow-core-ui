@@ -86,6 +86,19 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
   const [collapseAll,   setCollapseAll]   = useState<boolean | undefined>(undefined);
   const [pyFaRows, setPyFaRows] = useState<FARow[] | null>(null);
 
+  // Root-cause fix (see matching comment in PipelineFinancialStatements.tsx /
+  // NCENotesTab.tsx) — track which sub-tabs have ever been active so they can
+  // be forceMount'ed once visited. Without this, switching sub-tabs (or the
+  // outer Stage 7 "Notes" tab) UNMOUNTS this component and its siblings,
+  // discarding loaded state and forcing a fresh loadStage5Notes round-trip —
+  // including on every "Note No." click navigation, which is exactly the
+  // symptom reported. "bs_liab" is the default-active sub-tab so it mounts
+  // immediately regardless; tracked here too only for consistency.
+  const [visitedSubTabs, setVisitedSubTabs] = useState<Set<string>>(new Set(["bs_liab"]));
+  useEffect(() => {
+    setVisitedSubTabs(prev => prev.has(activeTab) ? prev : new Set(prev).add(activeTab));
+  }, [activeTab]);
+
   // ── Navigate to a specific note from BS / P&L click ──────────────────
   // 2026-08-06 fix (mirrors #48's fix for the NCE notes viewer): this used to
   // scroll on a FIXED 250ms timer, racing this component's own initial load
@@ -568,7 +581,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="bs_liab" className="mt-3">
+          <TabsContent value="bs_liab" className="mt-3" forceMount={visitedSubTabs.has("bs_liab") || undefined}>
             <NoteBSLiab
               engagementId={engagementId}
               notes={notes} cyYear={cyYear} pyYear={pyYear}
@@ -580,7 +593,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
               faceTaxCy={faceTaxCy} faceTaxPy={faceTaxPy}
             />
           </TabsContent>
-          <TabsContent value="bs_asset" className="mt-3">
+          <TabsContent value="bs_asset" className="mt-3" forceMount={visitedSubTabs.has("bs_asset") || undefined}>
             <NoteBSAsset
               engagementId={engagementId}
               notes={notes} cyYear={cyYear} pyYear={pyYear}
@@ -591,7 +604,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
               hideEmpty={false}
             />
           </TabsContent>
-          <TabsContent value="pl" className="mt-3">
+          <TabsContent value="pl" className="mt-3" forceMount={visitedSubTabs.has("pl") || undefined}>
             <NotePL
               engagementId={engagementId}
               notes={notes} cyYear={cyYear} pyYear={pyYear}
@@ -602,7 +615,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
               hideEmpty={false}
             />
           </TabsContent>
-          <TabsContent value="fa" className="mt-3">
+          <TabsContent value="fa" className="mt-3" forceMount={visitedSubTabs.has("fa") || undefined}>
             <FAGrid
               engagementId={engagementId}
               rows={notes.fa.rows}

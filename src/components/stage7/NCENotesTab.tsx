@@ -295,6 +295,19 @@ interface Props {
 export default function NCENotesTab({ engagementId, navigateToNote, navigateToken, dynamicNoteMap, onExpansionStateUpdate, readOnly = false, entityName, cyYear, initialExpandedRows, ntaData, sig }: Props) {
   const [activeSubTab, setActiveSubTab] = useState("capital_account");
 
+  // Root-cause fix (see matching comment in PipelineFinancialStatements.tsx) —
+  // track which sub-tabs have ever been active so they can be forceMount'ed
+  // once visited. Without this, switching to "capital_account" or
+  // "ppe_schedule" and back to "notes_to_accounts" UNMOUNTS NCEDetailedNotes,
+  // re-running its expensive self-heal rebuild every time — including on
+  // every "Note No." click navigation, which is exactly the symptom reported.
+  // "capital_account" is the default-active sub-tab so it mounts immediately
+  // regardless; tracked here too only for consistency/future-proofing.
+  const [visitedSubTabs, setVisitedSubTabs] = useState<Set<string>>(new Set(["capital_account"]));
+  useEffect(() => {
+    setVisitedSubTabs(prev => prev.has(activeSubTab) ? prev : new Set(prev).add(activeSubTab));
+  }, [activeSubTab]);
+
   useEffect(() => {
     if (navigateToNote != null) {
       // Static ref 2 = Owners' Capital Account → Capital Account tab
@@ -408,11 +421,11 @@ export default function NCENotesTab({ engagementId, navigateToNote, navigateToke
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="capital_account" className="mt-3">
+          <TabsContent value="capital_account" className="mt-3" forceMount={visitedSubTabs.has("capital_account") || undefined}>
             <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
           </TabsContent>
 
-          <TabsContent value="notes_to_accounts" className="mt-3">
+          <TabsContent value="notes_to_accounts" className="mt-3" forceMount={visitedSubTabs.has("notes_to_accounts") || undefined}>
             {/* Bug 1 fix: do NOT pass initialExpandedRows in edit mode — it changes
                 on every expansion update and would re-render NCEDetailedNotes on
                 every keystroke, causing a stale-effect loop (PatternBTable effects
@@ -420,7 +433,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, navigateToke
             <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} scrollToNoteNo={navigateToNote} scrollToken={navigateToken} />
           </TabsContent>
 
-          <TabsContent value="ppe_schedule" className="mt-3">
+          <TabsContent value="ppe_schedule" className="mt-3" forceMount={visitedSubTabs.has("ppe_schedule") || undefined}>
             <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
           </TabsContent>
         </Tabs>
