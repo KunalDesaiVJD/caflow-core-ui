@@ -79,3 +79,11 @@ export function isNonCorporateEntityType(raw: string | null | undefined): boolea
 export function isProprietorshipEntityType(raw: string | null | undefined): boolean {
   return normalizeEntityType(raw) === "proprietorship";
 }
+
+/** True specifically for an LLP (as opposed to a general Partnership) — LLPs
+ *  disclose Fixed Capital and Current Capital as separate schedules per the
+ *  LLP Act, so the Capital Account note splits into two linked sub-tables
+ *  only for this entity type. */
+export function isLLPEntityType(raw: string | null | undefined): boolean {
+  return normalizeEntityType(raw) === "llp";
+}

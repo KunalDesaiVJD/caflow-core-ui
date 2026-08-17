@@ -1212,14 +1212,16 @@ function PatternBTable({
         {config.rows.map((row, idx) => {
           if (!row.isSectionHeader && !row.isTotal && hiddenRows.includes(row.id)) return null;
           // Task 2 (doc8): in lock preview mode, hide empty section headers and their totals
-          if (row.isSectionHeader && emptySectionHdrIds.has(row.id)) return null;
-          if (row.isTotal && emptySectionTotalIds.has(row.id)) return null;
+          // — unless the row is a mandatory disclosure category (alwaysShow), which must
+          // print even when nil (mirrors nceFinancialsDocx.ts buildNoteSection).
+          if (row.isSectionHeader && emptySectionHdrIds.has(row.id) && !row.alwaysShow) return null;
+          if (row.isTotal && emptySectionTotalIds.has(row.id) && !row.alwaysShow) return null;
           // Suppress lone section subtotal that equals grand total (double-Total fix)
           if (row.isTotal && suppressSubtotalIds.has(row.id)) return null;
           // Changes doc Task 2: in readOnly/preview mode, suppress individual static data
           // rows where BOTH CY and PY aggregates (including attached custom sub-rows) are
           // zero — mirrors the export's hideBlankNoteRows behaviour exactly.
-          if (hideEmptySections && !row.isSectionHeader && !row.isTotal && !hiddenRows.includes(row.id)) {
+          if (hideEmptySections && !row.isSectionHeader && !row.isTotal && !hiddenRows.includes(row.id) && !row.alwaysShow) {
             // Use the recursive descendant sum so grand-children with amounts
             // don't fall through this hide filter and disappear from the
             // lock-preview / DOCX export.

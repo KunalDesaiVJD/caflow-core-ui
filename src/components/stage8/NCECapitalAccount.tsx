@@ -11,7 +11,7 @@ import {
 import { toast } from "sonner";
 import { AlertTriangle, Loader2, Save, Plus, Trash2, Lock, CheckCircle2, Wand2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { isProprietorshipEntityType } from "@/lib/entityType";
+import { isProprietorshipEntityType, isLLPEntityType } from "@/lib/entityType";
 
 // Paginated TB fetch (Supabase caps at 1000 rows/range) — used to re-derive the
 // COA-mapped Owners' Capital (NCE_CAP) closing total that the breakup must tie to.
@@ -64,6 +64,20 @@ interface PyPartnerRow {
   profit_share: number;
 }
 
+// LLP-only: Fixed Capital carries no remuneration/interest/profit-share — an
+// LLP's Fixed Capital balance only moves via fresh contribution or withdrawal
+// of capital itself (LLP Act disclosure convention). CY only — Previous Year
+// stays a single combined (Fixed + Current) figure, matching the existing PY
+// row(s) below; splitting PY the same way is not required by the reference
+// disclosure and would double the note's PY bookkeeping for no benefit.
+interface FixedPartnerRow {
+  partner_no: number;          // matches the CY Current-Capital partner_no 1:1
+  partner_name: string;
+  opening_balance_cy: number;
+  introduced_cy: number;
+  withdrawals_cy: number;
+}
+
 // PY aggregate is stored as partner_no = 99 (sentinel value)
 const PY_SENTINEL = 99;
 // PY per-partner rows use partner_no >= 100
@@ -112,6 +126,14 @@ function calcPyClosing(py: PyRow): number {
        + py.interest - py.withdrawals + py.profit_share;
 }
 
+function emptyFixedPartner(num: number, name = ""): FixedPartnerRow {
+  return { partner_no: num, partner_name: name, opening_balance_cy: 0, introduced_cy: 0, withdrawals_cy: 0 };
+}
+
+function calcFixedClosing(p: FixedPartnerRow): number {
+  return p.opening_balance_cy + p.introduced_cy - p.withdrawals_cy;
+}
+
 // Inline numeric input — defined outside component to avoid React warning.
 // In readOnly (preview) mode, renders as plain text that matches the fmt()
 // display in the rest of the Capital Account table — no editable widget.
@@ -153,6 +175,9 @@ interface Props {
 export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   // Start with a single partner by default — user adds more via "Add Partner"
   const [partners,    setPartners]    = useState<PartnerRow[]>([emptyPartner(1)]);
+  // LLP-only: Fixed Capital rows, kept in lockstep with `partners` (Current
+  // Capital) by partner_no — see FixedPartnerRow doc comment.
+  const [fixedPartners, setFixedPartners] = useState<FixedPartnerRow[]>([emptyFixedPartner(1)]);
   const [pyRow,       setPyRow]       = useState<PyRow>(EMPTY_PY);
   const [pyPartners,  setPyPartners]  = useState<PyPartnerRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -186,6 +211,9 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   // for a Proprietorship), while this exact-string check only recognised the
   // full word "Proprietorship". See src/lib/entityType.ts.
   const isProprietorship = isProprietorshipEntityType(entityType);
+  // LLPs disclose Fixed Capital + Current Capital as two linked schedules
+  // (see FixedPartnerRow doc comment). Partnership/Proprietorship are unchanged.
+  const isLLP = isLLPEntityType(entityType);
 
   // ── Load saved rows ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -203,6 +231,10 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
         .single();
       if (cancelled) return;
       if (engRow) setEng(engRow);
+      // Local copy of isLLP for use inside this async load — the component-level
+      // `isLLP` (derived from `eng` state) lags a render behind `setEng` above.
+      const entityTypeLocal = ((engRow as any)?.entity_type || (engRow as any)?.clients?.entity_type || "").trim();
+      const isLLPLocal = isLLPEntityType(entityTypeLocal);
 
       // Partner names auto-sourced from COA Mapping: every ledger mapped to the
       // Owners' Capital Account code (NCE_CAP) becomes a partner row, Proper-
@@ -216,6 +248,11 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
         ...emptyPartner(i + 1),
         partner_name: properCase(name),
       }));
+      // LLP-only: seed Fixed Capital rows from the same COA-mapped partner
+      // names (zero amounts) so both tables start in sync.
+      const autoFixedPartners: FixedPartnerRow[] = isLLPLocal
+        ? autoPartners.map(p => emptyFixedPartner(p.partner_no, p.partner_name))
+        : [];
 
       const activeFY = (engRow?.financial_year as string) || "";
       if (!activeFY) { setLoading(false); return; }
@@ -258,10 +295,14 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
         toast.error("Failed to load capital account data");
         // Even on error, seed names from COA mapping so the auditor isn't blank.
         if (autoPartners.length > 0) setPartners(autoPartners);
+        if (autoFixedPartners.length > 0) setFixedPartners(autoFixedPartners);
       } else if (data && data.length > 0) {
-        // CY partner rows: partner_no in [1, PY_SENTINEL-1]
-        const savedPartners = data
-          .filter(r => r.partner_no < PY_SENTINEL)
+        // CY partner rows: partner_no in [1, PY_SENTINEL-1]. Rows written before
+        // the Fixed/Current split (or by a non-LLP entity) default to 'current'.
+        const cyRows = data.filter(r => r.partner_no < PY_SENTINEL);
+        const cyCurrentRows = cyRows.filter(r => ((r as any).capital_type ?? "current") === "current");
+        const cyFixedRows   = cyRows.filter(r => (r as any).capital_type === "fixed");
+        const savedPartners = cyCurrentRows
           .sort((a, b) => a.partner_no - b.partner_no)
           .map(row => ({
             partner_no:         row.partner_no,
@@ -276,6 +317,29 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           }));
         if (savedPartners.length > 0) setPartners(savedPartners);
         else if (autoPartners.length > 0) setPartners(autoPartners);
+
+        if (isLLPLocal) {
+          const savedFixedPartners: FixedPartnerRow[] = cyFixedRows
+            .sort((a, b) => a.partner_no - b.partner_no)
+            .map(row => ({
+              partner_no:         row.partner_no,
+              partner_name:       row.partner_name       ?? "",
+              opening_balance_cy: row.opening_balance_cy ?? 0,
+              introduced_cy:      row.introduced_cy      ?? 0,
+              withdrawals_cy:     row.withdrawals_cy     ?? 0,
+            }));
+          if (savedFixedPartners.length > 0) {
+            setFixedPartners(savedFixedPartners);
+          } else {
+            // No saved Fixed Capital rows yet — seed names (zero amounts) from
+            // whichever Current-Capital source populated `partners` above, so
+            // the two tables start in sync.
+            const seedSource = savedPartners.length > 0 ? savedPartners : autoPartners;
+            if (seedSource.length > 0) {
+              setFixedPartners(seedSource.map(p => emptyFixedPartner(p.partner_no, p.partner_name)));
+            }
+          }
+        }
 
         // PY aggregate row (sentinel = 99) — used when no per-partner PY rows
         const py = data.find(r => r.partner_no === PY_SENTINEL);
@@ -309,6 +373,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
         // No saved capital-account rows yet → seed partner names from the
         // ledgers mapped to "(a) Owners' Capital Account" in COA Mapping.
         setPartners(autoPartners);
+        if (autoFixedPartners.length > 0) setFixedPartners(autoFixedPartners);
       }
       if (!cancelled) setLoading(false);
     })();
@@ -330,6 +395,27 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   const profitShareWarning =
     totals.pct > 0 && Math.abs(totals.pct - 100) > 0.01;
 
+  // ── LLP-only: Fixed Capital totals + combined (Fixed + Current) CY closing ──
+  const fixedTotals = useMemo(() => ({
+    opening:     fixedPartners.reduce((s, p) => s + p.opening_balance_cy, 0),
+    introduced:  fixedPartners.reduce((s, p) => s + p.introduced_cy, 0),
+    withdrawals: fixedPartners.reduce((s, p) => s + p.withdrawals_cy, 0),
+    closing:     fixedPartners.reduce((s, p) => s + calcFixedClosing(p), 0),
+  }), [fixedPartners]);
+  // The COA-lock anchor (NCE_CAP) represents TOTAL Owners' Capital regardless
+  // of the Fixed/Current split, so for an LLP the tie-check is against the
+  // combined closing of both tables.
+  const combinedClosingCy = isLLP ? fixedTotals.closing + totals.closing : totals.closing;
+  const combinedTotals = useMemo(() => ({
+    opening:      fixedTotals.opening + totals.opening,
+    introduced:   fixedTotals.introduced + totals.introduced,
+    remuneration: totals.remuneration,
+    interest:     totals.interest,
+    withdrawals:  fixedTotals.withdrawals + totals.withdrawals,
+    profit_share: totals.profit_share,
+    closing:      fixedTotals.closing + totals.closing,
+  }), [fixedTotals, totals]);
+
   // ── COA-lock: breakup Closing total must tie to NCE_CAP COA closing ────────
   const pyClosingTotal = useMemo(() =>
     pyPartners.length > 0
@@ -338,9 +424,9 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
     [pyPartners, pyRow]);
   const r2 = (n: number) => Math.round(n * 100) / 100;
   const diff = useMemo(() => ({
-    cy: r2(coaCap.cy - totals.closing),
+    cy: r2(coaCap.cy - combinedClosingCy),
     py: r2(coaCap.py - pyClosingTotal),
-  }), [coaCap, totals.closing, pyClosingTotal]);
+  }), [coaCap, combinedClosingCy, pyClosingTotal]);
   const cyTied = Math.abs(diff.cy) <= 1;
   const pyTied = !hasPyShell || Math.abs(diff.py) <= 1;
   const capTied = cyTied && pyTied;
@@ -362,14 +448,44 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   };
 
   // ── Mutators ─────────────────────────────────────────────────────────────
+  // Name sync (LLP only): editing a partner's name in EITHER the Fixed or the
+  // Current table writes the same name into the other table's row for the
+  // same partner_no, so the two schedules never drift out of sync on identity.
   const setPartnerField = (
     idx: number,
     field: keyof PartnerRow,
     value: string | number
-  ) =>
+  ) => {
     setPartners(prev =>
       prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p))
     );
+    if (isLLP && field === "partner_name") {
+      const partnerNo = partners[idx]?.partner_no;
+      if (partnerNo != null) {
+        setFixedPartners(prev =>
+          prev.map(p => (p.partner_no === partnerNo ? { ...p, partner_name: value as string } : p))
+        );
+      }
+    }
+  };
+
+  const setFixedPartnerField = (
+    idx: number,
+    field: keyof FixedPartnerRow,
+    value: string | number
+  ) => {
+    setFixedPartners(prev =>
+      prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p))
+    );
+    if (field === "partner_name") {
+      const partnerNo = fixedPartners[idx]?.partner_no;
+      if (partnerNo != null) {
+        setPartners(prev =>
+          prev.map(p => (p.partner_no === partnerNo ? { ...p, partner_name: value as string } : p))
+        );
+      }
+    }
+  };
 
   const setPyField = (field: keyof PyRow, value: number) =>
     setPyRow(prev => ({ ...prev, [field]: value }));
@@ -378,15 +494,15 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
     setPyPartners(prev => prev.map((p, i) => (i === idx ? { ...p, [field]: value } : p)));
 
   const addPartner = () => {
-    setPartners(prev => {
-      // Allocate a new partner_no that is not the PY sentinel and not already
-      // used — this keeps the unique (engagement, fy, partner_no) constraint
-      // satisfied across adds.
-      const used = new Set(prev.map(p => p.partner_no));
-      let next = 1;
-      while (used.has(next) || next === PY_SENTINEL) next++;
-      return [...prev, emptyPartner(next)];
-    });
+    // Allocate a new partner_no that is not the PY sentinel and not already
+    // used — this keeps the unique (engagement, fy, partner_no[, capital_type])
+    // constraint satisfied across adds. Shared by both tables so a partner's
+    // Fixed and Current rows always carry the same partner_no.
+    const used = new Set(partners.map(p => p.partner_no));
+    let next = 1;
+    while (used.has(next) || next === PY_SENTINEL) next++;
+    setPartners(prev => [...prev, emptyPartner(next)]);
+    if (isLLP) setFixedPartners(prev => [...prev, emptyFixedPartner(next)]);
   };
 
   const addPyPartner = () => {
@@ -407,6 +523,12 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
       if (prev.length <= 1) return prev; // keep at least one row
       const removed = prev[idx];
       setDeletedPartnerNos(d => [...d, removed.partner_no]);
+      // Deleting a partner removes BOTH their Fixed and Current rows — the
+      // delete-on-save query targets partner_no without a capital_type filter,
+      // so this keeps in-memory state consistent with what save() will persist.
+      if (isLLP) {
+        setFixedPartners(fp => fp.filter(p => p.partner_no !== removed.partner_no));
+      }
       return prev.filter((_, i) => i !== idx);
     });
   };
@@ -451,7 +573,9 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
       !p.opening_balance_cy && !p.introduced_cy &&
       !p.remuneration_cy && !p.interest_cy &&
       !p.withdrawals_cy   && !p.profit_share_cy,
-    );
+    ) && (!isLLP || fixedPartners.every(p =>
+      !p.opening_balance_cy && !p.introduced_cy && !p.withdrawals_cy,
+    ));
     const allZeroPy = pyPartners.length === 0
       ? !pyRow.opening && !pyRow.introduced && !pyRow.remuneration
         && !pyRow.interest && !pyRow.withdrawals && !pyRow.profit_share
@@ -507,6 +631,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           engagement_id:      engagementId,
           financial_year:     fy,
           partner_no:         p.partner_no,
+          capital_type:       "current",
           partner_name:       p.partner_name || null,
           profit_share_pct:   p.profit_share_pct,
           opening_balance_cy: p.opening_balance_cy,
@@ -516,11 +641,30 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           withdrawals_cy:     p.withdrawals_cy,
           profit_share_cy:    p.profit_share_cy,
         })),
-        // PY aggregate stored as partner_no = 99 (always saved for backward compat)
+        // LLP-only: Fixed Capital rows — Opening/Introduced/Withdrawals only,
+        // no remuneration/interest/profit-share (those don't apply to Fixed
+        // Capital). Same partner_no as the matching Current-Capital row.
+        ...(isLLP ? fixedPartners.map(p => ({
+          engagement_id:      engagementId,
+          financial_year:     fy,
+          partner_no:         p.partner_no,
+          capital_type:       "fixed",
+          partner_name:       p.partner_name || null,
+          profit_share_pct:   null,
+          opening_balance_cy: p.opening_balance_cy,
+          introduced_cy:      p.introduced_cy,
+          remuneration_cy:    0,
+          interest_cy:        0,
+          withdrawals_cy:     p.withdrawals_cy,
+          profit_share_cy:    0,
+        })) : []),
+        // PY aggregate stored as partner_no = 99 (always saved for backward compat).
+        // PY is not split Fixed/Current — see FixedPartnerRow doc comment.
         {
           engagement_id:      engagementId,
           financial_year:     fy,
           partner_no:         PY_SENTINEL,
+          capital_type:       "current",
           partner_name:       "Previous Year",
           profit_share_pct:   null,
           opening_balance_cy: pyAgg.opening,
@@ -535,6 +679,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           engagement_id:      engagementId,
           financial_year:     fy,
           partner_no:         p.partner_no,
+          capital_type:       "current",
           partner_name:       p.partner_name || null,
           profit_share_pct:   null,
           opening_balance_cy: p.opening,
@@ -549,7 +694,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
       const { error } = await supabase
         .from("nce_capital_account")
         .upsert(rows, {
-          onConflict: "engagement_id,financial_year,partner_no",
+          onConflict: "engagement_id,financial_year,partner_no,capital_type",
         });
 
       if (error) throw error;
@@ -569,7 +714,7 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
         .eq("financial_year", fy);
       if (!refetchErr && refreshed) {
         const reloadedPartners = refreshed
-          .filter(r => r.partner_no < PY_SENTINEL)
+          .filter(r => r.partner_no < PY_SENTINEL && ((r as any).capital_type ?? "current") === "current")
           .sort((a, b) => a.partner_no - b.partner_no)
           .map(row => ({
             partner_no:         row.partner_no,
@@ -583,6 +728,20 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
             profit_share_cy:    row.profit_share_cy     ?? 0,
           }));
         if (reloadedPartners.length > 0) setPartners(reloadedPartners);
+
+        if (isLLP) {
+          const reloadedFixedPartners: FixedPartnerRow[] = refreshed
+            .filter(r => r.partner_no < PY_SENTINEL && (r as any).capital_type === "fixed")
+            .sort((a, b) => a.partner_no - b.partner_no)
+            .map(row => ({
+              partner_no:         row.partner_no,
+              partner_name:       row.partner_name       ?? "",
+              opening_balance_cy: row.opening_balance_cy ?? 0,
+              introduced_cy:      row.introduced_cy      ?? 0,
+              withdrawals_cy:     row.withdrawals_cy     ?? 0,
+            }));
+          if (reloadedFixedPartners.length > 0) setFixedPartners(reloadedFixedPartners);
+        }
 
         const refreshedPy = refreshed.find(r => r.partner_no === PY_SENTINEL);
         if (refreshedPy) {
@@ -641,6 +800,11 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
+  // Column count for LLP's full-width sub-section banner rows ((A)/(B) labels)
+  // — Sr + Name + Opening + Introduced + Withdrawals + ProfitShare + Closing (7)
+  // + Share%/Remuneration/Interest when not Proprietorship (3) + Delete column
+  // when editable (1). LLP is never Proprietorship, so both extras apply here.
+  const capColCount = 7 + (!isProprietorship ? 3 : 0) + (!readOnly ? 1 : 0);
   return (
     <div className={`space-y-4${readOnly ? " pointer-events-none select-none" : ""}`}>
 
@@ -758,6 +922,117 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           </TableHeader>
 
           <TableBody>
+            {/* ── LLP only: Fixed Capital sub-table ── */}
+            {isLLP && (
+              <>
+                <TableRow className="bg-amber-50/60 dark:bg-amber-950/20 border-t">
+                  <TableCell colSpan={capColCount} className="text-xs font-semibold text-foreground py-1.5">
+                    (A) Fixed Capital
+                  </TableCell>
+                </TableRow>
+                {fixedPartners.map((p, i) => {
+                  const fixedClosing = calcFixedClosing(p);
+                  const naCell = <TableCell className="text-right text-muted-foreground">—</TableCell>;
+                  return (
+                    <TableRow key={`fixed-${p.partner_no}`} className="hover:bg-muted/20">
+                      <TableCell className="text-center font-medium">{i + 1}</TableCell>
+                      <TableCell>
+                        {readOnly
+                          ? <span className="text-xs">{p.partner_name || `Partner ${i + 1}`}</span>
+                          : <Input
+                              value={p.partner_name}
+                              onChange={e => setFixedPartnerField(i, "partner_name", e.target.value)}
+                              placeholder={`Partner ${i + 1}`}
+                              className="h-7 text-xs w-36"
+                            />
+                        }
+                      </TableCell>
+                      {naCell /* Share % — N/A for Fixed Capital */}
+                      <TableCell className="text-right">
+                        <NumInput
+                          value={p.opening_balance_cy}
+                          onChange={v => setFixedPartnerField(i, "opening_balance_cy", v)}
+                          readOnly={readOnly}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <NumInput
+                          value={p.introduced_cy}
+                          onChange={v => setFixedPartnerField(i, "introduced_cy", v)}
+                          readOnly={readOnly}
+                        />
+                      </TableCell>
+                      {naCell /* Remuneration — N/A for Fixed Capital */}
+                      {naCell /* Interest — N/A for Fixed Capital */}
+                      <TableCell className="text-right">
+                        <NumInput
+                          value={p.withdrawals_cy}
+                          onChange={v => setFixedPartnerField(i, "withdrawals_cy", v)}
+                          readOnly={readOnly}
+                        />
+                      </TableCell>
+                      {naCell /* Profit share — N/A for Fixed Capital */}
+                      <TableCell
+                        className={cn(
+                          "text-right font-semibold bg-primary/5",
+                          fixedClosing < 0 && "text-destructive"
+                        )}
+                      >
+                        {fmt(fixedClosing)}
+                      </TableCell>
+                      {!readOnly && (
+                        <TableCell className="text-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-muted-foreground hover:text-destructive disabled:opacity-30"
+                            onClick={() => {
+                              const ci = partners.findIndex(cp => cp.partner_no === p.partner_no);
+                              if (ci >= 0) removePartner(ci);
+                            }}
+                            disabled={partners.length <= 1}
+                            title={
+                              partners.length <= 1
+                                ? "At least one partner required"
+                                : "Remove partner"
+                            }
+                          >
+                            <Trash2 size={12} />
+                          </Button>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  );
+                })}
+                <TableRow className="bg-muted/60 border-t font-semibold">
+                  <TableCell />
+                  <TableCell className="text-xs uppercase tracking-wide">Total (A)</TableCell>
+                  <TableCell />
+                  <TableCell className="text-right">{fmt(fixedTotals.opening)}</TableCell>
+                  <TableCell className="text-right">{fmt(fixedTotals.introduced)}</TableCell>
+                  <TableCell />
+                  <TableCell />
+                  <TableCell className="text-right">{fmt(fixedTotals.withdrawals)}</TableCell>
+                  <TableCell />
+                  <TableCell
+                    className={cn(
+                      "text-right bg-primary/10 font-bold",
+                      fixedTotals.closing < 0 && "text-destructive"
+                    )}
+                  >
+                    {fmt(fixedTotals.closing)}
+                  </TableCell>
+                  {!readOnly && <TableCell />}
+                </TableRow>
+                <TableRow className="bg-blue-50/60 dark:bg-blue-950/20 border-t">
+                  <TableCell colSpan={capColCount} className="text-xs font-semibold text-foreground py-1.5">
+                    (B) Current Capital
+                  </TableCell>
+                </TableRow>
+              </>
+            )}
+
             {/* ── Partner rows (dynamic) ── */}
             {partners.map((p, i) => {
               const closing = calcClosing(p);
@@ -884,11 +1159,11 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
               );
             })}
 
-            {/* ── Total row (CY) ── */}
+            {/* ── Total row (CY) — "Total (B)" for LLP (Current Capital only), else "Total" ── */}
             <TableRow className="bg-muted/60 border-t-2 font-semibold">
               <TableCell />
               <TableCell className="text-xs uppercase tracking-wide">
-                Total
+                {isLLP ? "Total (B)" : "Total"}
               </TableCell>
               {!isProprietorship && (
                 <TableCell className="text-right text-xs">
@@ -934,6 +1209,38 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
               {/* Empty spacer for delete column — hidden in readOnly */}
               {!readOnly && <TableCell />}
             </TableRow>
+
+            {/* ── LLP only: combined Total = Total (A) Fixed + Total (B) Current ── */}
+            {isLLP && (
+              <TableRow className="bg-primary/10 border-t-2 font-bold">
+                <TableCell />
+                <TableCell className="text-xs uppercase tracking-wide">Total</TableCell>
+                <TableCell className="text-right text-xs">
+                  {totals.pct > 0 ? (
+                    <span className={cn(profitShareWarning && "text-destructive")}>
+                      {totals.pct.toFixed(2)}%
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </TableCell>
+                <TableCell className="text-right">{fmt(combinedTotals.opening)}</TableCell>
+                <TableCell className="text-right">{fmt(combinedTotals.introduced)}</TableCell>
+                <TableCell className="text-right">{fmt(combinedTotals.remuneration)}</TableCell>
+                <TableCell className="text-right">{fmt(combinedTotals.interest)}</TableCell>
+                <TableCell className="text-right">{fmt(combinedTotals.withdrawals)}</TableCell>
+                <TableCell className="text-right">{fmt(combinedTotals.profit_share)}</TableCell>
+                <TableCell
+                  className={cn(
+                    "text-right bg-primary/20",
+                    combinedTotals.closing < 0 && "text-destructive"
+                  )}
+                >
+                  {fmt(combinedTotals.closing)}
+                </TableCell>
+                {!readOnly && <TableCell />}
+              </TableRow>
+            )}
 
             {/* ── Previous Year section ── */}
             {pyPartners.length > 0 ? (
@@ -1088,6 +1395,8 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           <p className="text-[10px] text-muted-foreground">
             {isProprietorship
               ? "Closing Balance = Opening + Introduced − Withdrawals + Profit Share"
+              : isLLP
+              ? "Fixed Capital Closing = Opening + Introduced − Withdrawals · Current Capital Closing = Opening + Introduced + Remuneration + Interest − Withdrawals + Profit Share"
               : "Closing Balance = Opening + Introduced + Remuneration + Interest − Withdrawals + Profit Share"}
           </p>
         </div>

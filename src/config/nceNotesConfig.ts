@@ -31,6 +31,12 @@ export interface NoteRowDef {
   /** For section-total rows in Pattern A: tag to match NCECustomRow.section.
    *  Custom rows with this section tag are added into THIS total (not the grand total). */
   sectionTag?: string;
+  /** Mandatory Schedule III disclosure row/header/subtotal — always renders in the
+   *  locked preview and DOCX export even when both CY and PY are nil, overriding
+   *  the blank-row/empty-section suppression that otherwise applies there. Used for
+   *  categories that must be disclosed as "Nil" rather than omitted (e.g. MSME vs.
+   *  other-than-MSME trade payables, receivable ageing buckets, cash vs. bank). */
+  alwaysShow?: boolean;
 }
 
 export interface NoteConfig {
@@ -294,8 +300,8 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title: "Note 7: Trade Payables",
     pattern: "B",
     rows: [
-      { id: "msme",   label: "Total outstanding dues to Micro and Small Enterprises (MSME)" },
-      { id: "others", label: "Total outstanding dues to creditors other than Micro, Small and Medium Enterprises (MSME)" },
+      { id: "msme",   label: "Total outstanding dues to Micro and Small Enterprises (MSME)", alwaysShow: true },
+      { id: "others", label: "Total outstanding dues to creditors other than Micro, Small and Medium Enterprises (MSME)", alwaysShow: true },
       { id: "total",  label: "Total", isTotal: true, formulaAdd: ["msme","others"] },
     ],
   },
@@ -506,23 +512,23 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title: "Note 18: Trade Receivables",
     pattern: "B",
     rows: [
-      { id: "ka_hdr",       label: "Outstanding for less than 6 months",              isSectionHeader: true },
+      { id: "ka_hdr",       label: "Outstanding for less than 6 months",              isSectionHeader: true, alwaysShow: true },
       { id: "ka_secured",   label: "Secured, considered good",                            indent: 1 },
       { id: "ka_unsecured", label: "Unsecured, considered good",                          indent: 1 },
       { id: "ka_doubtful",  label: "Doubtful",                                            indent: 1 },
       { id: "ka_less_prov", label: "Less: Provision for doubtful receivables",            indent: 2 },
       {
-        id: "ka_total", label: "Total", isTotal: true, indent: 1,
+        id: "ka_total", label: "Total", isTotal: true, indent: 1, alwaysShow: true,
         formulaAdd: ["ka_secured","ka_unsecured","ka_doubtful"], formulaSub: ["ka_less_prov"],
       },
-      { id: "kb_hdr",       label: "Outstanding for more than 6 months",              isSectionHeader: true },
+      { id: "kb_hdr",       label: "Outstanding for more than 6 months",              isSectionHeader: true, alwaysShow: true },
       { id: "kb_secured",   label: "Secured, considered good",                            indent: 1 },
       { id: "kb_unsecured", label: "Unsecured, considered good",                          indent: 1 },
       { id: "kb_doubtful",  label: "Doubtful",                                            indent: 1 },
       { id: "kb_less_prov", label: "Less: Provision for doubtful receivables",            indent: 2 },
       { id: "kb_unbilled",  label: "Unbilled receivables",                                indent: 1 },
       {
-        id: "kb_total", label: "Total", isTotal: true, indent: 1,
+        id: "kb_total", label: "Total", isTotal: true, indent: 1, alwaysShow: true,
         formulaAdd: ["kb_secured","kb_unsecured","kb_doubtful","kb_unbilled"],
         formulaSub: ["kb_less_prov"],
       },
@@ -540,12 +546,12 @@ export const NOTES_CONFIG: NoteConfig[] = [
     title: "Note 19: Cash and Bank Balances",
     pattern: "B",
     rows: [
-      { id: "la_hdr",     label: "Cash and Cash Equivalents",  isSectionHeader: true },
-      { id: "la_current", label: "Balance in current account",     indent: 1 },
+      { id: "la_hdr",     label: "Cash and Cash Equivalents",  isSectionHeader: true, alwaysShow: true },
+      { id: "la_current", label: "Balance in current account",     indent: 1, alwaysShow: true },
       { id: "la_cc",      label: "Balance in cash credit account", indent: 1 },
       { id: "la_fd_3m",   label: "Fixed deposits",                 indent: 1 },
       { id: "la_cheques", label: "Cheques / drafts in hand",       indent: 1 },
-      { id: "la_cash",    label: "Cash in hand",                   indent: 1 },
+      { id: "la_cash",    label: "Cash in hand",                   indent: 1, alwaysShow: true },
       {
         id: "total", label: "Total", isTotal: true,
         formulaAdd: ["la_current","la_cc","la_fd_3m","la_cheques","la_cash"],
