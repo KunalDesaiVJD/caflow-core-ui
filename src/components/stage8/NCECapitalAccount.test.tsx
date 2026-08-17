@@ -67,7 +67,9 @@ describe("NCECapitalAccount — entity-subtype column set", () => {
     setupSupabase({ ...baseEng, entity_type: "Partnership", clients: { name: "Test Firm", entity_type: "Partnership" } });
     const { container } = render(<NCECapitalAccount engagementId="e2" />);
 
-    await waitFor(() => expect(screen.getByText(/Name of Partner/i)).toBeTruthy());
+    // "Name of Partner" appears in both the Fixed and Current Capital table
+    // headers now that they're two separate tables.
+    await waitFor(() => expect(screen.getAllByText(/Name of Partner/i).length).toBeGreaterThan(0));
 
     const text = container.textContent || "";
     expect(text).toContain("Note: Owners Capital Account");
@@ -91,7 +93,9 @@ describe("NCECapitalAccount — LLP Fixed Capital / Current Capital split", () =
     setupSupabase({ ...baseEng, entity_type: "LLP", clients: { name: "Test LLP", entity_type: "LLP" } });
     const { container } = render(<NCECapitalAccount engagementId="e4" />);
 
-    await waitFor(() => expect(screen.getByText(/Name of Partner/i)).toBeTruthy());
+    // "Name of Partner" appears in both the Fixed and Current Capital table
+    // headers now that they're two separate tables.
+    await waitFor(() => expect(screen.getAllByText(/Name of Partner/i).length).toBeGreaterThan(0));
 
     const text = container.textContent || "";
     expect(text).toContain("(A) Fixed Capital");
@@ -107,7 +111,9 @@ describe("NCECapitalAccount — LLP Fixed Capital / Current Capital split", () =
     setupSupabase({ ...baseEng, entity_type: "LLP", clients: { name: "Test LLP", entity_type: "LLP" } });
     render(<NCECapitalAccount engagementId="e5" />);
 
-    await waitFor(() => expect(screen.getByText(/Name of Partner/i)).toBeTruthy());
+    // "Name of Partner" appears in both the Fixed and Current Capital table
+    // headers now that they're two separate tables.
+    await waitFor(() => expect(screen.getAllByText(/Name of Partner/i).length).toBeGreaterThan(0));
 
     // Two "Partner 1" inputs exist: Fixed Capital (rendered first) and Current
     // Capital. Editing either one should propagate the name to the other.

@@ -800,11 +800,6 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
-  // Column count for LLP's full-width sub-section banner rows ((A)/(B) labels)
-  // — Sr + Name + Opening + Introduced + Withdrawals + ProfitShare + Closing (7)
-  // + Share%/Remuneration/Interest when not Proprietorship (3) + Delete column
-  // when editable (1). LLP is never Proprietorship, so both extras apply here.
-  const capColCount = 7 + (!isProprietorship ? 3 : 0) + (!readOnly ? 1 : 0);
   return (
     <div className={`space-y-4${readOnly ? " pointer-events-none select-none" : ""}`}>
 
@@ -879,7 +874,121 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
         </Alert>
       )}
 
-      {/* ── Table ── */}
+      {/* ── LLP only: Fixed Capital — a genuinely separate table, not a banner
+          inside the Current Capital table, so the two schedules read as the
+          distinct disclosures the LLP Act expects. Kept in sync with Current
+          Capital by partner_no (see setFixedPartnerField / addPartner / removePartner). ── */}
+      {isLLP && (
+        <div className="space-y-1.5">
+          <p className="text-xs font-semibold text-foreground">(A) Fixed Capital</p>
+          <div className="overflow-x-auto rounded-lg border">
+            <Table className="text-xs min-w-[600px]">
+              <TableHeader>
+                <TableRow className="bg-muted/50">
+                  <TableHead className="w-12 text-center">Sr. No.</TableHead>
+                  <TableHead className="min-w-[150px]">Name of Partner</TableHead>
+                  <TableHead className="text-right w-28">Opening Balance</TableHead>
+                  <TableHead className="text-right w-28">Introduced/ Contributed</TableHead>
+                  <TableHead className="text-right w-28">Withdrawals during the year</TableHead>
+                  <TableHead className="text-right w-28 bg-primary/5 font-semibold">Closing Balance</TableHead>
+                  {!readOnly && <TableHead className="w-10" />}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {fixedPartners.map((p, i) => {
+                  const fixedClosing = calcFixedClosing(p);
+                  return (
+                    <TableRow key={`fixed-${p.partner_no}`} className="hover:bg-muted/20">
+                      <TableCell className="text-center font-medium">{i + 1}</TableCell>
+                      <TableCell>
+                        {readOnly
+                          ? <span className="text-xs">{p.partner_name || `Partner ${i + 1}`}</span>
+                          : <Input
+                              value={p.partner_name}
+                              onChange={e => setFixedPartnerField(i, "partner_name", e.target.value)}
+                              placeholder={`Partner ${i + 1}`}
+                              className="h-7 text-xs w-36"
+                            />
+                        }
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <NumInput
+                          value={p.opening_balance_cy}
+                          onChange={v => setFixedPartnerField(i, "opening_balance_cy", v)}
+                          readOnly={readOnly}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <NumInput
+                          value={p.introduced_cy}
+                          onChange={v => setFixedPartnerField(i, "introduced_cy", v)}
+                          readOnly={readOnly}
+                        />
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <NumInput
+                          value={p.withdrawals_cy}
+                          onChange={v => setFixedPartnerField(i, "withdrawals_cy", v)}
+                          readOnly={readOnly}
+                        />
+                      </TableCell>
+                      <TableCell
+                        className={cn(
+                          "text-right font-semibold bg-primary/5",
+                          fixedClosing < 0 && "text-destructive"
+                        )}
+                      >
+                        {fmt(fixedClosing)}
+                      </TableCell>
+                      {!readOnly && (
+                        <TableCell className="text-center">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-6 w-6 text-muted-foreground hover:text-destructive disabled:opacity-30"
+                            onClick={() => {
+                              const ci = partners.findIndex(cp => cp.partner_no === p.partner_no);
+                              if (ci >= 0) removePartner(ci);
+                            }}
+                            disabled={partners.length <= 1}
+                            title={
+                              partners.length <= 1
+                                ? "At least one partner required"
+                                : "Remove partner"
+                            }
+                          >
+                            <Trash2 size={12} />
+                          </Button>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  );
+                })}
+                <TableRow className="bg-muted/60 border-t-2 font-semibold">
+                  <TableCell />
+                  <TableCell className="text-xs uppercase tracking-wide">Total (A)</TableCell>
+                  <TableCell className="text-right">{fmt(fixedTotals.opening)}</TableCell>
+                  <TableCell className="text-right">{fmt(fixedTotals.introduced)}</TableCell>
+                  <TableCell className="text-right">{fmt(fixedTotals.withdrawals)}</TableCell>
+                  <TableCell
+                    className={cn(
+                      "text-right bg-primary/10 font-bold",
+                      fixedTotals.closing < 0 && "text-destructive"
+                    )}
+                  >
+                    {fmt(fixedTotals.closing)}
+                  </TableCell>
+                  {!readOnly && <TableCell />}
+                </TableRow>
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Current Capital (Partnership/Proprietorship: the only table) ── */}
+      {isLLP && <p className="text-xs font-semibold text-foreground">(B) Current Capital</p>}
       <div className="overflow-x-auto rounded-lg border">
         <Table className="text-xs min-w-[960px]">
           <TableHeader>
@@ -922,117 +1031,6 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           </TableHeader>
 
           <TableBody>
-            {/* ── LLP only: Fixed Capital sub-table ── */}
-            {isLLP && (
-              <>
-                <TableRow className="bg-amber-50/60 dark:bg-amber-950/20 border-t">
-                  <TableCell colSpan={capColCount} className="text-xs font-semibold text-foreground py-1.5">
-                    (A) Fixed Capital
-                  </TableCell>
-                </TableRow>
-                {fixedPartners.map((p, i) => {
-                  const fixedClosing = calcFixedClosing(p);
-                  const naCell = <TableCell className="text-right text-muted-foreground">—</TableCell>;
-                  return (
-                    <TableRow key={`fixed-${p.partner_no}`} className="hover:bg-muted/20">
-                      <TableCell className="text-center font-medium">{i + 1}</TableCell>
-                      <TableCell>
-                        {readOnly
-                          ? <span className="text-xs">{p.partner_name || `Partner ${i + 1}`}</span>
-                          : <Input
-                              value={p.partner_name}
-                              onChange={e => setFixedPartnerField(i, "partner_name", e.target.value)}
-                              placeholder={`Partner ${i + 1}`}
-                              className="h-7 text-xs w-36"
-                            />
-                        }
-                      </TableCell>
-                      {naCell /* Share % — N/A for Fixed Capital */}
-                      <TableCell className="text-right">
-                        <NumInput
-                          value={p.opening_balance_cy}
-                          onChange={v => setFixedPartnerField(i, "opening_balance_cy", v)}
-                          readOnly={readOnly}
-                        />
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <NumInput
-                          value={p.introduced_cy}
-                          onChange={v => setFixedPartnerField(i, "introduced_cy", v)}
-                          readOnly={readOnly}
-                        />
-                      </TableCell>
-                      {naCell /* Remuneration — N/A for Fixed Capital */}
-                      {naCell /* Interest — N/A for Fixed Capital */}
-                      <TableCell className="text-right">
-                        <NumInput
-                          value={p.withdrawals_cy}
-                          onChange={v => setFixedPartnerField(i, "withdrawals_cy", v)}
-                          readOnly={readOnly}
-                        />
-                      </TableCell>
-                      {naCell /* Profit share — N/A for Fixed Capital */}
-                      <TableCell
-                        className={cn(
-                          "text-right font-semibold bg-primary/5",
-                          fixedClosing < 0 && "text-destructive"
-                        )}
-                      >
-                        {fmt(fixedClosing)}
-                      </TableCell>
-                      {!readOnly && (
-                        <TableCell className="text-center">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6 text-muted-foreground hover:text-destructive disabled:opacity-30"
-                            onClick={() => {
-                              const ci = partners.findIndex(cp => cp.partner_no === p.partner_no);
-                              if (ci >= 0) removePartner(ci);
-                            }}
-                            disabled={partners.length <= 1}
-                            title={
-                              partners.length <= 1
-                                ? "At least one partner required"
-                                : "Remove partner"
-                            }
-                          >
-                            <Trash2 size={12} />
-                          </Button>
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  );
-                })}
-                <TableRow className="bg-muted/60 border-t font-semibold">
-                  <TableCell />
-                  <TableCell className="text-xs uppercase tracking-wide">Total (A)</TableCell>
-                  <TableCell />
-                  <TableCell className="text-right">{fmt(fixedTotals.opening)}</TableCell>
-                  <TableCell className="text-right">{fmt(fixedTotals.introduced)}</TableCell>
-                  <TableCell />
-                  <TableCell />
-                  <TableCell className="text-right">{fmt(fixedTotals.withdrawals)}</TableCell>
-                  <TableCell />
-                  <TableCell
-                    className={cn(
-                      "text-right bg-primary/10 font-bold",
-                      fixedTotals.closing < 0 && "text-destructive"
-                    )}
-                  >
-                    {fmt(fixedTotals.closing)}
-                  </TableCell>
-                  {!readOnly && <TableCell />}
-                </TableRow>
-                <TableRow className="bg-blue-50/60 dark:bg-blue-950/20 border-t">
-                  <TableCell colSpan={capColCount} className="text-xs font-semibold text-foreground py-1.5">
-                    (B) Current Capital
-                  </TableCell>
-                </TableRow>
-              </>
-            )}
-
             {/* ── Partner rows (dynamic) ── */}
             {partners.map((p, i) => {
               const closing = calcClosing(p);
@@ -1210,38 +1208,6 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
               {!readOnly && <TableCell />}
             </TableRow>
 
-            {/* ── LLP only: combined Total = Total (A) Fixed + Total (B) Current ── */}
-            {isLLP && (
-              <TableRow className="bg-primary/10 border-t-2 font-bold">
-                <TableCell />
-                <TableCell className="text-xs uppercase tracking-wide">Total</TableCell>
-                <TableCell className="text-right text-xs">
-                  {totals.pct > 0 ? (
-                    <span className={cn(profitShareWarning && "text-destructive")}>
-                      {totals.pct.toFixed(2)}%
-                    </span>
-                  ) : (
-                    "—"
-                  )}
-                </TableCell>
-                <TableCell className="text-right">{fmt(combinedTotals.opening)}</TableCell>
-                <TableCell className="text-right">{fmt(combinedTotals.introduced)}</TableCell>
-                <TableCell className="text-right">{fmt(combinedTotals.remuneration)}</TableCell>
-                <TableCell className="text-right">{fmt(combinedTotals.interest)}</TableCell>
-                <TableCell className="text-right">{fmt(combinedTotals.withdrawals)}</TableCell>
-                <TableCell className="text-right">{fmt(combinedTotals.profit_share)}</TableCell>
-                <TableCell
-                  className={cn(
-                    "text-right bg-primary/20",
-                    combinedTotals.closing < 0 && "text-destructive"
-                  )}
-                >
-                  {fmt(combinedTotals.closing)}
-                </TableCell>
-                {!readOnly && <TableCell />}
-              </TableRow>
-            )}
-
             {/* ── Previous Year section ── */}
             {pyPartners.length > 0 ? (
               /* Per-partner PY rows */
@@ -1375,6 +1341,16 @@ export function NCECapitalAccount({ engagementId, readOnly = false }: Props) {
           </TableBody>
         </Table>
       </div>
+
+      {/* ── LLP only: combined Closing = Total (A) Fixed + Total (B) Current — ties to
+          the COA-lock anchor above, which already validates against this combined figure. ── */}
+      {isLLP && (
+        <div className="flex justify-end">
+          <span className="text-xs font-semibold text-foreground bg-primary/10 px-3 py-1.5 rounded-md">
+            Total Capital (A + B) — Closing: {fmt(combinedTotals.closing)}
+          </span>
+        </div>
+      )}
 
       {/* ── Actions — hidden in readOnly / preview mode ── */}
       {!readOnly && <div className="flex items-center justify-between flex-wrap gap-2">
