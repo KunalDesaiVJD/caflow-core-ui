@@ -47,6 +47,12 @@ export interface CoaAnchoredFace {
   face: Record<string, number>;
   /** Σ assets + Σ liab(signed) = the BS imbalance = the result to credit to Capital. */
   residual: number;
+  /** True when face["NCE_CII"] was genuinely derived from stock movement for
+   *  this column (always true for "cy"; true for "py" only when the PY-shell
+   *  TB's own opening stock was available). When false, face["NCE_CII"] is a
+   *  placeholder 0 and the caller should keep the note-entered PY value instead
+   *  of overriding the face with it. */
+  ciiDerived: boolean;
 }
 
 /**
@@ -55,7 +61,7 @@ export interface CoaAnchoredFace {
  * @param column "cy" (default) or "py".
  */
 export function computeNceCoaAnchoredFace(
-  coa: Record<string, { cy: number; py: number }> | undefined | null,
+  coa: Record<string, { cy: number; py: number; pyOpen?: number }> | undefined | null,
   column: "cy" | "py" = "cy",
 ): CoaAnchoredFace {
   const C = coa ?? {};
@@ -78,7 +84,24 @@ export function computeNceCoaAnchoredFace(
   // to the rupee against the auditors' manual CII on DBS & SUKIRTI.
   const stkClose = (C["NCE_STCK"]?.cy) ?? 0;
   const stkOpen = (C["NCE_STCK"]?.py) ?? 0;
-  if (column === "cy") face["NCE_CII"] = round2(stkOpen - stkClose);
+  let ciiDerived = false;
+  if (column === "cy") { face["NCE_CII"] = round2(stkOpen - stkClose); ciiDerived = true; }
+
+  // PY column — same stock-movement identity, one year earlier: PY's closing
+  // stock is C.py (already the PY-shell TB's own closing), and PY's OPENING
+  // stock is the PY-shell TB's own opening_balance (pyOpen — the balance at
+  // the start of the PY period, i.e. closing two years back). pyOpen is only
+  // populated when a PY shell TB was loaded (computeCOATotals); when absent,
+  // leave NCE_CII at the generic signed(code) value (0, since it has no COA
+  // ledger) so the caller's existing "keep the note value" fallback applies.
+  if (column === "py") {
+    const pyStkOpen = C["NCE_STCK"]?.pyOpen;
+    if (pyStkOpen != null) {
+      const pyStkClose = (C["NCE_STCK"]?.py) ?? 0;
+      face["NCE_CII"] = round2(pyStkOpen - pyStkClose);
+      ciiDerived = true;
+    }
+  }
 
   // Tax parent = sum of the three tax leaves (used by the profit chain).
   face["NCE_TAX"] = round2((face["NCE_CUR_TAX"] || 0) + (face["NCE_PRIOR_TAX"] || 0) + (face["NCE_DEFER_TAX"] || 0));
@@ -89,5 +112,5 @@ export function computeNceCoaAnchoredFace(
   const el = NCE_LIAB_CODES.reduce((s, c) => s + (face[c] || 0), 0);
   const residual = round2(ast + el);
 
-  return { face, residual };
+  return { face, residual, ciiDerived };
 }

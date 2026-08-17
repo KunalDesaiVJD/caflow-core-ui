@@ -4684,13 +4684,18 @@ export default function PipelineFinancialStatements({
     // ── Phase 7 (FS_NO_MANUAL_NOTE_ADD, NCE-only) — anchor the PY face to COA ──
     // PY mirror of the CY anchor. coaTotals.py is the PY-shell closing (= CY
     // opening) for BS codes, and the PY-shell P&L closing where a shell exists.
-    // NCE_CII PY is NOT auto-derived (needs the pre-PY opening stock, not loaded)
-    // → keep the note value. Engagements with no PY shell keep 0 PY P&L (existing
+    // NCE_CII PY is now auto-derived too, from the PY-shell TB's own opening
+    // stock (coaTotalsByCode["NCE_STCK"].pyOpen — see computeCOATotals /
+    // nceFaceAnchor.ts), whenever a PY shell was actually loaded. ciiDerived
+    // tells us whether that derivation had real data to work with; when it
+    // doesn't (no PY shell, or a legacy engagement without opening-balance
+    // data), NCE_CII keeps the note-entered PY value as before. Engagements
+    // with no PY shell keep 0 PY P&L for the rest of the codes (existing
     // limit). The PY residual absorber below credits the PY result to Capital.
     if (FS_NO_MANUAL_NOTE_ADD) {
-      const { face: coaFacePy } = computeNceCoaAnchoredFace(coaTotalsByCode, "py");
+      const { face: coaFacePy, ciiDerived } = computeNceCoaAnchoredFace(coaTotalsByCode, "py");
       for (const code of Object.keys(coaFacePy)) {
-        if (code === "NCE_CII") continue;
+        if (code === "NCE_CII" && !ciiDerived) continue;
         out[code] = coaFacePy[code];
       }
     }

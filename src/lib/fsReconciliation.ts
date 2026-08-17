@@ -412,8 +412,8 @@ export function computeCOATotals(
   pyTb:       TBRowLike[],
   coaMapping: COAMappingLike,
   pyCoaMap?:  COAMappingLike,
-): Record<string, { cy: number; py: number }> {
-  const out: Record<string, { cy: number; py: number }> = {};
+): Record<string, { cy: number; py: number; pyOpen: number }> {
+  const out: Record<string, { cy: number; py: number; pyOpen: number }> = {};
 
   // 2026-06-12 — Hardening (latent-RC audit):
   //   • Lookup fallback: exact name → trimmed name. The CY pass previously
@@ -474,7 +474,7 @@ export function computeCOATotals(
     const code = CANONICAL_NCE_CODE[mapped.code] ?? mapped.code;
     const noteType = CODE_TO_NOTE_TYPE[code] ?? code;
     const cy = signedBalance(row.closing_balance, row.balance_type, noteType);
-    const slot = (out[code] ||= { cy: 0, py: 0 });
+    const slot = (out[code] ||= { cy: 0, py: 0, pyOpen: 0 });
     slot.cy += cy;
     if (!hasPyTb) {
       slot.py += signedOpening(row.opening_balance, row.opening_type, noteType);
@@ -538,8 +538,14 @@ export function computeCOATotals(
       if (!mapped?.code) continue;
       const code = CANONICAL_NCE_CODE[mapped.code] ?? mapped.code;
       const noteType = CODE_TO_NOTE_TYPE[code] ?? code;
-      const slot = (out[code] ||= { cy: 0, py: 0 });
+      const slot = (out[code] ||= { cy: 0, py: 0, pyOpen: 0 });
       slot.py += signedBalance(row.closing_balance, row.balance_type, noteType);
+      // pyOpen = the PY-shell TB's OWN opening balance — i.e. the balance at
+      // the start of the PY period (closing two years back). Only meaningful
+      // for BS codes (P&L ledgers always open at 0 in Tally); consumers that
+      // need it (e.g. deriving PY's Changes in Inventory from the pre-PY
+      // opening stock — see nceFaceAnchor.ts) read it directly off this slot.
+      slot.pyOpen += signedOpening(row.opening_balance, row.opening_type, noteType);
     }
   }
 
@@ -548,6 +554,7 @@ export function computeCOATotals(
   for (const k of Object.keys(out)) {
     out[k].cy = Math.round(out[k].cy * 100) / 100;
     out[k].py = Math.round(out[k].py * 100) / 100;
+    out[k].pyOpen = Math.round(out[k].pyOpen * 100) / 100;
   }
   return out;
 }

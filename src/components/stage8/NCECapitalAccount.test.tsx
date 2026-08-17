@@ -6,7 +6,7 @@
  * engagement.entity_type (falling back to clients.entity_type).
  */
 import { describe, it, expect, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: { from: vi.fn() },
@@ -67,7 +67,9 @@ describe("NCECapitalAccount — entity-subtype column set", () => {
     setupSupabase({ ...baseEng, entity_type: "Partnership", clients: { name: "Test Firm", entity_type: "Partnership" } });
     const { container } = render(<NCECapitalAccount engagementId="e2" />);
 
-    await waitFor(() => expect(screen.getByText(/Name of Partner/i)).toBeTruthy());
+    // "Name of Partner" appears in both the Fixed and Current Capital table
+    // headers now that they're two separate tables.
+    await waitFor(() => expect(screen.getAllByText(/Name of Partner/i).length).toBeGreaterThan(0));
 
     const text = container.textContent || "";
     expect(text).toContain("Note: Owners Capital Account");
@@ -83,5 +85,46 @@ describe("NCECapitalAccount — entity-subtype column set", () => {
 
     await waitFor(() => expect(screen.getByText(/Proprietor's Name/i)).toBeTruthy());
     expect(container.textContent || "").not.toMatch(/Share of profit\/\s*\(loss\)%/i);
+  });
+});
+
+describe("NCECapitalAccount — LLP Fixed Capital / Current Capital split", () => {
+  it("renders linked Fixed Capital and Current Capital sub-tables with Total (A)/(B)", async () => {
+    setupSupabase({ ...baseEng, entity_type: "LLP", clients: { name: "Test LLP", entity_type: "LLP" } });
+    const { container } = render(<NCECapitalAccount engagementId="e4" />);
+
+    // "Name of Partner" appears in both the Fixed and Current Capital table
+    // headers now that they're two separate tables.
+    await waitFor(() => expect(screen.getAllByText(/Name of Partner/i).length).toBeGreaterThan(0));
+
+    const text = container.textContent || "";
+    expect(text).toContain("(A) Fixed Capital");
+    expect(text).toContain("(B) Current Capital");
+    expect(text).toContain("Total (A)");
+    expect(text).toContain("Total (B)");
+    // Partnership/LLP columns are still present (LLP is never Proprietorship).
+    expect(text).toContain("Remuneration for the year");
+    expect(text).toContain("Interest for the year");
+  });
+
+  it("keeps the partner name in sync between Fixed Capital and Current Capital", async () => {
+    setupSupabase({ ...baseEng, entity_type: "LLP", clients: { name: "Test LLP", entity_type: "LLP" } });
+    render(<NCECapitalAccount engagementId="e5" />);
+
+    // "Name of Partner" appears in both the Fixed and Current Capital table
+    // headers now that they're two separate tables.
+    await waitFor(() => expect(screen.getAllByText(/Name of Partner/i).length).toBeGreaterThan(0));
+
+    // Two "Partner 1" inputs exist: Fixed Capital (rendered first) and Current
+    // Capital. Editing either one should propagate the name to the other.
+    const inputsBefore = screen.getAllByPlaceholderText("Partner 1") as HTMLInputElement[];
+    expect(inputsBefore).toHaveLength(2);
+
+    fireEvent.change(inputsBefore[0], { target: { value: "Jane Partner" } });
+
+    await waitFor(() => {
+      const synced = screen.getAllByDisplayValue("Jane Partner");
+      expect(synced).toHaveLength(2);
+    });
   });
 });

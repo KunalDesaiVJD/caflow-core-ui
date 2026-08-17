@@ -37,7 +37,7 @@ import type { NoteConfig, NoteRowDef } from "@/config/nceNotesConfig";
 // read perRow lookups instead of duplicating the math locally.
 import { computeNoteTotals } from "@/lib/nceNoteTotals";
 import { collapseDuplicateCustomRows } from "@/lib/nceAutoPopulate";
-import { isProprietorshipEntityType } from "@/lib/entityType";
+import { isProprietorshipEntityType, isLLPEntityType } from "@/lib/entityType";
 import { getActiveFsDivisor, FS_SCALES } from "@/lib/fsUnits";
 import { getDynamicNoteDisplay } from "@/lib/nceDynamicNoteNumbers";
 
@@ -1548,13 +1548,23 @@ function buildCapitalAccountSection(
   cyYear: string,
   pyYear: string,
   isProprietorship = false,
+  isLLP = false,
 ): Table[] {
   const PY_SENTINEL    = 99;
   const PY_PARTNER_BASE = 100;
 
-  const cyPartners = (capitalData ?? [])
-    .filter((r: any) => r.partner_no < PY_SENTINEL)
+  const cyAllRows = (capitalData ?? []).filter((r: any) => r.partner_no < PY_SENTINEL);
+  // LLP-only: Fixed Capital rows carry capital_type "fixed" (see nce_capital_account
+  // migration). Rows written before the split, or by a non-LLP entity, default to
+  // "current" — excluded from the Fixed table by construction.
+  const cyPartners = cyAllRows
+    .filter((r: any) => (r.capital_type ?? "current") === "current")
     .sort((a: any, b: any) => (a.partner_name ?? "").localeCompare(b.partner_name ?? ""));
+  const cyFixedPartners = isLLP
+    ? cyAllRows
+        .filter((r: any) => r.capital_type === "fixed")
+        .sort((a: any, b: any) => (a.partner_name ?? "").localeCompare(b.partner_name ?? ""))
+    : [];
 
   const pyAggregate = (capitalData ?? []).find((r: any) => r.partner_no === PY_SENTINEL);
   const pyPartners  = (capitalData ?? [])
@@ -1564,6 +1574,11 @@ function buildCapitalAccountSection(
   const calcClosingCy = (p: any): number =>
     (p.opening_balance_cy ?? 0) + (p.introduced_cy ?? 0) + (p.remuneration_cy ?? 0)
     + (p.interest_cy ?? 0) - (p.withdrawals_cy ?? 0) + (p.profit_share_cy ?? 0);
+
+  // LLP Fixed Capital: no remuneration/interest/profit-share — only moves via
+  // fresh contribution or withdrawal of capital itself (matches NCECapitalAccount.tsx).
+  const calcFixedClosingCy = (p: any): number =>
+    (p.opening_balance_cy ?? 0) + (p.introduced_cy ?? 0) - (p.withdrawals_cy ?? 0);
 
   // Task 1: pyPartners store their data in _cy-suffixed fields (same record as
   // CY partners with partner_no >= 100).  Fall back to _cy fields when the
@@ -1637,10 +1652,12 @@ function buildCapitalAccountSection(
   const totCyClosing  = cyPartners.reduce((s: number, p: any) => s + calcClosingCy(p), 0);
   const totCyPct      = cyPartners.reduce((s: number, p: any) => s + (Number(p.profit_share_pct) || 0), 0);
 
+  // LLP only — labelled "Total (B)" (paired with Fixed Capital's "Total (A)")
+  // instead of the plain "Total" a non-LLP entity gets.
   const cyTotalRow = new TableRow({
     children: [
       ec(srW, BG_GRAN, BDR_GRAND),
-      cell({ text: "Total", w: nameW, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      cell({ text: isLLP ? "Total (B)" : "Total", w: nameW, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
       ...(isProprietorship ? [] : [cell({ text: totCyPct ? `${+totCyPct.toFixed(2)}%` : "", w: CAP_PCT, bold: true, bg: BG_GRAN, borders: BDR_GRAND, align: AlignmentType.CENTER })]),
       nc(totCyOpening,  numW,  true, BG_GRAN, BDR_GRAND),
       nc(totCyIntro,    numW,  true, BG_GRAN, BDR_GRAND),
@@ -1648,6 +1665,63 @@ function buildCapitalAccountSection(
       nc(totCyWith,     numW,  true, BG_GRAN, BDR_GRAND),
       nc(totCyPS,       numW,  true, BG_GRAN, BDR_GRAND),
       nc(totCyClosing,  lastW, true, BG_GRAN, BDR_GRAND),
+    ],
+  });
+
+  // ── LLP only: Fixed Capital rows/total, and the combined Total = (A) + (B) ──
+  const naCap = (w: number) => cell({ text: "—", w, sz: SZ_BODY, align: AlignmentType.CENTER });
+  const fixedDataRows = cyFixedPartners.map((p: any, idx: number) =>
+    new TableRow({
+      children: [
+        cell({ text: String(idx + 1), w: srW, sz: SZ_BODY, align: AlignmentType.CENTER }),
+        cell({ text: p.partner_name || "Partner", w: nameW, sz: SZ_BODY }),
+        naCap(CAP_PCT),
+        nc(p.opening_balance_cy ?? 0, numW),
+        nc(p.introduced_cy      ?? 0, numW),
+        naCap(CAP_NUM),
+        naCap(CAP_NUM),
+        nc(p.withdrawals_cy     ?? 0, numW),
+        naCap(numW),
+        nc(calcFixedClosingCy(p),     lastW),
+      ],
+    }),
+  );
+
+  const totFixedOpening = cyFixedPartners.reduce((s: number, p: any) => s + (p.opening_balance_cy ?? 0), 0);
+  const totFixedIntro   = cyFixedPartners.reduce((s: number, p: any) => s + (p.introduced_cy ?? 0), 0);
+  const totFixedWith    = cyFixedPartners.reduce((s: number, p: any) => s + (p.withdrawals_cy ?? 0), 0);
+  const totFixedClosing = cyFixedPartners.reduce((s: number, p: any) => s + calcFixedClosingCy(p), 0);
+
+  const fixedTotalRow = new TableRow({
+    children: [
+      ec(srW, BG_GRAN, BDR_GRAND),
+      cell({ text: "Total (A)", w: nameW, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      cell({ text: "", w: CAP_PCT, bg: BG_GRAN, borders: BDR_GRAND }),
+      nc(totFixedOpening, numW, true, BG_GRAN, BDR_GRAND),
+      nc(totFixedIntro,   numW, true, BG_GRAN, BDR_GRAND),
+      cell({ text: "", w: CAP_NUM, bg: BG_GRAN, borders: BDR_GRAND }),
+      cell({ text: "", w: CAP_NUM, bg: BG_GRAN, borders: BDR_GRAND }),
+      nc(totFixedWith,    numW, true, BG_GRAN, BDR_GRAND),
+      cell({ text: "", w: numW, bg: BG_GRAN, borders: BDR_GRAND }),
+      nc(totFixedClosing, lastW, true, BG_GRAN, BDR_GRAND),
+    ],
+  });
+
+  // Combined Total = Fixed Total (A) + Current Total (B). Remuneration/Interest/
+  // Profit Share only ever exist on Current Capital, so those columns carry the
+  // Current-only totals unchanged.
+  const combinedTotalRow = new TableRow({
+    children: [
+      ec(srW, BG_GRAN, BDR_GRAND),
+      cell({ text: "Total", w: nameW, bold: true, bg: BG_GRAN, borders: BDR_GRAND }),
+      cell({ text: totCyPct ? `${+totCyPct.toFixed(2)}%` : "", w: CAP_PCT, bold: true, bg: BG_GRAN, borders: BDR_GRAND, align: AlignmentType.CENTER }),
+      nc(totFixedOpening + totCyOpening, numW, true, BG_GRAN, BDR_GRAND),
+      nc(totFixedIntro + totCyIntro,     numW, true, BG_GRAN, BDR_GRAND),
+      nc(totCyRem, CAP_NUM, true, BG_GRAN, BDR_GRAND),
+      nc(totCyInt, CAP_NUM, true, BG_GRAN, BDR_GRAND),
+      nc(totFixedWith + totCyWith,       numW, true, BG_GRAN, BDR_GRAND),
+      nc(totCyPS, numW, true, BG_GRAN, BDR_GRAND),
+      nc(totFixedClosing + totCyClosing, lastW, true, BG_GRAN, BDR_GRAND),
     ],
   });
 
@@ -1703,8 +1777,12 @@ function buildCapitalAccountSection(
       noteTitleRow(cw, "2", isProprietorship ? "Capital Account" : "Partners' Capital Account"),
       makePeriodHdr(`Current Year — FY ${fyRange(cyYear)}`),
       makeHdrRow(),
+      ...(isLLP
+        ? [makePeriodHdr("(A) Fixed Capital"), ...fixedDataRows, fixedTotalRow, makePeriodHdr("(B) Current Capital")]
+        : []),
       ...cyDataRows,
       cyTotalRow,
+      ...(isLLP ? [combinedTotalRow] : []),
       previousYearRow,
     ],
   });
@@ -2016,7 +2094,7 @@ function buildNoteSection(
   for (let i = 0; i < cfg.rows.length; i++) {
     const row = cfg.rows[i];
     if (row.isSectionHeader) {
-      if (!emptySectionHeaders.has(row.id)) {
+      if (row.alwaysShow || !emptySectionHeaders.has(row.id)) {
         rows.push(noteSecHdr(colWidths, row.label));
       }
     } else if (row.isTotal) {
@@ -2033,7 +2111,7 @@ function buildNoteSection(
       // Task 2 (doc8): when locked, skip section totals for empty sections and
       // skip any non-grand total row whose computed value is 0 in both years
       // (prevents "blank Total" rows in sparse notes).
-      if (hideBlankNoteRows && row.id !== grandTotalId) {
+      if (hideBlankNoteRows && row.id !== grandTotalId && !row.alwaysShow) {
         if (emptySectionTotals.has(row.id)) continue;
         const totCy = isA
           ? (cy[row.id + "_lt"] ?? 0) + (cy[row.id + "_st"] ?? 0)
@@ -2071,7 +2149,9 @@ function buildNoteSection(
       // Task 2 (doc6): when locked (hideBlankNoteRows=true), skip data rows
       // where the aggregate value is 0 in BOTH current year and previous year.
       // Section headers and total rows are always shown regardless.
-      if (hideBlankNoteRows) {
+      // alwaysShow rows (mandatory Schedule III disclosure categories) bypass
+      // this suppression even when nil — see NoteRowDef.alwaysShow.
+      if (hideBlankNoteRows && !row.alwaysShow) {
         if (isA) {
           const v = aggA(row.id);
           if (!v.lt && !v.st && !v.ltP && !v.stP) continue;
@@ -2484,7 +2564,8 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // raw engagement/client entity_type, which AuditPipeline.tsx's wizard can
   // write as the short code "individual" instead. See src/lib/entityType.ts.
   const isProprietorship = isProprietorshipEntityType(constitution);
-  const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear, isProprietorship);
+  const isLLP = isLLPEntityType(constitution);
+  const capitalTables = buildCapitalAccountSection(capitalData, cyYear, pyYear, isProprietorship, isLLP);
 
   // Notes 3-28: export exactly the notes the UI shows — i.e. those active in
   // the dynamic note map (their BS/PL line carries data). The note number used
