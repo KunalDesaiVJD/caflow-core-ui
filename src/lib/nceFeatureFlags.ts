@@ -42,15 +42,22 @@ export const CORP_SIGNED_NOTE_TOTALS = false;
 export const NCE_RESYNC_DELETE_FIRST = true;
 
 /**
- * PD-1 / D2.1 — NCE Balance-Sheet residual absorber. When false (default), any
- * residual BS imbalance is plugged into Owners' Capital (NCE_CAP) so the face
- * always balances — which HIDES a real imbalance and defeats the export gate
- * (nceBsBalanced reads the post-plug total). When true, the plug is skipped: the
- * true residual stands, so an unbalanced BS displays unbalanced AND blocks export,
- * and the displayed Owners' Capital is the real note/COA value. Figure-MOVING →
- * stays OFF until the real-data parity run in the credentialed environment.
+ * PD-1 / D2.1 — NCE Balance-Sheet residual absorber. When false, any residual
+ * BS imbalance is plugged into Owners' Capital (NCE_CAP) so the face always
+ * balances — which HIDES a real imbalance and defeats the export gate
+ * (nceBsBalanced reads the post-plug total). When true (ACTIVATED 2026-08-11,
+ * per explicit user instruction — the intended data flow is COA mapping →
+ * Notes to Accounts → Financial Statements, each layer faithfully reflecting
+ * the one before it, with no silent correction at the face layer), the plug
+ * is skipped: the true residual stands, so an unbalanced BS displays
+ * unbalanced (the "BS CHECK" tiles' already-built fail state — red border +
+ * the real ₹ difference — activates instead of always showing ✓) AND blocks
+ * export, and the displayed Owners' Capital is the real note/COA value.
+ * FIGURE-MOVING and NOT scoped per client — every NCE engagement whose BS was
+ * only balancing because of this plug will now show its true (previously
+ * hidden) residual. Revert to false to restore the old silent-plug behaviour.
  */
-export const FS_NO_CAPITAL_PLUG = false;
+export const FS_NO_CAPITAL_PLUG = true;
 
 /**
  * PD-6 / D2.7 — Corporate PY Balance-Sheet face source. When false (default), the
