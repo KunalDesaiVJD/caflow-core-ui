@@ -1932,9 +1932,6 @@ export default function PipelineFinancialStatements({
   const [recorrectingFromCOA, setRecorrectingFromCOA] = useState(false);
   // Phase 1 (re-sync flow): non-destructive, finalization-gated notes refresh.
   const [refreshingNotes, setRefreshingNotes] = useState(false);
-  // 2026-08-06 — Recompute Notes (bug-fix path): same rebuild, gated only on
-  // write-protection (not TB staleness) — see recomputeNotesNow below.
-  const [recomputingNotes, setRecomputingNotes] = useState(false);
   // 2026-06-05 Phase 2 — instrumentation for the loading-timer modal that
   // wraps the Re-correct handler. recorrectStartedAt is the timestamp the
   // run kicked off; recorrectElapsedSec ticks every 500ms while the run is
@@ -5712,11 +5709,12 @@ export default function PipelineFinancialStatements({
   // while preserving every manual custom row, and persists both cy_data and
   // py_data — so the revised figures flow TB → Notes → BS/PL face for CY & PY.
   // Shared core: rebuild NCE notes' auto rows from the current TB + COA
-  // mapping and persist. Used by both refreshNotesFromTB (gated on the TB
-  // having been re-synced since notes were built) and recomputeNotesNow
-  // (gated only on write-protection, for forcing a rebuild after a
-  // nceAutoPopulate logic fix ships with no TB change) — same safe, tested
-  // rebuild logic; the caller owns the gate + confirm dialog.
+  // mapping and persist. Used by refreshNotesFromTB (gated on the TB having
+  // been re-synced since notes were built). The sibling "Recompute Notes"
+  // button (a redundant, unpreviewed duplicate of the Notes tab's "Re-sync
+  // from COA") was removed 2026-08-11 per explicit user instruction — same
+  // rebuild engine, no diff preview, so it added risk without adding
+  // capability. The caller owns the gate + confirm dialog.
   const rebuildAndPersistNceNotes = async () => {
     // 1. Load currently-saved notes so manual rows pass through untouched.
     const { data: existingRows } = await (supabase.from as any)("nce_financial_notes")
@@ -5819,43 +5817,6 @@ export default function PipelineFinancialStatements({
       toast.error(e?.message || "Notes refresh failed");
     } finally {
       setRefreshingNotes(false);
-    }
-  };
-
-  // ─── Recompute Notes (bug-fix / logic-update path) ────────────────────────
-  // 2026-08-06 — refreshNotesFromTB only offers itself when the TB was
-  // re-synced after the notes were last built. That leaves NO way to force an
-  // already-built note snapshot to pick up a nceAutoPopulate logic fix (e.g. a
-  // corrected ledger matcher) when the TB itself hasn't changed — exactly the
-  // AMBICA "Other (prior year)" residual case: the fix is live in code, but
-  // the persisted note snapshot predates it and is never re-read. This action
-  // runs the identical safe rebuild, gated ONLY on write-protection (not TB
-  // staleness), so the auditor can force a recompute on demand.
-  const recomputeNotesNow = async () => {
-    if (!isNonCorporate) {
-      toast.error("Recompute is only supported for non-corporate (NCE) entities.");
-      return;
-    }
-    if (notesStalenessRaw?.notesFinalized) {
-      toast.error("Notes are finalized (write-protected). Unlock notes before recomputing.");
-      return;
-    }
-    const ok = window.confirm(
-      "Recompute Notes to Accounts from the current Trial Balance and COA mapping?\n\n" +
-      "This re-applies the latest note-population logic — useful after a product fix — " +
-      "even though the trial balance hasn't changed. Auto rows are rebuilt; manual rows " +
-      "and any values you typed are PRESERVED.\n\nClick OK to continue.",
-    );
-    if (!ok) return;
-    setRecomputingNotes(true);
-    try {
-      await rebuildAndPersistNceNotes();
-      toast.success("Notes recomputed");
-    } catch (e: any) {
-      console.error("[recomputeNotesNow]", e);
-      toast.error(e?.message || "Notes recompute failed");
-    } finally {
-      setRecomputingNotes(false);
     }
   };
 
@@ -8942,32 +8903,6 @@ export default function PipelineFinancialStatements({
           </div>
         );
       })()}
-
-      {/* 2026-08-06 — Recompute Notes: unlike the staleness banner (only offered
-           when the TB was re-synced after the notes were built), this is
-           always available so the auditor can force a rebuild after a
-           nceAutoPopulate logic fix ships even with no TB change. Gated only
-           on write-protection. Deliberately kept OUTSIDE FsHealthDock below —
-           that dock collapses (and its toggle disables) once issueCount hits
-           0, which would make this button unreachable exactly when the page
-           is "FS Health — all checks pass". */}
-      {isNonCorporate && (
-        <div className="flex items-center gap-2 mb-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={recomputingNotes || !!notesStalenessRaw?.notesFinalized}
-            onClick={recomputeNotesNow}
-            title={
-              notesStalenessRaw?.notesFinalized
-                ? "Notes are finalized (write-protected). Unlock notes to recompute."
-                : "Re-run note auto-population against the current TB + COA mapping — use this after a bug fix ships, even if the TB hasn't changed."
-            }
-          >
-            {recomputingNotes ? "Recomputing…" : "Recompute Notes"}
-          </Button>
-        </div>
-      )}
 
       {/* ── FS Health dock ───────────────────────────────────────────────
            Every diagnostic surface below lives inside one collapsible dock so
