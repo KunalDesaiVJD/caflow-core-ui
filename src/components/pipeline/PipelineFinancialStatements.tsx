@@ -650,7 +650,20 @@ function CorporateBalanceSheetView({
         {onNavigateToNote && subTab ? (
           <button
             type="button"
-            onClick={() => onNavigateToNote(noteNo, subTab)}
+            // Root-cause fix (2026-08-11), part 2: DevTools event-tracing on
+            // the user's real machine showed pointerdown/mousedown/mouseup
+            // ALL correctly land on this exact button, but no `click` event
+            // ever fires — the browser only synthesizes `click` when
+            // mousedown and mouseup target the SAME DOM node, and something
+            // (a React re-render, e.g. a blur-triggered commit elsewhere on
+            // this large page) was swapping the node out between the two.
+            // mouseup is what we've proven reliably fires here, so navigate
+            // on mouseup for real pointer input. onClick is kept ONLY for
+            // keyboard activation (Enter/Space on a focused button fires a
+            // `click` with detail===0, never a mouseup) — guarded so a real
+            // mouse click doesn't double-navigate if `click` does fire.
+            onMouseUp={() => onNavigateToNote(noteNo, subTab)}
+            onClick={(e) => { if (e.detail === 0) onNavigateToNote(noteNo, subTab); }}
             className="w-full h-full inline-flex items-center justify-center gap-0.5 text-primary hover:underline hover:bg-muted/50 font-medium text-[11px] py-1 px-2"
             title={`Go to Note ${label}`}
           >
@@ -959,7 +972,20 @@ function CorporatePLView({
         {onNavigateToNote && subTab ? (
           <button
             type="button"
-            onClick={() => onNavigateToNote(noteNo, subTab)}
+            // Root-cause fix (2026-08-11), part 2: DevTools event-tracing on
+            // the user's real machine showed pointerdown/mousedown/mouseup
+            // ALL correctly land on this exact button, but no `click` event
+            // ever fires — the browser only synthesizes `click` when
+            // mousedown and mouseup target the SAME DOM node, and something
+            // (a React re-render, e.g. a blur-triggered commit elsewhere on
+            // this large page) was swapping the node out between the two.
+            // mouseup is what we've proven reliably fires here, so navigate
+            // on mouseup for real pointer input. onClick is kept ONLY for
+            // keyboard activation (Enter/Space on a focused button fires a
+            // `click` with detail===0, never a mouseup) — guarded so a real
+            // mouse click doesn't double-navigate if `click` does fire.
+            onMouseUp={() => onNavigateToNote(noteNo, subTab)}
+            onClick={(e) => { if (e.detail === 0) onNavigateToNote(noteNo, subTab); }}
             className="w-full h-full inline-flex items-center justify-center gap-0.5 text-primary hover:underline hover:bg-muted/50 font-medium text-[11px] py-0.5 px-2"
             title={`Go to Note ${label}`}
           >
@@ -1266,7 +1292,8 @@ function NCEBalanceSheetView({
         {noteNo != null && onNavigateToNote ? (
           <button
             type="button"
-            onClick={() => onNavigateToNote(noteNo)}
+            onMouseUp={() => onNavigateToNote(noteNo)}
+            onClick={(e) => { if (e.detail === 0) onNavigateToNote(noteNo); }}
             className="w-full h-full inline-flex items-center justify-center gap-0.5 text-primary hover:underline hover:bg-muted/50 font-medium text-[11px] py-0.5 px-2"
             title={`Go to Note ${label}`}
           >
@@ -1412,7 +1439,8 @@ function NCEPLView({
         {noteNo != null && onNavigateToNote ? (
           <button
             type="button"
-            onClick={() => onNavigateToNote(noteNo)}
+            onMouseUp={() => onNavigateToNote(noteNo)}
+            onClick={(e) => { if (e.detail === 0) onNavigateToNote(noteNo); }}
             className="w-full h-full inline-flex items-center justify-center gap-0.5 text-primary hover:underline hover:bg-muted/50 font-medium text-[11px] py-0.5 px-2"
             title={`Go to Note ${label}`}
           >
