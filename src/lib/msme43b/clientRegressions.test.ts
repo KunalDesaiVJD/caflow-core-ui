@@ -11,7 +11,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { analyzeVendor } from './engine';
 import { classifyTxn } from './classify';
-import { detectLedgerAccountVendorNames, detectBalanceSign, applyDeterministicCorrections } from './aiExtract';
+import {
+  detectLedgerAccountVendorNames, detectBalanceSign, applyDeterministicCorrections,
+  detectGstSubtotalCorrections,
+} from './aiExtract';
 import type { VendorLedger, LedgerTxn } from './types';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -252,5 +255,112 @@ describe('msme-extract-ledger prompt — opening/closing balance sign guardrail 
     const src = readFileSync(path, 'utf8');
     expect(src).toMatch(/BALANCING FIGURE, NOT A TRANSACTION/);
     expect(src).toMatch(/closingBalance = \+461340/);
+  });
+});
+
+describe('deterministic GST-subtotal correction — verified against the real Bindra Construction / Shree Navkar Trading Co ledger', () => {
+  // Real extracted text (Shree Navkar Trading Co, FY 2025-26). The model had
+  // been observed reading the SUB-LINE'S taxable amount ("Purchase @ 5%
+  // 64,378.24 Dr") as the voucher's gross, instead of the amount actually
+  // printed on the dated line itself ("...Tax Purchase 33 67,597.00"). The
+  // engine's own GST split then reduced that already-net figure a SECOND
+  // time, understating the disallowance (₹1,37,394 shown vs. the correct
+  // ₹1,44,263 — confirmed independently against the firm's own working
+  // paper). Ledger closing balance reconciliation caught the resulting drift
+  // and blocked sign-off, but the root misread needs fixing at the source.
+  const SHREE_NAVKAR_TEXT =
+    'Bindra Construction- Partnership\nD-1002\nSun Central Place\nNr.Vakil Saheb Bridge\nAmbali\n' +
+    'Ahmedabad-380058\nShree Navkar Trading Co\nLedger Account\n1, Sant Ashish Bunglows\nKathwada Fata\n' +
+    'Naroda, Ahmedabad\n1-Apr-25 to 31-Mar-26\nPage 1\nDate Particulars Vch Type Vch No. Debit Credit\n' +
+    '31-May-25 By (as per details) Tax Purchase 33 67,597.00\nPurchase @ 5% 64,378.24 Dr\n' +
+    'SGST Input @ 2.5% 1,609.46 Dr\nCGST Input @ 2.5% 1,609.46 Dr\nRound Off 0.16 Cr\n' +
+    '30-Jun-25 By (as per details) Tax Purchase 00058/2526 83,879.00\nPurchase @ 5% 79,885.09 Dr\n' +
+    'SGST Input @ 2.5% 1,997.13 Dr\nCGST Input @ 2.5% 1,997.13 Dr\nRound Off 0.35 Cr\n' +
+    '1,51,476.00\nTo Closing Balance 1,51,476.00\n1,51,476.00 1,51,476.00';
+
+  // Real extracted text (Vasudev Narayan RMC Infra, same client/batch) where
+  // the model read the voucher line correctly — proves the detector applies
+  // the SAME real gross either way, rather than being tuned to one example.
+  const VASUDEV_TEXT =
+    '13-Jul-25 By (as per details) Tax Purchase VNR/25-26/0664 56,879.00\nPurchase @ 18% 48,202.59 Dr\n' +
+    'SGST Input @ 9% 4,338.23 Dr\nCGST Input @ 9% 4,338.23 Dr\nRound Off 0.05 Cr';
+
+  // Real extracted text (Indian Valves (Calcutta) Pvt Ltd, interstate supply)
+  // — proves the IGST ("Inter State Purchase N%", no "@") shape is covered too.
+  const INDIAN_VALVES_TEXT =
+    '23-Apr-25 By (as per details) Tax Purchase IVC/019/25-26 6,66,420.00\n' +
+    'Inter State Purchase 18% 5,64,763.00 Dr\nIGST Input @ 18% 1,01,657.34 Dr\nRound Off 0.34 Cr';
+
+  it('reads the true gross off the voucher line and the taxable value off the sub-line, keyed by date + voucher number', () => {
+    const found = detectGstSubtotalCorrections(SHREE_NAVKAR_TEXT);
+    expect(found.get('2025-05-31|33')).toEqual({ grossAmount: 67597, taxableValue: 64378.24, gstRate: 5 });
+    expect(found.get('2025-06-30|00058/2526')).toEqual({ grossAmount: 83879, taxableValue: 79885.09, gstRate: 5 });
+  });
+
+  it('covers the interstate ("Inter State Purchase N%", no "@") voucher shape identically', () => {
+    const found = detectGstSubtotalCorrections(INDIAN_VALVES_TEXT);
+    expect(found.get('2025-04-23|IVC/019/25-26')).toEqual({ grossAmount: 666420, taxableValue: 564763, gstRate: 18 });
+  });
+
+  it('corrects a row the model mis-read as the sub-line amount, using only the real ledger text', () => {
+    // Positional (compact) row form: [date, particulars, vchType, vchNo, debit, credit, taxableValue, gstAmount, gstRate].
+    // Simulates the observed failure: credit = 64378.24 (the sub-line, wrong)
+    // instead of 67597 (the voucher line, correct), with no separate GST split.
+    const rawLedgers: unknown[] = [{
+      vendorName: 'Shree Navkar Trading Co',
+      openingBalance: 0,
+      closingBalance: 151476,
+      rows: [
+        ['2025-05-31', '(as per details) Tax Purchase', 'Tax Purchase', '33', 0, 64378.24, undefined, undefined, undefined],
+      ],
+    }];
+    applyDeterministicCorrections(rawLedgers, SHREE_NAVKAR_TEXT);
+    const row = (rawLedgers[0] as { rows: unknown[][] }).rows[0];
+    expect(row[5]).toBe(67597);     // credit corrected to the true gross
+    expect(row[6]).toBe(64378.24);  // taxableValue set from the sub-line
+    expect(row[8]).toBe(5);         // gstRate set from the sub-line
+    expect(row[7]).toBeUndefined(); // gstAmount cleared, left for splitGst to derive
+  });
+
+  it('also corrects the named-object row form', () => {
+    const rawLedgers: unknown[] = [{
+      vendorName: 'Shree Navkar Trading Co',
+      openingBalance: 0,
+      closingBalance: 151476,
+      rows: [
+        { date: '2025-06-30', particulars: 'Tax Purchase', vchNo: '00058/2526', debit: 0, credit: 79885.09 },
+      ],
+    }];
+    applyDeterministicCorrections(rawLedgers, SHREE_NAVKAR_TEXT);
+    const row = (rawLedgers[0] as { rows: Record<string, unknown>[] }).rows[0];
+    expect(row.credit).toBe(83879);
+    expect(row.taxableValue).toBe(79885.09);
+    expect(row.gstRate).toBe(5);
+  });
+
+  it('is a no-op (harmless) on a row the model already read correctly', () => {
+    const rawLedgers: unknown[] = [{
+      vendorName: 'Vasudev Narayan RMC Infra',
+      openingBalance: 0,
+      closingBalance: 0,
+      rows: [
+        ['2025-07-13', 'Tax Purchase', 'Tax Purchase', 'VNR/25-26/0664', 0, 56879, undefined, undefined, undefined],
+      ],
+    }];
+    applyDeterministicCorrections(rawLedgers, VASUDEV_TEXT);
+    const row = (rawLedgers[0] as { rows: unknown[][] }).rows[0];
+    expect(row[5]).toBe(56879);
+    expect(row[6]).toBe(48202.59);
+    expect(row[8]).toBe(18);
+  });
+
+  it('does not correct a date+voucher-number pair that appears more than once in the chunk (ambiguous, left unmatched)', () => {
+    // The same "31-May-25 ... Tax Purchase 33 ..." voucher block repeated —
+    // both would key to "2025-05-31|33", so neither is trustworthy to apply.
+    const duplicated = SHREE_NAVKAR_TEXT + '\n' +
+      '31-May-25 By (as per details) Tax Purchase 33 67,597.00\nPurchase @ 5% 64,378.24 Dr';
+    const found = detectGstSubtotalCorrections(duplicated);
+    expect(found.has('2025-05-31|33')).toBe(false);
+    expect(found.has('2025-06-30|00058/2526')).toBe(true); // the untouched voucher is unaffected
   });
 });

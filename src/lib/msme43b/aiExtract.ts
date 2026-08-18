@@ -9,7 +9,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { VendorLedger, LedgerTxn } from './types';
 import { reconcileLedger } from './reconcile';
-import { fyFromStart } from './parseUtils';
+import { fyFromStart, parseAmount, parseLedgerDate } from './parseUtils';
 import { pdfPageTexts, pdfPageImages } from './pdfText';
 
 async function bufferToBase64(buf: ArrayBuffer): Promise<string> {
@@ -90,6 +90,81 @@ export function detectBalanceSign(text: string, which: 'Opening' | 'Closing'): 1
   return isTo ? 1 : -1; // Closing: inverted relative to Opening
 }
 
+/** Corrected voucher amounts, keyed by `${isoDate}|${vchNo}`. */
+export interface GstSubtotalCorrection {
+  /** the amount printed on the voucher's own Debit/Credit line — the true gross */
+  grossAmount: number;
+  /** the taxable value printed on the "Purchase @ N%" / "Inter State Purchase N%" sub-line */
+  taxableValue: number;
+  gstRate: number;
+}
+
+// A Tally "Tax Purchase" voucher prints its GROSS amount on the dated line
+// itself, then breaks it down on the line(s) immediately below:
+//   31-May-25 By (as per details) Tax Purchase 33     67,597.00
+//   Purchase @ 5%                               64,378.24 Dr
+//   SGST Input @ 2.5%                            1,609.46 Dr
+//   CGST Input @ 2.5%                             1,609.46 Dr
+// (or, for an interstate supply, "Inter State Purchase 18%" + a single "IGST
+// Input" line instead of the SGST/CGST pair — the breakdown line's shape
+// doesn't otherwise change).
+const VOUCHER_TOTAL_RE = /^(\d{1,2}-[A-Za-z]{3}-\d{2,4})\s+(?:To|By)\s+.*?\bTax Purchase\b\s+(\S+)\s+([\d,]+\.\d{1,2})\s*$/;
+const TAXABLE_SUBLINE_RE = /^(?:Inter State |Local )?Purchase\s*@?\s*\d+(?:\.\d+)?\s*%\s+([\d,]+\.\d{1,2})\s*Dr\s*$/i;
+const RATE_RE = /@?\s*(\d+(?:\.\d+)?)\s*%/;
+
+/**
+ * Detect the true gross and taxable value of every "Tax Purchase" voucher in
+ * a chunk, straight from the ledger's own printed breakdown — never from a
+ * declared/guessed GST rate.
+ *
+ * Verified against real Bindra Construction ledgers where the model had
+ * extracted the SUB-LINE'S taxable amount ("Purchase @ 5% 64,378.24 Dr") as
+ * if it were the voucher's gross, instead of the amount actually printed on
+ * the dated voucher line ("...Tax Purchase 33 67,597.00"). Nothing downstream
+ * catches this by itself: mapLedger's own GST split then applied a further
+ * reduction to that already-net figure — a DOUBLE deduction — understating
+ * the disallowance by the GST amount a second time over (confirmed against
+ * the firm's own working paper: ₹1,37,394 shown vs. the correct ₹1,44,263).
+ * The ledger's own printed closing balance still caught the resulting drift
+ * and blocked sign-off, but the root misread is fixed here so the figure is
+ * right the first time rather than merely flagged wrong.
+ *
+ * Keyed by date + voucher number so a correction only ever applies to the
+ * one row it was read from. A date+vchNo pair seen more than once in the
+ * chunk (an ambiguous split, or two vouchers sharing a number) is dropped
+ * entirely rather than guessed at.
+ */
+export function detectGstSubtotalCorrections(text: string): Map<string, GstSubtotalCorrection> {
+  const lines = text.split('\n');
+  const out = new Map<string, GstSubtotalCorrection>();
+  const seenAmbiguous = new Set<string>();
+
+  for (let i = 0; i < lines.length - 1; i++) {
+    const head = lines[i].trim().match(VOUCHER_TOTAL_RE);
+    if (!head) continue;
+    const sub = lines[i + 1].trim().match(TAXABLE_SUBLINE_RE);
+    if (!sub) continue;
+
+    const iso = parseLedgerDate(head[1]);
+    const vchNo = head[2].trim();
+    if (!iso || !vchNo) continue;
+    const key = `${iso}|${vchNo}`;
+
+    const grossAmount = parseAmount(head[3]);
+    const taxableValue = parseAmount(sub[1]);
+    const rateMatch = lines[i + 1].match(RATE_RE);
+    if (taxableValue <= 0 || taxableValue > grossAmount) continue;
+
+    if (out.has(key) || seenAmbiguous.has(key)) {
+      out.delete(key);
+      seenAmbiguous.add(key);
+      continue;
+    }
+    out.set(key, { grossAmount, taxableValue, gstRate: rateMatch ? parseAmount(rateMatch[1]) : 0 });
+  }
+  return out;
+}
+
 /**
  * Apply both corrections to a chunk's raw model output IN PLACE, before
  * mapLedger ever sees it — so the existing UNRESOLVED-vendor / warning logic
@@ -122,6 +197,39 @@ export function applyDeterministicCorrections(rawLedgers: unknown[], chunkText: 
     const closeSign = detectBalanceSign(chunkText, 'Closing');
     if (closeSign !== undefined && raw.closingBalance != null) {
       raw.closingBalance = Math.abs(num(raw.closingBalance)) * closeSign;
+    }
+  }
+
+  const gstCorrections = detectGstSubtotalCorrections(chunkText);
+  if (gstCorrections.size) {
+    for (const raw of rawLedgers) {
+      const r = raw as Record<string, unknown>;
+      const rows = Array.isArray(r.rows) ? r.rows : Array.isArray(r.txns) ? r.txns : [];
+      for (const row of rows) {
+        const f = rowFields(row);
+        const iso = str(f.date);
+        const vchNo = str(f.vchNo).trim();
+        if (!iso || !vchNo) continue;
+        const fix = gstCorrections.get(`${iso}|${vchNo}`);
+        if (!fix) continue;
+
+        // Overwrite whichever side the model already reported as this
+        // voucher's amount (a "Tax Purchase" line is always the credit side
+        // of a creditor ledger, but the correction only touches the side
+        // actually in use, never invents an entry on the other side).
+        if (num(f.credit) > 0) setRowField(row, 'credit', fix.grossAmount);
+        else if (num(f.debit) > 0) setRowField(row, 'debit', fix.grossAmount);
+        else continue;
+
+        setRowField(row, 'taxableValue', fix.taxableValue);
+        setRowField(row, 'gstRate', fix.gstRate);
+        // Clear the model's own gstAmount: if it was computed against the
+        // WRONG gross, it would fail mapLedger's own consistency check and
+        // take taxableValue down with it. Leaving it unset lets splitGst
+        // derive gstAmount = gross − taxableValue from the two corrected
+        // figures instead.
+        setRowField(row, 'gstAmount', undefined);
+      }
     }
   }
 }
@@ -624,6 +732,17 @@ const ROW = {
   date: 0, particulars: 1, vchType: 2, vchNo: 3,
   debit: 4, credit: 5, taxableValue: 6, gstAmount: 7, gstRate: 8,
 } as const;
+
+/**
+ * Write one field back into a raw row IN PLACE, whichever of the two accepted
+ * shapes (positional array or named object — see rowFields) it happens to be
+ * in. Used by applyDeterministicCorrections, which must overwrite a field the
+ * model already returned rather than just read it.
+ */
+function setRowField(row: unknown, field: keyof typeof ROW, value: number | undefined): void {
+  if (Array.isArray(row)) row[ROW[field]] = value;
+  else if (row && typeof row === 'object') (row as Record<string, unknown>)[field] = value;
+}
 
 /**
  * Accept a transaction as either a positional array (the compact form the prompt
