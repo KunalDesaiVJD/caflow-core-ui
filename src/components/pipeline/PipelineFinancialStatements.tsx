@@ -9791,7 +9791,7 @@ export default function PipelineFinancialStatements({
 
           {/* ── Notes to Accounts (corporate only) — Phase 8 / UI-6 ── */}
           {!isNonCorporate && (
-            <TabsContent value="notes" className="mt-3" forceMount={notesTabVisited || undefined}>
+            <TabsContent value="notes" className="mt-3 data-[state=inactive]:hidden" forceMount={notesTabVisited || undefined}>
               {/* UI-6 Phase 3 — full Notes UI lives in src/components/stage5/NotesTab.tsx
                   Renders 4 sub-tabs (Note BS-Liab → Note BS-Asset → FA → Note PL),
                   uses notesAutoPopulate service for auto-fill, persists on every edit. */}
@@ -9837,7 +9837,7 @@ export default function PipelineFinancialStatements({
 
           {/* ── NCE Notes (UI-7) — Capital Account / Notes to Accounts / PPE ── */}
           {isNonCorporate && (
-            <TabsContent value="notes" className="mt-3" forceMount={notesTabVisited || undefined}>
+            <TabsContent value="notes" className="mt-3 data-[state=inactive]:hidden" forceMount={notesTabVisited || undefined}>
               {/* Bug 1 fix: initialExpandedRows is only passed when locked so the
                   editor's readOnly flat-div layout (tabs→flat remount) restores
                   expansion state.  In edit mode, omit it to avoid a render loop

@@ -421,11 +421,11 @@ export default function NCENotesTab({ engagementId, navigateToNote, navigateToke
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="capital_account" className="mt-3" forceMount={visitedSubTabs.has("capital_account") || undefined}>
+          <TabsContent value="capital_account" className="mt-3 data-[state=inactive]:hidden" forceMount={visitedSubTabs.has("capital_account") || undefined}>
             <NCECapitalAccount engagementId={engagementId} readOnly={readOnly} />
           </TabsContent>
 
-          <TabsContent value="notes_to_accounts" className="mt-3" forceMount={visitedSubTabs.has("notes_to_accounts") || undefined}>
+          <TabsContent value="notes_to_accounts" className="mt-3 data-[state=inactive]:hidden" forceMount={visitedSubTabs.has("notes_to_accounts") || undefined}>
             {/* Bug 1 fix: do NOT pass initialExpandedRows in edit mode — it changes
                 on every expansion update and would re-render NCEDetailedNotes on
                 every keystroke, causing a stale-effect loop (PatternBTable effects
@@ -433,7 +433,7 @@ export default function NCENotesTab({ engagementId, navigateToNote, navigateToke
             <NCEDetailedNotes engagementId={engagementId} dynamicNoteMap={dynamicNoteMap} onExpansionStateUpdate={onExpansionStateUpdate} readOnly={readOnly} scrollToNoteNo={navigateToNote} scrollToken={navigateToken} />
           </TabsContent>
 
-          <TabsContent value="ppe_schedule" className="mt-3" forceMount={visitedSubTabs.has("ppe_schedule") || undefined}>
+          <TabsContent value="ppe_schedule" className="mt-3 data-[state=inactive]:hidden" forceMount={visitedSubTabs.has("ppe_schedule") || undefined}>
             <NCEPPESchedule engagementId={engagementId} readOnly={readOnly} />
           </TabsContent>
         </Tabs>

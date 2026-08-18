@@ -581,7 +581,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="bs_liab" className="mt-3" forceMount={visitedSubTabs.has("bs_liab") || undefined}>
+          <TabsContent value="bs_liab" className="mt-3 data-[state=inactive]:hidden" forceMount={visitedSubTabs.has("bs_liab") || undefined}>
             <NoteBSLiab
               engagementId={engagementId}
               notes={notes} cyYear={cyYear} pyYear={pyYear}
@@ -593,7 +593,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
               faceTaxCy={faceTaxCy} faceTaxPy={faceTaxPy}
             />
           </TabsContent>
-          <TabsContent value="bs_asset" className="mt-3" forceMount={visitedSubTabs.has("bs_asset") || undefined}>
+          <TabsContent value="bs_asset" className="mt-3 data-[state=inactive]:hidden" forceMount={visitedSubTabs.has("bs_asset") || undefined}>
             <NoteBSAsset
               engagementId={engagementId}
               notes={notes} cyYear={cyYear} pyYear={pyYear}
@@ -604,7 +604,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
               hideEmpty={false}
             />
           </TabsContent>
-          <TabsContent value="pl" className="mt-3" forceMount={visitedSubTabs.has("pl") || undefined}>
+          <TabsContent value="pl" className="mt-3 data-[state=inactive]:hidden" forceMount={visitedSubTabs.has("pl") || undefined}>
             <NotePL
               engagementId={engagementId}
               notes={notes} cyYear={cyYear} pyYear={pyYear}
@@ -615,7 +615,7 @@ export default function NotesTab({ engagementId, cyYear, pyYear, navigateToNote,
               hideEmpty={false}
             />
           </TabsContent>
-          <TabsContent value="fa" className="mt-3" forceMount={visitedSubTabs.has("fa") || undefined}>
+          <TabsContent value="fa" className="mt-3 data-[state=inactive]:hidden" forceMount={visitedSubTabs.has("fa") || undefined}>
             <FAGrid
               engagementId={engagementId}
               rows={notes.fa.rows}
