@@ -241,6 +241,15 @@ export interface VendorResult {
   gstUnidentifiedValue: number;
   /** the GST rate declared for this vendor, if any */
   declaredGstRate?: number;
+  /**
+   * How the FY ledger was paired to this CY vendor. 'exact' = identical
+   * normalised name. 'fuzzy' = names differ but matched after stripping
+   * legal suffixes (Pvt/Ltd/LLP/& Co/etc.) — see coreNorm() in engine.ts.
+   * Undefined when no FY ledger was found (or none was supplied) at all.
+   */
+  vendorMatchType?: 'exact' | 'fuzzy';
+  /** the FY ledger's own (unmodified) vendor name, when it differs from vendorName */
+  fyVendorName?: string;
 }
 
 export interface Msme43bReport {
@@ -272,6 +281,13 @@ export interface Msme43bReport {
   blockingReasons: string[];
   /** gross value of bills whose GST split could not be established */
   totalGstUnidentified: number;
+  /**
+   * CY↔FY vendor pairs whose ledgers were matched on core name only (legal
+   * suffixes/connectors differ, e.g. "ABC & Co" vs "ABC and Company") rather
+   * than an identical name — included so the pairing can be confirmed rather
+   * than trusted silently. Format: `"CY name" ↔ "FY name"`.
+   */
+  fuzzyMatchedVendors: string[];
   /** true when every ledger reconciled and there are no review items blocking */
   clean: boolean;
 }

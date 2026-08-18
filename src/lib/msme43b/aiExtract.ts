@@ -9,7 +9,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import type { VendorLedger, LedgerTxn } from './types';
 import { reconcileLedger } from './reconcile';
-import { fyFromStart } from './parseUtils';
+import { fyFromStart, parseAmount, parseLedgerDate } from './parseUtils';
 import { pdfPageTexts, pdfPageImages } from './pdfText';
 
 async function bufferToBase64(buf: ArrayBuffer): Promise<string> {
@@ -27,6 +27,212 @@ const num = (v: unknown): number => {
   return isNaN(n) ? 0 : n;
 };
 const str = (v: unknown): string => (v == null ? '' : String(v));
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Deterministic corrections — DO NOT depend on the model following an
+//  instruction. Verified against 41 real ledger exports across 6 clients
+//  (Amadius Realty, Elenza Calista, Revti Infra, Skylark Corporation, Sweni
+//  Corporation, Accurate PMS): the AI extraction was directly observed still
+//  mislabeling a vendor with the reporting company's own letterhead AFTER an
+//  explicit prompt instruction was added telling it not to — models do not
+//  reliably follow layout-disambiguation instructions on every call. Both
+//  patterns below are 100% mechanical (a fixed anchor word/phrase, not a
+//  judgement call), so they are corrected here in code instead, using only
+//  the model's read of the AMOUNTS (a reliable OCR-like task) — never its
+//  read of which name or which sign those amounts belong to.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A real Tally "Ledger Account" export prints the reporting company's own
+ * name (and often PAN/UDYAM/CIN/address) FIRST, then the true vendor name on
+ * the line immediately before the literal heading "Ledger Account". Returns
+ * every vendor name found, in order of appearance, for correlation against
+ * however many ledger objects the model returned for this chunk.
+ */
+export function detectLedgerAccountVendorNames(text: string): string[] {
+  const lines = text.split('\n').map((l) => l.trim());
+  const names: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i] !== 'Ledger Account') continue;
+    for (let j = i - 1; j >= 0; j--) {
+      if (lines[j]) { names.push(lines[j]); break; }
+    }
+  }
+  return names;
+}
+
+/**
+ * The sign of a Tally opening/closing balance, from the "To"/"By" word
+ * printed immediately before it.
+ *
+ * OPENING is read directly: "To Opening Balance" is a real debit/advance
+ * balance carried in → negative. "By Opening Balance" → positive.
+ *
+ * CLOSING IS DIFFERENT: it is Tally's own balancing plug, printed on
+ * whichever column needs a top-up to make the two column TOTALS print equal
+ * — so its printed side is the OPPOSITE of what the ledger truly closes at.
+ * "To Closing Balance" means the credit-column total exceeded the debit
+ * total, so the ledger truly closes credit/payable → positive. "By Closing
+ * Balance" → negative. Verified by hand against three real V.J. Desai & Co.
+ * ledgers (Amadius Realty, Skylark Corporation, Sweni Corporation) and cross-
+ * checked against the following year's own independently-printed opening
+ * balance, which matched in every case.
+ *
+ * Returns undefined when the anchor text isn't present in this chunk (a
+ * continuation chunk with no header, or a non-Tally export) — the model's own
+ * figure is trusted as-is in that case.
+ */
+export function detectBalanceSign(text: string, which: 'Opening' | 'Closing'): 1 | -1 | undefined {
+  const m = text.match(new RegExp(`\\b(To|By)\\s+${which}\\s+Balance\\b`, 'i'));
+  if (!m) return undefined;
+  const isTo = m[1].toLowerCase() === 'to';
+  if (which === 'Opening') return isTo ? -1 : 1;
+  return isTo ? 1 : -1; // Closing: inverted relative to Opening
+}
+
+/** Corrected voucher amounts, keyed by `${isoDate}|${vchNo}`. */
+export interface GstSubtotalCorrection {
+  /** the amount printed on the voucher's own Debit/Credit line — the true gross */
+  grossAmount: number;
+  /** the taxable value printed on the "Purchase @ N%" / "Inter State Purchase N%" sub-line */
+  taxableValue: number;
+  gstRate: number;
+}
+
+// A Tally "Tax Purchase" voucher prints its GROSS amount on the dated line
+// itself, then breaks it down on the line(s) immediately below:
+//   31-May-25 By (as per details) Tax Purchase 33     67,597.00
+//   Purchase @ 5%                               64,378.24 Dr
+//   SGST Input @ 2.5%                            1,609.46 Dr
+//   CGST Input @ 2.5%                             1,609.46 Dr
+// (or, for an interstate supply, "Inter State Purchase 18%" + a single "IGST
+// Input" line instead of the SGST/CGST pair — the breakdown line's shape
+// doesn't otherwise change).
+const VOUCHER_TOTAL_RE = /^(\d{1,2}-[A-Za-z]{3}-\d{2,4})\s+(?:To|By)\s+.*?\bTax Purchase\b\s+(\S+)\s+([\d,]+\.\d{1,2})\s*$/;
+const TAXABLE_SUBLINE_RE = /^(?:Inter State |Local )?Purchase\s*@?\s*\d+(?:\.\d+)?\s*%\s+([\d,]+\.\d{1,2})\s*Dr\s*$/i;
+const RATE_RE = /@?\s*(\d+(?:\.\d+)?)\s*%/;
+
+/**
+ * Detect the true gross and taxable value of every "Tax Purchase" voucher in
+ * a chunk, straight from the ledger's own printed breakdown — never from a
+ * declared/guessed GST rate.
+ *
+ * Verified against real Bindra Construction ledgers where the model had
+ * extracted the SUB-LINE'S taxable amount ("Purchase @ 5% 64,378.24 Dr") as
+ * if it were the voucher's gross, instead of the amount actually printed on
+ * the dated voucher line ("...Tax Purchase 33 67,597.00"). Nothing downstream
+ * catches this by itself: mapLedger's own GST split then applied a further
+ * reduction to that already-net figure — a DOUBLE deduction — understating
+ * the disallowance by the GST amount a second time over (confirmed against
+ * the firm's own working paper: ₹1,37,394 shown vs. the correct ₹1,44,263).
+ * The ledger's own printed closing balance still caught the resulting drift
+ * and blocked sign-off, but the root misread is fixed here so the figure is
+ * right the first time rather than merely flagged wrong.
+ *
+ * Keyed by date + voucher number so a correction only ever applies to the
+ * one row it was read from. A date+vchNo pair seen more than once in the
+ * chunk (an ambiguous split, or two vouchers sharing a number) is dropped
+ * entirely rather than guessed at.
+ */
+export function detectGstSubtotalCorrections(text: string): Map<string, GstSubtotalCorrection> {
+  const lines = text.split('\n');
+  const out = new Map<string, GstSubtotalCorrection>();
+  const seenAmbiguous = new Set<string>();
+
+  for (let i = 0; i < lines.length - 1; i++) {
+    const head = lines[i].trim().match(VOUCHER_TOTAL_RE);
+    if (!head) continue;
+    const sub = lines[i + 1].trim().match(TAXABLE_SUBLINE_RE);
+    if (!sub) continue;
+
+    const iso = parseLedgerDate(head[1]);
+    const vchNo = head[2].trim();
+    if (!iso || !vchNo) continue;
+    const key = `${iso}|${vchNo}`;
+
+    const grossAmount = parseAmount(head[3]);
+    const taxableValue = parseAmount(sub[1]);
+    const rateMatch = lines[i + 1].match(RATE_RE);
+    if (taxableValue <= 0 || taxableValue > grossAmount) continue;
+
+    if (out.has(key) || seenAmbiguous.has(key)) {
+      out.delete(key);
+      seenAmbiguous.add(key);
+      continue;
+    }
+    out.set(key, { grossAmount, taxableValue, gstRate: rateMatch ? parseAmount(rateMatch[1]) : 0 });
+  }
+  return out;
+}
+
+/**
+ * Apply both corrections to a chunk's raw model output IN PLACE, before
+ * mapLedger ever sees it — so the existing UNRESOLVED-vendor / warning logic
+ * downstream keeps working unchanged for whatever these detectors don't
+ * cover (scanned PDFs, non-Tally exports, genuinely ambiguous multi-vendor
+ * chunks).
+ *
+ * Vendor names are only overridden when the count of detected headers
+ * EXACTLY matches the count of ledger objects the model returned for this
+ * chunk — on a mismatch (a multi-vendor chunk this heuristic can't safely
+ * correlate) nothing is touched, which is no worse than before. The balance
+ * sign is only corrected when the chunk produced exactly one ledger, so
+ * there is no ambiguity about which ledger a single detected "Opening/
+ * Closing Balance" line belongs to.
+ */
+export function applyDeterministicCorrections(rawLedgers: unknown[], chunkText: string): void {
+  const names = detectLedgerAccountVendorNames(chunkText);
+  if (names.length && names.length === rawLedgers.length) {
+    rawLedgers.forEach((raw, i) => {
+      (raw as Record<string, unknown>).vendorName = names[i];
+    });
+  }
+
+  if (rawLedgers.length === 1) {
+    const raw = rawLedgers[0] as Record<string, unknown>;
+    const openSign = detectBalanceSign(chunkText, 'Opening');
+    if (openSign !== undefined && raw.openingBalance != null) {
+      raw.openingBalance = Math.abs(num(raw.openingBalance)) * openSign;
+    }
+    const closeSign = detectBalanceSign(chunkText, 'Closing');
+    if (closeSign !== undefined && raw.closingBalance != null) {
+      raw.closingBalance = Math.abs(num(raw.closingBalance)) * closeSign;
+    }
+  }
+
+  const gstCorrections = detectGstSubtotalCorrections(chunkText);
+  if (gstCorrections.size) {
+    for (const raw of rawLedgers) {
+      const r = raw as Record<string, unknown>;
+      const rows = Array.isArray(r.rows) ? r.rows : Array.isArray(r.txns) ? r.txns : [];
+      for (const row of rows) {
+        const f = rowFields(row);
+        const iso = str(f.date);
+        const vchNo = str(f.vchNo).trim();
+        if (!iso || !vchNo) continue;
+        const fix = gstCorrections.get(`${iso}|${vchNo}`);
+        if (!fix) continue;
+
+        // Overwrite whichever side the model already reported as this
+        // voucher's amount (a "Tax Purchase" line is always the credit side
+        // of a creditor ledger, but the correction only touches the side
+        // actually in use, never invents an entry on the other side).
+        if (num(f.credit) > 0) setRowField(row, 'credit', fix.grossAmount);
+        else if (num(f.debit) > 0) setRowField(row, 'debit', fix.grossAmount);
+        else continue;
+
+        setRowField(row, 'taxableValue', fix.taxableValue);
+        setRowField(row, 'gstRate', fix.gstRate);
+        // Clear the model's own gstAmount: if it was computed against the
+        // WRONG gross, it would fail mapLedger's own consistency check and
+        // take taxableValue down with it. Leaving it unset lets splitGst
+        // derive gstAmount = gross − taxableValue from the two corrected
+        // figures instead.
+        setRowField(row, 'gstAmount', undefined);
+      }
+    }
+  }
+}
 
 /**
  * An OPTIONAL number: null/undefined/"" stay undefined rather than collapsing to
@@ -419,7 +625,10 @@ async function extractByLineChunks(
 
   for (let i = 0; i < lines.length; i += LINES_PER_CHUNK) {
     const group = lines.slice(i, i + LINES_PER_CHUNK);
-    for (const raw of await readChunk(group)) collected.push(mapLedger(raw, file.name, false, span(group)));
+    const chunkText = render(group);
+    const rawLedgers = await readChunk(group);
+    applyDeterministicCorrections(rawLedgers, chunkText);
+    for (const raw of rawLedgers) collected.push(mapLedger(raw, file.name, false, span(group)));
   }
 
   if (!collected.length) {
@@ -523,6 +732,17 @@ const ROW = {
   date: 0, particulars: 1, vchType: 2, vchNo: 3,
   debit: 4, credit: 5, taxableValue: 6, gstAmount: 7, gstRate: 8,
 } as const;
+
+/**
+ * Write one field back into a raw row IN PLACE, whichever of the two accepted
+ * shapes (positional array or named object — see rowFields) it happens to be
+ * in. Used by applyDeterministicCorrections, which must overwrite a field the
+ * model already returned rather than just read it.
+ */
+function setRowField(row: unknown, field: keyof typeof ROW, value: number | undefined): void {
+  if (Array.isArray(row)) row[ROW[field]] = value;
+  else if (row && typeof row === 'object') (row as Record<string, unknown>)[field] = value;
+}
 
 /**
  * Accept a transaction as either a positional array (the compact form the prompt

@@ -74,7 +74,17 @@ const SYSTEM_PROMPT =
   'from the vendor\'s trade, or from what is typical.\n' +
   '- taxableValue + gstAmount must equal the credit amount when both are given.\n' +
   '- Each transaction has EITHER a debit OR a credit (the other is 0). Never put ' +
-  'the same amount in both.\n' +
+  'the same amount in both — WITH ONE EXCEPTION, next.\n' +
+  '- A SINGLE VOUCHER ROW CAN PRINT TWO AMOUNTS, ONE IN EACH COLUMN — a compound ' +
+  'journal that both raises a fresh charge AND deducts something (commonly TDS) ' +
+  'against the SAME party in the SAME voucher. Verified real example: ' +
+  '"31-Mar-26 To (as per details) Journal 505  24,000.00  2,40,000.00" prints ' +
+  '24,000.00 in the Debit column and 2,40,000.00 in the Credit column of the SAME ' +
+  'row. Do NOT drop one of the two amounts and do NOT merge them into a single net ' +
+  'figure — output this as TWO separate rows in the array, same date and vchNo, one ' +
+  'with debit=24000 credit=0, the other with debit=0 credit=240000. Missing either ' +
+  'side of such a row is a common, serious error: it silently breaks the ledger\'s ' +
+  'arithmetic reconciliation to its printed closing balance.\n' +
   '- THE "To"/"By" PREFIX DECIDES THE COLUMN for an ordinary transaction row — use ' +
   'it, do not guess from position. "To ..." names a DEBIT-column entry; "By ..." ' +
   'names a CREDIT-column entry.\n' +

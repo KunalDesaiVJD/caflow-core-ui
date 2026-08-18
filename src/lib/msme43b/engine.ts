@@ -28,6 +28,45 @@ interface WorkBill extends MatchedBill { allocs: Alloc[]; remaining: number; }
 const r2 = (n: number) => Math.round(n * 100) / 100;
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
+// Legal-entity/connector words stripped when computing a vendor's "core"
+// name — words that describe the entity TYPE, not the business it names.
+// "&" is folded into "and" before stripping so both spellings drop equally.
+const CORE_NORM_STRIP_WORDS = new Set([
+  'and', 'the',
+  'pvt', 'private', 'ltd', 'limited', 'llp', 'llc',
+  'co', 'company', 'corp', 'corporation', 'inc', 'incorporated',
+  'enterprise', 'enterprises', 'trading', 'traders',
+  'industries', 'industry', 'associates', 'agencies', 'agency',
+]);
+/** Minimum length of a stripped core name for a fuzzy match to be trusted. */
+const CORE_NORM_MIN_LENGTH = 3;
+
+/**
+ * Vendor "core" name for fuzzy CY↔FY pairing: lowercase, "&" folded to
+ * "and", legal-entity/connector words dropped, remaining words joined.
+ * "ABC & Co" and "ABC and Company" both reduce to "abc" — the exact pattern
+ * reported against real client ledgers, where one year's export spells out
+ * "and Company" and the other abbreviates "& Co".
+ *
+ * Deliberately a fixed, auditable word-strip rather than an edit-distance or
+ * similarity-score matcher: a distance threshold risks silently pairing two
+ * DIFFERENT vendors that happen to be typographically close (e.g. "Shree Ram
+ * Traders" vs "Shree Ram Enterprises" are commonly unrelated businesses in
+ * practice), which would be worse than leaving them unmatched. See buildReport
+ * for how this is used — only as a fallback when the exact match fails, only
+ * when exactly one FY ledger shares the core name, and always flagged rather
+ * than paired silently.
+ */
+function coreNorm(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w && !CORE_NORM_STRIP_WORDS.has(w))
+    .join('');
+}
+
 let seq = 0;
 
 function buildBillsAndSettlements(
@@ -383,11 +422,49 @@ export function buildReport(
   opts: BuildReportOptions = {},
 ): Msme43bReport {
   const fyByName = new Map(fyLedgers.map((l) => [norm(l.vendorName), l]));
+
+  // Fuzzy fallback pool: FY ledgers grouped by core name. A CY vendor only
+  // draws from this when the exact match above fails AND exactly one FY
+  // ledger shares its core name — an ambiguous core match (two or more FY
+  // ledgers reducing to the same core, e.g. two differently-suffixed vendors
+  // that both start "ABC") is left unmatched rather than guessed.
+  const fyByCoreName = new Map<string, VendorLedger[]>();
+  for (const l of fyLedgers) {
+    const key = coreNorm(l.vendorName);
+    if (key.length < CORE_NORM_MIN_LENGTH) continue;
+    const group = fyByCoreName.get(key);
+    if (group) group.push(l); else fyByCoreName.set(key, [l]);
+  }
+
   const vendors = cyLedgers.map((cy) => {
     const key = norm(cy.vendorName);
+    let fy = fyByName.get(key) || null;
+    let fuzzyMatch = false;
+    if (!fy) {
+      const coreKey = coreNorm(cy.vendorName);
+      const candidates = coreKey.length >= CORE_NORM_MIN_LENGTH ? fyByCoreName.get(coreKey) : undefined;
+      if (candidates && candidates.length === 1) {
+        fy = candidates[0];
+        fuzzyMatch = true;
+      }
+    }
+
     const declared = opts.vendorWindowDays?.[key];
     const vcfg = declared && declared !== cfg.windowDays ? { ...cfg, windowDays: declared } : cfg;
-    return analyzeVendor(cy, fyByName.get(key) || null, vcfg, opts.verify !== false, opts.vendorGstRate?.[key]);
+    const result = analyzeVendor(cy, fy, vcfg, opts.verify !== false, opts.vendorGstRate?.[key]);
+    if (fuzzyMatch && fy) {
+      result.vendorMatchType = 'fuzzy';
+      result.fyVendorName = fy.vendorName;
+      result.warnings = [
+        `FY ledger vendor name ("${fy.vendorName}") differs from the CY vendor name ("${cy.vendorName}") — ` +
+        'paired automatically because they share the same core name after stripping legal suffixes ' +
+        '(Pvt/Ltd/LLP/& Co/etc.). Confirm this is the same account before relying on the FY-side figures.',
+        ...result.warnings,
+      ];
+    } else if (fy) {
+      result.vendorMatchType = 'exact';
+    }
+    return result;
   });
 
   const cyLabel = cyLedgers[0]?.financialYear || 'CY';
@@ -415,6 +492,7 @@ export interface ReportBlockers {
   unreconciledDisallowed: number;
   blocksSignOff: boolean;
   blockingReasons: string[];
+  fuzzyMatchedVendors: string[];
 }
 
 /**
@@ -459,10 +537,21 @@ export function deriveBlockers(vendors: VendorResult[]): ReportBlockers {
     );
   }
 
+  const fuzzyMatchedVendors = vendors
+    .filter((v) => v.vendorMatchType === 'fuzzy')
+    .map((v) => `"${v.vendorName}" ↔ "${v.fyVendorName}"`);
+  if (fuzzyMatchedVendors.length) {
+    blockingReasons.push(
+      `${fuzzyMatchedVendors.length} vendor(s) were paired to their FY ledger by core name only, not an exact ` +
+      `name match — confirm these are the same account: ${fuzzyMatchedVendors.join(', ')}.`,
+    );
+  }
+
   return {
     unreconciledVendors,
     unreconciledDisallowed,
     blocksSignOff: blockingReasons.length > 0,
     blockingReasons,
+    fuzzyMatchedVendors,
   };
 }
