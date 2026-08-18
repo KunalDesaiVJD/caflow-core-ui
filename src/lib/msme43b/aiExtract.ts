@@ -94,28 +94,47 @@ export function detectBalanceSign(text: string, which: 'Opening' | 'Closing'): 1
 export interface GstSubtotalCorrection {
   /** the amount printed on the voucher's own Debit/Credit line — the true gross */
   grossAmount: number;
-  /** the taxable value printed on the "Purchase @ N%" / "Inter State Purchase N%" sub-line */
+  /** the taxable value printed on the item/breakdown sub-line */
   taxableValue: number;
   gstRate: number;
+  /**
+   * The sub-line's own item/reason text (e.g. "FIRE FIGHTING MATERIAL",
+   * "LIFT PURCHASE", "PROVISION FOR AUDIT FEES"), stripped of the trailing
+   * rate/"@"/"-". Used to replace a generic "(as per details)" particulars
+   * with the real reason the ledger itself already states — see
+   * applyDeterministicCorrections.
+   */
+  reasonText: string;
 }
 
-// A Tally "Tax Purchase" voucher prints its GROSS amount on the dated line
+// A Tally "...Purchase..." voucher prints its GROSS amount on the dated line
 // itself, then breaks it down on the line(s) immediately below:
 //   31-May-25 By (as per details) Tax Purchase 33     67,597.00
 //   Purchase @ 5%                               64,378.24 Dr
 //   SGST Input @ 2.5%                            1,609.46 Dr
 //   CGST Input @ 2.5%                             1,609.46 Dr
-// (or, for an interstate supply, "Inter State Purchase 18%" + a single "IGST
-// Input" line instead of the SGST/CGST pair — the breakdown line's shape
-// doesn't otherwise change).
-const VOUCHER_TOTAL_RE = /^(\d{1,2}-[A-Za-z]{3}-\d{2,4})\s+(?:To|By)\s+.*?\bTax Purchase\b\s+(\S+)\s+([\d,]+\.\d{1,2})\s*$/;
-const TAXABLE_SUBLINE_RE = /^(?:Inter State |Local )?Purchase\s*@?\s*\d+(?:\.\d+)?\s*%\s+([\d,]+\.\d{1,2})\s*Dr\s*$/i;
-const RATE_RE = /@?\s*(\d+(?:\.\d+)?)\s*%/;
+// The item/breakdown line's own leading text varies by client and by what's
+// actually being bought — "Purchase @ 5%", "LIFT PURCHASE - 18%", "FIRE
+// FIGHTING MATERIAL - 18%", "Inter State Purchase 18%" have all been seen on
+// real ledgers — so ONLY the mechanical SHAPE is matched (some text, then a
+// rate, then an amount, then "Dr"), not any specific wording. The Dr suffix
+// still discriminates a genuine taxable-base breakdown line from a "Cr"
+// reversal/provision line on a compound Journal voucher, which is a
+// different pattern entirely (see DUAL_AMOUNT_VOUCHER_RE below) and must not
+// be treated as having an extra GST portion to strip.
+//
+// The voucher line itself is still required to mention "Purchase" (matching
+// "Tax Purchase", plain "Purchase", or any other phrase containing that
+// word) so this never fires on a non-purchase compound Journal voucher whose
+// sub-lines happen to end in "N% <amount> Dr" too.
+const VOUCHER_TOTAL_RE = /^(\d{1,2}-[A-Za-z]{3}-\d{2,4})\s+(?:To|By)\s+.*?\bPurchase\b.*?\s+(\S+)\s+([\d,]+\.\d{1,2})\s*$/;
+const TAXABLE_SUBLINE_RE = /^(.+?)\s*\d+(?:\.\d+)?\s*%\s+([\d,]+\.\d{1,2})\s*Dr\s*$/i;
+const RATE_RE = /(\d+(?:\.\d+)?)\s*%/;
 
 /**
- * Detect the true gross and taxable value of every "Tax Purchase" voucher in
- * a chunk, straight from the ledger's own printed breakdown — never from a
- * declared/guessed GST rate.
+ * Detect the true gross and taxable value of every purchase voucher with an
+ * embedded GST breakdown in a chunk, straight from the ledger's own printed
+ * breakdown — never from a declared/guessed GST rate.
  *
  * Verified against real Bindra Construction ledgers where the model had
  * extracted the SUB-LINE'S taxable amount ("Purchase @ 5% 64,378.24 Dr") as
@@ -151,7 +170,7 @@ export function detectGstSubtotalCorrections(text: string): Map<string, GstSubto
     const key = `${iso}|${vchNo}`;
 
     const grossAmount = parseAmount(head[3]);
-    const taxableValue = parseAmount(sub[1]);
+    const taxableValue = parseAmount(sub[2]);
     const rateMatch = lines[i + 1].match(RATE_RE);
     if (taxableValue <= 0 || taxableValue > grossAmount) continue;
 
@@ -160,7 +179,8 @@ export function detectGstSubtotalCorrections(text: string): Map<string, GstSubto
       seenAmbiguous.add(key);
       continue;
     }
-    out.set(key, { grossAmount, taxableValue, gstRate: rateMatch ? parseAmount(rateMatch[1]) : 0 });
+    const reasonText = sub[1].trim().replace(/[-@]+$/, '').trim();
+    out.set(key, { grossAmount, taxableValue, gstRate: rateMatch ? parseAmount(rateMatch[1]) : 0, reasonText });
   }
   return out;
 }
@@ -294,6 +314,18 @@ export function applyDeterministicCorrections(rawLedgers: unknown[], chunkText: 
         // derive gstAmount = gross − taxableValue from the two corrected
         // figures instead.
         setRowField(row, 'gstAmount', undefined);
+
+        // A compound "(as per details)" voucher's real reason — including
+        // the word "PROVISION" when this is a book provision, not an actual
+        // invoice — lives only in the breakdown sub-line, never in the
+        // voucher line's own particulars. The classifier (classify.ts) only
+        // ever reads particulars + vchType, so a provision booked this way
+        // was silently defaulting to PURCHASE. Only replace a GENERIC
+        // placeholder — never a particulars the model already read as
+        // something more specific.
+        if (fix.reasonText && /\bas per details\b/i.test(str(f.particulars))) {
+          setRowField(row, 'particulars', fix.reasonText);
+        }
       }
     }
   }
@@ -848,7 +880,7 @@ const ROW = {
  * in. Used by applyDeterministicCorrections, which must overwrite a field the
  * model already returned rather than just read it.
  */
-function setRowField(row: unknown, field: keyof typeof ROW, value: number | undefined): void {
+function setRowField(row: unknown, field: keyof typeof ROW, value: number | string | undefined): void {
   if (Array.isArray(row)) row[ROW[field]] = value;
   else if (row && typeof row === 'object') (row as Record<string, unknown>)[field] = value;
 }

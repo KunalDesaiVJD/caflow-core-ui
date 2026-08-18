@@ -293,13 +293,13 @@ describe('deterministic GST-subtotal correction — verified against the real Bi
 
   it('reads the true gross off the voucher line and the taxable value off the sub-line, keyed by date + voucher number', () => {
     const found = detectGstSubtotalCorrections(SHREE_NAVKAR_TEXT);
-    expect(found.get('2025-05-31|33')).toEqual({ grossAmount: 67597, taxableValue: 64378.24, gstRate: 5 });
-    expect(found.get('2025-06-30|00058/2526')).toEqual({ grossAmount: 83879, taxableValue: 79885.09, gstRate: 5 });
+    expect(found.get('2025-05-31|33')).toEqual({ grossAmount: 67597, taxableValue: 64378.24, gstRate: 5, reasonText: 'Purchase' });
+    expect(found.get('2025-06-30|00058/2526')).toEqual({ grossAmount: 83879, taxableValue: 79885.09, gstRate: 5, reasonText: 'Purchase' });
   });
 
   it('covers the interstate ("Inter State Purchase N%", no "@") voucher shape identically', () => {
     const found = detectGstSubtotalCorrections(INDIAN_VALVES_TEXT);
-    expect(found.get('2025-04-23|IVC/019/25-26')).toEqual({ grossAmount: 666420, taxableValue: 564763, gstRate: 18 });
+    expect(found.get('2025-04-23|IVC/019/25-26')).toEqual({ grossAmount: 666420, taxableValue: 564763, gstRate: 18, reasonText: 'Inter State Purchase' });
   });
 
   it('corrects a row the model mis-read as the sub-line amount, using only the real ledger text', () => {
@@ -465,5 +465,101 @@ describe('deterministic dual-amount voucher split — verified against the real 
       '31-Mar-26 To (as per details) Journal 285 23,300.00 2,33,000.00';
     const found = detectDualAmountVouchers(duplicated);
     expect(found.has('2026-03-31|285')).toBe(false);
+  });
+});
+
+describe('generalized GST-subtotal detector — verified against real Amadius Realty ledgers with a different breakdown phrasing than Bindra', () => {
+  // Real extracted text (Alpha Solution, FY 2025-26) — the client's own
+  // stock-item name ("FIRE FIGHTING MATERIAL - 18%") replaces the generic
+  // "Purchase @ N%" wording the detector was first built against. Reported
+  // by the user as "Alpha ledger is not matching for disallowance figures"
+  // after the Bindra-only fix shipped — proves the phrasing, not the bug
+  // mechanism, was what the original regex missed.
+  const ALPHA_SOLUTION_TEXT =
+    'AMADIUS REALTY\n{PAN: ABYFA4842P}\nReg.Office No.FF/04, Ankur Shopping Center,\n' +
+    'Bh. VIP International School,Nikol,\nAhmedabad\nALPHA SOLUTION\nLedger Account\n' +
+    '1-Apr-25 to 31-Mar-26\nPage 1\nDate Particulars Vch Type Vch No. Debit Credit\n' +
+    '1-Apr-25 By Opening Balance 11,60,000.00\n30-Jul-25 To ICICI BANK LTD Payment 165 7,00,000.00\n' +
+    'A/C\n-346705002058\n1-Dec-25 By (as per details) Purchase AS/129/25-25 7,08,000.00\n' +
+    'FIRE FIGHTING MATERIAL - 18% 6,00,000.00 Dr\nINPUT CGST 54,000.00 Dr\nINPUT SGST 54,000.00 Dr\n' +
+    '9-Mar-26 By (as per details) Purchase AS/179/25-26 21,36,980.00\n' +
+    'FIRE FIGHTING MATERIAL - 18% 18,11,000.00 Dr\nINPUT CGST 1,62,990.00 Dr\nINPUT SGST 1,62,990.00 Dr\n' +
+    '7,00,000.00 40,04,980.00\nTo Closing Balance 33,04,980.00\n40,04,980.00 40,04,980.00';
+
+  // Real extracted text (Omega Elevator, FY 2025-26) — same phrasing pattern
+  // ("LIFT PURCHASE - 18%"), the ledger the user separately reported as
+  // "the purchase is not being recorded according to its closing balance".
+  const OMEGA_ELEVATOR_VOUCHER_TEXT =
+    '27-Apr-25 By (as per details) Purchase GJ/2526/00440 13,23,960.00\n' +
+    'LIFT PURCHASE - 18% 11,22,000.00 Dr\nINPUT CGST 1,00,980.00 Dr\nINPUT SGST 1,00,980.00 Dr';
+
+  it('reads the true gross and taxable value off the Alpha Solution ledger, matching the firm\'s own working paper (₹6,00,000 and ₹18,11,000)', () => {
+    const found = detectGstSubtotalCorrections(ALPHA_SOLUTION_TEXT);
+    expect(found.get('2025-12-01|AS/129/25-25')).toEqual({
+      grossAmount: 708000, taxableValue: 600000, gstRate: 18, reasonText: 'FIRE FIGHTING MATERIAL',
+    });
+    expect(found.get('2026-03-09|AS/179/25-26')).toEqual({
+      grossAmount: 2136980, taxableValue: 1811000, gstRate: 18, reasonText: 'FIRE FIGHTING MATERIAL',
+    });
+  });
+
+  it('reads the true gross and taxable value off the Omega Elevator ledger\'s "LIFT PURCHASE" phrasing', () => {
+    const found = detectGstSubtotalCorrections(OMEGA_ELEVATOR_VOUCHER_TEXT);
+    expect(found.get('2025-04-27|GJ/2526/00440')).toEqual({
+      grossAmount: 1323960, taxableValue: 1122000, gstRate: 18, reasonText: 'LIFT PURCHASE',
+    });
+  });
+
+  it('does NOT treat a "Cr" reversal/provision breakdown line on a Journal voucher as a GST-subtotal to strip', () => {
+    // The V.J. Desai "Journal 3" reversal has the same "text N% amount"
+    // shape but ends in "Cr", not "Dr", and its voucher line says "Journal"
+    // rather than "Purchase" — both must independently exclude it, since a
+    // real GST-bearing purchase invoice's breakdown line is always "Dr".
+    const text =
+      '1-Apr-25 To (as per details) Journal 3 2,33,000.00\n' +
+      'PROFESSIONAL FEES - 18% 50,000.00 Cr\nAUDIT FEES - 18% 1,83,000.00 Cr';
+    const found = detectGstSubtotalCorrections(text);
+    expect(found.size).toBe(0);
+  });
+
+  it('replaces a generic "(as per details)" particulars with the sub-line\'s real reason, so a provision hidden in the breakdown is no longer classified as an ordinary purchase', () => {
+    // Synthetic but structurally identical to the real ledgers above: a
+    // "(as per details) Purchase" voucher whose actual reason — a book
+    // provision, not a real invoice — only appears in the breakdown
+    // sub-line. classify.ts only ever reads particulars + vchType (never
+    // the sub-lines), so without this correction such a row silently
+    // defaults to PURCHASE, which is what the firm reported as "provisions
+    // are still considering as purchase".
+    const text =
+      '31-Mar-26 By (as per details) Purchase JV/44 1,18,000.00\n' +
+      'PROVISION FOR AUDIT FEES - 18% 1,00,000.00 Dr\nINPUT CGST 9,000.00 Dr\nINPUT SGST 9,000.00 Dr';
+    const rawLedgers: unknown[] = [{
+      vendorName: 'Some Vendor',
+      openingBalance: 0,
+      closingBalance: 118000,
+      rows: [
+        { date: '2026-03-31', particulars: '(as per details)', vchType: 'Purchase', vchNo: 'JV/44', debit: 0, credit: 100000 },
+      ],
+    }];
+    applyDeterministicCorrections(rawLedgers, text);
+    const row = rowFields((rawLedgers[0] as { rows: unknown[] }).rows[0]);
+    expect(row.particulars).toBe('PROVISION FOR AUDIT FEES');
+    expect(row.credit).toBe(118000);
+    expect(row.taxableValue).toBe(100000);
+  });
+
+  it('leaves a particulars the model already read as something specific untouched', () => {
+    const rawLedgers: unknown[] = [{
+      vendorName: 'Alpha Solution',
+      openingBalance: 0,
+      closingBalance: 708000,
+      rows: [
+        { date: '2025-12-01', particulars: 'Fire Fighting Material Purchase', vchType: 'Purchase', vchNo: 'AS/129/25-25', debit: 0, credit: 600000 },
+      ],
+    }];
+    applyDeterministicCorrections(rawLedgers, ALPHA_SOLUTION_TEXT);
+    const row = rowFields((rawLedgers[0] as { rows: unknown[] }).rows[0]);
+    expect(row.particulars).toBe('Fire Fighting Material Purchase');
+    expect(row.credit).toBe(708000); // the amount is still corrected
   });
 });
