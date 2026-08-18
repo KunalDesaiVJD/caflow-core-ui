@@ -636,20 +636,29 @@ function CorporateBalanceSheetView({
     if (noteNo == null) return <td className="text-center py-1 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const label = String(noteNo);
     const subTab = code ? FS_CODE_TO_NOTES_SUBTAB[code] : undefined;
+    // Root-cause fix (2026-08-11): the click target used to be just the
+    // number + tiny arrow icon (~17x16px), an easy miss on high-DPI/scaled
+    // displays — a near-miss click lands on inert cell whitespace with no
+    // error, no state change, indistinguishable from "the feature doesn't
+    // work". The <button> now fills the WHOLE <td> (padding moved from the
+    // cell onto the button) so the entire cell is the hit target, while
+    // staying visually identical (button content still centered, same text/
+    // icon size). Verified: JS .click() already proved the handler/state
+    // logic itself was correct — this fixes real-pointer targeting only.
     return (
-      <td className="text-center py-1 px-2">
+      <td className="text-center p-0">
         {onNavigateToNote && subTab ? (
           <button
             type="button"
             onClick={() => onNavigateToNote(noteNo, subTab)}
-            className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium text-[11px]"
+            className="w-full h-full inline-flex items-center justify-center gap-0.5 text-primary hover:underline hover:bg-muted/50 font-medium text-[11px] py-1 px-2"
             title={`Go to Note ${label}`}
           >
             {label}
             <ArrowRight className="h-2.5 w-2.5" />
           </button>
         ) : (
-          <span className="text-primary font-medium text-[11px] cursor-default">{label}</span>
+          <span className="text-primary font-medium text-[11px] cursor-default block py-1 px-2">{label}</span>
         )}
       </td>
     );
@@ -942,20 +951,23 @@ function CorporatePLView({
     if (noteNo == null) return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     const label = String(noteNo);
     const subTab = code ? FS_CODE_TO_NOTES_SUBTAB[code] : undefined;
+    // Root-cause fix (2026-08-11) — see matching comment in
+    // CorporateBalanceSheetView.NoteCell: button now fills the whole <td>
+    // so the click target isn't just the tiny number+icon.
     return (
-      <td className="text-center py-0.5 px-2">
+      <td className="text-center p-0">
         {onNavigateToNote && subTab ? (
           <button
             type="button"
             onClick={() => onNavigateToNote(noteNo, subTab)}
-            className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium text-[11px]"
+            className="w-full h-full inline-flex items-center justify-center gap-0.5 text-primary hover:underline hover:bg-muted/50 font-medium text-[11px] py-0.5 px-2"
             title={`Go to Note ${label}`}
           >
             {label}
             <ArrowRight className="h-2.5 w-2.5" />
           </button>
         ) : (
-          <span className="text-primary font-medium text-[11px] cursor-default">{label}</span>
+          <span className="text-primary font-medium text-[11px] cursor-default block py-0.5 px-2">{label}</span>
         )}
       </td>
     );
@@ -1246,20 +1258,23 @@ function NCEBalanceSheetView({
     if (!label || noteNo == null) {
       return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     }
+    // Root-cause fix (2026-08-11) — see matching comment in
+    // CorporateBalanceSheetView.NoteCell: button now fills the whole <td>
+    // so the click target isn't just the tiny number+icon.
     return (
-      <td className="text-center py-0.5 px-2">
+      <td className="text-center p-0">
         {noteNo != null && onNavigateToNote ? (
           <button
             type="button"
             onClick={() => onNavigateToNote(noteNo)}
-            className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium text-[11px]"
+            className="w-full h-full inline-flex items-center justify-center gap-0.5 text-primary hover:underline hover:bg-muted/50 font-medium text-[11px] py-0.5 px-2"
             title={`Go to Note ${label}`}
           >
             {label}
             <ArrowRight className="h-2.5 w-2.5" />
           </button>
         ) : (
-          <span className="text-primary font-medium text-[11px]">{label}</span>
+          <span className="text-primary font-medium text-[11px] block py-0.5 px-2">{label}</span>
         )}
       </td>
     );
@@ -1389,20 +1404,23 @@ function NCEPLView({
     if (!label || noteNo == null) {
       return <td className="text-center py-0.5 px-2 text-muted-foreground/40 text-[11px]">—</td>;
     }
+    // Root-cause fix (2026-08-11) — see matching comment in
+    // CorporateBalanceSheetView.NoteCell: button now fills the whole <td>
+    // so the click target isn't just the tiny number+icon.
     return (
-      <td className="text-center py-0.5 px-2">
+      <td className="text-center p-0">
         {noteNo != null && onNavigateToNote ? (
           <button
             type="button"
             onClick={() => onNavigateToNote(noteNo)}
-            className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium text-[11px]"
+            className="w-full h-full inline-flex items-center justify-center gap-0.5 text-primary hover:underline hover:bg-muted/50 font-medium text-[11px] py-0.5 px-2"
             title={`Go to Note ${label}`}
           >
             {label}
             <ArrowRight className="h-2.5 w-2.5" />
           </button>
         ) : (
-          <span className="text-primary font-medium text-[11px]">{label}</span>
+          <span className="text-primary font-medium text-[11px] block py-0.5 px-2">{label}</span>
         )}
       </td>
     );
