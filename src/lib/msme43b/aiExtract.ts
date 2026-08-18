@@ -165,6 +165,71 @@ export function detectGstSubtotalCorrections(text: string): Map<string, GstSubto
   return out;
 }
 
+/** A voucher that prints BOTH a Debit- and a Credit-column amount on one line. */
+export interface DualAmountVoucher {
+  date: string;   // ISO
+  vchNo: string;
+  particulars: string;
+  debitAmount: number;
+  creditAmount: number;
+}
+
+// A compound Tally journal that both raises a charge against the party AND
+// nets something off in the same voucher (most commonly re-invoicing a fee
+// while netting the TDS on it) prints BOTH its Debit- and Credit-column
+// entries on the SAME line, in that column order:
+//   31-Mar-26 To (as per details) Journal 285   23,300.00   2,33,000.00
+// Verified by full-ledger reconciliation arithmetic (not a guess): summing
+// every OTHER row's contribution to the printed Debit/Credit column TOTALS
+// on three real V.J. Desai & Co. ledgers (Amadius Realty, Skylark
+// Corporation, Sweni Corporation) and solving for what this one row must
+// contribute — the totals only balance when the FIRST trailing amount is
+// this row's Debit-column entry and the SECOND is its Credit-column entry.
+const DUAL_AMOUNT_VOUCHER_RE =
+  /^(\d{1,2}-[A-Za-z]{3}-\d{2,4})\s+(?:To|By)\s+(.+?)\s+(\S+)\s+([\d,]+\.\d{1,2})\s+([\d,]+\.\d{1,2})\s*$/;
+
+/**
+ * Detect every dual-amount voucher in a chunk, keyed by date + voucher
+ * number. A key seen more than once (an ambiguous split, or two vouchers
+ * sharing a number) is dropped entirely rather than guessed at — same
+ * discipline as detectGstSubtotalCorrections.
+ *
+ * The engine's own bill/settlement split (buildBillsAndSettlements in
+ * engine.ts) reads credit-then-debit with an if/else — a single LedgerTxn
+ * can only ever be read as ONE of a bill or a settlement, never both. So
+ * this can't be fixed by setting both fields on one row; applyDeterministic
+ * Corrections below turns each detected voucher into two rows instead —
+ * exactly what the extraction prompt already asks the model to do, except
+ * this no longer depends on the model complying.
+ */
+export function detectDualAmountVouchers(text: string): Map<string, DualAmountVoucher> {
+  const out = new Map<string, DualAmountVoucher>();
+  const seenAmbiguous = new Set<string>();
+
+  for (const rawLine of text.split('\n')) {
+    const m = rawLine.trim().match(DUAL_AMOUNT_VOUCHER_RE);
+    if (!m) continue;
+    const iso = parseLedgerDate(m[1]);
+    const vchNo = m[3].trim();
+    if (!iso || !vchNo) continue;
+    const key = `${iso}|${vchNo}`;
+
+    if (out.has(key) || seenAmbiguous.has(key)) {
+      out.delete(key);
+      seenAmbiguous.add(key);
+      continue;
+    }
+    out.set(key, {
+      date: iso,
+      vchNo,
+      particulars: m[2].trim(),
+      debitAmount: parseAmount(m[4]),
+      creditAmount: parseAmount(m[5]),
+    });
+  }
+  return out;
+}
+
 /**
  * Apply both corrections to a chunk's raw model output IN PLACE, before
  * mapLedger ever sees it — so the existing UNRESOLVED-vendor / warning logic
@@ -230,6 +295,50 @@ export function applyDeterministicCorrections(rawLedgers: unknown[], chunkText: 
         // figures instead.
         setRowField(row, 'gstAmount', undefined);
       }
+    }
+  }
+
+  const dualVouchers = detectDualAmountVouchers(chunkText);
+  if (dualVouchers.size) {
+    const byVchNo = new Map<string, DualAmountVoucher>();
+    const ambiguousVchNo = new Set<string>();
+    for (const v of dualVouchers.values()) {
+      if (byVchNo.has(v.vchNo) || ambiguousVchNo.has(v.vchNo)) {
+        byVchNo.delete(v.vchNo);
+        ambiguousVchNo.add(v.vchNo);
+        continue;
+      }
+      byVchNo.set(v.vchNo, v);
+    }
+
+    for (const raw of rawLedgers) {
+      const r = raw as Record<string, unknown>;
+      const field = Array.isArray(r.rows) ? 'rows' : Array.isArray(r.txns) ? 'txns' : null;
+      if (!field) continue;
+      const rows = r[field] as unknown[];
+
+      // Only correct a voucher this ledger's OWN rows already reference by
+      // number — a chunk can hold more than one vendor, and a Tally journal
+      // voucher number is not scoped to a single party, so matching on
+      // vchNo alone across ALL ledgers in the chunk could apply one party's
+      // amounts to a different party's ledger.
+      const matchedVchNos = new Set<string>();
+      for (const row of rows) {
+        const vchNo = str(rowFields(row).vchNo).trim();
+        if (vchNo && byVchNo.has(vchNo)) matchedVchNos.add(vchNo);
+      }
+      if (!matchedVchNos.size) continue;
+
+      const kept = rows.filter((row) => {
+        const vchNo = str(rowFields(row).vchNo).trim();
+        return !matchedVchNos.has(vchNo);
+      });
+      for (const vchNo of matchedVchNos) {
+        const v = byVchNo.get(vchNo)!;
+        kept.push([v.date, v.particulars, '', v.vchNo, v.debitAmount, 0, undefined, undefined, undefined]);
+        kept.push([v.date, v.particulars, '', v.vchNo, 0, v.creditAmount, undefined, undefined, undefined]);
+      }
+      r[field] = kept;
     }
   }
 }

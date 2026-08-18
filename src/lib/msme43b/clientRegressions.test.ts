@@ -13,7 +13,7 @@ import { analyzeVendor } from './engine';
 import { classifyTxn } from './classify';
 import {
   detectLedgerAccountVendorNames, detectBalanceSign, applyDeterministicCorrections,
-  detectGstSubtotalCorrections,
+  detectGstSubtotalCorrections, detectDualAmountVouchers, rowFields,
 } from './aiExtract';
 import type { VendorLedger, LedgerTxn } from './types';
 import { readFileSync } from 'node:fs';
@@ -362,5 +362,108 @@ describe('deterministic GST-subtotal correction — verified against the real Bi
     const found = detectGstSubtotalCorrections(duplicated);
     expect(found.has('2025-05-31|33')).toBe(false);
     expect(found.has('2025-06-30|00058/2526')).toBe(true); // the untouched voucher is unaffected
+  });
+});
+
+describe('deterministic dual-amount voucher split — verified against the real Amadius Realty / V.J. Desai & Co. ledger', () => {
+  // Real extracted text (V.J. Desai & Co., FY 2025-26). The 31-Mar-26 "Journal
+  // 285" voucher prints BOTH a Debit (23,300.00, the TDS netted) and a Credit
+  // (2,33,000.00, this year's fee re-invoice) amount on the SAME line — the
+  // exact pattern reported as "unable to run" for V.J. Desai & Co. in three
+  // different clients (Amadius Realty, Skylark Corporation, Sweni
+  // Corporation). Verified by full-ledger reconciliation arithmetic: every
+  // OTHER row's contribution to the printed column totals (Debit 2,56,300.00
+  // / Credit 7,17,640.00) leaves exactly 23,300.00 / 2,33,000.00 unaccounted
+  // for — which only balances if the first trailing amount is this row's
+  // Debit-column entry and the second is its Credit-column entry.
+  const VJ_DESAI_TEXT =
+    'AMADIUS REALTY\n{PAN: ABYFA4842P}\nReg.Office No.FF/04, Ankur Shopping Center,\n' +
+    'Bh. VIP International School,Nikol,\nAhmedabad\nV J DESAI & CO.\nLedger Account\n' +
+    '1-Apr-25 to 31-Mar-26\nPage 1\nDate Particulars Vch Type Vch No. Debit Credit\n' +
+    '1-Apr-25 By Opening Balance 2,09,700.00\n1-Apr-25 To (as per details) Journal 3 2,33,000.00\n' +
+    'PROFESSIONAL FEES - 18% 50,000.00 Cr\nAUDIT FEES - 18% 1,83,000.00 Cr\n' +
+    '16-Jul-25 By (as per details) Purchase 065/2025-26 2,74,940.00\nAUDIT FEES - 18% 1,83,000.00 Dr\n' +
+    'PROFESSIONAL FEES - 18% 50,000.00 Dr\nINPUT CGST 20,970.00 Dr\nINPUT SGST 20,970.00 Dr\n' +
+    'ROUND OFF - PURCHASE\n31-Mar-26 To (as per details) Journal 285 23,300.00 2,33,000.00\n' +
+    'AUDIT FEES - 18% 1,83,000.00 Dr\nPROFESSIONAL FEES - 18% 50,000.00 Dr\n' +
+    'TDS - 194J PROFESSIONAL FEES 23,300.00 Cr\n2,56,300.00 7,17,640.00\n' +
+    'To Closing Balance 4,61,340.00\n7,17,640.00 7,17,640.00';
+
+  it('reads the debit and credit amounts off the dual-amount voucher line, keyed by date + voucher number', () => {
+    const found = detectDualAmountVouchers(VJ_DESAI_TEXT);
+    expect(found.get('2026-03-31|285')).toEqual({
+      date: '2026-03-31', vchNo: '285', particulars: '(as per details) Journal',
+      debitAmount: 23300, creditAmount: 233000,
+    });
+    // Ordinary single-amount lines (opening balance, the two other vouchers) never match.
+    expect(found.size).toBe(1);
+  });
+
+  it('replaces whatever the model returned for that voucher number with exactly two clean rows — simulating a dropped Debit side', () => {
+    // Simulates the observed failure: the model kept only the Credit leg
+    // (233,000) and silently dropped the Debit/TDS-netting leg (23,300),
+    // which is exactly what breaks reconciliation and the s.43B(h) base.
+    const rawLedgers: unknown[] = [{
+      vendorName: 'V J DESAI & CO.',
+      openingBalance: -209700,
+      closingBalance: 461340,
+      rows: [
+        ['2025-01-01', '(as per details) Journal', 'Journal', '3', 0, 233000, undefined, undefined, undefined],
+        ['2025-07-16', '(as per details) Purchase', 'Purchase', '065/2025-26', 0, 274940, undefined, undefined, undefined],
+        ['2026-03-31', '(as per details) Journal', 'Journal', '285', 0, 233000, undefined, undefined, undefined],
+      ],
+    }];
+    applyDeterministicCorrections(rawLedgers, VJ_DESAI_TEXT);
+    const rows = (rawLedgers[0] as { rows: unknown[][] }).rows;
+    // The two untouched vouchers (3, 065/2025-26) survive unchanged.
+    expect(rows).toHaveLength(4);
+    const voucher285 = rows.filter((r) => r[3] === '285');
+    expect(voucher285).toHaveLength(2);
+    expect(voucher285).toContainEqual(['2026-03-31', '(as per details) Journal', '', '285', 23300, 0, undefined, undefined, undefined]);
+    expect(voucher285).toContainEqual(['2026-03-31', '(as per details) Journal', '', '285', 0, 233000, undefined, undefined, undefined]);
+  });
+
+  it('also replaces a merged single-net row that started in the named-object form', () => {
+    // Simulates a different failure: the model merged both legs into one
+    // net figure (233,000 − 23,300 = 209,700) instead of two rows. The
+    // ORIGINAL row is object-shaped; the two rows it's replaced with are
+    // always emitted in the compact (positional) form applyDeterministic
+    // Corrections uses elsewhere — mixing shapes within one rows array is
+    // fine, since mapLedger reads either shape per-row via rowFields.
+    const rawLedgers: unknown[] = [{
+      vendorName: 'V J DESAI & CO.',
+      openingBalance: -209700,
+      closingBalance: 461340,
+      rows: [
+        { date: '2026-03-31', particulars: 'Journal', vchNo: '285', debit: 0, credit: 209700 },
+      ],
+    }];
+    applyDeterministicCorrections(rawLedgers, VJ_DESAI_TEXT);
+    const rows = (rawLedgers[0] as { rows: unknown[] }).rows;
+    expect(rows).toHaveLength(2);
+    const fields = rows.map((row) => rowFields(row));
+    expect(fields.some((f) => f.debit === 23300 && f.credit === 0)).toBe(true);
+    expect(fields.some((f) => f.debit === 0 && f.credit === 233000)).toBe(true);
+  });
+
+  it('does not touch a voucher number this ledger has no row for (avoids leaking another vendor’s amounts across a multi-vendor chunk)', () => {
+    const rawLedgers: unknown[] = [{
+      vendorName: 'Some Other Vendor',
+      openingBalance: 0,
+      closingBalance: 0,
+      rows: [
+        ['2026-01-05', 'Purchase', 'Purchase', '999', 0, 5000, undefined, undefined, undefined],
+      ],
+    }];
+    applyDeterministicCorrections(rawLedgers, VJ_DESAI_TEXT);
+    const rows = (rawLedgers[0] as { rows: unknown[][] }).rows;
+    expect(rows).toHaveLength(1); // untouched — voucher "285" never appears in this ledger's own rows
+  });
+
+  it('does not split a date+voucher-number pair that appears more than once in the chunk (ambiguous, left unmatched)', () => {
+    const duplicated = VJ_DESAI_TEXT + '\n' +
+      '31-Mar-26 To (as per details) Journal 285 23,300.00 2,33,000.00';
+    const found = detectDualAmountVouchers(duplicated);
+    expect(found.has('2026-03-31|285')).toBe(false);
   });
 });
