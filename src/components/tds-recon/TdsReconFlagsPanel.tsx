@@ -138,6 +138,98 @@ function StatusPill({ status }: { status: FlagStatus }) {
   );
 }
 
+// ─── Calculation breakdown (Goal 2 — "how was this derived?") ───────────────
+// The 4-box grid this replaces showed only the FINAL numbers (Amount Paid /
+// Expected TDS / Actual TDS / Short-Over) — for a threshold-based section
+// like 194Q, "Expected TDS at 0.1% = ₹3,809" on a ₹88,09,380 payment looks
+// like a typo unless the ₹50L threshold subtraction step is shown explicitly.
+// This renders the actual arithmetic the engine ran (tdsEngine.ts's
+// runReconEngine — Goal 2 rate loop), step by step, using only fields
+// already persisted on the flag row — no recomputation, so it can never
+// drift from what was actually stored.
+function CalcRow({
+  label, value, op, bold, tone,
+}: {
+  label: string; value: string; op?: "−" | "×" | "=" | "÷";
+  bold?: boolean; tone?: "danger" | "warn" | "muted";
+}) {
+  return (
+    <div className={cn("flex items-baseline justify-between gap-3 py-0.5", bold && "border-t border-slate-200 mt-0.5 pt-1")}>
+      <span className={cn("text-[11px]", tone === "muted" ? "text-muted-foreground" : "text-slate-700", bold && "font-medium")}>
+        {op && <span className="inline-block w-4 text-muted-foreground font-mono">{op}</span>}
+        {label}
+      </span>
+      <span className={cn(
+        "text-xs font-mono tabular-nums",
+        bold && "font-bold",
+        tone === "danger" ? "text-red-600" : tone === "warn" ? "text-amber-600" : "text-slate-800",
+      )}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function CalculationBreakdown({ flag }: { flag: TdsReconFlag }) {
+  const isRateBased = flag.expected_rate != null;
+  const isOver = (flag.variance_amount ?? 0) < 0;
+
+  if (!isRateBased) {
+    // books_tds_gt_module — no rate/threshold involved, a straight
+    // booked-vs-filed comparison (tdsEngine.ts's Goal 2.b branch).
+    return (
+      <div className="p-2.5 bg-muted/30 rounded text-xs space-y-0.5">
+        <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">How this was calculated</p>
+        <CalcRow label="TDS booked in Tally for this deductee" value={fmtINR(flag.book_amount)} />
+        <CalcRow label="TDS actually filed (26Q/27Q)" value={fmtINR(flag.tds_amount ?? flag.actual_tds)} op="−" />
+        <CalcRow label="Gap — booked but not filed/remitted" value={fmtINR(flag.variance_amount, true)} op="=" bold tone="danger" />
+      </div>
+    );
+  }
+
+  // 194Q is the only section where the engine SUBTRACTS the threshold
+  // before applying the rate (TDS applies only on the excess over ₹50L) —
+  // every other section's threshold is just a "does TDS apply at all"
+  // gate, applied to the FULL amount once crossed. Showing both the same
+  // way would misrepresent sections that don't get the subtraction.
+  const is194Q = (flag.section_code ?? "").toUpperCase().startsWith("194Q");
+  const amountPaid   = flag.book_amount ?? 0;
+  const threshold    = flag.threshold_amount ?? 0;
+  const taxableBase  = is194Q ? Math.max(0, amountPaid - threshold) : amountPaid;
+
+  return (
+    <div className="p-2.5 bg-muted/30 rounded text-xs space-y-0.5">
+      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1">How this was calculated</p>
+
+      <CalcRow label="Amount paid / credited" value={fmtINR(amountPaid)} />
+      {is194Q ? (
+        <>
+          <CalcRow label={`Less: Section 194Q threshold (exempt up to)`} value={fmtINR(threshold)} op="−" />
+          <CalcRow label="Taxable (excess over threshold)" value={fmtINR(taxableBase)} op="=" bold />
+        </>
+      ) : threshold > 0 && (
+        <p className="text-[10px] text-muted-foreground italic pl-4">
+          Threshold ₹{threshold.toLocaleString("en-IN")} exceeded — full amount is taxable (this section's threshold is an
+          applicability gate, not a deduction).
+        </p>
+      )}
+      <CalcRow label={`× Rate (${flag.expected_rate}%)`} value="" op="×" />
+      <CalcRow label="= Expected TDS" value={fmtINR(flag.expected_tds)} op="=" bold />
+
+      <div className="mt-1.5 pt-1.5 border-t border-slate-300 space-y-0.5">
+        <CalcRow label={`Actual TDS filed (effective rate ${flag.actual_rate?.toFixed(2) ?? "0.00"}%)`} value={fmtINR(flag.actual_tds)} />
+        <CalcRow
+          label={isOver ? "Over-deducted (Expected − Actual)" : "Short-deducted (Expected − Actual)"}
+          value={fmtINR(flag.variance_amount, true)}
+          op="="
+          bold
+          tone={isOver ? "warn" : "danger"}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ConfidenceBar({ value }: { value: number | null }) {
   const v = value ?? 0;
   const color = v >= 80 ? "bg-red-500" : v >= 65 ? "bg-orange-400" : "bg-amber-400";
@@ -435,29 +527,7 @@ function FlagRow({
               </div>
             </div>
           ) : (
-            <div className="grid grid-cols-4 gap-2 p-2.5 bg-muted/30 rounded text-xs">
-              <div>
-                <p className="text-muted-foreground text-[10px]">Amount Paid</p>
-                <p className="font-semibold">{fmtINR(flag.book_amount)}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-[10px]">Expected TDS ({flag.expected_rate?.toFixed(1)}%)</p>
-                <p className="font-semibold">{fmtINR(flag.expected_tds)}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-[10px]">Actual TDS ({flag.actual_rate?.toFixed(2)}%)</p>
-                <p className="font-semibold">{fmtINR(flag.actual_tds)}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-[10px]">Short / Over</p>
-                <p className={cn(
-                  "font-bold",
-                  (flag.variance_amount ?? 0) > 0 ? "text-red-600" : "text-amber-600",
-                )}>
-                  {fmtINR(flag.variance_amount, true)}
-                </p>
-              </div>
-            </div>
+            <CalculationBreakdown flag={flag} />
           )}
 
           {/* AI Reasoning */}
