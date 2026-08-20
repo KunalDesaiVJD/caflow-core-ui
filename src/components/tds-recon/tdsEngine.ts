@@ -641,16 +641,67 @@ export async function runAiMapper(params: {
   }
 
   // 2b. TDS Management integration (read-only) — resolve TDS Management's
-  // own confirmed office<->Tally-party maps (tds_tally_party_maps, owned
-  // entirely by TdsTallyRecon.tsx, never written here) against this FY's
-  // live TB, so a ledger TDS Management has already identified doesn't
-  // need to be independently re-discovered by the heuristics below.
-  const { data: tallyPartyMapRows } = await (supabase as any)
-    .from("tds_tally_party_maps")
-    .select("office_name,tally_party")
+  // own confirmed office<->Tally-party pairs against this FY's live TB, so
+  // a ledger TDS Management has already identified doesn't need to be
+  // independently re-discovered by the heuristics below.
+  //
+  // TWO sources, both owned entirely by TDS Management (TdsTallyRecon.tsx)
+  // and never written here:
+  //   (a) tds_tally_party_maps — pairs the auditor manually confirmed in
+  //       Stage 3 after an automatic match failed.
+  //   (b) tds_tally_results where result='Matched' — pairs TDS Management's
+  //       OWN reconciliation engine matched automatically (date+amount+
+  //       party all agreed) and never needed a saved row for at all. This
+  //       is the MAJORITY of TDS Management's confirmed identities (2,417
+  //       of 3,026 "Matched" outcomes system-wide have no tds_tally_
+  //       party_maps row behind them) — reading only (a), as the first
+  //       version of this integration did, missed 80% of what a user sees
+  //       as "already mapped in TDS Management".
+  // tds_tally_results has no client_id column directly; scoped via its
+  // filing_id -> tds_filings.client_id (not FY-scoped, same as (a), so a
+  // match from any quarter/year still counts as a confirmed identity).
+  const { data: clientFilings } = await (supabase as any)
+    .from("tds_filings")
+    .select("id")
     .eq("client_id", client_id);
+  const filingIds = (clientFilings ?? []).map((f: any) => f.id);
+
+  const [{ data: tallyPartyMapRows }, tallyResultRows] = await Promise.all([
+    (supabase as any)
+      .from("tds_tally_party_maps")
+      .select("office_name,tally_party")
+      .eq("client_id", client_id),
+    (async () => {
+      if (filingIds.length === 0) return [] as any[];
+      const rows: any[] = [];
+      // PostgREST .in() has a practical URL-length ceiling — chunk defensively.
+      for (let i = 0; i < filingIds.length; i += 200) {
+        const { data } = await (supabase as any)
+          .from("tds_tally_results")
+          .select("office_name,tally_party")
+          .in("filing_id", filingIds.slice(i, i + 200))
+          .eq("result", "Matched")
+          .not("office_name", "is", null)
+          .not("tally_party", "is", null);
+        rows.push(...(data ?? []));
+      }
+      return rows;
+    })(),
+  ]);
+
+  // Merge + dedupe both sources into one input list for the same resolver.
+  const combinedPartyMapsSeen = new Set<string>();
+  const combinedPartyMaps: TallyPartyMapRow[] = [];
+  for (const r of [...(tallyPartyMapRows ?? []), ...tallyResultRows] as TallyPartyMapRow[]) {
+    if (!r.office_name || !r.tally_party) continue;
+    const key = `${r.office_name.trim().toLowerCase()}|${r.tally_party.trim().toLowerCase()}`;
+    if (combinedPartyMapsSeen.has(key)) continue;
+    combinedPartyMapsSeen.add(key);
+    combinedPartyMaps.push(r);
+  }
+
   const tdsMgmtHints = resolveTdsMgmtHints(
-    (tallyPartyMapRows ?? []) as TallyPartyMapRow[],
+    combinedPartyMaps,
     expenseLedgers.map((l: any) => ({ ledger_name: l.ledger_name, parent_group: l.parent_group })),
   );
   const hintsByLedger = new Map<string, ResolvedHint>();
