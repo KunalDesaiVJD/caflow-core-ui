@@ -10,7 +10,8 @@
  *   • Expandable table rows with full AI reasoning + narration evidence
  *   • Per-row actions: Raise Query (dialog) | Accept | Disregard
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button }   from "@/components/ui/button";
 import { runReconEngine } from "./tdsEngine";
@@ -29,7 +30,7 @@ import {
 import {
   GitCompareArrows, Calculator, AlertTriangle, TrendingDown,
   TrendingUp, Loader2, RefreshCw, Info, ChevronDown, ChevronRight,
-  MessageSquareWarning, CheckCircle, XCircle, BookText,
+  MessageSquareWarning, CheckCircle, XCircle, BookText, ExternalLink,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -230,6 +231,81 @@ function CalculationBreakdown({ flag }: { flag: TdsReconFlag }) {
   );
 }
 
+// ─── Calculation breakdown (Goal 1 — "how were Book Amount / TDS Module
+// Amount derived?") ──────────────────────────────────────────────────────
+// Root cause of "I can't verify Book Value / TDS Amount": the 3-box grid
+// showed only the two FINAL aggregate numbers with no visibility into (a)
+// tb_total_debit is a whole-YEAR ledger total that gets a flat 18% GST
+// strip before comparison (runReconEngine, tdsEngine.ts) — a step that's
+// invisible once you're only shown the post-strip number — and (b) neither
+// number links to the actual vouchers/filings behind it. This shows the
+// GST-strip arithmetic explicitly (back-derived from the stored, already-
+// stripped book_amount — labelled as a reconstruction, not a second stored
+// figure) and links straight to the real Tally vouchers via the same route
+// TdsPartyMappingPanel's "View Ledger" already uses.
+function Goal1Breakdown({ flag, tallyEngId }: { flag: TdsReconFlag; tallyEngId: string | null }) {
+  const bookAmt = flag.book_amount; // already GST-stripped, as persisted
+  const rawTbEstimate = bookAmt != null ? bookAmt * 1.18 : null;
+  const isBooksNotTds = flag.flag_type === "entry_in_books_not_in_tds";
+
+  return (
+    <div className="p-2.5 bg-muted/30 rounded text-xs space-y-2">
+      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">How this was calculated</p>
+
+      <div className="space-y-0.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] text-slate-700">
+            TB ledger activity, full FY (debit/credit, incl. GST)
+            {flag.tb_ledger_name && (
+              <Link
+                to={`/audit/tally-sync/ledger/${encodeURIComponent(flag.tb_ledger_name)}${tallyEngId ? `?eng=${tallyEngId}` : ""}`}
+                className="inline-flex items-center gap-0.5 ml-1.5 text-blue-600 hover:underline"
+                title="Open the actual vouchers behind this ledger"
+              >
+                View Ledger <ExternalLink size={9} />
+              </Link>
+            )}
+          </span>
+          <span className="text-xs font-mono tabular-nums text-slate-800">
+            {rawTbEstimate != null ? `≈ ${fmtINR(rawTbEstimate)}` : "—"}
+          </span>
+        </div>
+        {rawTbEstimate != null && (
+          <p className="text-[9px] text-muted-foreground italic pl-1">
+            Reconstructed from the stored (already GST-stripped) figure below — not a separately stored number.
+          </p>
+        )}
+        <CalcRow label="÷ 1.18 (strip an assumed 18% GST component)" value="" op="÷" />
+        <CalcRow label="= Book Amount (TB, ex-GST) — compared below" value={fmtINR(bookAmt)} op="=" bold />
+      </div>
+
+      <div className="pt-1.5 border-t border-slate-300 space-y-0.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] text-slate-700">
+            TDS Module Amount — sum of every filed challan/quarter for
+            {" "}<span className="font-medium">{flag.tds_deductee_name ?? "this deductee"}</span>
+            {flag.section_code ? ` under ${flag.section_code}` : ""}
+          </span>
+          <span className="text-xs font-mono tabular-nums font-bold text-slate-800">{fmtINR(flag.tds_amount)}</span>
+        </div>
+        <p className="text-[9px] text-muted-foreground italic pl-1">
+          From TDS Management's filed 26Q/27Q amount_paid_credited for this deductee+section, across every quarter filed so far this FY.
+        </p>
+      </div>
+
+      <div className="pt-1.5 border-t border-slate-300">
+        <CalcRow
+          label={isBooksNotTds ? "Gap — in Books, not (fully) in TDS filings" : "Gap — in TDS filings, not (fully) in Books"}
+          value={fmtINR(flag.variance_amount, true)}
+          op="="
+          bold
+          tone={isBooksNotTds ? "warn" : "danger"}
+        />
+      </div>
+    </div>
+  );
+}
+
 function ConfidenceBar({ value }: { value: number | null }) {
   const v = value ?? 0;
   const color = v >= 80 ? "bg-red-500" : v >= 65 ? "bg-orange-400" : "bg-amber-400";
@@ -366,12 +442,14 @@ function FlagRow({
   onAccept,
   onDisregard,
   saving,
+  tallyEngId,
 }: {
   flag: TdsReconFlag;
   onRaiseQuery: (f: TdsReconFlag) => void;
   onAccept: (id: string) => void;
   onDisregard: (id: string) => void;
   saving: boolean;
+  tallyEngId: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const isPending = flag.flag_status === "pending";
@@ -507,25 +585,7 @@ function FlagRow({
 
           {/* Amount breakdown */}
           {flag.goal_number === 1 ? (
-            <div className="grid grid-cols-3 gap-2 p-2.5 bg-muted/30 rounded text-xs">
-              <div>
-                <p className="text-muted-foreground text-[10px]">Book Amount (TB)</p>
-                <p className="font-semibold">{fmtINR(flag.book_amount)}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-[10px]">TDS Module Amount</p>
-                <p className="font-semibold">{fmtINR(flag.tds_amount)}</p>
-              </div>
-              <div>
-                <p className="text-muted-foreground text-[10px]">Variance</p>
-                <p className={cn(
-                  "font-bold",
-                  (flag.variance_amount ?? 0) > 0 ? "text-orange-600" : "text-purple-600",
-                )}>
-                  {fmtINR(flag.variance_amount, true)}
-                </p>
-              </div>
-            </div>
+            <Goal1Breakdown flag={flag} tallyEngId={tallyEngId} />
           ) : (
             <CalculationBreakdown flag={flag} />
           )}
@@ -573,6 +633,45 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
     flags, loading, error, counts, firmId,
     refresh, updateFlagStatus,
   } = useTdsReconFlags(clientId, financialYear);
+
+  // Resolve the Tally engagement id so Goal 1 flag breakdowns can link
+  // straight to the real vouchers ("View Ledger") — same 3-step fallback
+  // TdsPartyMappingPanel already uses for the identical purpose.
+  const [tallyEngId, setTallyEngId] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function resolve() {
+      if (!clientId || !financialYear) { setTallyEngId(null); return; }
+      let id: string | null = null;
+      try {
+        const { data } = await (supabase as any)
+          .from("tally_groups").select("engagement_id")
+          .eq("client_id", clientId).eq("financial_year", financialYear)
+          .limit(1).maybeSingle();
+        id = (data as any)?.engagement_id ?? null;
+      } catch { /* ignore — fall through */ }
+      if (!id) {
+        try {
+          const { data } = await (supabase as any)
+            .from("tally_trial_balance").select("engagement_id")
+            .eq("client_id", clientId).eq("financial_year", financialYear)
+            .limit(1).maybeSingle();
+          id = (data as any)?.engagement_id ?? null;
+        } catch { /* ignore */ }
+      }
+      if (!id) {
+        try {
+          const { data } = await (supabase as any)
+            .from("tally_trial_balance").select("engagement_id")
+            .eq("client_id", clientId).limit(1).maybeSingle();
+          id = (data as any)?.engagement_id ?? null;
+        } catch { /* ignore */ }
+      }
+      if (!cancelled) setTallyEngId(id);
+    }
+    resolve();
+    return () => { cancelled = true; };
+  }, [clientId, financialYear]);
 
   const [running,      setRunning]      = useState(false);
   const [goalFilter,   setGoalFilter]   = useState<GoalFilter>("all");
@@ -986,6 +1085,7 @@ export function TdsReconFlagsPanel({ clientId, financialYear }: Props) {
                   onAccept={handleAccept}
                   onDisregard={handleDisregard}
                   saving={savingId === f.id}
+                  tallyEngId={tallyEngId}
                 />
               ))
             )}
