@@ -18,9 +18,6 @@ verify_jwt = false
 [functions.scrutiny-investigator]
 verify_jwt = false
 
-[functions.run-scrutiny]
-verify_jwt = false
-
 # Deployed with platform JWT verification ON (matches prod v4); the function also
 # self-validates the caller via a firm-ownership gate. Pinned true to keep prod behavior.
 [functions.run-scrutiny-v2]

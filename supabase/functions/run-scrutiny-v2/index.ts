@@ -1,12 +1,13 @@
 // run-scrutiny-v2 — deterministic detection_logic interpreter over the seeded scrutiny_rules.
 //
 // Reuses the UNIT-TESTED engine + adapters from ../_shared/* (kept byte-identical to
-// src/lib/scrutiny/* by src/lib/scrutiny/sharedSync.test.ts). This is a NEW function — it does
-// NOT touch the live `run-scrutiny`, so it can be wired behind a flag and A/B-tested.
+// src/lib/scrutiny/* by src/lib/scrutiny/sharedSync.test.ts).
 //
-// STATUS: authored, NOT yet deployed (no dev DB). Acceptance test = handoff Ticket 1.1
-// (non-zero finding_count, no error) once a dev DB exists. AI narration enrichment is
-// intentionally out of scope here (Phase 2, senior-owned).
+// STATUS: the only scrutiny engine. The legacy `run-scrutiny` (v1) only read file-import
+// snapshots and failed for Tally-synced clients; every caller now routes here via
+// src/lib/scrutiny/flags.ts, and v1's function has been deleted. Its narration_rules
+// (keyword + AI classification, Settings → Narration Rules) layer is ported below as a
+// best-effort routing step, same shape as the TDS routing it sits next to.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
@@ -298,12 +299,113 @@ serve(async (req) => {
       }
     }
 
-    // Delete previous OPEN findings only NOW — after reads + detection + TDS routing have succeeded.
-    // A run that fails or times out before this point leaves existing findings intact.
+    // ── Narration routing (ported from the retired v1 `run-scrutiny`) ──
+    // v1 read every active narration_rules row (Settings → Narration Rules) and, for each voucher
+    // narration: matched it against a rule's keywords in order; a "flag" rule raised a finding
+    // directly, a "send_ai" rule queued the entry for AI classification via claude-gateway. Neither
+    // path has a v2 equivalent, so a firm's custom narration rules would go silently dead the moment
+    // v1 is removed — ported here in the same best-effort, never-blocks-the-run shape as the TDS
+    // routing above.
+    //
+    // Fixed while porting: v1 fetched narration_rules with NO firm_id filter at all (only an
+    // ORDER BY firm_id, presumably meant to make this firm's custom rows sort first) — every firm's
+    // custom keyword rules silently applied to every OTHER firm's runs. Scoped here to this firm's
+    // rows plus firm-less (global default) rows only.
+    let narrationRows: Record<string, unknown>[] = [];
+    if (findingFirmId) {
+      try {
+        const { data: narrationRules } = await supabase
+          .from("narration_rules")
+          .select("*")
+          .eq("is_active", true)
+          .or(`firm_id.is.null,firm_id.eq.${findingFirmId}`)
+          .order("firm_id", { ascending: false, nullsFirst: false });
+        const nRules = (narrationRules ?? []) as { id: string; keywords: string[] | null; action: string | null; category: string | null; severity: string | null; message: string | null }[];
+
+        const voucherEntries = vouchersCur.filter((v) => typeof v.narration === "string" && v.narration.trim().length > 0);
+        const aiBatch: { entry_id: string; date: string; narration: string; amount: number; ledger_name: string; debit_credit: string }[] = [];
+
+        voucherEntries.forEach((entry, idx) => {
+          const narLower = String(entry.narration).toLowerCase();
+          const rule = nRules.find((r) => (r.keywords ?? []).some((kw) => narLower.includes(String(kw).toLowerCase())));
+          if (!rule) return;
+          if (rule.action === "flag") {
+            narrationRows.push({
+              client_id, financial_year, status: "open",
+              rule_id: `NAR-${String(rule.id).slice(0, 8)}`,
+              category: rule.category ?? "NAR",
+              severity: (rule.severity ?? "MEDIUM").toUpperCase(),
+              flag_message: rule.message || `Narration rule triggered: ${rule.category ?? ""}`,
+              amount: Number(entry.amount) || null,
+              detection_level: "voucher",
+              clause_3cd: null,
+              narration: entry.narration,
+              firm_id: findingFirmId,
+              engagement_id: engId,
+            });
+          } else if (rule.action === "send_ai") {
+            aiBatch.push({
+              entry_id: String(idx),
+              date: entry.voucher_date,
+              narration: String(entry.narration),
+              amount: Number(entry.amount) || 0,
+              ledger_name: entry.ledger_name ?? entry.party_ledger ?? "",
+              debit_credit: entry.dr_cr ?? "",
+            });
+          }
+        });
+
+        const AI_BATCH_SIZE = 50;
+        for (let i = 0; i < aiBatch.length; i += AI_BATCH_SIZE) {
+          const batch = aiBatch.slice(i, i + AI_BATCH_SIZE);
+          try {
+            const res = await fetch(`${Deno.env.get("SUPABASE_URL")}/functions/v1/claude-gateway`, {
+              method: "POST",
+              headers: {
+                Authorization: req.headers.get("Authorization") ?? `Bearer ${Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ request_type: "narration_batch_classifier", user_message: JSON.stringify(batch) }),
+            });
+            if (res.ok) {
+              const aiResult = await res.json();
+              const items = Array.isArray(aiResult) ? aiResult : aiResult?.raw ? [] : [aiResult];
+              for (const item of items) {
+                if (item?.category && item.category !== "normal") {
+                  const src = batch.find((b) => b.entry_id === String(item.entry_id));
+                  narrationRows.push({
+                    client_id, financial_year, status: "open",
+                    rule_id: "NAR-AI",
+                    category: "NAR",
+                    severity: String(item.risk_level ?? "MEDIUM").toUpperCase(),
+                    flag_message: item.flag_reason || `AI flagged: ${item.category}`,
+                    amount: src?.amount ?? null,
+                    detection_level: "voucher",
+                    clause_3cd: item.suggested_3cd_clause ?? null,
+                    narration: src?.narration ?? "",
+                    firm_id: findingFirmId,
+                    engagement_id: engId,
+                  });
+                }
+              }
+            } else {
+              console.error("claude-gateway narration batch failed:", res.status);
+            }
+          } catch (aiErr) {
+            console.error("Narration AI batch error:", aiErr);
+          }
+        }
+      } catch (narrErr) {
+        console.error("Narration routing error:", narrErr);
+      }
+    }
+
+    // Delete previous OPEN findings only NOW — after reads + detection + TDS/narration routing have
+    // succeeded. A run that fails or times out before this point leaves existing findings intact.
     await supabase.from("scrutiny_findings").delete()
       .eq("client_id", client_id).eq("financial_year", financial_year).eq("status", "open");
-    // Insert deterministic + TDS rows in SEPARATE batches — their column sets differ, and PostgREST
-    // requires a uniform key set per bulk insert.
+    // Insert deterministic + TDS + narration rows in SEPARATE batches — their column sets differ,
+    // and PostgREST requires a uniform key set per bulk insert.
     const insertChunked = async (batch: Record<string, unknown>[]) => {
       const CHUNK = 100;
       for (let i = 0; i < batch.length; i += CHUNK) {
@@ -313,8 +415,9 @@ serve(async (req) => {
     };
     if (rows.length > 0) await insertChunked(rows);
     if (tdsRows.length > 0) await insertChunked(tdsRows);
+    if (narrationRows.length > 0) await insertChunked(narrationRows);
 
-    const allRows = [...rows, ...tdsRows];
+    const allRows = [...rows, ...tdsRows, ...narrationRows];
     const counts = { HIGH: 0, MEDIUM: 0, LOW: 0 };
     for (const r of allRows) {
       const s = String(r.severity).toUpperCase();
@@ -360,6 +463,7 @@ serve(async (req) => {
       findings_created: counts,
       total,
       tds_flagged: tdsRows.length,         // TDS obligations routed in from tds-missing-scanner (Phase 2)
+      narration_flagged: narrationRows.length, // ported from retired v1: narration_rules keyword + AI hits
       source,                              // "tally_sync" | "snapshot" — which data path fed the engine
       input: { ledgers: tbCur.length, vouchers: vouchersCur.length, priorYearLedgers: tbPY?.length ?? 0 },
       coverage: result.coverage,           // rulesHandled / executedKinds / unhandled
