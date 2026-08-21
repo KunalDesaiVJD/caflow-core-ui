@@ -44,3 +44,19 @@ jobs:
             --no-verify-jwt
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Deploy run-scrutiny-v2 function
+        continue-on-error: true      # never fail the build (see header)
+        run: |
+          npx supabase functions deploy run-scrutiny-v2 \
+            --project-ref hubyywmodekfdzhwiumb
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      # Best-effort cleanup of the retired v1 engine. Safe to leave failing silently
+      # (continue-on-error) once it's actually gone — nothing re-creates it.
+      - name: Delete retired run-scrutiny (v1) function
+        continue-on-error: true
+        run: npx supabase functions delete run-scrutiny --project-ref hubyywmodekfdzhwiumb
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
