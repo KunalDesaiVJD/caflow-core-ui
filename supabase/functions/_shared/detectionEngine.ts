@@ -1225,6 +1225,127 @@ const h_running_balance: CheckHandler = (rule, data) => {
 };
 
 // ---------------------------------------------------------------------------
+// high_risk_ledger — a Creditor/Debtor/Loan ledger with a cash-routing shape (payments only,
+// receipts only, or a pay+receipt mix) and ZERO real underlying business activity (no Sales,
+// Purchase, Debit/Credit Note — Journal doesn't count as "real" either, so interest/accrual
+// journals on a loan don't mask the pattern). That shape — cash moving on a party/loan ledger with
+// no invoice or documented reason behind it — is the signature of an undisclosed loan, a benami
+// transaction, or a FEMA/Income-Tax-Act violation dressed up as a trade balance.
+//
+// Genuinely needs its own handler: this is FIVE simultaneous per-ledger counts (pay/receipt/
+// journal/other, plus two derived amount sums) tested together, which neither h_expr's account
+// grain (one static snapshot) nor its aggregate (one metric at a time) can express.
+//
+// One rule row per (ledger-group × activity-pattern) combination — 18 in total, sharing this one
+// handler and the one shared per-run stats cache below (computing all 18 rules' worth of ledger
+// stats independently, 18 full scans of every voucher, would be pure waste for one detection run).
+//
+// detection_logic: { check:"high_risk_ledger", scope:{parent_group_keywords:[...]},
+//   exclude_group_keywords?:string[] (e.g. the generic Loans(Liability) catch-all rules exclude the
+//   more specific Secured/Unsecured/Loans&Advances groups so they don't double-count),
+//   pattern:"only_pay"|"only_receipt"|"mix", is_loan?:bool (skips the vendor-journal suppression —
+//   an interest journal on a loan is not "normal expense-booked-then-paid" accounting),
+//   exclude_keywords?:string[] (default: statutory/payroll/adjustment ledger names below),
+//   vendor_journal_pct?:number (default 80), message? }
+// ---------------------------------------------------------------------------
+
+const HRL_DEFAULT_EXCLUDE_KEYWORDS = [
+  "gst", "igst", "cgst", "sgst", "tds", "tcs", "vat", "cst", "professional tax", "income tax",
+  "insurance", "subscription", "prepaid", "provision", "salary", "wages", "round off", "roundoff",
+  "discount", "depreciation",
+];
+
+interface HrlStats {
+  payCnt: number; rcptCnt: number; jrnlCnt: number; otherCnt: number;
+  jrnlCrAmt: number; payDrAmt: number; totAllAmt: number; openingAbs: number;
+}
+
+/** Per-ledger activity stats, computed once per run and cached by the vouchers array identity —
+ * all 18 high_risk_ledger rules in a run share this instead of each re-scanning every voucher. */
+const _hrlStatsCache = new WeakMap<VoucherRow[], Map<string, HrlStats>>();
+
+const computeHrlStats = (data: ScrutinyData): Map<string, HrlStats> => {
+  const cached = _hrlStatsCache.get(data.vouchers);
+  if (cached) return cached;
+  const stats = new Map<string, HrlStats>();
+  const statFor = (name: string | null | undefined): HrlStats | null => {
+    const key = normName(name);
+    if (!key) return null;
+    let s = stats.get(key);
+    if (!s) { s = { payCnt: 0, rcptCnt: 0, jrnlCnt: 0, otherCnt: 0, jrnlCrAmt: 0, payDrAmt: 0, totAllAmt: 0, openingAbs: 0 }; stats.set(key, s); }
+    return s;
+  };
+  for (const v of data.vouchers) {
+    const legs = Array.isArray(v.line_items) && v.line_items.length
+      ? v.line_items
+      : [{ ledger_name: v.ledger_name ?? v.party_ledger, dr_cr: v.dr_cr, amount: v.amount }];
+    const vt = lc(v.voucher_type);
+    const isPay = vt.includes("payment");
+    const isRcpt = vt.includes("receipt");
+    const isJrnl = vt.includes("journal");
+    for (const leg of legs) {
+      const s = statFor(leg.ledger_name as string | null | undefined);
+      if (!s) continue;
+      const amt = Math.abs(num(leg.amount));
+      const side = sideOf(leg.dr_cr);
+      if (isPay) { s.payCnt++; if (side === "Dr") s.payDrAmt += amt; }
+      else if (isRcpt) s.rcptCnt++;
+      else if (isJrnl) { s.jrnlCnt++; if (side === "Cr") s.jrnlCrAmt += amt; }
+      else s.otherCnt++;
+      s.totAllAmt += amt;
+    }
+  }
+  for (const r of data.tb) {
+    const s = stats.get(normName(r.ledger_name));
+    if (s) s.openingAbs = num(r.opening_balance);
+  }
+  _hrlStatsCache.set(data.vouchers, stats);
+  return stats;
+};
+
+const h_high_risk_ledger: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const exclGroup = dl.exclude_group_keywords as string[] | undefined;
+  const excludeKw = (Array.isArray(dl.exclude_keywords) ? dl.exclude_keywords : HRL_DEFAULT_EXCLUDE_KEYWORDS) as string[];
+  const pattern = String(dl.pattern ?? "");
+  const isLoan = !!dl.is_loan;
+  const vendorJournalPct = num(dl.vendor_journal_pct, 80);
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const stats = computeHrlStats(data);
+
+  const out: ScrutinyFinding[] = [];
+  for (const r of data.tb) {
+    if (!accountInScope(r, scope)) continue;
+    if (Array.isArray(exclGroup) && exclGroup.length && kwMatch(r.parent_group ?? "", exclGroup)) continue;
+    if (kwMatch(r.ledger_name, excludeKw)) continue;
+    const s = stats.get(normName(r.ledger_name));
+    if (!s) continue;
+
+    const matches =
+      pattern === "only_pay" ? (s.payCnt > 0 && s.rcptCnt === 0 && s.otherCnt === 0) :
+      pattern === "only_receipt" ? (s.rcptCnt > 0 && s.payCnt === 0 && s.otherCnt === 0) :
+      pattern === "mix" ? (s.payCnt > 0 && s.rcptCnt > 0 && s.otherCnt === 0) : false;
+    if (!matches) continue;
+
+    // Suppression 1: the ledger simply cleared a brought-forward balance this year (period activity
+    // total equals the opening balance) — settlement, not an undocumented new transaction.
+    if (s.openingAbs > 0 && Math.abs(s.totAllAmt - s.openingAbs) < 0.5) continue;
+    // Suppression 2: normal "expense booked via Journal, then paid via Payment" accounting — never
+    // applied to loan-type rules, where an interest journal is not expense-booking.
+    if (!isLoan && s.payDrAmt > 0 && (s.jrnlCrAmt / s.payDrAmt) * 100 > vendorJournalPct) continue;
+
+    const amt = num(r.closing_balance);
+    out.push(finding(rule, {
+      account: r.ledger_name, amount: amt,
+      flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(amt) }),
+      evidence: { pay_count: s.payCnt, receipt_count: s.rcptCnt, journal_count: s.jrnlCnt, other_count: s.otherCnt, opening: s.openingAbs },
+    }));
+  }
+  return out;
+};
+
+// ---------------------------------------------------------------------------
 // Line-item (cross-leg) handlers — read the full double entry (VoucherRow.line_items) to express
 // checks a single flattened row cannot: GST intra/inter co-tagging and "money moved but nothing
 // booked" stream gaps. Both group by party and scan every leg's ledger_name.
@@ -1826,6 +1947,7 @@ export const TIER_B_CHECK_KINDS = Object.keys(TIER_B_HANDLERS);
 export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   expr: h_expr,
   running_balance: h_running_balance,
+  high_risk_ledger: h_high_risk_ledger,
   cotag: h_cotag,
   stream_gap: h_stream_gap,
   ageing: h_ageing,
