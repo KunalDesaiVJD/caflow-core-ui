@@ -540,6 +540,28 @@ describe("expr — parent_group scoping on the voucher path (RC1)", () => {
   });
 });
 
+describe("h_expr account grain — amount_field", () => {
+  // A "settled during the year" check (closing == 0) needs the OPENING figure in the finding —
+  // closing is definitionally 0 for every match, so the default amount_field would report ₹0.
+  it("defaults to closing_balance; amount_field:\"opening\" reports the opening balance instead", () => {
+    const squaredUp = rule({
+      rule_id: "LOAN-303", category: "LOAN", detection_level: "account",
+      detection_logic: {
+        check: "expr", grain: "account", scope: { parent_group_keywords: ["loan"] },
+        where: [{ field: "opening", op: ">", value: 0 }, { field: "closing", op: "==", value: 0 }],
+        amount_field: "opening",
+      },
+      audit_query_template: "{account} opening ₹{amount}",
+    });
+    const out = run(squaredUp, {
+      tb: [tb({ ledger_name: "Ramesh — Unsecured Loan", parent_group: "Unsecured Loans", opening_balance: 600000, opening_type: "Cr", closing_balance: 0, balance_type: "Cr" })],
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].amount).toBe(600000);
+    expect(out[0].flag_message).toContain("₹6,00,000");
+  });
+});
+
 describe("cotag — GST intra/inter co-tagging (line_items)", () => {
   it("flags a party carrying both CGST/SGST and IGST legs; leaves a single-tax party alone", () => {
     const r = rule({
@@ -901,6 +923,37 @@ describe("scope regressions — voucher_type as a string, and leg-aware matching
     expect(run(legRule(true), data)).toHaveLength(1);
     // opt-in by design: without the flag the leg is invisible, so existing rules do not widen
     expect(run(legRule(false), data)).toHaveLength(0);
+  });
+
+  // A cash-withdrawal/deposit CONTRA voucher touches both a Cash and a Bank leg. A pure cash
+  // payment/receipt rule must not misread it as a Section 40A(3)/269ST breach.
+  const cashExclBankRule = () => rule({
+    rule_id: "CASH-EXCL-01", detection_level: "voucher",
+    detection_logic: { check: "expr", grain: "voucher", scope: { cash_only: true, exclude_leg_group_keywords: ["bank"] }, where: [{ field: "abs_amount", op: ">", value: 0 }] },
+    audit_query_template: "{account} {amount}",
+  });
+
+  it("scope.exclude_leg_group_keywords rejects a voucher whose legs include the excluded group", () => {
+    const tbRows = [
+      tb({ ledger_name: "Cash A/c", parent_group: "Cash-in-Hand" }),
+      tb({ ledger_name: "HDFC Bank", parent_group: "Bank Accounts" }),
+    ];
+    const contra = vch({
+      amount: 50000, voucher_date: "2025-06-01", voucher_type: "Contra", ledger_name: "Cash A/c",
+      line_items: [
+        { ledger_name: "Cash A/c", dr_cr: "Dr", amount: 50000 },
+        { ledger_name: "HDFC Bank", dr_cr: "Cr", amount: 50000 },
+      ],
+    });
+    const purePayment = vch({
+      amount: 15000, voucher_date: "2025-06-02", voucher_type: "Payment", ledger_name: "Cash A/c",
+      line_items: [
+        { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 15000 },
+        { ledger_name: "Office Expense", dr_cr: "Dr", amount: 15000 },
+      ],
+    });
+    expect(run(cashExclBankRule(), { tb: tbRows, vouchers: [contra] })).toHaveLength(0);
+    expect(run(cashExclBankRule(), { tb: tbRows, vouchers: [purePayment] })).toHaveLength(1);
   });
 });
 
@@ -1305,5 +1358,155 @@ describe("run ledger — completeness accounting (no rule silently dropped)", ()
     expect(byId["CASH-X"].found).toBe(1);
     expect(byId["ZZZ-1"].status).toBe("skipped_no_handler");
     expect(byId["RAT-X"].status).toBe("needs_data");
+  });
+});
+
+// TDL logic inventory Phase 1 (2026-08-21 migration) — mirrors the literal detection_logic seeded
+// for each rule_id, so a future edit to the migration's JSON is caught here if it stops matching
+// the fixture it was designed for.
+describe("TDL Phase 1 rules — CASH-002/003 fixes, CASH-008, LOAN-301/302/303, BKR-008, CRED/DEBT-008/009", () => {
+  const cashBankTB = [
+    tb({ ledger_name: "Cash A/c", parent_group: "Cash-in-Hand" }),
+    tb({ ledger_name: "HDFC Bank", parent_group: "Bank Accounts" }),
+  ];
+
+  it("CASH-002 (fixed): cash payment > ₹10,000 fires; the same payment via a CONTRA touching Bank does not", () => {
+    const r = rule({
+      rule_id: "CASH-002", category: "CASH", detection_level: "voucher",
+      detection_logic: { check: "expr", grain: "voucher", scope: { cash_only: true, side: "Dr", exclude_leg_group_keywords: ["bank"] }, where: [{ field: "abs_amount", op: ">", value: 10000 }] },
+      audit_query_template: "{account} {amount} {date}",
+    });
+    const purePayment = vch({ amount: 15000, voucher_date: "2025-06-01", voucher_type: "Payment", ledger_name: "Cash A/c", dr_cr: "Dr", line_items: [{ ledger_name: "Cash A/c", dr_cr: "Dr", amount: 15000 }, { ledger_name: "Office Expense", dr_cr: "Cr", amount: 15000 }] });
+    const bankContra = vch({ amount: 15000, voucher_date: "2025-06-02", voucher_type: "Contra", ledger_name: "Cash A/c", dr_cr: "Dr", line_items: [{ ledger_name: "Cash A/c", dr_cr: "Dr", amount: 15000 }, { ledger_name: "HDFC Bank", dr_cr: "Cr", amount: 15000 }] });
+    expect(run(r, { tb: cashBankTB, vouchers: [purePayment] })).toHaveLength(1);
+    expect(run(r, { tb: cashBankTB, vouchers: [bankContra] })).toHaveLength(0);
+  });
+
+  it("CASH-003 (fixed): cash receipt > ₹2,00,000 fires; a bank-deposit CONTRA does not", () => {
+    const r = rule({
+      rule_id: "CASH-003", category: "CASH", detection_level: "voucher",
+      detection_logic: { check: "expr", grain: "voucher", scope: { cash_only: true, side: "Cr", exclude_leg_group_keywords: ["bank"] }, where: [{ field: "abs_amount", op: ">", value: 200000 }] },
+      audit_query_template: "{account} {amount} {date}",
+    });
+    const pureReceipt = vch({ amount: 250000, voucher_date: "2025-06-01", voucher_type: "Receipt", ledger_name: "Cash A/c", dr_cr: "Cr", line_items: [{ ledger_name: "Cash A/c", dr_cr: "Cr", amount: 250000 }, { ledger_name: "Ramesh Traders", dr_cr: "Dr", amount: 250000 }] });
+    const bankDeposit = vch({ amount: 250000, voucher_date: "2025-06-02", voucher_type: "Contra", ledger_name: "Cash A/c", dr_cr: "Cr", line_items: [{ ledger_name: "Cash A/c", dr_cr: "Cr", amount: 250000 }, { ledger_name: "HDFC Bank", dr_cr: "Dr", amount: 250000 }] });
+    expect(run(r, { tb: cashBankTB, vouchers: [pureReceipt] })).toHaveLength(1);
+    expect(run(r, { tb: cashBankTB, vouchers: [bankDeposit] })).toHaveLength(0);
+  });
+
+  it("CASH-008: two same-day cash receipts from one party, neither alone over ₹2L, breach the daily aggregate", () => {
+    const r = rule({
+      rule_id: "CASH-008", category: "CASH", detection_level: "voucher",
+      detection_logic: { check: "expr", grain: "voucher", scope: { cash_only: true, side: "Cr", exclude_leg_group_keywords: ["bank"] }, aggregate: { by: ["party", "day"], fn: "sum", field: "abs_amount", having: { op: ">", value: 200000 } } },
+      audit_query_template: "{account} {date} {amount}",
+    });
+    const leg1 = vch({ amount: 150000, voucher_date: "2025-06-01", voucher_type: "Receipt", party_ledger: "Ramesh Traders", ledger_name: "Cash A/c", dr_cr: "Cr", line_items: [{ ledger_name: "Cash A/c", dr_cr: "Cr", amount: 150000 }] });
+    const leg2 = vch({ amount: 100000, voucher_date: "2025-06-01", voucher_type: "Receipt", party_ledger: "Ramesh Traders", ledger_name: "Cash A/c", dr_cr: "Cr", line_items: [{ ledger_name: "Cash A/c", dr_cr: "Cr", amount: 100000 }] });
+    const otherParty = vch({ amount: 150000, voucher_date: "2025-06-01", voucher_type: "Receipt", party_ledger: "Suresh Traders", ledger_name: "Cash A/c", dr_cr: "Cr", line_items: [{ ledger_name: "Cash A/c", dr_cr: "Cr", amount: 150000 }] });
+    const out = run(r, { tb: cashBankTB, vouchers: [leg1, leg2, otherParty] });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Ramesh Traders");
+    expect(out[0].amount).toBe(250000);
+  });
+
+  const loanTB = [
+    tb({ ledger_name: "Ramesh — Unsecured Loan", parent_group: "Unsecured Loans" }),
+    tb({ ledger_name: "Cash A/c", parent_group: "Cash-in-Hand" }),
+    tb({ ledger_name: "HDFC Bank", parent_group: "Bank Accounts" }),
+  ];
+
+  it("LOAN-301: loan accepted in cash ≥ ₹20,000 fires; the same loan accepted by bank transfer does not", () => {
+    const r = rule({
+      rule_id: "LOAN-301", category: "LOAN", detection_level: "voucher",
+      detection_logic: { check: "expr", grain: "voucher", scope: { parent_group_keywords: ["loan"], match_legs: true, ledger_keywords: ["cash-in-hand"], side: "Cr" }, aggregate: { by: ["ledger"], fn: "sum", field: "abs_amount", having: { op: ">=", value: 20000 } } },
+      audit_query_template: "{account} {amount}",
+    });
+    const cashAccepted = vch({
+      amount: 25000, voucher_date: "2025-06-01", voucher_type: "Receipt", party_ledger: "Ramesh — Unsecured Loan", ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Cr",
+      line_items: [{ ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Cr", amount: 25000 }, { ledger_name: "Cash A/c", dr_cr: "Dr", amount: 25000 }],
+    });
+    const bankAccepted = vch({
+      amount: 25000, voucher_date: "2025-06-02", voucher_type: "Receipt", party_ledger: "Ramesh — Unsecured Loan", ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Cr",
+      line_items: [{ ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Cr", amount: 25000 }, { ledger_name: "HDFC Bank", dr_cr: "Dr", amount: 25000 }],
+    });
+    expect(run(r, { tb: loanTB, vouchers: [cashAccepted] })).toHaveLength(1);
+    expect(run(r, { tb: loanTB, vouchers: [bankAccepted] })).toHaveLength(0);
+  });
+
+  it("LOAN-302: loan repaid in cash ≥ ₹20,000 fires; repayment by bank transfer does not", () => {
+    const r = rule({
+      rule_id: "LOAN-302", category: "LOAN", detection_level: "voucher",
+      detection_logic: { check: "expr", grain: "voucher", scope: { parent_group_keywords: ["loan"], match_legs: true, ledger_keywords: ["cash-in-hand"], side: "Dr" }, aggregate: { by: ["ledger"], fn: "sum", field: "abs_amount", having: { op: ">=", value: 20000 } } },
+      audit_query_template: "{account} {amount}",
+    });
+    const cashRepaid = vch({
+      amount: 30000, voucher_date: "2025-09-01", voucher_type: "Payment", party_ledger: "Ramesh — Unsecured Loan", ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Dr",
+      line_items: [{ ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Dr", amount: 30000 }, { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 30000 }],
+    });
+    const bankRepaid = vch({
+      amount: 30000, voucher_date: "2025-09-02", voucher_type: "Payment", party_ledger: "Ramesh — Unsecured Loan", ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Dr",
+      line_items: [{ ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Dr", amount: 30000 }, { ledger_name: "HDFC Bank", dr_cr: "Cr", amount: 30000 }],
+    });
+    expect(run(r, { tb: loanTB, vouchers: [cashRepaid] })).toHaveLength(1);
+    expect(run(r, { tb: loanTB, vouchers: [bankRepaid] })).toHaveLength(0);
+  });
+
+  // LOAN-303 (squared-up, amount_field:"opening") is exercised end-to-end above in the
+  // "h_expr account grain — amount_field" describe block, against this exact detection_logic shape.
+
+  it("BKR-008: a small nonzero balance under ₹1,000 fires; nil and material balances do not", () => {
+    const r = rule({
+      rule_id: "BKR-008", category: "BKR", detection_level: "account",
+      detection_logic: { check: "expr", grain: "account", scope: { parent_group_keywords: ["creditor", "debtor", "payable", "receivable"] }, where: [{ field: "abs_closing", op: "!=", value: 0 }, { field: "abs_closing", op: "<", value: 1000 }] },
+      audit_query_template: "{account} {amount}",
+    });
+    const small = tb({ ledger_name: "Old Vendor Balance", parent_group: "Sundry Creditors", closing_balance: 42, balance_type: "Cr" });
+    const nil = tb({ ledger_name: "Settled Vendor", parent_group: "Sundry Creditors", closing_balance: 0, balance_type: "Cr" });
+    const material = tb({ ledger_name: "Active Vendor", parent_group: "Sundry Creditors", closing_balance: 50000, balance_type: "Cr" });
+    expect(run(r, { tb: [small, nil, material] })).toHaveLength(1);
+  });
+
+  it("CRED-008 / DEBT-008: a balance carried forward with zero debit/credit activity fires; any activity clears it", () => {
+    const rCred = rule({
+      rule_id: "CRED-008", category: "CRED", detection_level: "account",
+      detection_logic: { check: "expr", grain: "account", scope: { parent_group_keywords: ["creditor"], nonzero: true }, where: [{ field: "opening", op: "!=", value: 0 }, { field: "debit_amount", op: "==", value: 0 }, { field: "credit_amount", op: "==", value: 0 }] },
+      audit_query_template: "{account} {amount}",
+    });
+    const dormant = tb({ ledger_name: "Dormant Creditor", parent_group: "Sundry Creditors", opening_balance: 5000, opening_type: "Cr", debit_amount: 0, credit_amount: 0, closing_balance: 5000, balance_type: "Cr" });
+    const active = tb({ ledger_name: "Active Creditor", parent_group: "Sundry Creditors", opening_balance: 5000, opening_type: "Cr", debit_amount: 2000, credit_amount: 1000, closing_balance: 4000, balance_type: "Cr" });
+    expect(run(rCred, { tb: [dormant, active] })).toHaveLength(1);
+    expect(run(rCred, { tb: [dormant, active] })[0].account).toBe("Dormant Creditor");
+
+    const rDebt = rule({
+      rule_id: "DEBT-008", category: "DEBT", detection_level: "account",
+      detection_logic: { check: "expr", grain: "account", scope: { parent_group_keywords: ["debtor"], nonzero: true }, where: [{ field: "opening", op: "!=", value: 0 }, { field: "debit_amount", op: "==", value: 0 }, { field: "credit_amount", op: "==", value: 0 }] },
+      audit_query_template: "{account} {amount}",
+    });
+    const dormantDebtor = tb({ ledger_name: "Dormant Debtor", parent_group: "Sundry Debtors", opening_balance: 8000, opening_type: "Dr", debit_amount: 0, credit_amount: 0, closing_balance: 8000, balance_type: "Dr" });
+    expect(run(rDebt, { tb: [dormantDebtor] })).toHaveLength(1);
+  });
+
+  it("CRED-009: outstanding all year with zero payments but growing credits fires — ITC reversal risk", () => {
+    const r = rule({
+      rule_id: "CRED-009", category: "CRED", detection_level: "account",
+      detection_logic: { check: "expr", grain: "account", scope: { parent_group_keywords: ["creditor"] }, where: [{ field: "opening_type", op: "==", value: "Cr" }, { field: "opening", op: ">", value: 0 }, { field: "debit_amount", op: "==", value: 0 }, { field: "credit_amount", op: ">", value: 0 }] },
+      audit_query_template: "{account} {amount}",
+    });
+    const noPayment = tb({ ledger_name: "Unpaid Supplier", parent_group: "Sundry Creditors", opening_balance: 10000, opening_type: "Cr", debit_amount: 0, credit_amount: 5000, closing_balance: 15000, balance_type: "Cr" });
+    const paidSome = tb({ ledger_name: "Partly Paid Supplier", parent_group: "Sundry Creditors", opening_balance: 10000, opening_type: "Cr", debit_amount: 3000, credit_amount: 5000, closing_balance: 12000, balance_type: "Cr" });
+    expect(run(r, { tb: [noPayment, paidSome] })).toHaveLength(1);
+    expect(run(r, { tb: [noPayment, paidSome] })[0].account).toBe("Unpaid Supplier");
+  });
+
+  it("DEBT-009: continuing sales with zero receipts all year fires — collectability/provisioning risk", () => {
+    const r = rule({
+      rule_id: "DEBT-009", category: "DEBT", detection_level: "account",
+      detection_logic: { check: "expr", grain: "account", scope: { parent_group_keywords: ["debtor"] }, where: [{ field: "opening_type", op: "==", value: "Dr" }, { field: "opening", op: ">", value: 0 }, { field: "debit_amount", op: ">", value: 0 }, { field: "credit_amount", op: "==", value: 0 }] },
+      audit_query_template: "{account} {amount}",
+    });
+    const noReceipts = tb({ ledger_name: "Non-Paying Customer", parent_group: "Sundry Debtors", opening_balance: 20000, opening_type: "Dr", debit_amount: 15000, credit_amount: 0, closing_balance: 35000, balance_type: "Dr" });
+    const paying = tb({ ledger_name: "Paying Customer", parent_group: "Sundry Debtors", opening_balance: 20000, opening_type: "Dr", debit_amount: 15000, credit_amount: 10000, closing_balance: 25000, balance_type: "Dr" });
+    expect(run(r, { tb: [noReceipts, paying] })).toHaveLength(1);
+    expect(run(r, { tb: [noReceipts, paying] })[0].account).toBe("Non-Paying Customer");
   });
 });
