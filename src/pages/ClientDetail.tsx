@@ -18,6 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogD
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { VersionHistoryPanel } from "@/components/VersionHistoryPanel";
+import { scrutinyRunFunction } from "@/lib/scrutiny/flags";
 import { ClientGroupsSection } from "@/components/client-detail/ClientGroupsSection";
 import ClassificationHistoryTimeline from "@/components/clients/ClassificationHistoryTimeline";
 import { useToast } from "@/hooks/use-toast";
@@ -474,11 +475,11 @@ const ClientDetail = () => {
     if (!clientId || !client) return;
     setScrutinyRunning(true);
     try {
-      const { error } = await supabase.functions.invoke("run-scrutiny", {
-        body: { client_id: clientId, financial_year: new Date().getFullYear().toString(), firm_id: client.firm_id },
+      const { data: result, error } = await supabase.functions.invoke(scrutinyRunFunction(), {
+        body: { client_id: clientId, financial_year: getCurrentFY(), firm_id: client.firm_id },
       });
       if (error) throw error;
-      toast({ title: "Scrutiny complete" });
+      toast({ title: "Scrutiny complete", description: `${result?.total ?? 0} finding(s) raised.` });
       const { data } = await supabase.from("scrutiny_findings").select("*").eq("client_id", clientId);
       setFindings(data || []);
     } catch (e: any) {

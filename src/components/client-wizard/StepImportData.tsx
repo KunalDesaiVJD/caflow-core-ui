@@ -3,6 +3,14 @@ import { Button } from "@/components/ui/button";
 import { Upload, FileSpreadsheet, CheckCircle2, Shield, Loader2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import * as XLSX from "xlsx";
+import { scrutinyRunFunction } from "@/lib/scrutiny/flags";
+
+/** "2026-27"-style financial year for the currently running date. */
+function getCurrentFY(): string {
+  const now = new Date();
+  const fyStart = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  return `${fyStart}-${String(fyStart + 1).slice(-2)}`;
+}
 
 export interface ImportDataResult {
   filename: string;
@@ -139,8 +147,8 @@ export const StepImportData = ({ data, onChange, onSkip, clientId, firmId, onScr
       // Keeping the scrutiny trigger below so the wizard flow still works.
 
       // Then run scrutiny
-      const { data: result, error } = await supabase.functions.invoke("run-scrutiny", {
-        body: { client_id: clientId, financial_year: new Date().getFullYear().toString(), firm_id: firmId },
+      const { data: result, error } = await supabase.functions.invoke(scrutinyRunFunction(), {
+        body: { client_id: clientId, financial_year: getCurrentFY(), firm_id: firmId },
       });
       if (error) throw error;
 
