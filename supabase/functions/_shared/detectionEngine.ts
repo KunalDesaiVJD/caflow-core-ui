@@ -1139,6 +1139,92 @@ const h_expr: CheckHandler = (rule, data, ctx) => {
 };
 
 // ---------------------------------------------------------------------------
+// running_balance — a sequential, date-ordered running-balance walk per ledger. Neither h_expr's
+// account grain (one static snapshot) nor its aggregate (a groupby-reduce, no memory of order) can
+// express this: "did this ledger's balance ever go negative" and "what's the highest balance this
+// ledger reached at ANY point in the year" both need the actual chronological path, not just the
+// opening/closing endpoints. One shared walk, two uses:
+//   - mode:"min_negative" — cash-book integrity: a cash ledger should never legitimately go credit.
+//     Tracks the deepest negative point reached and every date the balance was negative.
+//   - mode:"max_abs" — the "Max Outstanding" figure Form 3CD Clause 31 disclosure needs: a loan
+//     that peaked mid-year can look unremarkable by its closing balance alone.
+// detection_logic: { check:"running_balance", scope?, sign?:"dr_positive"|"cr_positive" (default
+//   dr_positive), mode?:"min_negative"|"max_abs" (default min_negative), threshold?:number
+//   (default 0 — min_negative fires below it, max_abs fires above its absolute value), message? }
+// ---------------------------------------------------------------------------
+
+interface LedgerEntry { date: string; amount: number; dr_cr: "Dr" | "Cr"; voucher_number?: string | null; }
+
+/** Every voucher LEG touching each ledger, sorted by date — built once, reused per TB row. Prefers
+ * the full double entry (line_items) when present; falls back to the voucher's own primary fields
+ * for older/simpler data that never carried the full entry. */
+const buildLedgerEntryIndex = (vouchers: VoucherRow[]): Map<string, LedgerEntry[]> => {
+  const idx = new Map<string, LedgerEntry[]>();
+  const push = (name: string | null | undefined, e: LedgerEntry) => {
+    const key = normName(name);
+    if (!key) return;
+    (idx.get(key) ?? idx.set(key, []).get(key)!).push(e);
+  };
+  for (const v of vouchers) {
+    const legs = Array.isArray(v.line_items) ? v.line_items : [];
+    if (legs.length) {
+      for (const leg of legs) push(leg.ledger_name, { date: v.voucher_date, amount: Math.abs(num(leg.amount)), dr_cr: sideOf(leg.dr_cr), voucher_number: v.voucher_number });
+    } else {
+      push(v.ledger_name ?? v.party_ledger, { date: v.voucher_date, amount: Math.abs(num(v.amount)), dr_cr: sideOf(v.dr_cr), voucher_number: v.voucher_number });
+    }
+  }
+  for (const arr of idx.values()) arr.sort((a, b) => a.date.localeCompare(b.date));
+  return idx;
+};
+
+const signedOpening = (r: TBRow, sign: "dr_positive" | "cr_positive"): number => {
+  const isDr = sideOf(r.opening_type) === "Dr";
+  const mag = num(r.opening_balance);
+  return sign === "dr_positive" ? (isDr ? mag : -mag) : (isDr ? -mag : mag);
+};
+
+const signedDelta = (e: LedgerEntry, sign: "dr_positive" | "cr_positive"): number =>
+  sign === "dr_positive" ? (e.dr_cr === "Dr" ? e.amount : -e.amount) : (e.dr_cr === "Cr" ? e.amount : -e.amount);
+
+const h_running_balance: CheckHandler = (rule, data) => {
+  const dl = rule.detection_logic as unknown as Record<string, unknown>;
+  const scope = dl.scope as Record<string, unknown> | undefined;
+  const sign: "dr_positive" | "cr_positive" = dl.sign === "cr_positive" ? "cr_positive" : "dr_positive";
+  const mode: "min_negative" | "max_abs" = dl.mode === "max_abs" ? "max_abs" : "min_negative";
+  const t = num(dl.threshold ?? rule.threshold_value, 0);
+  const tpl = (dl.message as string | undefined) ?? rule.audit_query_template;
+  const idx = buildLedgerEntryIndex(data.vouchers);
+
+  const out: ScrutinyFinding[] = [];
+  for (const r of data.tb) {
+    if (!accountInScope(r, scope)) continue;
+    const entries = idx.get(normName(r.ledger_name)) ?? [];
+    let running = signedOpening(r, sign);
+    let extremum = running;
+    let extremumDate: string | undefined;
+    const negativeDates: string[] = [];
+    for (const e of entries) {
+      running += signedDelta(e, sign);
+      if (mode === "min_negative") {
+        if (running < extremum) { extremum = running; extremumDate = e.date; }
+        if (running < 0 && negativeDates[negativeDates.length - 1] !== e.date) negativeDates.push(e.date);
+      } else if (Math.abs(running) > Math.abs(extremum)) {
+        extremum = running; extremumDate = e.date;
+      }
+    }
+    const fires = mode === "min_negative" ? extremum < t : Math.abs(extremum) > t;
+    if (!fires) continue;
+    const amt = Math.abs(extremum);
+    out.push(finding(rule, {
+      account: r.ledger_name, amount: amt, date: extremumDate,
+      flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(amt), date: extremumDate ?? "" }),
+      evidence: mode === "min_negative" ? { negative_dates: negativeDates, peak_negative: amt } : { peak_date: extremumDate, peak_outstanding: amt },
+    }));
+  }
+  return out;
+};
+
+// ---------------------------------------------------------------------------
 // Line-item (cross-leg) handlers — read the full double entry (VoucherRow.line_items) to express
 // checks a single flattened row cannot: GST intra/inter co-tagging and "money moved but nothing
 // booked" stream gaps. Both group by party and scan every leg's ledger_name.
@@ -1739,6 +1825,7 @@ export const TIER_B_CHECK_KINDS = Object.keys(TIER_B_HANDLERS);
 /** Generic composable evaluator + cross-leg (line_items) handlers — data-driven, no bespoke code per rule. */
 export const GENERIC_HANDLERS: Record<string, CheckHandler> = {
   expr: h_expr,
+  running_balance: h_running_balance,
   cotag: h_cotag,
   stream_gap: h_stream_gap,
   ageing: h_ageing,

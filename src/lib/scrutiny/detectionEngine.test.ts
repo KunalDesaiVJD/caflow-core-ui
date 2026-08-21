@@ -1510,3 +1510,72 @@ describe("TDL Phase 1 rules — CASH-002/003 fixes, CASH-008, LOAN-301/302/303, 
     expect(run(r, { tb: [noReceipts, paying] })[0].account).toBe("Non-Paying Customer");
   });
 });
+
+describe("running_balance — sequential date-ordered walk per ledger", () => {
+  it("mode:min_negative flags a cash ledger that dipped into credit, with the deepest point and every negative date", () => {
+    const r = rule({
+      rule_id: "CASH-009", category: "CASH", detection_level: "account",
+      detection_logic: { check: "running_balance", scope: { parent_group_keywords: ["cash"] }, sign: "dr_positive", mode: "min_negative", threshold: 0 },
+      audit_query_template: "{account} went ₹{amount} negative on {date}",
+    });
+    const tbRows = [
+      tb({ ledger_name: "Cash A/c", parent_group: "Cash-in-Hand", opening_balance: 1000, opening_type: "Dr", closing_balance: 300, balance_type: "Dr" }),
+      tb({ ledger_name: "Petty Cash", parent_group: "Cash-in-Hand", opening_balance: 5000, opening_type: "Dr", closing_balance: 4000, balance_type: "Dr" }),
+    ];
+    const vouchers = [
+      // Cash A/c: 1000 -> -500 (Cr 1500) -> 300 (Dr 800) -> -700 (Cr 1000): dips negative twice, deepest -700.
+      vch({ amount: 1500, voucher_date: "2025-06-01", voucher_type: "Payment", ledger_name: "Cash A/c", dr_cr: "Cr" }),
+      vch({ amount: 800, voucher_date: "2025-06-05", voucher_type: "Receipt", ledger_name: "Cash A/c", dr_cr: "Dr" }),
+      vch({ amount: 1000, voucher_date: "2025-06-10", voucher_type: "Payment", ledger_name: "Cash A/c", dr_cr: "Cr" }),
+      // Petty Cash: 5000 -> 4000, never negative.
+      vch({ amount: 1000, voucher_date: "2025-06-02", voucher_type: "Payment", ledger_name: "Petty Cash", dr_cr: "Cr" }),
+    ];
+    const out = run(r, { tb: tbRows, vouchers });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Cash A/c");
+    expect(out[0].amount).toBe(700);
+    expect(out[0].date).toBe("2025-06-10");
+    expect(out[0].evidence?.negative_dates).toEqual(["2025-06-01", "2025-06-10"]);
+  });
+
+  it("mode:max_abs flags a loan ledger whose mid-year peak exceeds the closing balance and the threshold", () => {
+    const r = rule({
+      rule_id: "LOAN-304", category: "LOAN", detection_level: "account",
+      detection_logic: { check: "running_balance", scope: { parent_group_keywords: ["loan"] }, sign: "cr_positive", mode: "max_abs", threshold: 1000000 },
+      audit_query_template: "{account} peaked at ₹{amount} on {date}",
+    });
+    const tbRows = [
+      tb({ ledger_name: "Ramesh — Unsecured Loan", parent_group: "Unsecured Loans", opening_balance: 600000, opening_type: "Cr", closing_balance: 220000, balance_type: "Cr" }),
+      tb({ ledger_name: "Small Loan — Suresh", parent_group: "Unsecured Loans", opening_balance: 50000, opening_type: "Cr", closing_balance: 50000, balance_type: "Cr" }),
+    ];
+    const vouchers = [
+      // 600000 -> 1720000 (more accepted) -> 220000 (largely repaid). Peak 1,720,000 in August.
+      vch({ amount: 1120000, voucher_date: "2025-08-01", voucher_type: "Receipt", ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Cr" }),
+      vch({ amount: 1500000, voucher_date: "2025-12-01", voucher_type: "Payment", ledger_name: "Ramesh — Unsecured Loan", dr_cr: "Dr" }),
+    ];
+    const out = run(r, { tb: tbRows, vouchers });
+    expect(out).toHaveLength(1);
+    expect(out[0].account).toBe("Ramesh — Unsecured Loan");
+    expect(out[0].amount).toBe(1720000);
+    expect(out[0].date).toBe("2025-08-01");
+    expect(out[0].evidence?.peak_outstanding).toBe(1720000);
+  });
+
+  it("reads legs from line_items when present, rather than the voucher's own primary ledger_name", () => {
+    const r = rule({
+      rule_id: "CASH-009b", category: "CASH", detection_level: "account",
+      detection_logic: { check: "running_balance", scope: { parent_group_keywords: ["cash"] }, sign: "dr_positive", mode: "min_negative", threshold: 0 },
+      audit_query_template: "{account} {amount} {date}",
+    });
+    const tbRows = [tb({ ledger_name: "Cash A/c", parent_group: "Cash-in-Hand", opening_balance: 500, opening_type: "Dr", closing_balance: 0, balance_type: "Dr" })];
+    // The top-level row's own ledger_name is the EXPENSE side, not cash — only line_items carries
+    // the cash leg. A handler reading only the top-level fields would see nothing to walk.
+    const vouchers = [vch({
+      amount: 1500, voucher_date: "2025-06-01", voucher_type: "Payment", ledger_name: "Office Expense", dr_cr: "Dr",
+      line_items: [{ ledger_name: "Office Expense", dr_cr: "Dr", amount: 1500 }, { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 1500 }],
+    })];
+    const out = run(r, { tb: tbRows, vouchers });
+    expect(out).toHaveLength(1);
+    expect(out[0].amount).toBe(1000);
+  });
+});
