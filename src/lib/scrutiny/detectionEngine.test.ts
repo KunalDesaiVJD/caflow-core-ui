@@ -1579,3 +1579,97 @@ describe("running_balance — sequential date-ordered walk per ledger", () => {
     expect(out[0].amount).toBe(1000);
   });
 });
+
+describe("high_risk_ledger — HR-01..18 cash-routing pattern detector", () => {
+  const credOnlyPay = rule({
+    rule_id: "HR-01", category: "CRED", detection_level: "account",
+    detection_logic: { check: "high_risk_ledger", scope: { parent_group_keywords: ["creditor"] }, pattern: "only_pay" },
+    audit_query_template: "{account} {amount}",
+  });
+
+  it("flags a creditor with payments only and zero other activity; a Purchase entry on the same shape clears it", () => {
+    const tbRows = [
+      tb({ ledger_name: "XYZ Contractor", parent_group: "Sundry Creditors", opening_balance: 0, opening_type: "Cr", closing_balance: 20000, balance_type: "Dr" }),
+      tb({ ledger_name: "ABC Suppliers", parent_group: "Sundry Creditors", opening_balance: 0, opening_type: "Cr", closing_balance: 5000, balance_type: "Cr" }),
+    ];
+    const vouchers = [
+      vch({ amount: 10000, voucher_date: "2025-06-01", voucher_type: "Payment", ledger_name: "XYZ Contractor", dr_cr: "Dr", line_items: [{ ledger_name: "XYZ Contractor", dr_cr: "Dr", amount: 10000 }, { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 10000 }] }),
+      vch({ amount: 10000, voucher_date: "2025-07-01", voucher_type: "Payment", ledger_name: "XYZ Contractor", dr_cr: "Dr", line_items: [{ ledger_name: "XYZ Contractor", dr_cr: "Dr", amount: 10000 }, { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 10000 }] }),
+      // ABC Suppliers: a real Purchase leg alongside a payment — "other" activity present, so the
+      // pay-only shape does not apply even though payments outnumber everything else.
+      vch({ amount: 15000, voucher_date: "2025-06-05", voucher_type: "Purchase", ledger_name: "ABC Suppliers", dr_cr: "Cr", line_items: [{ ledger_name: "Purchase A/c", dr_cr: "Dr", amount: 15000 }, { ledger_name: "ABC Suppliers", dr_cr: "Cr", amount: 15000 }] }),
+      vch({ amount: 10000, voucher_date: "2025-07-05", voucher_type: "Payment", ledger_name: "ABC Suppliers", dr_cr: "Dr", line_items: [{ ledger_name: "ABC Suppliers", dr_cr: "Dr", amount: 10000 }, { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 10000 }] }),
+    ];
+    const out = run(credOnlyPay, { tb: tbRows, vouchers });
+    expect(out.map((f) => f.account)).toEqual(["XYZ Contractor"]);
+    expect(out[0].evidence?.pay_count).toBe(2);
+  });
+
+  it("suppresses a ledger that merely cleared its opening balance (period activity == opening)", () => {
+    const tbRows = [tb({ ledger_name: "Settled Vendor", parent_group: "Sundry Creditors", opening_balance: 50000, opening_type: "Cr", closing_balance: 0, balance_type: "Cr" })];
+    const vouchers = [vch({ amount: 50000, voucher_date: "2025-05-01", voucher_type: "Payment", ledger_name: "Settled Vendor", dr_cr: "Dr", line_items: [{ ledger_name: "Settled Vendor", dr_cr: "Dr", amount: 50000 }, { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 50000 }] })];
+    expect(run(credOnlyPay, { tb: tbRows, vouchers })).toHaveLength(0);
+  });
+
+  it("suppresses normal vendor-journal-then-payment accounting (>80% journal-covered), but never for a loan-type rule", () => {
+    const tbRows = [tb({ ledger_name: "Office Expense Vendor", parent_group: "Sundry Creditors", opening_balance: 0, opening_type: "Cr", closing_balance: 1000, balance_type: "Cr" })];
+    const vouchers = [
+      vch({ amount: 10000, voucher_date: "2025-06-01", voucher_type: "Journal", ledger_name: "Office Expense Vendor", dr_cr: "Cr", line_items: [{ ledger_name: "Office Expense", dr_cr: "Dr", amount: 10000 }, { ledger_name: "Office Expense Vendor", dr_cr: "Cr", amount: 10000 }] }),
+      vch({ amount: 9000, voucher_date: "2025-06-10", voucher_type: "Payment", ledger_name: "Office Expense Vendor", dr_cr: "Dr", line_items: [{ ledger_name: "Office Expense Vendor", dr_cr: "Dr", amount: 9000 }, { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 9000 }] }),
+    ];
+    // Journal (10,000) covers 111% of the 9,000 paid — well over the 80% "normal accounting" bar.
+    expect(run(credOnlyPay, { tb: tbRows, vouchers })).toHaveLength(0);
+
+    const loanOnlyPay = rule({
+      rule_id: "HR-11", category: "LOAN", detection_level: "account",
+      detection_logic: { check: "high_risk_ledger", scope: { parent_group_keywords: ["unsecured loan"] }, pattern: "only_pay", is_loan: true },
+      audit_query_template: "{account} {amount}",
+    });
+    const loanTB = [tb({ ledger_name: "Office Expense Vendor", parent_group: "Unsecured Loans", opening_balance: 0, opening_type: "Cr", closing_balance: 1000, balance_type: "Cr" })];
+    // Same shape, but a loan-type rule never applies the vendor-journal exclusion.
+    expect(run(loanOnlyPay, { tb: loanTB, vouchers })).toHaveLength(1);
+  });
+
+  it("the generic Loans(Liability) catch-all excludes Unsecured/Secured Loans, keeping only custom sub-groups like Bank OD", () => {
+    const catchAll = rule({
+      rule_id: "HR-17", category: "LOAN", detection_level: "account",
+      detection_logic: { check: "high_risk_ledger", scope: { parent_group_keywords: ["loan"] }, exclude_group_keywords: ["secured loan", "unsecured loan", "loans & advances"], pattern: "only_pay", is_loan: true },
+      audit_query_template: "{account} {amount}",
+    });
+    const tbRows = [
+      tb({ ledger_name: "Bank OD A/c", parent_group: "Loans (Liability)", opening_balance: 0, opening_type: "Cr", closing_balance: 30000, balance_type: "Cr" }),
+      tb({ ledger_name: "Ramesh Unsecured Loan", parent_group: "Unsecured Loans", opening_balance: 0, opening_type: "Cr", closing_balance: 30000, balance_type: "Cr" }),
+    ];
+    const legFor = (name: string) => [{ ledger_name: name, dr_cr: "Dr" as const, amount: 15000 }, { ledger_name: "Cash A/c", dr_cr: "Cr" as const, amount: 15000 }];
+    const vouchers = [
+      vch({ amount: 15000, voucher_date: "2025-06-01", voucher_type: "Payment", ledger_name: "Bank OD A/c", dr_cr: "Dr", line_items: legFor("Bank OD A/c") }),
+      vch({ amount: 15000, voucher_date: "2025-06-01", voucher_type: "Payment", ledger_name: "Ramesh Unsecured Loan", dr_cr: "Dr", line_items: legFor("Ramesh Unsecured Loan") }),
+    ];
+    const out = run(catchAll, { tb: tbRows, vouchers });
+    expect(out.map((f) => f.account)).toEqual(["Bank OD A/c"]);
+  });
+
+  it("never flags a ledger whose name matches a statutory/payroll exclusion keyword", () => {
+    const tbRows = [tb({ ledger_name: "TDS Payable", parent_group: "Sundry Creditors", opening_balance: 0, opening_type: "Cr", closing_balance: 5000, balance_type: "Cr" })];
+    const vouchers = [vch({ amount: 5000, voucher_date: "2025-06-01", voucher_type: "Payment", ledger_name: "TDS Payable", dr_cr: "Dr", line_items: [{ ledger_name: "TDS Payable", dr_cr: "Dr", amount: 5000 }, { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 5000 }] })];
+    expect(run(credOnlyPay, { tb: tbRows, vouchers })).toHaveLength(0);
+  });
+
+  it("flags the pay+receipt mix pattern only when both sides are present and nothing else is booked", () => {
+    const mixRule = rule({
+      rule_id: "HR-03", category: "CRED", detection_level: "account",
+      detection_logic: { check: "high_risk_ledger", scope: { parent_group_keywords: ["creditor"] }, pattern: "mix" },
+      audit_query_template: "{account} {amount}",
+    });
+    const tbRows = [tb({ ledger_name: "Cash-Routed Vendor", parent_group: "Sundry Creditors", opening_balance: 0, opening_type: "Cr", closing_balance: 5000, balance_type: "Cr" })];
+    const vouchers = [
+      vch({ amount: 20000, voucher_date: "2025-06-01", voucher_type: "Payment", ledger_name: "Cash-Routed Vendor", dr_cr: "Dr", line_items: [{ ledger_name: "Cash-Routed Vendor", dr_cr: "Dr", amount: 20000 }, { ledger_name: "Cash A/c", dr_cr: "Cr", amount: 20000 }] }),
+      vch({ amount: 15000, voucher_date: "2025-08-01", voucher_type: "Receipt", ledger_name: "Cash-Routed Vendor", dr_cr: "Cr", line_items: [{ ledger_name: "Cash A/c", dr_cr: "Dr", amount: 15000 }, { ledger_name: "Cash-Routed Vendor", dr_cr: "Cr", amount: 15000 }] }),
+    ];
+    expect(run(mixRule, { tb: tbRows, vouchers })).toHaveLength(1);
+    // pay-only and receipt-only rules must NOT also match the mix — each pattern is exclusive.
+    const onlyReceipt = rule({ rule_id: "HR-02", category: "CRED", detection_level: "account", detection_logic: { check: "high_risk_ledger", scope: { parent_group_keywords: ["creditor"] }, pattern: "only_receipt" }, audit_query_template: "x" });
+    expect(run(credOnlyPay, { tb: tbRows, vouchers })).toHaveLength(0);
+    expect(run(onlyReceipt, { tb: tbRows, vouchers })).toHaveLength(0);
+  });
+});
