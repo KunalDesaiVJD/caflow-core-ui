@@ -868,9 +868,14 @@ const h_cash_capital_payment: CheckHandler = (rule, { vouchers }) => {
 // with no bespoke handler. This is what the AI Rule Composer targets and what
 // lets previously-unhandled rules run. detection_logic shape:
 //   { check:"expr", grain?:"voucher"|"account"|"aggregate",
-//     scope?:{voucher_type?:string[], ledger_keywords?:string[], parent_group_keywords?:string[] (alias group), cash_only?:bool, side?:"Dr"|"Cr", nonzero?:bool},
+//     scope?:{voucher_type?:string[], ledger_keywords?:string[], parent_group_keywords?:string[] (alias group), cash_only?:bool, side?:"Dr"|"Cr", nonzero?:bool, exclude_leg_group_keywords?:string[]},
+//     amount_field?: string (account grain only; default "closing_balance" — set e.g. "opening" for a
+//       "settled during the year" check where closing is definitionally 0 for every match),
 //       - on the voucher grain, ledger_keywords also matches the party's resolved parent_group (from the TB),
 //         so family words like "creditor"/"debtor" work even though they live in the group label, not the ledger name.
+//       - exclude_leg_group_keywords rejects the voucher if ANY leg (full double entry, not just the
+//         party) belongs to one of these groups — e.g. {cash_only:true, exclude_leg_group_keywords:["bank"]}
+//         isolates a "pure cash" voucher from a cash-deposit/withdrawal CONTRA that also touches a bank ledger.
 //     where?: Cond | Cond[] | {all?:Cond[], any?:Cond[]},
 //     aggregate?:{by:("party"|"ledger"|"day"|"month"|"year"|"amount"|"date"|"voucher_type")[], fn:"sum"|"count"|"max", field?:string, having:{op,value}},
 //     vs_prior_year?:{op?:string, pct:number}, message?:string }
@@ -990,6 +995,17 @@ const voucherInScope = (
   const kw = scope.ledger_keywords;
   // ledger_keywords also matches the resolved parent_group so family words work on the voucher path (RC1)
   if (Array.isArray(kw) && kw.length && !kwMatch(`${v.party_ledger ?? ""} ${v.ledger_name ?? ""} ${v.narration ?? ""} ${grp} ${legNames} ${legGroups}`, kw)) return false;
+  // scope.exclude_leg_group_keywords: reject the voucher if ANY leg (not just the party/primary
+  // ledger) belongs to one of these groups — e.g. exclude "Bank" so a cash-withdrawal/deposit
+  // CONTRA voucher isn't misread as a pure cash payment/receipt. Always scans the full double
+  // entry regardless of match_legs, since the leg being excluded is almost never the party.
+  const exclKw = scope.exclude_leg_group_keywords as unknown;
+  if (Array.isArray(exclKw) && exclKw.length) {
+    const allLegs = Array.isArray(v.line_items) ? v.line_items : [];
+    const allLegGroups = allLegs.map((l) => groupOf(l.ledger_name)).join(" ");
+    const allLegNames = allLegs.map((l) => l.ledger_name ?? "").join(" ");
+    if (kwMatch(`${allLegGroups} ${allLegNames}`, exclKw)) return false;
+  }
   return true;
 };
 
@@ -1048,10 +1064,16 @@ const h_expr: CheckHandler = (rule, data, ctx) => {
       }
       return out;
     }
+    // amount_field: which account field fills {amount}/finding.amount. Defaults to closing_balance
+    // (unchanged behaviour for every existing rule). A "settled during the year" style check
+    // (e.g. closing == 0) needs the OPENING figure instead, since closing is definitionally 0 for
+    // every match — opt in per rule rather than guessing.
+    const amountField = String(dl.amount_field ?? "closing_balance");
+    const amountOf = (r: TBRow): number => amountField === "closing_balance" ? num(r.closing_balance) : num(accountField(r, amountField));
     return data.tb
       .filter((r) => accountInScope(r, scope))
       .filter((r) => evalWhere(where, (f) => accountField(r, f)))
-      .map((r) => finding(rule, { account: r.ledger_name, amount: num(r.closing_balance), flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(num(r.closing_balance)) }), evidence: { balance_type: r.balance_type, parent_group: r.parent_group } }));
+      .map((r) => { const amt = amountOf(r); return finding(rule, { account: r.ledger_name, amount: amt, flag_message: render(tpl, { account: r.ledger_name, amount: fmtAmt(amt) }), evidence: { balance_type: r.balance_type, parent_group: r.parent_group } }); });
   }
 
   const groupOf = groupResolver(data.tb);
