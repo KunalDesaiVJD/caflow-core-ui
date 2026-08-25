@@ -87,18 +87,22 @@ const Login = () => {
       if (!session || !authUser) throw new Error("No session returned");
 
       // Fetch user profile from users table
-      const { data: profile } = await supabase
+      const { data: profile, error: profileError } = await supabase
         .from("users")
         .select("name, role, mfa_enabled, firm_id")
         .eq("id", authUser.id)
-        .single();
+        .maybeSingle();
 
-      const role = profile?.role || authUser.user_metadata?.role || "staff";
-      const name = profile?.name || authUser.email || "User";
+      if (profileError) {
+        throw new Error(`Could not load your account profile (${profileError.message}). Please contact your administrator.`);
+      }
 
       if (!profile) {
         throw new Error("User profile not found. Please contact your administrator to set up your account.");
       }
+
+      const role = profile.role || authUser.user_metadata?.role || "staff";
+      const name = profile.name || authUser.email || "User";
 
       // Check MFA
       if (profile?.mfa_enabled) {
