@@ -290,7 +290,10 @@ Deno.serve(async (req) => {
       });
       if (authError) throw authError;
 
-      // Insert into users table
+      // Insert into users table. If this fails, the auth user must be rolled
+      // back — otherwise the account is left with valid login credentials
+      // but no profile row, and the staff member can authenticate but then
+      // gets rejected right after with a confusing "profile not found" error.
       const { data: newUser, error: insertError } = await adminClient.from("users").insert({
         id: authUser.user.id,
         name,
@@ -301,7 +304,10 @@ Deno.serve(async (req) => {
         is_active: true,
         must_change_password: true,
       }).select().single();
-      if (insertError) throw insertError;
+      if (insertError) {
+        await adminClient.auth.admin.deleteUser(authUser.user.id);
+        throw insertError;
+      }
 
       return new Response(JSON.stringify({ user: newUser, default_password: password }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
