@@ -51,12 +51,22 @@ interface Props {
   onConfirm: (realProfileId: string, patch: { acknowledgment_no: string; upload_by: string }) => Promise<void>;
 }
 
+const WORD_TYPES = [
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+];
+
 function isPdf(file: File): boolean {
   return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
 }
 
+/** PDF or Word (.doc/.docx) — Computation of Income accepts either. */
+function isPdfOrWord(file: File): boolean {
+  return isPdf(file) || WORD_TYPES.includes(file.type) || /\.docx?$/i.test(file.name);
+}
+
 function FilePickerRow({
-  label, icon, existing, picked, onPick, checking, typeError,
+  label, icon, existing, picked, onPick, checking, typeError, accept, typeHint,
 }: {
   label: string;
   icon: React.ReactNode;
@@ -65,6 +75,8 @@ function FilePickerRow({
   onPick: (f: File | null) => void;
   checking?: boolean;
   typeError?: string | null;
+  accept: string;
+  typeHint: string;
 }) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
 
@@ -80,11 +92,11 @@ function FilePickerRow({
 
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs font-medium flex items-center gap-1.5">{icon}{label} <span className="text-muted-foreground font-normal">(PDF only)</span></Label>
+      <Label className="text-xs font-medium flex items-center gap-1.5">{icon}{label} <span className="text-muted-foreground font-normal">({typeHint})</span></Label>
       <div className="flex items-center gap-2">
         <Input
           type="file"
-          accept="application/pdf,.pdf"
+          accept={accept}
           onChange={e => onPick(e.target.files?.[0] ?? null)}
           className="h-8 text-[11px] file:h-full file:mr-2 file:border-0 file:bg-indigo-50 file:text-indigo-700 file:text-[11px] file:px-2 file:rounded"
         />
@@ -173,8 +185,8 @@ export default function ItrFiledConfirmDialog({
     setComputationFile(file);
     setComputationTypeError(null);
     if (!file) return;
-    if (!isPdf(file)) {
-      setComputationTypeError("Only PDF files are allowed for Computation of Income.");
+    if (!isPdfOrWord(file)) {
+      setComputationTypeError("Only PDF or Word files are allowed for Computation of Income.");
       setComputationFile(null);
     }
   }
@@ -249,6 +261,8 @@ export default function ItrFiledConfirmDialog({
               onPick={handleItrFormPick}
               checking={ackChecking}
               typeError={itrFormTypeError}
+              accept="application/pdf,.pdf"
+              typeHint="PDF only"
             />
             <FilePickerRow
               label="Computation of Income"
@@ -257,6 +271,8 @@ export default function ItrFiledConfirmDialog({
               picked={computationFile}
               onPick={handleComputationPick}
               typeError={computationTypeError}
+              accept="application/pdf,.pdf,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              typeHint="PDF or Word"
             />
 
             <div className="space-y-1.5">
