@@ -18,15 +18,18 @@ import { Button }   from "@/components/ui/button";
 import { Input }    from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge }    from "@/components/ui/badge";
-import { Check, X, Trash2, Loader2, Clock, Users, Building2, User, CalendarDays, BadgeCheck, AlertCircle } from "lucide-react";
+import { Check, X, Trash2, Loader2, Clock, Users, Building2, User, CalendarDays, BadgeCheck, AlertCircle, Paperclip, Upload } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { useAuth } from "@/hooks/useAuth";
 import type { StatusEntry, StatusPatch } from "../hooks/useAuditStatus";
 import type { ClientOption }             from "../hooks/useClients";
 import type { UserOption }               from "../hooks/useUsers";
 import type { AuditFirmOption }          from "../hooks/useFirms";
 import type { PlanEntry }                from "../hooks/useAuditPlanning";
 import { AUDIT_STATUS_OPTIONS }          from "./AuditStatusFilters";
+import UploadConfirmDialog               from "./UploadConfirmDialog";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -106,6 +109,7 @@ interface RowDraft {
   prepared_by:                  string;
   checked_by:                   string;
   uploaded_by:                  string;
+  upload_date:                  string;
   remarks:                      string;
 }
 
@@ -300,7 +304,7 @@ function ClientCombobox({ value, onChange, clients, placeholder }: {
 // Keyboard nav (kept from the earlier fix): ArrowDown/ArrowUp move the
 // highlight, Enter selects, Escape closes; highlight auto-scrolls into view.
 
-function UserCombobox({ value, onChange, users, placeholder }: {
+export function UserCombobox({ value, onChange, users, placeholder }: {
   value: string; onChange: (v: string) => void;
   users: UserOption[]; placeholder?: string;
 }) {
@@ -472,6 +476,10 @@ export default function AuditStatusRow({
   //   error   → PATCH failed; auto-retried once, still failed. Cell keeps
   //             the auditor's typed value visible + red icon in Actions gutter
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  // 3CA/3CB+3CD Uploaded By — gated confirmation dialog (files + AI-read
+  // date + name, all-or-nothing before anything is saved to the row).
+  const [uploadDialogOpen, setUploadDialogOpen] = useState(false);
+  const { user: authUser } = useAuth();
 
   // Auto-reset draft when a new row is first mounted
   useEffect(() => {
@@ -663,6 +671,7 @@ export default function AuditStatusRow({
       patch.prepared_by = "NA";
       patch.checked_by  = "NA";
       patch.uploaded_by = "NA";
+      patch.upload_date = null;
     }
     if (isNew && onAdd) {
       await onAdd(patch);
@@ -974,13 +983,49 @@ export default function AuditStatusRow({
             : <span className="text-[11px] truncate block" title={row.checked_by || ""}>{row.checked_by || "—"}</span>}
       </TCell>
 
-      {/* 17 · Uploaded By — locked to "NA" when tax audit not applicable */}
-      <TCell className="min-w-[110px]">
-        {!taxAuditApplicable
-          ? <span className="text-[11px] text-muted-foreground" title="Tax audit not applicable">NA</span>
-          : editing
-            ? <UserCombobox value={draft.uploaded_by} onChange={v => set("uploaded_by", v)} users={users} placeholder="Uploaded…" />
-            : <span className="text-[11px] truncate block" title={row.uploaded_by || ""}>{row.uploaded_by || "—"}</span>}
+      {/* 17 · Uploaded By — gated: scanned report + filed form + AI-read date +
+          name, confirmed via UploadConfirmDialog. Locked to "NA" when tax
+          audit not applicable. */}
+      <TCell className="min-w-[130px]">
+        {!taxAuditApplicable ? (
+          <span className="text-[11px] text-muted-foreground" title="Tax audit not applicable">NA</span>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                if (isNew || row.isVirtual) {
+                  toast.info("Save this row first (fill in any field), then upload the files.");
+                  return;
+                }
+                setUploadDialogOpen(true);
+              }}
+              className={cn(
+                "inline-flex items-center gap-1 h-6 px-1.5 rounded text-[11px] w-full truncate",
+                row.uploaded_by
+                  ? "text-emerald-700 bg-emerald-50 hover:bg-emerald-100"
+                  : "text-muted-foreground border border-dashed border-input hover:bg-muted",
+              )}
+              title={row.uploaded_by
+                ? `Uploaded by ${row.uploaded_by}${row.upload_date ? " on " + row.upload_date : ""} — click to view/replace files`
+                : "Upload scanned report + filed form"}
+            >
+              {row.uploaded_by ? <Paperclip size={11} className="shrink-0" /> : <Upload size={11} className="shrink-0" />}
+              <span className="truncate">{row.uploaded_by || "Upload…"}</span>
+            </button>
+            {uploadDialogOpen && (
+              <UploadConfirmDialog
+                open={uploadDialogOpen}
+                onClose={() => setUploadDialogOpen(false)}
+                row={row}
+                users={users}
+                currentUserId={authUser?.id ?? null}
+                currentUserName={authUser?.name ?? authUser?.email ?? null}
+                onConfirm={async patch => { await onSave(row.id, patch); }}
+              />
+            )}
+          </>
+        )}
       </TCell>
 
       {/* 18 · Remarks */}
@@ -1085,6 +1130,7 @@ function buildDraft(row: StatusEntry, clients: ClientOption[]): RowDraft {
     prepared_by:                  row.prepared_by                  || "",
     checked_by:                   row.checked_by                   || "",
     uploaded_by:                  row.uploaded_by                  || "",
+    upload_date:                  row.upload_date                  || "",
     remarks:                      row.remarks                      || "",
   };
 }
@@ -1111,6 +1157,7 @@ function draftToPatch(d: RowDraft): StatusPatch {
     prepared_by:                  d.prepared_by || null,
     checked_by:                   d.checked_by || null,
     uploaded_by:                  d.uploaded_by || null,
+    upload_date:                  d.upload_date || null,
     remarks:                      d.remarks || null,
   };
 }

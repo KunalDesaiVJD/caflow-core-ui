@@ -110,3 +110,8 @@ verify_jwt = true
 
 [functions.tds-portal-credentials]
 verify_jwt = true
+
+# Browser-invoked; self-validates the caller's JWT itself via
+# supabase.auth.getUser(token) (same pattern as tds-recon-import).
+[functions.audit-3ca-extract-date]
+verify_jwt = false

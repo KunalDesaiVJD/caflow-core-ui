@@ -37,6 +37,7 @@ const FIELD_LABELS: Record<string, string> = {
   prepared_by:                  "3CA Prepared By",
   checked_by:                   "3CA Checked By",
   uploaded_by:                  "3CA Uploaded By",
+  upload_date:                  "3CA Upload Date",
   remarks:                      "Remarks",
 };
 
