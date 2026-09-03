@@ -112,6 +112,9 @@ verify_jwt = true
 verify_jwt = true
 
 # Browser-invoked; self-validates the caller's JWT itself via
-# supabase.auth.getUser(token) (same pattern as tds-recon-import).
-[functions.audit-3ca-extract-date]
+# supabase.auth.getUser(token) (same pattern as tds-recon-import). Was
+# audit-3ca-extract-date, generalized to also serve the IT Returns module's
+# acknowledgement-number extraction (doc_type input) rather than forking a
+# near-identical second function.
+[functions.tax-document-extract]
 verify_jwt = false

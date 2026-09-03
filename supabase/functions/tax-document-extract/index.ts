@@ -1,26 +1,36 @@
 /**
- * audit-3ca-extract-date
+ * tax-document-extract
  *
- * Reads an uploaded audit document (scanned audit report OR a filed Form
- * 3CA/3CB + 3CD PDF) for the "3CA/3CB+3CD Uploaded By" dialog in Audit
- * Tracker, and extracts:
- *   - assessee_name — the client/entity the report is ABOUT, so the dialog
- *     can flag a file that belongs to the wrong client.
- *   - date — the filing/signing date (filed-form call only matters for this;
- *     the dialog ignores it for the scanned-report call).
- * Both are best-effort and the auditor can still correct/override the date;
- * a name mismatch blocks the upload (see UploadConfirmDialog.tsx).
+ * Reads an uploaded tax document and extracts structured fields, so the
+ * upload-confirmation dialogs in Audit Tracker (3CA/3CB+3CD) and IT Returns
+ * (ITR filing) can pre-fill a value the auditor would otherwise retype by
+ * hand. The auditor can always edit the result — a misread scan must never
+ * silently corrupt the record.
+ *
+ * Was `audit-3ca-extract-date`, generalized here to a second document type
+ * (`doc_type: "itr_form"`) rather than forking a near-identical function —
+ * same reasoning already applied to this codebase's shared TDS matching
+ * engine (src/lib/tds/match.ts): one engine, one prompt-maintenance surface.
  *
  * Input (POST, Bearer auth):
- *   { pdf_base64?: string, image_base64?: string, image_media_type?: string,
+ *   { doc_type: "3ca_3cd" | "itr_form",
+ *     pdf_base64?: string, image_base64?: string, image_media_type?: string,
  *     file_name?: string }
- * Output: { date: "YYYY-MM-DD" | null, confidence: "high"|"medium"|"low"|"unavailable",
- *           assessee_name: string | null }
+ *
+ *   doc_type "3ca_3cd"   — a filed Form 3CA/3CB + 3CD. Extracts the filing/
+ *                          signing date and the assessee name.
+ *   doc_type "itr_form"  — a filed Income Tax Return / acknowledgement PDF.
+ *                          Extracts the e-filing acknowledgement number.
+ *
+ * Output (fields not relevant to the requested doc_type come back null):
+ *   { date: "YYYY-MM-DD" | null, date_confidence: "high"|"medium"|"low"|"unavailable",
+ *     assessee_name: string | null,
+ *     acknowledgment_no: string | null, ack_confidence: "high"|"medium"|"low"|"unavailable" }
  *
  * Requires the ANTHROPIC_API_KEY secret. Fails soft — any missing key,
  * provider error or unparseable reply returns nulls/"unavailable" rather
  * than a hard failure, so the auditor can always fall back to typing the
- * date in manually and isn't blocked by a name it couldn't read.
+ * value in manually.
  */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
@@ -32,7 +42,10 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const SYSTEM_PROMPT = `You read an Indian tax-audit document: either (a) a Chartered Accountant's scanned/signed audit report, or (b) a filed Income Tax Form 3CA/3CB and Form 3CD PDF (downloaded from the e-filing portal, usually digitally signed).
+type DocType = "3ca_3cd" | "itr_form";
+
+const SYSTEM_PROMPTS: Record<DocType, string> = {
+  "3ca_3cd": `You read an Indian tax-audit document: either (a) a Chartered Accountant's scanned/signed audit report, or (b) a filed Income Tax Form 3CA/3CB and Form 3CD PDF (downloaded from the e-filing portal, usually digitally signed).
 
 Extract TWO things:
 
@@ -48,24 +61,45 @@ Extract TWO things:
    c. If NEITHER exists, return date: null — do not guess.
    Indian forms print dates as DD/MM/YYYY — convert to YYYY-MM-DD. Never use the financial-year-end date (31/03/...), an appointment date, or a date inside a schedule/table (e.g. "Date of Sale" in a depreciation or deductions schedule) as the signing date — only rule (a) or (b) above.
 
-Return STRICT JSON only, no markdown, no prose: {"assessee_name":"..."|null,"date":"YYYY-MM-DD"|null,"date_confidence":"high"|"medium"|"low"}`;
+Return STRICT JSON only, no markdown, no prose: {"assessee_name":"..."|null,"date":"YYYY-MM-DD"|null,"date_confidence":"high"|"medium"|"low"}`,
+
+  itr_form: `You read a filed Indian Income Tax Return (ITR) PDF or its e-filing acknowledgement/ITR-V page.
+
+Extract the ACKNOWLEDGEMENT NUMBER — the number the e-filing portal assigns to this specific filed return. It is printed prominently, usually near the top of the acknowledgement page, labelled something like "Acknowledgement Number", "Acknowledgement No.", "ARN", or "e-Filing Acknowledgement Number", typically followed by a colon and then a run of digits (commonly 15 digits, but treat the exact length as whatever is printed — do not pad or truncate it). Return it EXACTLY as printed, digits only (strip spaces).
+
+Do not confuse it with: a PAN (5 letters + 4 digits + 1 letter), an Aadhaar number, a Form/DSC serial number, or an assessment year. If no acknowledgement number is found anywhere in the document, return null — do not guess.
+
+Return STRICT JSON only, no markdown, no prose: {"acknowledgment_no":"..."|null,"ack_confidence":"high"|"medium"|"low"}`,
+};
 
 interface ExtractResult {
   date: string | null;
-  confidence: "high" | "medium" | "low" | "unavailable";
+  date_confidence: "high" | "medium" | "low" | "unavailable";
   assessee_name: string | null;
+  acknowledgment_no: string | null;
+  ack_confidence: "high" | "medium" | "low" | "unavailable";
 }
 
-function extractJson(text: string): ExtractResult {
+function extractJson(text: string, docType: DocType): ExtractResult {
+  const empty: ExtractResult = {
+    date: null, date_confidence: "unavailable", assessee_name: null,
+    acknowledgment_no: null, ack_confidence: "unavailable",
+  };
   try {
     const cleaned = text.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
     const parsed = JSON.parse(cleaned);
-    const date = typeof parsed?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null;
-    const confidence = ["high", "medium", "low"].includes(parsed?.date_confidence) ? parsed.date_confidence : "low";
-    const assessee_name = typeof parsed?.assessee_name === "string" && parsed.assessee_name.trim() ? parsed.assessee_name.trim() : null;
-    return { date, confidence: date ? confidence : "low", assessee_name };
+    if (docType === "3ca_3cd") {
+      const date = typeof parsed?.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.date) ? parsed.date : null;
+      const confidence = ["high", "medium", "low"].includes(parsed?.date_confidence) ? parsed.date_confidence : "low";
+      const assessee_name = typeof parsed?.assessee_name === "string" && parsed.assessee_name.trim() ? parsed.assessee_name.trim() : null;
+      return { ...empty, date, date_confidence: date ? confidence : "low", assessee_name };
+    }
+    const ackRaw = typeof parsed?.acknowledgment_no === "string" ? parsed.acknowledgment_no.replace(/\s+/g, "").trim() : "";
+    const acknowledgment_no = /^\d{6,}$/.test(ackRaw) ? ackRaw : null;
+    const ackConfidence = ["high", "medium", "low"].includes(parsed?.ack_confidence) ? parsed.ack_confidence : "low";
+    return { ...empty, acknowledgment_no, ack_confidence: acknowledgment_no ? ackConfidence : "low" };
   } catch {
-    return { date: null, confidence: "unavailable", assessee_name: null };
+    return empty;
   }
 }
 
@@ -82,6 +116,11 @@ serve(async (req) => {
   const json = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
+  const emptyResult: ExtractResult = {
+    date: null, date_confidence: "unavailable", assessee_name: null,
+    acknowledgment_no: null, ack_confidence: "unavailable",
+  };
+
   try {
     const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "").trim();
     if (!token) return json({ error: "Unauthorized" }, 401);
@@ -94,15 +133,16 @@ serve(async (req) => {
     if (authErr || !user) return json({ error: "Unauthorized" }, 401);
 
     const body = await req.json().catch(() => ({}));
-    const { pdf_base64, image_base64, image_media_type, file_name } = body ?? {};
+    const { doc_type, pdf_base64, image_base64, image_media_type, file_name } = body ?? {};
+    const docType: DocType = doc_type === "itr_form" ? "itr_form" : "3ca_3cd";
     if (!pdf_base64 && !image_base64) {
       return json({ error: "Provide `pdf_base64` or `image_base64`." }, 400);
     }
 
     const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
     if (!ANTHROPIC_API_KEY) {
-      // Fails soft — the dialog just leaves the date blank / skips the name check.
-      return json({ date: null, confidence: "unavailable", assessee_name: null });
+      // Fails soft — the dialog just leaves the field blank for manual entry.
+      return json(emptyResult);
     }
 
     const userContent: unknown[] = [{ type: "text", text: `File name: ${file_name || "unknown"}` }];
@@ -129,18 +169,18 @@ serve(async (req) => {
           // scrutiny-heavy claude-gateway paths), not the cheaper Haiku tier.
           model: Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514",
           max_tokens: 400,
-          system: SYSTEM_PROMPT,
+          system: SYSTEM_PROMPTS[docType],
           messages: [{ role: "user", content: userContent }],
         }),
       });
     } catch (e) {
-      console.error("audit-3ca-extract-date: provider request failed", e);
-      return json({ date: null, confidence: "unavailable", assessee_name: null });
+      console.error("tax-document-extract: provider request failed", e);
+      return json(emptyResult);
     }
 
     if (!res.ok) {
-      console.error("audit-3ca-extract-date: Anthropic error", res.status, await res.text());
-      return json({ date: null, confidence: "unavailable", assessee_name: null });
+      console.error("tax-document-extract: Anthropic error", res.status, await res.text());
+      return json(emptyResult);
     }
 
     const result = await res.json();
@@ -148,14 +188,14 @@ serve(async (req) => {
       ? result.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("")
       : "";
 
-    const parsed = extractJson(text);
+    const parsed = extractJson(text, docType);
     // Always logged (not just on failure) — the only way to see WHY a real
-    // client PDF came back with a null name/date is the raw model reply,
-    // and this function has no other observability hook.
-    console.log("audit-3ca-extract-date result:", JSON.stringify(parsed), "raw:", text.slice(0, 500));
+    // client PDF came back with a null field is the raw model reply, and
+    // this function has no other observability hook.
+    console.log("tax-document-extract result:", docType, JSON.stringify(parsed), "raw:", text.slice(0, 500));
     return json(parsed);
   } catch (e) {
-    console.error("audit-3ca-extract-date error:", e);
-    return json({ date: null, confidence: "unavailable", assessee_name: null });
+    console.error("tax-document-extract error:", e);
+    return json(emptyResult);
   }
 });

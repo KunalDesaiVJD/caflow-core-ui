@@ -27,7 +27,7 @@ import { Label }  from "@/components/ui/label";
 import { FileText, ScanLine, Loader2, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { UserCombobox } from "./AuditStatusRow";
+import { UserCombobox } from "@/components/shared/UserCombobox";
 import { nameCompare } from "@/lib/tds/match";
 import type { UserOption } from "../hooks/useUsers";
 import type { StatusEntry } from "../hooks/useAuditStatus";

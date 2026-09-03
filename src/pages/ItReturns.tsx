@@ -42,6 +42,7 @@ import {
   CalendarDays, Sparkles, Copy, Send, Mail, History, Loader2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import ItrFiledConfirmDialog from "@/components/itr/ItrFiledConfirmDialog";
 import { getClassificationsForFY } from "@/utils/classificationUtils";
 import { format, differenceInDays, isBefore, addDays, parse } from "date-fns";
 
@@ -787,8 +788,12 @@ const ItReturns = () => {
       // Ack No gate: refuse to move into "Filed" without an acknowledgement
       // number. Surface a destructive toast so the auditor sees exactly why
       // the dropdown reverted, and stop here — no DB write, no optimistic
-      // patch, no history-log entry.
-      if (value === "Filed" && !((profile as any).acknowledgment_no || "").trim()) {
+      // patch, no history-log entry. Checks extraPatch too — the Audited-
+      // client upload-confirm dialog (ItrFiledConfirmDialog) supplies a
+      // freshly-read Ack No via extraPatch in the SAME call that sets
+      // filing_status="Filed", so `profile.acknowledgment_no` (the OLD
+      // value) is still blank at that point and must not block it.
+      if (value === "Filed" && !((profile as any).acknowledgment_no || extraPatch?.acknowledgment_no || "").trim()) {
         toast({
           title: "Ack No is required",
           description: "Enter the ARN (Ack No) on this row's Info panel before marking it as Filed.",
@@ -951,6 +956,53 @@ const ItReturns = () => {
       toast({ title: "Save failed", description: e.message, variant: "destructive" });
     }
   };
+
+  // ─── ITR upload-confirm gate (Audited clients — see ItrFiledConfirmDialog) ─
+  // Guarantees a real itr_profiles row exists for this client+FY and returns
+  // its id, so files can be attached to it BEFORE the "Filed"/"Sent to CPC"
+  // status patch is applied. A client with no profile row yet for the
+  // selected FY shows as a virtual row (id "virtual_"/"new_"-prefixed) until
+  // the auditor's first edit — this performs that same realize-on-first-edit
+  // upsert handleInlineUpdate already does for a new row, but as its own
+  // step, so it doesn't write a spurious no-op field to itr_profile_history.
+  const ensureRealProfileId = useCallback(async (profile: ItrProfile): Promise<string> => {
+    if (!isUnsavedItrProfile(profile)) return profile.id;
+    const payload: any = {
+      client_id: profile.client_id,
+      firm_id: firmId,
+      assessment_year: selectedAY,
+      financial_year: profile.financial_year,
+      filing_status: profile.filing_status || "Data Pending",
+      assigned_to: profile.assigned_to || null,
+      itr_form: profile.itr_form || null,
+      itr_work_group_id: profile.itr_work_group_id || null,
+      date_data_received: profile.date_data_received || null,
+      date_filed: profile.date_filed || null,
+      acknowledgment_no: profile.acknowledgment_no || null,
+      upload_by: profile.upload_by || null,
+      prepared_by: profile.prepared_by || null,
+      checked_by: profile.checked_by || null,
+      reviewed_by: (profile as any).reviewed_by || null,
+      remarks: profile.remarks || null,
+    };
+    const { data, error } = await supabase
+      .from("itr_profiles")
+      .upsert(payload, { onConflict: "client_id,assessment_year,firm_id" })
+      .select();
+    if (error) throw error;
+    if (!data || data.length === 0) {
+      throw new Error("Row was not created (possible RLS policy block). Check Supabase logs.");
+    }
+    const realId = (data[0] as any).id as string;
+    queryClient.setQueriesData(
+      { queryKey: ["itr_profiles"] },
+      (old: any) => {
+        if (!Array.isArray(old)) return old;
+        return old.map((row: any) => (row.id === profile.id ? { ...row, id: realId } : row));
+      },
+    );
+    return realId;
+  }, [firmId, selectedAY, queryClient]);
 
   // ─── Export ───────────────────────────────────────────────────────────────
   // `filtered` already respects every active filter (search, status, form,
@@ -1148,6 +1200,7 @@ const ItReturns = () => {
             selectedAY={selectedAY}
             firmId={firmId}
             user={user}
+            ensureRealProfileId={ensureRealProfileId}
           />
         </TabsContent>
 
@@ -1179,7 +1232,7 @@ function FilingTab({
   groupCounts,
   responsiblePersons,
   isLoading, onInlineUpdate, onExport, navigate, selectedAY,
-  firmId, user,
+  firmId, user, ensureRealProfileId,
 }: any) {
   const [filingSubTab, setFilingSubTab] = useState<FilingSubTab>("audited");
   const { toast } = useToast();
@@ -1619,6 +1672,10 @@ function FilingTab({
                         onUpdate={onInlineUpdate}
                         onDelete={handleDeleteRow}
                         navigate={navigate}
+                        ensureRealProfileId={ensureRealProfileId}
+                        currentUserId={user?.id ?? null}
+                        currentUserName={user?.name ?? user?.email ?? null}
+                        firmId={firmId ?? null}
                       />
                     ))}
                   </TableBody>
@@ -1882,15 +1939,43 @@ function ItrRowHistoryButton({ clientId, assessmentYear, rowLabel }: {
 }
 
 // ─── Inline Editable Row ───
-function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete, navigate }: {
+function InlineEditableRow({
+  profile, staffUsers, workGroups, onUpdate, onDelete, navigate,
+  ensureRealProfileId, currentUserId, currentUserName, firmId,
+}: {
   profile: ItrProfile; staffUsers: StaffUser[]; workGroups: any[];
-  onUpdate: (p: ItrProfile, field: string, value: any) => void;
+  onUpdate: (p: ItrProfile, field: string, value: any, extraPatch?: Record<string, any>) => void;
   onDelete: (p: ItrProfile) => void;
   navigate: (path: string) => void;
+  ensureRealProfileId: (p: ItrProfile) => Promise<string>;
+  currentUserId: string | null;
+  currentUserName: string | null;
+  firmId: string | null;
 }) {
   const p = profile;
   const [infoOpen, setInfoOpen] = useState(false);
   const { toast } = useToast();
+
+  // ── ITR upload-confirm gate (Audited clients only) ───────────────────────
+  // Marking "Filed" (or jumping straight to "Sent to CPC", which would
+  // otherwise skip the gate entirely) requires the ITR Form + Computation of
+  // Income + Ack No + Filed By to be confirmed together first. A row that's
+  // already been gated once (has an Ack No) can move freely between Filed
+  // and Sent to CPC afterward without re-prompting.
+  const [itrUploadOpen, setItrUploadOpen] = useState(false);
+  const [pendingStatus, setPendingStatus] = useState<string | null>(null);
+  const isAuditedClient = getClientSubTab(p.client_classification) === "audited";
+  const needsUploadGate = (v: string) =>
+    isAuditedClient && (v === "Filed" || v === "Sent to CPC") && !((p as any).acknowledgment_no || "").trim();
+
+  function handleStatusChange(v: string) {
+    if (needsUploadGate(v)) {
+      setPendingStatus(v);
+      setItrUploadOpen(true);
+      return;
+    }
+    onUpdate(p, "filing_status", v);
+  }
 
   return (
     <>
@@ -1951,7 +2036,7 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
         <TableCell>
           <Select
             value={p.filing_status || "Data Pending"}
-            onValueChange={v => onUpdate(p, "filing_status", v)}
+            onValueChange={handleStatusChange}
           >
             <SelectTrigger className={cn("h-7 text-xs border-none shadow-none px-1 rounded-full", STATUS_COLORS[p.filing_status || "Data Pending"] || "")}>
               <SelectValue />
@@ -1987,9 +2072,23 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
           {formatFiledDate(p.date_filed)}
         </TableCell>
 
-        {/* Upload By — auto-stamped when Status moves to "Sent to CPC" */}
-        <TableCell className="text-xs text-muted-foreground px-2">
-          {staffName(staffUsers, (p as any).upload_by)}
+        {/* Upload By — set via the ITR upload-confirm dialog for Audited
+            clients (see handleStatusChange above); auto-stamped as before
+            for non-Audited clients. A gated-and-confirmed Audited row is
+            clickable to view/replace the ITR Form + Computation of Income. */}
+        <TableCell className="text-xs px-2">
+          {isAuditedClient && (p as any).upload_by ? (
+            <button
+              type="button"
+              onClick={() => { setPendingStatus(p.filing_status || "Filed"); setItrUploadOpen(true); }}
+              className="text-indigo-600 hover:underline"
+              title="View / replace filed documents"
+            >
+              {staffName(staffUsers, (p as any).upload_by)}
+            </button>
+          ) : (
+            <span className="text-muted-foreground">{staffName(staffUsers, (p as any).upload_by)}</span>
+          )}
         </TableCell>
 
         <TableCell>
@@ -2017,6 +2116,27 @@ function InlineEditableRow({ profile, staffUsers, workGroups, onUpdate, onDelete
         onUpdate={onUpdate}
         staffUsers={staffUsers}
       />
+
+      {/* ITR upload-confirm dialog — Audited clients' Filed / Sent to CPC gate */}
+      {itrUploadOpen && pendingStatus && (
+        <ItrFiledConfirmDialog
+          open={itrUploadOpen}
+          onClose={() => { setItrUploadOpen(false); setPendingStatus(null); }}
+          profile={p}
+          pendingStatus={pendingStatus}
+          staffUsers={(staffUsers as StaffUser[])
+            .filter(u => u.name)
+            .map(u => ({ id: u.id, name: u.name as string }))}
+          currentUserId={currentUserId}
+          currentUserName={currentUserName}
+          firmId={firmId}
+          ensureRealProfileId={ensureRealProfileId}
+          onConfirm={async (realId, patch) => {
+            const realProfile = realId === p.id ? p : { ...p, id: realId };
+            await onUpdate(realProfile, "filing_status", pendingStatus, patch);
+          }}
+        />
+      )}
     </>
   );
 }

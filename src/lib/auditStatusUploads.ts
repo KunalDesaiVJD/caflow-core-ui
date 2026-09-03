@@ -9,6 +9,7 @@
 // nothing is deleted, listUploads() simply returns the latest per kind.
 
 import { supabase } from '@/integrations/supabase/client';
+import { extractTaxDocFields } from '@/lib/taxDocExtract';
 
 export type UploadKind = 'scanned_report' | 'filed_form';
 
@@ -107,39 +108,12 @@ export interface ExtractedDocInfo extends ExtractedDate {
 }
 
 /**
- * AI-read the filing date (filed-form call) and the assessee name (both
- * calls) off an uploaded document. Fails soft — a missing/unreadable value
- * comes back null, never an exception, so extraction never blocks the
- * upload flow on its own.
+ * AI-read the filing date and the assessee name off an uploaded document.
+ * Thin wrapper over the shared tax-document-extract call (doc_type
+ * "3ca_3cd") — fails soft — a missing/unreadable value comes back null,
+ * never an exception, so extraction never blocks the upload flow on its own.
  */
 export async function extractDocumentInfo(file: File): Promise<ExtractedDocInfo> {
-  try {
-    const base64 = await fileToBase64(file);
-    const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
-    const payload = isPdf
-      ? { pdf_base64: base64, file_name: file.name }
-      : { image_base64: base64, image_media_type: file.type || 'image/png', file_name: file.name };
-
-    const { data, error } = await supabase.functions.invoke('audit-3ca-extract-date', { body: payload });
-    if (error || !data) return { date: null, confidence: 'unavailable', assesseeName: null };
-    return {
-      date: data.date ?? null,
-      confidence: data.confidence ?? 'unavailable',
-      assesseeName: data.assessee_name ?? null,
-    };
-  } catch {
-    return { date: null, confidence: 'unavailable', assesseeName: null };
-  }
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      resolve(result.split(',')[1] ?? '');
-    };
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
-  });
+  const fields = await extractTaxDocFields(file, '3ca_3cd');
+  return { date: fields.date, confidence: fields.dateConfidence, assesseeName: fields.assesseeName };
 }
