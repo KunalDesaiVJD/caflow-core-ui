@@ -101,8 +101,18 @@ export interface ExtractedDate {
   confidence: 'high' | 'medium' | 'low' | 'unavailable';
 }
 
-/** AI-read filing date off the filed Form 3CA/3CB+3CD. Fails soft. */
-export async function extractFilingDate(file: File): Promise<ExtractedDate> {
+export interface ExtractedDocInfo extends ExtractedDate {
+  /** The assessee/client name AI-read off the document, or null if it couldn't find one. */
+  assesseeName: string | null;
+}
+
+/**
+ * AI-read the filing date (filed-form call) and the assessee name (both
+ * calls) off an uploaded document. Fails soft — a missing/unreadable value
+ * comes back null, never an exception, so extraction never blocks the
+ * upload flow on its own.
+ */
+export async function extractDocumentInfo(file: File): Promise<ExtractedDocInfo> {
   try {
     const base64 = await fileToBase64(file);
     const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
@@ -111,10 +121,14 @@ export async function extractFilingDate(file: File): Promise<ExtractedDate> {
       : { image_base64: base64, image_media_type: file.type || 'image/png', file_name: file.name };
 
     const { data, error } = await supabase.functions.invoke('audit-3ca-extract-date', { body: payload });
-    if (error || !data) return { date: null, confidence: 'unavailable' };
-    return { date: data.date ?? null, confidence: data.confidence ?? 'unavailable' };
+    if (error || !data) return { date: null, confidence: 'unavailable', assesseeName: null };
+    return {
+      date: data.date ?? null,
+      confidence: data.confidence ?? 'unavailable',
+      assesseeName: data.assessee_name ?? null,
+    };
   } catch {
-    return { date: null, confidence: 'unavailable' };
+    return { date: null, confidence: 'unavailable', assesseeName: null };
   }
 }
 

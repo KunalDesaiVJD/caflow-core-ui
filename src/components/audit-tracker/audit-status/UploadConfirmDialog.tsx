@@ -3,10 +3,16 @@
  *
  * Gates the "3CA/3CB+3CD Uploaded By" column. Nothing is saved to the row
  * until all four are present together:
- *  1. Scanned Audit Report file
- *  2. Filed Form 3CA/3CB + 3CD file
+ *  1. Scanned Audit Report file — AI-checked against the client's name
+ *  2. Filed Form 3CA/3CB + 3CD file — AI-checked against the client's name
  *  3. Upload Date — AI-read off the filed form, always editable
  *  4. Uploaded By — defaults to the logged-in user, always editable
+ *
+ * Either file is REJECTED (Confirm stays disabled) if the AI reads a
+ * different assessee name off it than this row's client — using the same
+ * hardened name-comparison engine the TDS module uses (src/lib/tds/match.ts),
+ * not a fresh ad-hoc string compare. A name the AI can't read at all never
+ * blocks the upload — only a name it CAN read and that clearly disagrees.
  *
  * Re-openable after completion (existing files/date/name prefill) so a
  * mistake can be corrected later — each confirm still goes through the
@@ -22,10 +28,11 @@ import { FileText, ScanLine, Loader2, CheckCircle2, AlertCircle, ExternalLink } 
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { UserCombobox } from "./AuditStatusRow";
+import { nameCompare } from "@/lib/tds/match";
 import type { UserOption } from "../hooks/useUsers";
 import type { StatusEntry } from "../hooks/useAuditStatus";
 import {
-  storeUpload, listUploads, uploadFileUrl, extractFilingDate,
+  storeUpload, listUploads, uploadFileUrl, extractDocumentInfo,
   type UploadKind, type StoredUpload,
 } from "@/lib/auditStatusUploads";
 
@@ -41,14 +48,15 @@ interface Props {
 }
 
 function FilePickerRow({
-  label, icon, existing, picked, onPick, extracting,
+  label, icon, existing, picked, onPick, checking, nameIssue,
 }: {
   label: string;
   icon: React.ReactNode;
   existing: StoredUpload | null;
   picked: File | null;
   onPick: (f: File | null) => void;
-  extracting?: boolean;
+  checking?: boolean;
+  nameIssue?: string | null;
 }) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
 
@@ -72,9 +80,11 @@ function FilePickerRow({
           onChange={e => onPick(e.target.files?.[0] ?? null)}
           className="h-8 text-[11px] file:h-full file:mr-2 file:border-0 file:bg-indigo-50 file:text-indigo-700 file:text-[11px] file:px-2 file:rounded"
         />
-        {extracting && <Loader2 size={14} className="animate-spin text-indigo-500 shrink-0" />}
+        {checking && <Loader2 size={14} className="animate-spin text-indigo-500 shrink-0" />}
       </div>
-      {picked ? (
+      {nameIssue ? (
+        <p className="text-[10px] text-red-600 flex items-center gap-1"><AlertCircle size={11} className="shrink-0" /> {nameIssue}</p>
+      ) : picked ? (
         <p className="text-[10px] text-emerald-600 flex items-center gap-1">
           <CheckCircle2 size={11} /> {picked.name} — will replace{existing ? " existing file" : ""}
         </p>
@@ -101,7 +111,10 @@ export default function UploadConfirmDialog({
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [scannedFile, setScannedFile]     = useState<File | null>(null);
   const [filedFormFile, setFiledFormFile] = useState<File | null>(null);
-  const [extractingDate, setExtractingDate] = useState(false);
+  const [scannedChecking, setScannedChecking] = useState(false);
+  const [filedChecking, setFiledChecking]     = useState(false);
+  const [scannedNameIssue, setScannedNameIssue] = useState<string | null>(null);
+  const [filedNameIssue, setFiledNameIssue]     = useState<string | null>(null);
   const [uploadDate, setUploadDate]       = useState("");
   const [uploaderName, setUploaderName]   = useState("");
   const [submitting, setSubmitting]       = useState(false);
@@ -112,6 +125,8 @@ export default function UploadConfirmDialog({
     if (!open) return;
     setScannedFile(null);
     setFiledFormFile(null);
+    setScannedNameIssue(null);
+    setFiledNameIssue(null);
     setError(null);
     setUploadDate(row.upload_date || "");
     setUploaderName(row.uploaded_by || currentUserName || "");
@@ -122,28 +137,62 @@ export default function UploadConfirmDialog({
     });
   }, [open, row.id]); // eslint-disable-line
 
-  async function handleFiledFormPick(file: File | null) {
-    setFiledFormFile(file);
+  function mismatchMessage(extractedName: string) {
+    return `This file appears to be for "${extractedName}", not "${row.party_name || "this client"}". Upload blocked — please attach the correct file.`;
+  }
+
+  async function handleScannedPick(file: File | null) {
+    setScannedFile(file);
+    setScannedNameIssue(null);
     if (!file) return;
-    setExtractingDate(true);
+    setScannedChecking(true);
     try {
-      const result = await extractFilingDate(file);
-      if (result.date) setUploadDate(result.date);
-      else if (result.confidence === "unavailable") {
-        toast.info("Couldn't auto-read the filing date — please enter it manually.");
+      const info = await extractDocumentInfo(file);
+      if (info.assesseeName) {
+        const cmp = nameCompare(info.assesseeName, row.party_name);
+        if (cmp === "different" || cmp === "mismatch") setScannedNameIssue(mismatchMessage(info.assesseeName));
       }
     } finally {
-      setExtractingDate(false);
+      setScannedChecking(false);
+    }
+  }
+
+  async function handleFiledFormPick(file: File | null) {
+    setFiledFormFile(file);
+    setFiledNameIssue(null);
+    if (!file) return;
+    setFiledChecking(true);
+    try {
+      const info = await extractDocumentInfo(file);
+      if (info.date) setUploadDate(info.date);
+      else if (info.confidence === "unavailable") {
+        toast.info("Couldn't auto-read the filing date — please enter it manually.");
+      }
+      if (info.assesseeName) {
+        const cmp = nameCompare(info.assesseeName, row.party_name);
+        if (cmp === "different" || cmp === "mismatch") setFiledNameIssue(mismatchMessage(info.assesseeName));
+      }
+    } finally {
+      setFiledChecking(false);
     }
   }
 
   const hasScanned  = !!scannedFile || !!existing.scanned_report;
-  const hasFiled     = !!filedFormFile || !!existing.filed_form;
-  const canConfirm  = hasScanned && hasFiled && uploadDate.trim() !== "" && uploaderName.trim() !== "" && !submitting;
+  const hasFiled    = !!filedFormFile || !!existing.filed_form;
+  const canConfirm  =
+    hasScanned && hasFiled &&
+    uploadDate.trim() !== "" && uploaderName.trim() !== "" &&
+    !scannedNameIssue && !filedNameIssue &&
+    !scannedChecking && !filedChecking &&
+    !submitting;
 
   async function handleConfirm() {
     if (!row.firm_id) {
       setError("This row has no firm assigned — cannot attach files.");
+      return;
+    }
+    if (scannedNameIssue || filedNameIssue) {
+      setError("Resolve the name mismatch before confirming.");
       return;
     }
     setSubmitting(true);
@@ -192,7 +241,9 @@ export default function UploadConfirmDialog({
               icon={<ScanLine size={13} className="text-slate-500" />}
               existing={existing.scanned_report}
               picked={scannedFile}
-              onPick={setScannedFile}
+              onPick={handleScannedPick}
+              checking={scannedChecking}
+              nameIssue={scannedNameIssue}
             />
             <FilePickerRow
               label="Filed Form 3CA/3CB + 3CD"
@@ -200,12 +251,13 @@ export default function UploadConfirmDialog({
               existing={existing.filed_form}
               picked={filedFormFile}
               onPick={handleFiledFormPick}
-              extracting={extractingDate}
+              checking={filedChecking}
+              nameIssue={filedNameIssue}
             />
 
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">
-                Upload Date {extractingDate && <span className="text-indigo-500 font-normal">(reading from filed form…)</span>}
+                Upload Date {filedChecking && <span className="text-indigo-500 font-normal">(reading from filed form…)</span>}
               </Label>
               <Input
                 type="date"
