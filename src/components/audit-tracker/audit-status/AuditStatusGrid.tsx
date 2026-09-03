@@ -74,7 +74,7 @@ const makeBlankRow = (fy?: string): StatusEntry => ({
   report_print_date: null, firm: null, partner: null,
   udin_tax_audit: null, udin_statutory_audit: null, udin_date: null,
   physical_report_received_date: null, scanned: "No",
-  prepared_by: null, checked_by: null, uploaded_by: null,
+  prepared_by: null, checked_by: null, uploaded_by: null, upload_date: null,
   remarks: null, engagement_id: null, financial_year: fy ?? null, created_at: "",
 });
 
@@ -314,6 +314,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       prepared_by:                   patch.prepared_by                   ?? null,
       checked_by:                    patch.checked_by                    ?? null,
       uploaded_by:                   patch.uploaded_by                   ?? null,
+      upload_date:                   patch.upload_date                   ?? null,
       remarks:                       patch.remarks                       ?? null,
       engagement_id:                 patch.engagement_id                 ?? null,
       financial_year:                patch.financial_year                ?? selectedFY ?? null,

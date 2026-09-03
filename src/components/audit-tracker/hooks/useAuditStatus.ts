@@ -37,6 +37,7 @@ export interface StatusEntry {
   prepared_by:                  string | null;
   checked_by:                   string | null;
   uploaded_by:                  string | null;
+  upload_date:                  string | null;
   remarks:                      string | null;
   engagement_id:                string | null;
   financial_year:               string | null;
@@ -344,6 +345,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
             prepared_by:                  null,
             checked_by:                   null,
             uploaded_by:                  null,
+            upload_date:                  null,
             remarks:                      null,
             engagement_id:                eng.id,
             financial_year:               selectedFY,
@@ -489,6 +491,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
           prepared_by:                  null,
           checked_by:                   null,
           uploaded_by:                  null,
+          upload_date:                  null,
           remarks:                      null,
           engagement_id:                null,
           financial_year:               selectedFY,
@@ -611,6 +614,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
     'report_print_date',
     'udin_date',
     'physical_report_received_date',
+    'upload_date',
     'planned_from',
     'planned_to',
   ]);
