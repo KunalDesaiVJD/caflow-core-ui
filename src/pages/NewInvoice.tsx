@@ -93,6 +93,49 @@ function isIntraStateFromGstins(firmGstin: string, clientGstin: string): boolean
   return firmGstin.substring(0, 2) === clientGstin.substring(0, 2);
 }
 
+// ─── Root-cause fix (2026-08-11): GSTIN-less Place of Supply ───
+// Place of Supply / intra-vs-inter-state was previously derived ONLY from
+// GSTIN, silently falling back to the FIRM's own state for any client with
+// no GSTIN (unregistered / B2C) — wrong whenever that client is actually in
+// a different state. The client record already carries a proper,
+// standardized state (`registered_state`, picked from a fixed dropdown at
+// client onboarding — see StepAdvancedInfo.tsx's INDIAN_STATES list),
+// independent of GSTIN. This normalizes a state name (from either that list
+// or a manual override) against STATE_CODES so it can be used as a
+// GSTIN-less fallback. Normalization only affects matching, not what's
+// displayed — STATE_CODES' own names are always what render.
+function normalizeStateName(name: string): string {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/\(new\)/g, "")
+    .replace(/\s*&\s*/g, " and ")
+    .replace(/[^a-z]+/g, " ")
+    .trim();
+}
+const STATE_NAME_TO_CODE: Record<string, string> = (() => {
+  const map: Record<string, string> = {};
+  for (const [code, name] of Object.entries(STATE_CODES)) {
+    const key = normalizeStateName(name);
+    if (!(key in map)) map[key] = code; // first match wins (e.g. AP → 28, not 37)
+  }
+  return map;
+})();
+/** Resolve a free-form/standardized state name (e.g. client.registered_state
+ *  or a manually-picked value) to its GST state code, or null if unmatched.
+ *  Unmatched names (e.g. the post-2020 merged "Dadra and Nagar Haveli and
+ *  Daman and Diu" UT, which STATE_CODES still lists as two separate legacy
+ *  codes) fall through to null so callers can keep their existing fallback —
+ *  this only ADDS a resolution path, it never removes the old one. */
+function getStateCodeFromName(stateName: string | null | undefined): string | null {
+  if (!stateName) return null;
+  return STATE_NAME_TO_CODE[normalizeStateName(stateName)] ?? null;
+}
+// Dropdown options for the manual Place-of-Supply override (GSTIN-less
+// clients only) — every STATE_CODES entry, alphabetised by name.
+const STATE_OPTIONS = Object.entries(STATE_CODES)
+  .map(([code, name]) => ({ code, name }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
 // ─── Types ───
 type DocumentType = "invoice" | "quotation" | "proforma" | "credit_note";
 
@@ -154,6 +197,7 @@ interface Client {
   entity_type: string | null;
   address: string | null;
   registered_office: string | null;
+  registered_state?: string | null;
 }
 
 interface Firm {
@@ -323,6 +367,14 @@ const NewInvoice = () => {
   );
   const [toGstin, setToGstin] = useState("");
   const [toAddress, setToAddress] = useState("");
+  // Root-cause fix (2026-08-11): the client's own registered state (set at
+  // onboarding, independent of GSTIN) — used as the Place-of-Supply source
+  // for clients with no GSTIN instead of silently falling back to the
+  // firm's state. manualPlaceOfSupplyCode lets the auditor override/correct
+  // it directly on the invoice when registered_state is blank or wrong;
+  // only surfaced (and only takes effect) when the client has no GSTIN.
+  const [toRegisteredState, setToRegisteredState] = useState("");
+  const [manualPlaceOfSupplyCode, setManualPlaceOfSupplyCode] = useState("");
 
   // Source document info (for converted docs)
   const [sourceDocInfo, setSourceDocInfo] = useState<{ invoice_no: string; document_type: string; invoice_date: string; total_amount: number } | null>(null);
@@ -365,9 +417,21 @@ const NewInvoice = () => {
 
   // Derived values
   const firmGstin = firm?.gstin || "";
-  // H6: place of supply is the RECIPIENT's state (from the client GSTIN), not the
-  // firm's. Falls back to the firm's state for unregistered/B2C clients.
-  const placeOfSupply = getPlaceOfSupply(toGstin || firmGstin);
+  // Root-cause fix (2026-08-11): for a client with NO GSTIN, resolve Place of
+  // Supply from (in priority order) a manual override typed on the invoice,
+  // then the client's own registered_state — instead of silently falling
+  // back to the firm's own state. Only when NEITHER resolves (no manual pick
+  // and registered_state is blank/unrecognised) does the original H6
+  // fallback-to-firm's-state behaviour apply, unchanged.
+  const noGstinStateCode = !toGstin
+    ? (manualPlaceOfSupplyCode || getStateCodeFromName(toRegisteredState) || "")
+    : "";
+  // H6 (original): place of supply is the RECIPIENT's state (from the client
+  // GSTIN); falls back to the firm's state only when GSTIN-less resolution
+  // above found nothing.
+  const placeOfSupply = toGstin
+    ? getPlaceOfSupply(toGstin)
+    : (noGstinStateCode ? `${noGstinStateCode}-${STATE_CODES[noGstinStateCode]}` : getPlaceOfSupply(firmGstin));
   const msmeNo = (firm?.settings as any)?.msme_no || "";
   const billingEmail = (firm?.settings as any)?.billing_email || firm?.email || "";
   const billingContact = (firm?.settings as any)?.billing_contact_no || firm?.phone || "";
@@ -382,12 +446,21 @@ const NewInvoice = () => {
   useEffect(() => {
     if (firmGstin && toGstin) {
       setIsIntraState(isIntraStateFromGstins(firmGstin, toGstin));
+    } else if (!toGstin && firmGstin.length >= 2 && noGstinStateCode) {
+      // Root-cause fix (2026-08-11): previously this branch never ran for a
+      // GSTIN-less client, so isIntraState stayed stuck at its `true`
+      // default forever (always CGST+SGST). Now that we can resolve the
+      // client's actual state (manual pick or registered_state), compare it
+      // against the firm's GSTIN state like the GSTIN path already does.
+      // Only fires once a state is actually resolved — when it isn't, the
+      // original always-true default is left untouched.
+      setIsIntraState(firmGstin.substring(0, 2) === noGstinStateCode);
     }
     // When user picks a GSTIN from the multi-picker, auto-fill per-GSTIN address
     if (toGstin && clientGstins.length > 1 && clientGstinAddresses[toGstin]) {
       setToAddress(clientGstinAddresses[toGstin]);
     }
-  }, [firmGstin, toGstin]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [firmGstin, toGstin, noGstinStateCode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch firms list
   useEffect(() => {
@@ -470,7 +543,7 @@ const NewInvoice = () => {
     (async () => {
       const { data: clientData } = await supabase
         .from("clients")
-        .select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office, is_active, deleted_at")
+        .select("id, name, pan, gstin, gstin_states, gstin_addresses, entity_type, address, registered_office, registered_state, is_active, deleted_at")
         .eq("is_draft", false)
         .order("name");
       const isArchived = (c: any) => c.deleted_at != null || c.is_active === false;
@@ -581,10 +654,15 @@ const NewInvoice = () => {
 
   // Auto-fill client details & check audit classification
   useEffect(() => {
-    if (!clientId) { setIsAuditClient(false); setClientGstins([]); setClientGstinStates({}); return; }
+    if (!clientId) { setIsAuditClient(false); setClientGstins([]); setClientGstinStates({}); setToRegisteredState(""); setManualPlaceOfSupplyCode(""); return; }
     const client = clients.find(c => c.id === clientId);
     if (client) {
       setToName(client.name || "");
+      // Root-cause fix (2026-08-11): carry the client's own registered state
+      // + clear any manual Place-of-Supply override from a previous client
+      // selection, so switching clients never leaks a stale pick forward.
+      setToRegisteredState(client.registered_state || "");
+      setManualPlaceOfSupplyCode("");
       const gstins = client.gstin ?? [];
       const states = (client.gstin_states && typeof client.gstin_states === "object") ? client.gstin_states as Record<string, string> : {};
       const addresses = (client.gstin_addresses && typeof client.gstin_addresses === "object") ? client.gstin_addresses as Record<string, string> : {};
@@ -1425,7 +1503,30 @@ const NewInvoice = () => {
               </div>
               <div>
                 <Label className="text-xs">Place of Supply</Label>
-                <Input value={placeOfSupply} readOnly className="bg-muted text-xs" />
+                {/* Root-cause fix (2026-08-11): a client with no GSTIN gets an
+                    editable state picker (defaulting to their registered_state
+                    when resolvable) instead of a locked field permanently
+                    showing the firm's own state. A client WITH a GSTIN is
+                    unchanged — GST law ties place of supply to the GSTIN
+                    there, so it stays derived-only. */}
+                {!toGstin ? (
+                  <Select
+                    value={noGstinStateCode}
+                    onValueChange={setManualPlaceOfSupplyCode}
+                    disabled={isLocked}
+                  >
+                    <SelectTrigger className="text-xs h-9">
+                      <SelectValue placeholder="Select state" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {STATE_OPTIONS.map(s => (
+                        <SelectItem key={s.code} value={s.code}>{s.code}-{s.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Input value={placeOfSupply} readOnly className="bg-muted text-xs" />
+                )}
               </div>
             </div>
           </div>
