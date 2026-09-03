@@ -36,7 +36,11 @@ const SYSTEM_PROMPT = `You read an Indian tax-audit document: either (a) a Chart
 
 Extract TWO things:
 
-1. assessee_name — the name of the ENTITY BEING AUDITED (the client whose accounts these are). NOT the Chartered Accountant's own name, and NOT the audit firm's name. Look for phrases like "Name of the assessee", "In the case of ...", "M/s ...", "the accounts of ...", "the Balance Sheet of ...". This is the company/firm/proprietorship the report is ABOUT — return null only if you genuinely cannot find it.
+1. assessee_name — the name of the ENTITY BEING AUDITED (the client whose accounts these are). NOT the Chartered Accountant's own name, and NOT the audit firm's name. This is the company/firm/proprietorship the report is ABOUT, and it appears prominently and REPEATEDLY throughout the document — not just in one labelled field. Look for, in this order of reliability:
+   - An explicit label: "Name of the assessee", "In the case of ...", "the accounts of ...", "the Balance Sheet of ...".
+   - The document's title block, letterhead, or cover heading (e.g. "TAX AUDIT REPORT OF <NAME>", "M/s <NAME>").
+   - The name repeated in running headers/footers or the balance sheet/P&L heading ("Balance Sheet of <NAME> as at 31st March ...").
+   Cross-check: the correct name is whichever one appears MOST OFTEN across the document — a CA's or audit firm's name typically appears once or twice (signature block, header), while the assessee's name recurs on nearly every page. Return null ONLY if no company/firm/proprietorship name appears anywhere in the document.
 
 2. date — the date this document was SIGNED / FILED, checked in this priority order:
    a. HIGHEST PRIORITY: a digital-signature (DSC) certification stamp, which reads approximately like: "This form has been digitally signed by <PERSON NAME> having PAN <PAN> from IP Address <IP> on <DATE> <TIME> Dsc Sl.No and issuer <...>". If this stamp is present ANYWHERE in the document (it usually appears once, near the end), extract the <DATE> immediately after "on" — this OVERRIDES every other date in the document, regardless of which page or section it appears on.
@@ -119,7 +123,11 @@ serve(async (req) => {
           ...(pdf_base64 ? { "anthropic-beta": "pdfs-2024-09-25" } : {}),
         },
         body: JSON.stringify({
-          model: "claude-haiku-4-5-20251001",
+          // Sonnet, not Haiku — this reads real scanned/complex client PDFs and
+          // gates a compliance record, so it uses the same model this codebase's
+          // other real-document-reading calls rely on (tds-recon-import, the
+          // scrutiny-heavy claude-gateway paths), not the cheaper Haiku tier.
+          model: Deno.env.get("ANTHROPIC_MODEL") || "claude-sonnet-4-20250514",
           max_tokens: 400,
           system: SYSTEM_PROMPT,
           messages: [{ role: "user", content: userContent }],
@@ -140,7 +148,12 @@ serve(async (req) => {
       ? result.content.filter((b: any) => b?.type === "text").map((b: any) => b.text).join("")
       : "";
 
-    return json(extractJson(text));
+    const parsed = extractJson(text);
+    // Always logged (not just on failure) — the only way to see WHY a real
+    // client PDF came back with a null name/date is the raw model reply,
+    // and this function has no other observability hook.
+    console.log("audit-3ca-extract-date result:", JSON.stringify(parsed), "raw:", text.slice(0, 500));
+    return json(parsed);
   } catch (e) {
     console.error("audit-3ca-extract-date error:", e);
     return json({ date: null, confidence: "unavailable", assessee_name: null });
