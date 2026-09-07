@@ -67,8 +67,13 @@ export interface StoredDocument {
 async function storeAgreement(file: File, clientId: string): Promise<string | null> {
   try {
     const path = `tds-property/${clientId}/${Date.now()}_${sanitizeStorageName(file.name)}`;
-    const { error } = await supabase.storage.from("documents").upload(path, file);
-    if (error) return null;
+    // Bounded, for the same reason the invoke is: this runs AFTER a successful
+    // extraction the user has already waited for, so a stalled upload here
+    // would hold the spinner open on work that is actually finished.
+    const upload = supabase.storage.from("documents").upload(path, file);
+    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 30_000));
+    const result = await Promise.race([upload, timeout]);
+    if (result === null || (result as { error?: unknown }).error) return null;
     return supabase.storage.from("documents").getPublicUrl(path).data.publicUrl || null;
   } catch {
     return null;
@@ -78,6 +83,38 @@ async function storeAgreement(file: File, clientId: string): Promise<string | nu
 /** Base64 inflates a file by a third, and the API caps a request at 32 MB.
  *  Refusing early with a clear reason beats a 413 the user cannot interpret. */
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * Supabase kills an edge-function worker at its request idle timeout (150s)
+ * and returns a 504 with no body. supabase-js can leave the promise hanging in
+ * that case, which is how an upload ends up spinning forever with nothing on
+ * screen and no error — the worst possible outcome, because it looks like the
+ * app is still working.
+ *
+ * So the call is BOUNDED here, on the client, at the same 150s. Whatever
+ * happens on the far side, the spinner stops and something is said.
+ *
+ * Mirrors invokeFn() in TdsValidateFinalise.tsx, which already learned this.
+ */
+const INVOKE_TIMEOUT_MS = 150_000;
+
+async function invokeBounded(name: string, body: unknown) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), INVOKE_TIMEOUT_MS);
+  try {
+    return await Promise.race([
+      // `signal` is passed opportunistically — some supabase-js versions honour
+      // it. The race below bounds the UI even when the SDK ignores it.
+      supabase.functions.invoke(name, { body, signal: ctrl.signal } as never),
+      new Promise<never>((_, reject) => {
+        ctrl.signal.addEventListener("abort", () =>
+          reject(new Error("READER_TIMEOUT")), { once: true });
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * Say what actually went wrong with the invoke.
@@ -92,11 +129,32 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
  * credits, key rejected, model withdrawn, scan unreadable), so it is passed
  * through rather than re-summarised.
  */
-function describeInvokeError(e: unknown): string {
+async function describeInvokeError(e: unknown): Promise<string> {
   const raw = e instanceof Error ? e.message : String(e ?? "");
-  if (/failed to send a request|failed to fetch|not found|404/i.test(raw)) {
-    return "The document reader is not deployed on this project yet. Run `npx supabase functions deploy property-agreement-extract` from a local session, then try again. You can enter the details manually in the meantime.";
+
+  if (raw === "READER_TIMEOUT") {
+    return "The reader took longer than 150 seconds and the server cut it off. Long registered deeds are usually the cause — upload just the pages carrying the parties, the consideration and the stamp duty value, or set the PROPERTY_EXTRACT_MODEL secret to a faster model.";
   }
+  if (/failed to send a request|failed to fetch|not found|404/i.test(raw)) {
+    return "The document reader is not deployed on this project yet. Deploy the property-agreement-extract function, then try again. You can enter the details manually in the meantime.";
+  }
+
+  // A platform kill (wall-clock timeout or OOM) comes back with NO JSON body
+  // and a bare "non-2xx status code". Read the status to say something useful
+  // rather than repeating that string at the user.
+  try {
+    const ctx = (e as { context?: { status?: number; json?: () => Promise<unknown> } }).context;
+    const status = ctx?.status ?? 0;
+    const body = ctx && typeof ctx.json === "function" ? await ctx.json() : null;
+    const fromBody = (body as { error?: string } | null)?.error;
+    if (fromBody) return String(fromBody);
+    if ([500, 502, 504, 546].includes(status)) {
+      return "The server ran out of time or memory reading this document. Upload fewer pages, or set the PROPERTY_EXTRACT_MODEL secret to a faster model.";
+    }
+  } catch {
+    // No parseable body — fall through to the raw message.
+  }
+
   return raw || "The document could not be read.";
 }
 
@@ -143,12 +201,10 @@ export function TdsPropertyUpload({
     try {
       const b64 = await toBase64(file);
       const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
-      const { data, error } = await supabase.functions.invoke("property-agreement-extract", {
-        body: {
-          doc_kind: "sale_agreement",
-          file_name: file.name,
-          ...(isPdf ? { pdf_base64: b64 } : { image_base64: b64, image_media_type: file.type || "image/png" }),
-        },
+      const { data, error } = await invokeBounded("property-agreement-extract", {
+        doc_kind: "sale_agreement",
+        file_name: file.name,
+        ...(isPdf ? { pdf_base64: b64 } : { image_base64: b64, image_media_type: file.type || "image/png" }),
       });
       if (error) throw error;
 
@@ -194,7 +250,7 @@ export function TdsPropertyUpload({
           : `Read ${file.name}. Check the figures against the document before filing.`,
       );
     } catch (e: unknown) {
-      toast.error(describeInvokeError(e));
+      toast.error(await describeInvokeError(e));
       setSummary(null);
     } finally {
       setReading(false);
