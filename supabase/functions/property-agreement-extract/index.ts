@@ -66,7 +66,16 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * Below Supabase's 150s request idle timeout, with room for the base64
+ * document to travel up and the reply to travel back.
+ *
+ * The point is not to make a slow read fast — it is to make sure THIS function
+ * answers first. Past 150s the platform closes the connection and whatever the
+ * model eventually returns is delivered to nobody, which is how an upload ends
+ * up spinning with no error at all.
+ */
+const REQUEST_TIMEOUT_MS = 110_000;
 
 /**
  * Opus, not the cheaper tier msme-extract-ledger settled on for ledgers.
@@ -236,7 +245,15 @@ serve(async (req) => {
     const reply = await callModel(
       SYSTEM_PROMPT,
       parts,
-      { modelEnv: MODEL_ENV, defaultModel: DEFAULT_MODEL, appTitle: "CAFlow Property TDS", maxTokens: 16000 },
+      {
+        modelEnv: MODEL_ENV,
+        defaultModel: DEFAULT_MODEL,
+        appTitle: "CAFlow Property TDS",
+        maxTokens: 16000,
+        // Keeps Opus's reading quality while cutting the thinking that pushed a
+        // real deed to 173s — see the note on CallOptions.effort.
+        effort: "low",
+      },
       REQUEST_TIMEOUT_MS,
     );
 

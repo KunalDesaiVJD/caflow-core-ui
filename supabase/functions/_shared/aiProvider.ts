@@ -69,6 +69,23 @@ export interface CallOptions {
   /** Shown to OpenRouter in X-Title, so spend is attributable per feature. */
   appTitle: string;
   maxTokens: number;
+  /**
+   * How hard the model should think before answering.
+   *
+   * This is the single biggest lever on wall-clock time, and it matters here
+   * because Supabase cuts an edge-function request off at a 150s idle timeout.
+   * Current Claude models run adaptive thinking by DEFAULT at "high" effort —
+   * a real registered deed measured 173s that way, so the answer arrived 23
+   * seconds after the connection had already gone.
+   *
+   * "low" allocates roughly a fifth of max_tokens to reasoning instead of four
+   * fifths. For structured extraction — read the page, copy the figures — that
+   * is the right trade: the work is careful reading, not deduction.
+   *
+   * Sent as `reasoning.effort` on OpenRouter and `output_config.effort` on
+   * Anthropic direct; both accept low/medium/high/xhigh/max.
+   */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
 }
 
 export function resolveProvider(
@@ -133,6 +150,7 @@ export async function callModel(
           body: JSON.stringify({
             model,
             max_tokens: opts.maxTokens,
+            ...(opts.effort ? { reasoning: { effort: opts.effort } } : {}),
             messages: [
               { role: "system", content: system },
               {
@@ -167,6 +185,7 @@ export async function callModel(
           body: JSON.stringify({
             model,
             max_tokens: opts.maxTokens,
+            ...(opts.effort ? { output_config: { effort: opts.effort } } : {}),
             system,
             messages: [{
               role: "user",
