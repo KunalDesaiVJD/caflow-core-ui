@@ -31,6 +31,8 @@ import { cn } from "@/lib/utils";
 import { computeForm141ScheduleB } from "@/lib/tds/form141ScheduleB";
 import { taxYearForDate, FORM_141_FIRST_TAX_YEAR } from "@/lib/tds/form141";
 import { TdsPropertyEditor } from "./TdsPropertyEditor";
+import type { StoredDocument } from "./TdsPropertyUpload";
+import type { AppliedExtraction, ResolvedQuery, FieldProvenance } from "./agreementExtraction";
 import {
   toForm141Deal,
   formatInr,
@@ -105,6 +107,23 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<PropertyDealBundle | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // ── Agreement extraction state ───────────────────────────────────────────
+  // Held here rather than in the editor so it outlives a save: the field
+  // provenance and the question/answer pairs are persisted onto
+  // tds_property_documents, where they stay readable long after this session.
+  const [provenance, setProvenance] = useState<Record<string, FieldProvenance>>({});
+  const [queries, setQueries] = useState<ResolvedQuery[]>([]);
+  const [pendingDoc, setPendingDoc] = useState<StoredDocument | null>(null);
+
+  const resetExtraction = () => { setProvenance({}); setQueries([]); setPendingDoc(null); };
+
+  const handleExtracted = (applied: AppliedExtraction, doc: StoredDocument | null) => {
+    setEditing(applied.bundle);
+    setProvenance(applied.provenance);
+    setQueries(applied.queries);
+    setPendingDoc(doc);
+  };
 
   const client = clients.find((c) => c.id === selClient) || null;
 
@@ -251,8 +270,27 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
         if (error) throw error;
       }
 
+      // The agreement and what was read from it, with every question and the
+      // answer given to it. Best-effort: a transaction that saved correctly
+      // must not be reported as failed because its audit trail did not write.
+      if (pendingDoc) {
+        const { error } = await propertyTable("tds_property_documents").insert({
+          firm_id: firmId,
+          transaction_id: txnId,
+          doc_kind: pendingDoc.docKind,
+          file_url: pendingDoc.fileUrl,
+          file_name: pendingDoc.fileName,
+          mime_type: pendingDoc.mimeType,
+          extraction_json: { extraction: pendingDoc.extractionJson, queries, provenance },
+          extraction_status: queries.some((q) => !q.resolvedAt) ? "extracted" : "confirmed",
+          uploaded_by: user?.id ?? null,
+        });
+        if (error) console.error("property document not recorded:", error.message);
+      }
+
       toast.success("Transaction saved.");
       setEditing(null);
+      resetExtraction();
       await load();
     } catch (e: unknown) {
       toast.error(errorMessage(e) || "Could not save the transaction.");
@@ -264,6 +302,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
   const startNew = async () => {
     const firmId = await resolveFirmId();
     if (!firmId) { toast.error("Could not resolve your firm."); return; }
+    resetExtraction();
     const txn = emptyTransaction(selClient, firmId);
     setEditing({
       transaction: txn,
@@ -284,7 +323,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
     return (
       <div>
         <div className="mb-4 flex items-center gap-3">
-          <Button variant="ghost" size="sm" onClick={() => setEditing(null)} disabled={saving}>
+          <Button variant="ghost" size="sm" onClick={() => { setEditing(null); resetExtraction(); }} disabled={saving}>
             <ArrowLeft size={14} className="mr-1.5" /> Back
           </Button>
           <div>
@@ -300,10 +339,15 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
           bundle={editing}
           onChange={setEditing}
           onSave={save}
-          onCancel={() => setEditing(null)}
+          onCancel={() => { setEditing(null); resetExtraction(); }}
           saving={saving}
           selectedClientPan={client?.pan || null}
           selectedTaxYear={selTaxYear}
+          provenance={provenance}
+          queries={queries}
+          onExtracted={handleExtracted}
+          onProvenanceChange={setProvenance}
+          onQueriesChange={setQueries}
         />
       </div>
     );
@@ -393,7 +437,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
               <Card
                 key={b.transaction.id}
                 className="cursor-pointer hover:border-primary/40 transition-colors"
-                onClick={() => setEditing(b)}
+                onClick={() => { resetExtraction(); setEditing(b); }}
               >
                 <CardContent className="py-3.5">
                   <div className="flex items-start justify-between gap-4">

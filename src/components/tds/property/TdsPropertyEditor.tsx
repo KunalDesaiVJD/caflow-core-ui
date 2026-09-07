@@ -13,9 +13,12 @@
  * never stale: the Save button reflects the state of the data as it stands,
  * not as it stood when some step was last completed.
  *
- * The findings panel is the same gate an extracted agreement will pass through
- * in a later phase. Nothing here is manual-entry-specific — which is the
- * point.
+ * The findings panel is ONE gate for both entry paths. A figure read out of an
+ * uploaded agreement lands in the same fields a typed one does, and the
+ * extractor's own unresolved questions and unconfirmed readings become
+ * findings of the same shape as the arithmetic checks. Nothing here is
+ * manual-entry-specific — which is what makes the extraction safe to trust
+ * exactly as far as the gate allows.
  */
 import { useMemo, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
@@ -44,6 +47,14 @@ import {
   type PropertyPartyRow,
   type PropertyInstalmentRow,
 } from "./propertyDeal";
+import { TdsPropertyUpload, type StoredDocument } from "./TdsPropertyUpload";
+import {
+  blockingQueries,
+  FIELD_LABEL,
+  type AppliedExtraction,
+  type ResolvedQuery,
+  type FieldProvenance,
+} from "./agreementExtraction";
 
 interface Props {
   bundle: PropertyDealBundle;
@@ -57,6 +68,15 @@ interface Props {
    *  reconciliation — the document decides the period, this only reports a
    *  disagreement. */
   selectedTaxYear?: string | null;
+
+  // ── Agreement extraction ────────────────────────────────────────────────
+  // Held by the module rather than here so it survives a save and can be
+  // persisted onto tds_property_documents alongside the file itself.
+  provenance: Record<string, FieldProvenance>;
+  queries: ResolvedQuery[];
+  onExtracted: (applied: AppliedExtraction, doc: StoredDocument | null) => void;
+  onProvenanceChange: (next: Record<string, FieldProvenance>) => void;
+  onQueriesChange: (next: ResolvedQuery[]) => void;
 }
 
 const blankParty = (
@@ -99,6 +119,7 @@ const blankInstalment = (seq: number, firmId: string, txnId: string): PropertyIn
 
 export function TdsPropertyEditor({
   bundle, onChange, onSave, onCancel, saving, selectedClientPan, selectedTaxYear,
+  provenance, queries, onExtracted, onProvenanceChange, onQueriesChange,
 }: Props) {
   const [showDisclaimer, setShowDisclaimer] = useState(false);
   const t = bundle.transaction;
@@ -149,12 +170,70 @@ export function TdsPropertyEditor({
     return resolveForm141Period(first.datePaidOrCredited, first.dateOfDeduction, selectedTaxYear || null);
   }, [deal.instalments, selectedTaxYear]);
 
+  /**
+   * ONE gate, not two.
+   *
+   * An unresolved blocking question from the extractor, and a
+   * medium-confidence reading nobody has confirmed, are turned into findings
+   * of exactly the same shape the engine produces. They sort and render
+   * beside the arithmetic checks, and they block filing on the same terms —
+   * which is the whole reason extraction was built on top of a working manual
+   * path rather than beside it.
+   */
+  const extractionFindings = useMemo(() => {
+    const out: { code: string; severity: "blocking" | "warning"; field: string; message: string; ref?: string }[] = [];
+
+    for (const q of blockingQueries(queries)) {
+      out.push({
+        code: "extraction_query_unresolved",
+        severity: "blocking",
+        field: q.field,
+        ref: FIELD_LABEL[q.field] || q.field,
+        message: `Unanswered question about ${FIELD_LABEL[q.field] || q.field}: ${q.question}`,
+      });
+    }
+
+    for (const [key, p] of Object.entries(provenance)) {
+      if (!p.needsConfirmation) continue;
+      out.push({
+        code: "extraction_unconfirmed",
+        severity: "warning",
+        field: key,
+        ref: FIELD_LABEL[key] || key,
+        message: `${FIELD_LABEL[key] || key} was read from the document at ${p.confidence} confidence and has not been confirmed${p.page !== null ? ` (page ${p.page})` : ""}. Check it against the source before filing.`,
+      });
+    }
+
+    return out;
+  }, [queries, provenance]);
+
+  const allFindings = useMemo(
+    () => [
+      ...result.blocking,
+      ...extractionFindings.filter((f) => f.severity === "blocking"),
+      ...result.warnings,
+      ...extractionFindings.filter((f) => f.severity === "warning"),
+    ],
+    [result.blocking, result.warnings, extractionFindings],
+  );
+  const blockingCount = result.blocking.length + extractionFindings.filter((f) => f.severity === "blocking").length;
+  const warningCount = result.warnings.length + extractionFindings.filter((f) => f.severity === "warning").length;
+
   const canSave = Boolean(t.property_address.trim()) && !saving;
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
       {/* ── Form ─────────────────────────────────────────────────────────── */}
       <div className="space-y-5 min-w-0">
+        <TdsPropertyUpload
+          bundle={bundle}
+          provenance={provenance}
+          queries={queries}
+          onExtracted={onExtracted}
+          onProvenanceChange={onProvenanceChange}
+          onQueriesChange={onQueriesChange}
+        />
+
         {/* Property */}
         <Card>
           <CardContent className="pt-5 space-y-4">
@@ -430,7 +509,7 @@ export function TdsPropertyEditor({
             Save transaction
           </Button>
           <Button variant="ghost" onClick={onCancel} disabled={saving}>Cancel</Button>
-          {result.blocking.length > 0 && (
+          {blockingCount > 0 && (
             <span className="text-xs text-muted-foreground">
               Saving is allowed with findings open — filing is not.
             </span>
@@ -540,27 +619,27 @@ export function TdsPropertyEditor({
           <CardContent className="pt-5 space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-semibold">Checks</h3>
-              {result.findings.length === 0 ? (
+              {allFindings.length === 0 ? (
                 <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px]">
                   All clear
                 </Badge>
               ) : (
                 <div className="flex gap-1.5">
-                  {result.blocking.length > 0 && (
+                  {blockingCount > 0 && (
                     <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 text-[10px]">
-                      {result.blocking.length} blocking
+                      {blockingCount} blocking
                     </Badge>
                   )}
-                  {result.warnings.length > 0 && (
+                  {warningCount > 0 && (
                     <Badge className="bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 text-[10px]">
-                      {result.warnings.length} to review
+                      {warningCount} to review
                     </Badge>
                   )}
                 </div>
               )}
             </div>
 
-            {result.findings.length === 0 && (
+            {allFindings.length === 0 && (
               <p className="text-xs text-muted-foreground flex items-start gap-2">
                 <CheckCircle2 size={14} className="text-emerald-600 shrink-0 mt-0.5" />
                 Every cross-field check passes. This transaction is ready to file.
@@ -568,7 +647,7 @@ export function TdsPropertyEditor({
             )}
 
             <ul className="space-y-2.5">
-              {result.findings.map((f, idx) => (
+              {allFindings.map((f, idx) => (
                 <li key={`${f.code}-${f.ref ?? ""}-${idx}`} className="flex items-start gap-2 text-xs">
                   {f.severity === "blocking"
                     ? <AlertCircle size={14} className="text-red-600 dark:text-red-400 shrink-0 mt-0.5" />
