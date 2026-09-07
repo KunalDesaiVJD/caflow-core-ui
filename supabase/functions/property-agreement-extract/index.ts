@@ -109,6 +109,18 @@ STEP 2 — EXTRACT. Every field is an object: {"value": <value or null>, "confid
   "low"    — a guess from context.
 Never invent a snippet. If you cannot find a field, return value null, confidence "low", snippet null — do not omit the key.
 
+THE ENVELOPE APPLIES TO EVERY FIELD, INCLUDING THE LIST ONES. A list field carries the ARRAY as its "value", and the objects inside the array are PLAIN — their properties are bare strings and numbers, NOT further envelopes. Exactly this shape:
+
+  "buyers": {
+    "value": [
+      {"name": "Girishbhai Madhavji Barochia", "pan": "ABCDE1234F", "share_pct": 50},
+      {"name": "Pratapbhai Girishbhai Solanki", "pan": null, "share_pct": 50}
+    ],
+    "confidence": "high", "page": 2, "snippet": "PURCHASERS: 1) Girishbhai ..."
+  }
+
+Do NOT return the bare array without the envelope, and do NOT wrap "name" or "pan" in their own {"value": ...} objects. One envelope per field, plain objects inside.
+
 Fields to extract:
   property_type            — LAND, BUILDING, LAND & BUILDING, FLAT / APARTMENT, or OTHER.
   property_address         — the full description as written: survey/khata/block/plot numbers, village, taluka, district, state, PIN.

@@ -217,6 +217,103 @@ describe("confidence gating", () => {
   });
 });
 
+/**
+ * The three shapes a model actually returns for a list field.
+ *
+ * The prompt says "every field is an object {value, confidence, page,
+ * snippet}" AND "buyers — array of {...}". Both are satisfiable three
+ * different ways, and requiring only the specified one is what made a real
+ * registered deed come back with no parties, no payments and therefore no
+ * tax — silently, which is the worst part: zero tax looks exactly like a
+ * below-threshold deal.
+ */
+describe("list fields — every shape a model returns", () => {
+  const BUYERS = [
+    { name: "Buyer One", pan: "ADFPB0000E", share_pct: 50 },
+    { name: "Buyer Two", pan: "ACTPP0000E", share_pct: 50 },
+  ];
+
+  const withBuyers = (buyers: unknown): AgreementExtraction => ({
+    ...GOOD_EXTRACTION,
+    fields: { ...GOOD_EXTRACTION.fields, buyers: buyers as never },
+  });
+
+  it("reads the specified shape: {value: [...]}", () => {
+    const r = applyExtraction(withBuyers(f(BUYERS)), BASE);
+    expect(r.bundle.parties.filter((p) => p.party_role === "buyer")).toHaveLength(2);
+    expect(r.unreadable).not.toContain("buyers");
+  });
+
+  it("reads a BARE array with no envelope", () => {
+    const r = applyExtraction(withBuyers(BUYERS), BASE);
+    const buyers = r.bundle.parties.filter((p) => p.party_role === "buyer");
+    expect(buyers).toHaveLength(2);
+    expect(buyers[0].name).toBe("Buyer One");
+    expect(buyers[0].pan).toBe("ADFPB0000E");
+    expect(buyers[0].share_pct).toBe(50);
+  });
+
+  it("reads rows whose every leaf carries its OWN envelope", () => {
+    const nested = f([
+      {
+        name: { value: "Buyer One", confidence: "high", page: 2, snippet: "..." },
+        pan: { value: "ADFPB0000E", confidence: "high", page: 2, snippet: "..." },
+        share_pct: { value: 50, confidence: "medium", page: 2, snippet: "..." },
+      },
+    ]);
+    const r = applyExtraction(withBuyers(nested), BASE);
+    const buyers = r.bundle.parties.filter((p) => p.party_role === "buyer");
+    expect(buyers).toHaveLength(1);
+    expect(buyers[0].name).toBe("Buyer One");
+    expect(buyers[0].pan).toBe("ADFPB0000E");
+    expect(buyers[0].share_pct).toBe(50);
+  });
+
+  it("reads instalments in a bare-array shape too, and computes tax from them", () => {
+    const ex: AgreementExtraction = {
+      ...GOOD_EXTRACTION,
+      fields: {
+        ...GOOD_EXTRACTION.fields,
+        buyers: BUYERS as never,
+        sellers: [
+          { name: "Seller One", pan: "ANRPP0000R", share_pct: 50 },
+          { name: "Seller Two", pan: "CBNPM0000M", share_pct: 50 },
+        ] as never,
+        instalments: [{ amount: 25600000, date_paid_or_credited: "2026-09-02" }] as never,
+      },
+    };
+    const r = applyExtraction(ex, BASE);
+    expect(r.unreadable).toEqual([]);
+    const computed = computeForm141ScheduleB(toForm141Deal(r.bundle), "ADFPB0000E");
+    expect(computed.statements[0].totalTds).toBe(128000);
+  });
+
+  it("SAYS SO when a field arrives in a shape it cannot read", () => {
+    // The old failure was silent. A list that yields nothing must be reported,
+    // because an empty seller list computes zero tax.
+    const r = applyExtraction(withBuyers(f("Girishbhai and Pratapbhai")), BASE);
+    expect(r.bundle.parties.filter((p) => p.party_role === "buyer")).toHaveLength(0);
+    expect(r.unreadable).toContain("buyers");
+  });
+
+  it("does NOT report a field the model legitimately left empty", () => {
+    const r = applyExtraction(withBuyers(f(null)), BASE);
+    expect(r.unreadable).not.toContain("buyers");
+  });
+
+  it("tolerates an enveloped scalar and a bare scalar alike", () => {
+    const bare: AgreementExtraction = {
+      ...GOOD_EXTRACTION,
+      fields: {
+        ...GOOD_EXTRACTION.fields,
+        property_type: "LAND" as never,
+        total_sale_consideration: f(25600000),
+      },
+    };
+    expect(applyExtraction(bare, BASE).bundle.transaction.property_type).toBe("LAND");
+  });
+});
+
 describe("shares are never re-normalised", () => {
   it("carries a deed whose shares do not total 100% straight through", () => {
     // Smoothing 60+60 to 50+50 would hide a real defect behind a plausible

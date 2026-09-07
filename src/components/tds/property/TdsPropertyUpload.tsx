@@ -187,7 +187,7 @@ export function TdsPropertyUpload({
   const inputRef = useRef<HTMLInputElement>(null);
   const [reading, setReading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [summary, setSummary] = useState<{ needsConfirmation: string[]; withheld: string[] } | null>(null);
+  const [summary, setSummary] = useState<{ needsConfirmation: string[]; withheld: string[]; unreadable: string[] } | null>(null);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [showEvidence, setShowEvidence] = useState<string | null>(null);
 
@@ -241,7 +241,11 @@ export function TdsPropertyUpload({
             }
           : null,
       );
-      setSummary({ needsConfirmation: applied.needsConfirmation, withheld: applied.withheld });
+      setSummary({
+        needsConfirmation: applied.needsConfirmation,
+        withheld: applied.withheld,
+        unreadable: applied.unreadable,
+      });
 
       const open = openQueries(applied.queries).length;
       toast.success(
@@ -293,6 +297,20 @@ export function TdsPropertyUpload({
           <p className="text-xs text-muted-foreground flex items-center gap-1.5">
             <FileText size={12} /> {fileName}
           </p>
+        )}
+
+        {/* Returned but unparseable. Loud, because an empty seller list computes
+            zero tax and looks exactly like a below-threshold deal. */}
+        {summary && summary.unreadable.length > 0 && (
+          <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-3">
+            <p className="text-xs font-medium mb-1">Read but not understood</p>
+            <p className="text-xs text-muted-foreground">
+              The reader returned {summary.unreadable.map((k) => FIELD_LABEL[k] || k).join(", ")} in a form
+              this app could not use, so {summary.unreadable.length === 1 ? "it is" : "they are"} empty below.
+              Enter {summary.unreadable.length === 1 ? "it" : "them"} by hand — and please report this, because
+              it is a bug rather than a limit of the document.
+            </p>
+          </div>
         )}
 
         {/* What it withheld, and why — the empty boxes explained. */}
