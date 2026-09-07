@@ -41,14 +41,23 @@
  * regardless, because the threshold and the tax are recomputed from the
  * parties' shares rather than read off the page.
  *
- * Fails soft throughout: a missing key, a provider error or an unparseable
- * reply returns extraction_status "failed" rather than a hard error, so the
- * user always falls back to typing the deal in by hand.
+ * ── Provider ──────────────────────────────────────────────────────────────
  *
- * Requires the ANTHROPIC_API_KEY secret.
+ * Goes through _shared/aiProvider.ts, the same transport msme-extract-ledger
+ * established: OPENROUTER_API_KEY first, ANTHROPIC_API_KEY second. An earlier
+ * version of this function required ANTHROPIC_API_KEY specifically, which is
+ * wrong for a project funded through a single OpenRouter account — it would
+ * deploy cleanly and then report "not configured" on first use, with the key
+ * sitting right there under a different name.
+ *
+ * Fails soft throughout: a missing key, a provider error or an unparseable
+ * reply returns extraction_status "failed" with a message saying WHICH of
+ * those it was, so the user either fixes it or falls back to typing the deal
+ * in by hand.
  */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { callModel, isProviderError, type Part } from "../_shared/aiProvider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -58,6 +67,19 @@ const corsHeaders = {
 };
 
 const REQUEST_TIMEOUT_MS = 120_000;
+
+/**
+ * Opus, not the cheaper tier msme-extract-ledger settled on for ledgers.
+ * This reads scanned, often regional-language legal documents whose figures
+ * drive a government filing, so the reading is where the money belongs.
+ * Overridable per project without a redeploy via PROPERTY_EXTRACT_MODEL —
+ * which is also the escape hatch if an OpenRouter model id changes.
+ */
+const MODEL_ENV = "PROPERTY_EXTRACT_MODEL";
+const DEFAULT_MODEL = {
+  openrouter: "anthropic/claude-opus-5",
+  anthropic: "claude-opus-5",
+} as const;
 
 const SYSTEM_PROMPT = `You read Indian immovable-property transfer documents and extract the facts needed to prepare a TDS statement. You are precise, and you say when you are unsure rather than guessing.
 
@@ -174,16 +196,6 @@ function parseReply(text: string): ExtractionResult {
   };
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
-  } finally {
-    clearTimeout(t);
-  }
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -207,62 +219,40 @@ serve(async (req) => {
       return json({ error: "Provide `pdf_base64` or `image_base64`." }, 400);
     }
 
-    const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
-    if (!ANTHROPIC_API_KEY) {
-      return json(failed("Document reading is not configured on this environment. Enter the details manually."));
-    }
-
     // The document goes FIRST, the instruction after it — the model reads the
     // whole deed before being told what to look for, rather than scanning for
     // the first match of each field.
-    const userContent: unknown[] = [];
+    const parts: Part[] = [];
     if (pdf_base64) {
-      userContent.push({ type: "document", source: { type: "base64", media_type: "application/pdf", data: pdf_base64 } });
+      parts.push({ kind: "pdf", filename: file_name || "agreement.pdf", base64: pdf_base64 });
     } else {
-      userContent.push({ type: "image", source: { type: "base64", media_type: image_media_type || "image/png", data: image_base64 } });
+      parts.push({ kind: "image", mediaType: image_media_type || "image/png", base64: image_base64 });
     }
-    userContent.push({
-      type: "text",
+    parts.push({
+      kind: "text",
       text: `File name: ${file_name || "unknown"}. Expected document kind: ${doc_kind || "sale_agreement"} (verify this yourself — classify what the document actually is, not what it was labelled). Extract the Form 141 Schedule B fields and raise any queries.`,
     });
 
-    let res: Response;
-    try {
-      res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "x-api-key": ANTHROPIC_API_KEY,
-          "anthropic-version": "2023-06-01",
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          // Opus, not the cheaper tier: this reads scanned, often
-          // regional-language legal documents whose figures drive a
-          // government filing. A misread here is a wrong statement to the
-          // department, so the reading is where the money belongs.
-          model: Deno.env.get("ANTHROPIC_PROPERTY_MODEL") || "claude-opus-5",
-          max_tokens: 16000,
-          system: SYSTEM_PROMPT,
-          messages: [{ role: "user", content: userContent }],
-        }),
-      });
-    } catch (e) {
-      console.error("property-agreement-extract: provider request failed", e);
-      return json(failed("The document reader could not be reached. Enter the details manually."));
+    const reply = await callModel(
+      SYSTEM_PROMPT,
+      parts,
+      { modelEnv: MODEL_ENV, defaultModel: DEFAULT_MODEL, appTitle: "CAFlow Property TDS", maxTokens: 16000 },
+      REQUEST_TIMEOUT_MS,
+    );
+
+    // A provider failure is reported VERBATIM rather than flattened into "could
+    // not be read". "No credits left" and "this scan is unreadable" have
+    // completely different remedies, and only one of them is the user's to fix.
+    if (isProviderError(reply)) return json(failed(reply.error));
+
+    if (reply.truncated) {
+      return json(failed(
+        "The document is too long to read in one pass — the reply was cut off. Upload just the pages " +
+        "carrying the parties, the consideration and the stamp duty value.",
+      ));
     }
 
-    if (!res.ok) {
-      console.error("property-agreement-extract: Anthropic error", res.status, await res.text());
-      return json(failed("The document could not be read just now. Enter the details manually, or try again."));
-    }
-
-    const result = await res.json();
-    const text = Array.isArray(result?.content)
-      ? result.content
-          .filter((b: { type?: string }) => b?.type === "text")
-          .map((b: { text?: string }) => b.text ?? "")
-          .join("")
-      : "";
+    const text = reply.text;
 
     const parsed = parseReply(text);
     // Logged on every call, not just failures: when a real client deed comes
@@ -270,6 +260,7 @@ serve(async (req) => {
     // whether the model missed it or the document genuinely lacks it.
     console.log(
       "property-agreement-extract:",
+      `${reply.provider}/${reply.model}`,
       parsed.document_kind,
       parsed.extraction_status,
       `${(parsed.queries || []).length} queries`,
