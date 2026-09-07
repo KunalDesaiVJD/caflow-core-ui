@@ -788,8 +788,8 @@ const ItReturns = () => {
       // Ack No gate: refuse to move into "Filed" without an acknowledgement
       // number. Surface a destructive toast so the auditor sees exactly why
       // the dropdown reverted, and stop here — no DB write, no optimistic
-      // patch, no history-log entry. Checks extraPatch too — the Audited-
-      // client upload-confirm dialog (ItrFiledConfirmDialog) supplies a
+      // patch, no history-log entry. Checks extraPatch too — the ITR
+      // upload-confirm dialog (ItrFiledConfirmDialog) supplies a
       // freshly-read Ack No via extraPatch in the SAME call that sets
       // filing_status="Filed", so `profile.acknowledgment_no` (the OLD
       // value) is still blank at that point and must not block it.
@@ -957,7 +957,7 @@ const ItReturns = () => {
     }
   };
 
-  // ─── ITR upload-confirm gate (Audited clients — see ItrFiledConfirmDialog) ─
+  // ─── ITR upload-confirm gate (every sub-tab but Non-ITR — see ItrFiledConfirmDialog) ─
   // Guarantees a real itr_profiles row exists for this client+FY and returns
   // its id, so files can be attached to it BEFORE the "Filed"/"Sent to CPC"
   // status patch is applied. A client with no profile row yet for the
@@ -1956,17 +1956,20 @@ function InlineEditableRow({
   const [infoOpen, setInfoOpen] = useState(false);
   const { toast } = useToast();
 
-  // ── ITR upload-confirm gate (Audited clients only) ───────────────────────
+  // ── ITR upload-confirm gate (every filing sub-tab except Non-ITR) ────────
   // Marking "Filed" (or jumping straight to "Sent to CPC", which would
   // otherwise skip the gate entirely) requires the ITR Form + Computation of
   // Income + Ack No + Filed By to be confirmed together first. A row that's
   // already been gated once (has an Ack No) can move freely between Filed
-  // and Sent to CPC afterward without re-prompting.
+  // and Sent to CPC afterward without re-prompting. Applies to Audited,
+  // Non-Audited, Non-Audit (BP) and Partner in Audited Firm alike — only
+  // Non-ITR clients (the ITR service toggled off) are exempt, since they
+  // never actually file a return through this module.
   const [itrUploadOpen, setItrUploadOpen] = useState(false);
   const [pendingStatus, setPendingStatus] = useState<string | null>(null);
-  const isAuditedClient = getClientSubTab(p.client_classification) === "audited";
+  const isGatedClient = getClientSubTab(p.client_classification) !== "non_itr";
   const needsUploadGate = (v: string) =>
-    isAuditedClient && (v === "Filed" || v === "Sent to CPC") && !((p as any).acknowledgment_no || "").trim();
+    isGatedClient && (v === "Filed" || v === "Sent to CPC") && !((p as any).acknowledgment_no || "").trim();
 
   function handleStatusChange(v: string) {
     if (needsUploadGate(v)) {
@@ -2072,12 +2075,12 @@ function InlineEditableRow({
           {formatFiledDate(p.date_filed)}
         </TableCell>
 
-        {/* Upload By — set via the ITR upload-confirm dialog for Audited
-            clients (see handleStatusChange above); auto-stamped as before
-            for non-Audited clients. A gated-and-confirmed Audited row is
-            clickable to view/replace the ITR Form + Computation of Income. */}
+        {/* Upload By — set via the ITR upload-confirm dialog (see
+            handleStatusChange above), for every gated client. A gated-and-
+            confirmed row is clickable to view/replace the ITR Form +
+            Computation of Income. */}
         <TableCell className="text-xs px-2">
-          {isAuditedClient && (p as any).upload_by ? (
+          {isGatedClient && (p as any).upload_by ? (
             <button
               type="button"
               onClick={() => { setPendingStatus(p.filing_status || "Filed"); setItrUploadOpen(true); }}
@@ -2117,7 +2120,7 @@ function InlineEditableRow({
         staffUsers={staffUsers}
       />
 
-      {/* ITR upload-confirm dialog — Audited clients' Filed / Sent to CPC gate */}
+      {/* ITR upload-confirm dialog — Filed / Sent to CPC gate (all sub-tabs but Non-ITR) */}
       {itrUploadOpen && pendingStatus && (
         <ItrFiledConfirmDialog
           open={itrUploadOpen}
