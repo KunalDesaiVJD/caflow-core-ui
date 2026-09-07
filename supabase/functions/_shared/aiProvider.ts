@@ -219,7 +219,11 @@ export async function callModel(
     return describeProviderError(res.status, body, model, provider, opts.modelEnv);
   }
 
+  // Both linters, because this file is Deno source that the repo's eslint also
+  // walks. The provider response genuinely is arbitrary JSON whose shape
+  // differs per provider — it is narrowed immediately below.
   // deno-lint-ignore no-explicit-any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const body: any = await res.json();
   if (provider === "openrouter") {
     const choice = body.choices?.[0];
