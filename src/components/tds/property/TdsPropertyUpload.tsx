@@ -79,6 +79,27 @@ async function storeAgreement(file: File, clientId: string): Promise<string | nu
  *  Refusing early with a clear reason beats a 413 the user cannot interpret. */
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
+/**
+ * Say what actually went wrong with the invoke.
+ *
+ * The failure that matters most here is the function not being DEPLOYED. The
+ * Supabase client reports that as a generic transport error ("Failed to send a
+ * request to the Edge Function"), which reads like a network problem and sends
+ * whoever hits it looking in the wrong place entirely — the code is fine, the
+ * key is fine, the function simply is not on the project yet.
+ *
+ * Every other case reaches here already worded by the function itself (no
+ * credits, key rejected, model withdrawn, scan unreadable), so it is passed
+ * through rather than re-summarised.
+ */
+function describeInvokeError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e ?? "");
+  if (/failed to send a request|failed to fetch|not found|404/i.test(raw)) {
+    return "The document reader is not deployed on this project yet. Run `npx supabase functions deploy property-agreement-extract` from a local session, then try again. You can enter the details manually in the meantime.";
+  }
+  return raw || "The document could not be read.";
+}
+
 interface Props {
   bundle: PropertyDealBundle;
   provenance: Record<string, FieldProvenance>;
@@ -173,8 +194,7 @@ export function TdsPropertyUpload({
           : `Read ${file.name}. Check the figures against the document before filing.`,
       );
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "The document could not be read.";
-      toast.error(msg);
+      toast.error(describeInvokeError(e));
       setSummary(null);
     } finally {
       setReading(false);
