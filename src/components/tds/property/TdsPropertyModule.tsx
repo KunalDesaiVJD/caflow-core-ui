@@ -33,6 +33,7 @@ import { taxYearForDate, FORM_141_FIRST_TAX_YEAR } from "@/lib/tds/form141";
 import { TdsPropertyEditor } from "./TdsPropertyEditor";
 import type { StoredDocument } from "./TdsPropertyUpload";
 import type { AppliedExtraction, ResolvedQuery, FieldProvenance } from "./agreementExtraction";
+import { challanFilingUpdate, type ChallanFields } from "@/lib/tds/form141Challan";
 import {
   toForm141Deal,
   formatInr,
@@ -115,8 +116,12 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
   const [provenance, setProvenance] = useState<Record<string, FieldProvenance>>({});
   const [queries, setQueries] = useState<ResolvedQuery[]>([]);
   const [pendingDoc, setPendingDoc] = useState<StoredDocument | null>(null);
+  // Reconciled challans awaiting persistence, keyed by instalment sequence.
+  const [attachedChallans, setAttachedChallans] = useState<Record<number, ChallanFields>>({});
 
-  const resetExtraction = () => { setProvenance({}); setQueries([]); setPendingDoc(null); };
+  const resetExtraction = () => {
+    setProvenance({}); setQueries([]); setPendingDoc(null); setAttachedChallans({});
+  };
 
   const handleExtracted = (applied: AppliedExtraction, doc: StoredDocument | null) => {
     setEditing(applied.bundle);
@@ -270,6 +275,42 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
         if (error) throw error;
       }
 
+      // ── Filings ────────────────────────────────────────────────────────
+      // A reconciled challan carries facts no computation can reproduce — the
+      // acknowledgement number, the CIN, the BSR code. Written only after the
+      // instalments exist, and keyed by re-reading their saved ids: a row
+      // created in this save has no id until the database assigns one.
+      if (Object.keys(attachedChallans).length) {
+        const { data: savedInst } = await propertyTable("tds_property_instalments")
+          .select("id, seq").eq("transaction_id", txnId);
+        const idBySeq = new Map<number, string>(
+          ((savedInst || []) as { id: string; seq: number }[]).map((r) => [r.seq, r.id]),
+        );
+        const computed = computeForm141ScheduleB(toForm141Deal(editing), t.filing_buyer_pan || "");
+
+        for (const [seqStr, fields] of Object.entries(attachedChallans)) {
+          const seq = Number(seqStr);
+          const instalmentId = idBySeq.get(seq);
+          const statement = computed.statements.find((x) => x.instalmentSeq === seq);
+          if (!instalmentId || !statement) continue;
+
+          const { error } = await propertyTable("tds_property_filings").upsert({
+            firm_id: firmId,
+            transaction_id: txnId,
+            instalment_id: instalmentId,
+            tax_year: statement.taxYear,
+            month_of_deduction: statement.month,
+            due_date: statement.dueDate,
+            // What the statement SAID, frozen at the moment it was filed.
+            rows_snapshot: statement.rows,
+            filed_at: new Date().toISOString(),
+            created_by: user?.id ?? null,
+            ...challanFilingUpdate(fields),
+          }, { onConflict: "instalment_id" });
+          if (error) console.error("property filing not recorded:", error.message);
+        }
+      }
+
       // The agreement and what was read from it, with every question and the
       // answer given to it. Best-effort: a transaction that saved correctly
       // must not be reported as failed because its audit trail did not write.
@@ -348,6 +389,8 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
           onExtracted={handleExtracted}
           onProvenanceChange={setProvenance}
           onQueriesChange={setQueries}
+          attachedChallans={attachedChallans}
+          onAttachChallan={(seq, fields) => setAttachedChallans((m) => ({ ...m, [seq]: fields }))}
         />
       </div>
     );

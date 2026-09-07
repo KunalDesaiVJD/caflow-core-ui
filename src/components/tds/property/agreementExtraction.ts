@@ -34,6 +34,7 @@
  * the session that produced it.
  */
 
+import { parseIndianAmount, parseIndianDate as normaliseDate } from "@/lib/tds/indianAmount";
 import type { PropertyDealBundle, PropertyTransactionRow, PropertyPartyRow, PropertyInstalmentRow } from "./propertyDeal";
 
 // ─── Wire format ────────────────────────────────────────────────────────────
@@ -84,81 +85,18 @@ export interface FieldProvenance {
   needsConfirmation: boolean;
 }
 
-// ─── Amount parsing ─────────────────────────────────────────────────────────
-
-const CRORE = 10_000_000;
-const LAKH = 100_000;
-
-/**
- * Parse a rupee amount as an Indian document writes it.
- *
- * The extractor is asked for a plain integer, and usually returns one. This
- * exists for when it doesn't — and because the shapes it has to survive are
- * genuinely peculiar to the domain:
- *
- *   "₹2,56,00,000/-"  → 25600000   (2,2,3 grouping, not 3,3,3)
- *   "Rs. 1.28 Cr"     → 12800000
- *   "50 lacs"         →  5000000
- *   "Rs 64,00,000"    →  6400000
- *
- * Returns null rather than 0 for anything unparseable: zero is a legitimate
- * amount, and silently substituting it for "I could not read this" would take
- * a deal under the threshold.
- */
-export function parseIndianAmount(raw: unknown): number | null {
-  if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
-  if (typeof raw !== "string") return null;
-
-  const s = raw.trim().toLowerCase();
-  if (!s) return null;
-
-  // Strip currency marks, the trailing "/-" Indian documents use, and spaces.
-  const cleaned = s
-    .replace(/(?:₹|rs\.?|inr|rupees)/g, " ")
-    .replace(/\/-/g, " ")
-    .replace(/,/g, "")
-    .trim();
-
-  const multiplierMatch = cleaned.match(/^([\d.]+)\s*(crore?s?|cr|lakhs?|lacs?|lac|lakh)\b/);
-  if (multiplierMatch) {
-    const n = Number(multiplierMatch[1]);
-    if (!Number.isFinite(n)) return null;
-    const unit = multiplierMatch[2];
-    return Math.round(n * (/^(crore?s?|cr)$/.test(unit) ? CRORE : LAKH));
-  }
-
-  const plain = cleaned.match(/^-?[\d.]+/);
-  if (!plain) return null;
-  const n = Number(plain[0]);
-  return Number.isFinite(n) ? Math.round(n) : null;
-}
-
-/**
- * Normalise a date to "YYYY-MM-DD".
- *
- * Indian documents overwhelmingly write DD/MM/YYYY, so an ambiguous
- * "05/09/2026" is read as 5 September, not 9 May. Getting this backwards
- * would silently move a filing into the wrong month and manufacture — or
- * hide — a late-filing fee.
- */
-export function normaliseDate(raw: unknown): string | null {
-  if (typeof raw !== "string") return null;
-  const s = raw.trim();
-  if (!s) return null;
-
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-
-  const dmy = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{4})$/);
-  if (dmy) {
-    const [, d, m, y] = dmy;
-    const day = Number(d);
-    const month = Number(m);
-    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
-    return `${y}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-  }
-  return null;
-}
+// ─── Amount and date parsing ────────────────────────────────────────────────
+//
+// Both live in src/lib/tds/indianAmount.ts, shared with the challan/statement
+// parser. A second independently-written copy is exactly how ₹2,56,00,000 gets
+// read correctly in one half of the module and wrongly in the other, with
+// nothing to compare them against — see that file's own note.
+//
+// Re-exported here because this module is the extraction surface the rest of
+// the property UI imports from, and because both functions are part of what
+// its tests pin.
+export { parseIndianAmount } from "@/lib/tds/indianAmount";
+export { parseIndianDate as normaliseDate } from "@/lib/tds/indianAmount";
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 

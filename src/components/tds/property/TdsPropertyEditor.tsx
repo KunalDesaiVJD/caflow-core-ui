@@ -48,6 +48,8 @@ import {
   type PropertyInstalmentRow,
 } from "./propertyDeal";
 import { TdsPropertyUpload, type StoredDocument } from "./TdsPropertyUpload";
+import { TdsPropertyChallan } from "./TdsPropertyChallan";
+import type { ChallanFields } from "@/lib/tds/form141Challan";
 import {
   blockingQueries,
   FIELD_LABEL,
@@ -77,6 +79,10 @@ interface Props {
   onExtracted: (applied: AppliedExtraction, doc: StoredDocument | null) => void;
   onProvenanceChange: (next: Record<string, FieldProvenance>) => void;
   onQueriesChange: (next: ResolvedQuery[]) => void;
+
+  /** Challans reconciled and attached, keyed by instalment sequence. */
+  attachedChallans: Record<number, ChallanFields>;
+  onAttachChallan: (instalmentSeq: number, fields: ChallanFields) => void;
 }
 
 const blankParty = (
@@ -120,6 +126,7 @@ const blankInstalment = (seq: number, firmId: string, txnId: string): PropertyIn
 export function TdsPropertyEditor({
   bundle, onChange, onSave, onCancel, saving, selectedClientPan, selectedTaxYear,
   provenance, queries, onExtracted, onProvenanceChange, onQueriesChange,
+  attachedChallans, onAttachChallan,
 }: Props) {
   const [showDisclaimer, setShowDisclaimer] = useState(false);
   const t = bundle.transaction;
@@ -218,6 +225,24 @@ export function TdsPropertyEditor({
   );
   const blockingCount = result.blocking.length + extractionFindings.filter((f) => f.severity === "blocking").length;
   const warningCount = result.warnings.length + extractionFindings.filter((f) => f.severity === "warning").length;
+
+  /**
+   * Attaching a challan does two things, and the second is easy to miss: it
+   * records the government's identifiers, AND it tells the engine WHEN the
+   * tax was deposited. Until a deposit date exists, interest and the ₹200/day
+   * fee keep accruing in the panel — so a challan attached without setting it
+   * would leave a paid statement still showing a growing liability.
+   */
+  const handleAttachChallan = (seq: number, fields: ChallanFields) => {
+    const inst = bundle.instalments.find((i) => i.seq === seq);
+    if (inst && fields.dateOfDeposit) {
+      patchInstalment(inst.id, {
+        date_of_deposit: fields.dateOfDeposit,
+        date_of_filing: fields.dateOfEFiling || fields.dateOfDeposit,
+      });
+    }
+    onAttachChallan(seq, fields);
+  };
 
   const canSave = Boolean(t.property_address.trim()) && !saving;
 
@@ -502,6 +527,14 @@ export function TdsPropertyEditor({
             )}
           </CardContent>
         </Card>
+
+        <TdsPropertyChallan
+          statements={result.computation.statements}
+          filingBuyerPan={filingPan || null}
+          clientName={selectedClientPan ? buyers.find((b) => b.pan === selectedClientPan)?.name ?? null : null}
+          onAttach={handleAttachChallan}
+          attached={attachedChallans}
+        />
 
         <div className="flex items-center gap-2">
           <Button onClick={onSave} disabled={!canSave}>
