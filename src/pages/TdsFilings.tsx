@@ -7,7 +7,7 @@ import { format } from "date-fns";
 import {
   LayoutDashboard, PenLine,
   ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw, Repeat2,
-  FileEdit, Mail,
+  FileEdit, Mail, Home,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
@@ -19,6 +19,7 @@ import { TdsAuditLog } from "@/components/tds/TdsAuditLog";
 import { TdsOverrides } from "@/components/tds/TdsOverrides";
 import { TdsCorrectionsModule } from "@/components/tds/TdsCorrectionsModule";
 import { TdsPortalLoginButtons } from "@/components/tds/TdsPortalLoginButtons";
+import { TdsPropertyModule } from "@/components/tds/property/TdsPropertyModule";
 import { TdsEmailSettingsPage } from "@/pages/TdsEmailSettingsPage";
 
 interface ClientOption {
@@ -41,6 +42,12 @@ interface UserOption { id: string; name: string | null; }
 const NAV_ITEMS = [
   { key: "dashboard",  label: "Dashboard",     icon: LayoutDashboard },
   { key: "workspace",  label: "TDS Workspace",  icon: Combine },
+  // TDS on transfer of immovable property — Form 141 Schedule B, s.393(1).
+  // Its OWN section, not a tab inside the Workspace: this is filed under the
+  // buyer's PAN (no TAN), the period is a MONTH rather than a quarter, and the
+  // challan is the statement. Nothing in the quarterly return spine applies to
+  // it, so mixing the two would give every column header two meanings.
+  { key: "property",   label: "TDS on Property", icon: Home },
   // Audit Log + Overrides live under ONE nav tab ("Audit & Overrides") with sub-tabs —
   // same pattern as TDS Workspace (Data Entry / Validate & Finalise). Both read
   // the same override/action history, so splitting them across two top-level
@@ -599,6 +606,10 @@ const TdsFilings = () => {
               clients={clients} users={users}
               isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId}
             />
+          )}
+
+          {activeSection === "property" && (
+            <TdsPropertyModule clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />
           )}
 
           {activeSection === "reports" && <TdsReports clients={clients} isSuperadmin={isSuperadmin} resolveFirmId={resolveFirmId} />}
