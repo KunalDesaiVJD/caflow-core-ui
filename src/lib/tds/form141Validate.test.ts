@@ -294,10 +294,14 @@ describe("warnings — proceed, but look", () => {
     expect(validateDeal(deal, FILING_BUYER).map((f) => f.code)).toContain("sdv_above_consideration");
   });
 
-  it("warns when the stamp duty value is missing entirely", () => {
+  it("BLOCKS when the stamp duty value is missing entirely", () => {
+    // Blocking rather than a warning: with no stamp duty value the engine
+    // falls back to the consideration, which under-deducts on every deal
+    // where the circle rate is higher — silently, and in the direction that
+    // produces a demand against the buyer. There is no safe figure to guess.
     const deal = { ...DEAL, totalStampDutyValue: 0 };
     const hit = validateDeal(deal, FILING_BUYER).find((f) => f.code === "stamp_duty_value_missing");
-    expect(hit?.severity).toBe("warning");
+    expect(hit?.severity).toBe("blocking");
     expect(hit?.message).toContain("Index-II");
   });
 
@@ -389,13 +393,169 @@ describe("validateForm141 — the single gate", () => {
   });
 
   it("is not ok when anything blocks, and ok when only warnings remain", () => {
-    expect(validateForm141({ ...DEAL, totalStampDutyValue: 0 }, FILING_BUYER).ok).toBe(true);
+    // A stamp duty value ABOVE the consideration is a warning — the figure is
+    // present, the engine uses the higher one, and the firm is told to check
+    // it. Nothing about that stops a filing.
+    const warnOnly = validateForm141({ ...DEAL, totalStampDutyValue: 28000000 }, FILING_BUYER);
+    expect(warnOnly.warnings.map((f) => f.code)).toContain("sdv_above_consideration");
+    expect(warnOnly.ok).toBe(true);
+
     expect(validateForm141({ ...DEAL, totalSaleConsideration: 0 }, FILING_BUYER).ok).toBe(false);
+    // Absent, as opposed to merely surprising, does block.
+    expect(validateForm141({ ...DEAL, totalStampDutyValue: 0 }, FILING_BUYER).ok).toBe(false);
   });
 
   it("does not report the same blocker twice from the engine and the deal checks", () => {
     const deal = { ...DEAL, sellers: [SELLER({ sharePct: 100, residentialStatus: "non_resident" as const })] };
     const r = validateForm141(deal, FILING_BUYER);
     expect(r.findings.filter((f) => f.code === "non_resident_seller")).toHaveLength(1);
+  });
+});
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * The audit fixes
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+
+describe("PAN operativeness is reported, never assumed", () => {
+  it("reports an unchecked seller PAN", () => {
+    const hit = validateDeal(DEAL, FILING_BUYER).find((f) => f.code === "seller_pan_status_unchecked");
+    expect(hit?.severity).toBe("warning");
+    expect(hit?.message).toContain("20%");
+  });
+
+  it("says so when the higher rate is being applied because of it", () => {
+    const deal = {
+      ...DEAL,
+      sellers: [SELLER({ pan: "ANRPP0000R", name: "Inoperative One", sharePct: 100, panStatus: "inoperative" as const })],
+    };
+    const codes = validateForm141(deal, FILING_BUYER).findings.map((f) => f.code);
+    expect(codes).toContain("seller_pan_inoperative");
+    expect(codes).toContain("rate_from_inoperative_pan");
+  });
+
+  it("says nothing once the PAN is confirmed operative", () => {
+    const deal = {
+      ...DEAL,
+      sellers: DEAL.sellers.map((s) => ({ ...s, panStatus: "operative" as const })),
+    };
+    const codes = validateDeal(deal, FILING_BUYER).map((f) => f.code);
+    expect(codes).not.toContain("seller_pan_status_unchecked");
+    expect(codes).not.toContain("seller_pan_inoperative");
+  });
+});
+
+describe("section 395(1) certificate limits", () => {
+  const withCert = (over: Record<string, unknown>) => ({
+    ...DEAL,
+    sellers: [SELLER({
+      pan: "ANRPP0000R", name: "Certified", sharePct: 100,
+      section395CertificateNo: "CERT/1", section395Rate: 0.1,
+      ...over,
+    })],
+  });
+
+  it("asks for the validity window when none is recorded", () => {
+    const codes = validateDeal(withCert({}), FILING_BUYER).map((f) => f.code);
+    expect(codes).toContain("certificate_window_missing");
+  });
+
+  it("asks for the amount the certificate covers", () => {
+    const codes = validateDeal(withCert({}), FILING_BUYER).map((f) => f.code);
+    expect(codes).toContain("certificate_ceiling_missing");
+  });
+
+  it("blocks a window that ends before it starts", () => {
+    const deal = withCert({ section395ValidFrom: "2027-01-01", section395ValidTo: "2026-04-01" });
+    const hit = validateDeal(deal, FILING_BUYER).find((f) => f.code === "certificate_window_inverted");
+    expect(hit?.severity).toBe("blocking");
+  });
+
+  it("reports a deduction the certificate did not cover", () => {
+    const deal = withCert({ section395ValidFrom: "2026-04-01", section395ValidTo: "2026-08-31", section395CeilingAmount: 99000000 });
+    const codes = validateForm141(deal, FILING_BUYER).findings.map((f) => f.code);
+    expect(codes).toContain("certificate_expired");
+  });
+
+  it("reports a certificate used up by earlier instalments", () => {
+    const deal = {
+      ...withCert({ section395ValidFrom: "2026-01-01", section395ValidTo: "2027-03-31", section395CeilingAmount: 7000000 }),
+      paymentMode: "instalments" as const,
+      instalments: [
+        { seq: 1, amountPaidByBuyer: 6400000, datePaidOrCredited: "2026-09-02", dateOfDeduction: "2026-09-02", dateOfDeposit: "2026-09-02", dateOfFiling: "2026-09-02" },
+        { seq: 2, amountPaidByBuyer: 6400000, datePaidOrCredited: "2026-10-02", dateOfDeduction: "2026-10-02", dateOfDeposit: "2026-10-02", dateOfFiling: "2026-10-02" },
+      ],
+    };
+    const codes = validateForm141(deal, FILING_BUYER).findings.map((f) => f.code);
+    expect(codes).toContain("certificate_ceiling_exceeded");
+  });
+});
+
+describe("which stamp duty value governs", () => {
+  const REGISTERED = {
+    ...DEAL,
+    dateOfAgreement: "2026-06-10",
+    dateOfRegistration: "2026-09-02",
+    instalments: [{ ...DEAL.instalments[0], datePaidOrCredited: "2026-06-05", dateOfDeduction: "2026-06-05" }],
+  };
+
+  it("asks which date the figure is taken as at when the two differ", () => {
+    const codes = validateDeal(REGISTERED, FILING_BUYER).map((f) => f.code);
+    expect(codes).toContain("sdv_as_on_date_missing");
+  });
+
+  it("flags a registration-date value where consideration moved by the agreement date", () => {
+    const deal = { ...REGISTERED, stampDutyValueAsOn: "2026-09-02" };
+    const hit = validateDeal(deal, FILING_BUYER).find((f) => f.code === "sdv_should_be_agreement_date");
+    expect(hit?.severity).toBe("warning");
+  });
+
+  it("says nothing once the agreement-date value is recorded", () => {
+    const deal = { ...REGISTERED, stampDutyValueAsOn: "2026-06-10" };
+    const codes = validateDeal(deal, FILING_BUYER).map((f) => f.code);
+    expect(codes).not.toContain("sdv_should_be_agreement_date");
+    expect(codes).not.toContain("sdv_as_on_date_missing");
+  });
+
+  it("says nothing at all when agreement and registration are the same day", () => {
+    const deal = { ...DEAL, dateOfRegistration: DEAL.dateOfAgreement };
+    const codes = validateDeal(deal, FILING_BUYER).map((f) => f.code);
+    expect(codes).not.toContain("sdv_as_on_date_missing");
+  });
+
+  it("blocks a deed registered before it was agreed", () => {
+    const deal = { ...DEAL, dateOfRegistration: "2026-01-01" };
+    const hit = validateDeal(deal, FILING_BUYER).find((f) => f.code === "registration_before_agreement");
+    expect(hit?.severity).toBe("blocking");
+  });
+});
+
+describe("other things a CA would want raised", () => {
+  it("warns when the price may be GST-inclusive", () => {
+    const deal = { ...DEAL, notes: "Consideration inclusive of all taxes including GST @5%" };
+    const hit = validateDeal(deal, FILING_BUYER).find((f) => f.code === "gst_in_consideration");
+    expect(hit?.severity).toBe("warning");
+  });
+
+  it("spots agricultural land named only in the address", () => {
+    const deal = { ...DEAL, propertyType: "LAND", propertyAddress: "Survey No. 142, Village Karjat, Raigad" };
+    expect(validateDeal(deal, FILING_BUYER).map((f) => f.code)).toContain("agricultural_land");
+  });
+
+  it("warns when the payments are not numbered in the order they were paid", () => {
+    const deal = {
+      ...DEAL,
+      paymentMode: "instalments" as const,
+      instalments: [
+        { seq: 1, amountPaidByBuyer: 5000000, datePaidOrCredited: "2026-08-01", dateOfDeduction: "2026-08-01", dateOfDeposit: null, dateOfFiling: null },
+        { seq: 2, amountPaidByBuyer: 3000000, datePaidOrCredited: "2026-06-01", dateOfDeduction: "2026-06-01", dateOfDeposit: null, dateOfFiling: null },
+      ],
+    };
+    expect(validateDeal(deal, FILING_BUYER).map((f) => f.code)).toContain("instalments_out_of_date_order");
+  });
+
+  it("says nothing about ordering when the numbering follows the dates", () => {
+    expect(validateDeal(DEAL, FILING_BUYER).map((f) => f.code)).not.toContain("instalments_out_of_date_order");
   });
 });

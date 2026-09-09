@@ -5,6 +5,7 @@ import {
   reconcileChallan,
   challanFilingUpdate,
   challanPeriod,
+  matchChallanToStatement,
 } from "./form141Challan";
 import type { Form141Statement } from "./form141ScheduleB";
 
@@ -389,11 +390,32 @@ describe("what gets written onto the filing", () => {
   });
 
   it("derives the period for attaching the challan to the right payment", () => {
-    expect(challanPeriod(fields)).toEqual({ taxYear: "2026-27", month: "Sep-2026" });
+    expect(challanPeriod(fields)).toEqual({ taxYear: "2026-27", month: "Sep-2026", inferred: false });
   });
 
-  it("falls back to the deposit date when the period is not stated", () => {
-    const sparse = { ...fields, taxYear: null, monthOfDeduction: null };
-    expect(challanPeriod(sparse)).toEqual({ taxYear: "2026-27", month: "Sep-2026" });
+  it("never guesses the month of deduction from the deposit date", () => {
+    // Tax deducted on 28 September and deposited on 3 October belongs to
+    // Sep-2026. The deposit date says nothing about the month of DEDUCTION,
+    // so an unstated month stays unstated rather than becoming Oct-2026.
+    const sparse = { ...fields, taxYear: null, monthOfDeduction: null, dateOfDeposit: "2026-10-03" };
+    expect(challanPeriod(sparse)).toEqual({ taxYear: "2026-27", month: null, inferred: true });
+  });
+
+  it("attaches an unstated-period challan only when one payment can take it", () => {
+    const sparse = challanPeriod({ ...fields, taxYear: null, monthOfDeduction: null });
+    const sep = { taxYear: "2026-27", month: "Sep-2026" };
+    const oct = { taxYear: "2026-27", month: "Oct-2026" };
+
+    // One candidate in the tax year — unambiguous, so it attaches.
+    expect(matchChallanToStatement([sep], sparse)).toBe(sep);
+    // Two — genuinely ambiguous. Guessing would write a government
+    // acknowledgement number onto the wrong payment.
+    expect(matchChallanToStatement([sep, oct], sparse)).toBeNull();
+  });
+
+  it("matches exactly when the document states its month", () => {
+    const sep = { taxYear: "2026-27", month: "Sep-2026" };
+    const oct = { taxYear: "2026-27", month: "Oct-2026" };
+    expect(matchChallanToStatement([sep, oct], challanPeriod(fields))).toBe(sep);
   });
 });

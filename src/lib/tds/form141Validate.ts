@@ -58,6 +58,7 @@ import {
   RATE_NO_PAN,
   isForm141Regime,
   form141DueDate,
+  todayInIndia,
   FORM_141_EFFECTIVE_FROM,
 } from "./form141";
 import {
@@ -381,6 +382,68 @@ export function validateDeal(
         message: `${s.name} holds a section 395(1) certificate (${s.section395CertificateNo}) but no rate has been recorded for it. Enter the rate the certificate permits — deducting at the standard ${RATE_STANDARD}% instead would over-deduct.`,
       });
     }
+    // ── PAN operativeness ──────────────────────────────────────────────
+    // The gap this closes is the expensive one. A PAN that exists but is not
+    // linked to Aadhaar is INOPERATIVE, and a deduction against it is due at
+    // 20%, not 1%. Nothing on the deed reveals it and the seller will not
+    // raise it, so an unchecked PAN is reported as unchecked rather than
+    // quietly priced at the lower rate. On a ₹1 crore flat the difference is
+    // ₹19 lakh, recovered from the buyer.
+    if (s.pan && isValidPan(s.pan)) {
+      if (s.panStatus === "inoperative" || s.panStatus === "invalid") {
+        findings.push({
+          code: "seller_pan_inoperative",
+          severity: "warning",
+          field: "sellers",
+          ref,
+          message: `${s.name}'s PAN is recorded as ${s.panStatus}, so tax on this seller is being deducted at ${RATE_NO_PAN}% rather than ${RATE_STANDARD}%. If the seller has since linked their PAN to Aadhaar, update the status before filing — and tell them, because they cannot claim credit for a deduction against an inoperative PAN.`,
+        });
+      } else if (!s.panStatus || s.panStatus === "unknown") {
+        findings.push({
+          code: "seller_pan_status_unchecked",
+          severity: "warning",
+          field: "sellers",
+          ref,
+          message: `${s.name}'s PAN has not been checked for operativeness. An inoperative (Aadhaar-unlinked) PAN attracts ${RATE_NO_PAN}% instead of ${RATE_STANDARD}%, and the shortfall is recovered from the buyer with interest. Verify it before filing.`,
+        });
+      }
+    }
+
+    // ── Certificate coherence ──────────────────────────────────────────
+    if (s.section395CertificateNo) {
+      if (s.section395ValidFrom && s.section395ValidTo && s.section395ValidFrom > s.section395ValidTo) {
+        findings.push({
+          code: "certificate_window_inverted",
+          severity: "blocking",
+          field: "sellers",
+          ref,
+          message: `${s.name}'s section 395(1) certificate is recorded as valid from ${s.section395ValidFrom} to ${s.section395ValidTo}, which ends before it starts.`,
+        });
+      }
+      if (!s.section395ValidFrom && !s.section395ValidTo) {
+        findings.push({
+          code: "certificate_window_missing",
+          severity: "warning",
+          field: "sellers",
+          ref,
+          message: `No validity period recorded for ${s.name}'s section 395(1) certificate. A certificate authorises deductions made within its own window only — without the dates, a later instalment will keep taking the concessional rate after the certificate has expired.`,
+        });
+      }
+      if (
+        s.section395CeilingAmount === null ||
+        s.section395CeilingAmount === undefined ||
+        s.section395CeilingAmount <= 0
+      ) {
+        findings.push({
+          code: "certificate_ceiling_missing",
+          severity: "warning",
+          field: "sellers",
+          ref,
+          message: `No amount ceiling recorded for ${s.name}'s section 395(1) certificate. A certificate covers a stated amount; tax on anything beyond it is due at the standard ${RATE_STANDARD}%. Without the ceiling the concessional rate is applied to the whole consideration.`,
+        });
+      }
+    }
+
     if (!s.email && !s.contact) {
       findings.push({
         code: "seller_contact_missing",
@@ -402,12 +465,19 @@ export function validateDeal(
     });
   }
   if (!deal.totalStampDutyValue) {
+    // Blocking, not a warning. Tax is charged on the HIGHER of the two
+    // measures, and with the stamp duty value absent the engine has no
+    // choice but to fall back to the consideration — which understates the
+    // deduction on every deal where the circle rate is the higher figure,
+    // silently, in the direction that produces a demand. There is no safe
+    // default to guess, so the figure has to be supplied before anything is
+    // filed. Drafts still save; this stops the deal being marked ready.
     findings.push({
       code: "stamp_duty_value_missing",
-      severity: "warning",
+      severity: "blocking",
       field: "totalStampDutyValue",
       message:
-        "No stamp duty value recorded. Tax is charged on the HIGHER of consideration and stamp duty value, so an absent figure can understate the deduction. On a registered deed it is usually on the Index-II page.",
+        "No stamp duty value recorded. Tax is charged on the HIGHER of consideration and stamp duty value, so leaving this blank silently computes the tax on the consideration alone and under-deducts wherever the circle rate is higher. On a registered deed it is on the Index-II page. If it genuinely equals the consideration, enter the same figure.",
     });
   }
   if (deal.totalStampDutyValue > deal.totalSaleConsideration && deal.totalSaleConsideration > 0) {
@@ -441,7 +511,64 @@ export function validateDeal(
     });
   }
 
-  if (/agricultur|farm|krishi|kheti/i.test(deal.propertyType || "")) {
+  // ── Which stamp duty value governs ───────────────────────────────────────
+  // Where the deed is registered later than it is agreed, there are two
+  // circle rates in play. Where part of the consideration moved on or before
+  // the agreement date by banking channel, it is the AGREEMENT-date value
+  // that governs — and the figure sitting on the Index-II page is the
+  // registration-date one. This is a question of fact the software cannot
+  // settle, so it is raised rather than decided.
+  if (deal.dateOfRegistration && deal.dateOfAgreement && deal.dateOfRegistration !== deal.dateOfAgreement) {
+    const asOn = deal.stampDutyValueAsOn || null;
+    if (!asOn) {
+      findings.push({
+        code: "sdv_as_on_date_missing",
+        severity: "warning",
+        field: "totalStampDutyValue",
+        message: `The deed was agreed on ${deal.dateOfAgreement} and registered on ${deal.dateOfRegistration}, so two stamp duty values exist. Record which date the figure entered here is taken as at. Where any part of the consideration moved on or before the agreement date through a banking channel, the agreement-date value governs — and the Index-II page carries the registration-date one.`,
+      });
+    } else if (asOn !== deal.dateOfAgreement) {
+      const paidByAgreement = deal.instalments.some((i) => i.datePaidOrCredited <= deal.dateOfAgreement);
+      if (paidByAgreement) {
+        findings.push({
+          code: "sdv_should_be_agreement_date",
+          severity: "warning",
+          field: "totalStampDutyValue",
+          message: `Consideration moved on or before the agreement date (${deal.dateOfAgreement}), but the stamp duty value recorded is taken as at ${asOn}. Where part-consideration is paid by banking channel on or before the agreement date, the agreement-date stamp duty value is the one that governs. Confirm which figure this is.`,
+        });
+      }
+    }
+  }
+  if (deal.dateOfRegistration && deal.dateOfAgreement && deal.dateOfRegistration < deal.dateOfAgreement) {
+    findings.push({
+      code: "registration_before_agreement",
+      severity: "blocking",
+      field: "dateOfRegistration",
+      message: `The deed is shown as registered on ${deal.dateOfRegistration}, before it was agreed on ${deal.dateOfAgreement}. Check both dates.`,
+    });
+  }
+
+  // ── GST ──────────────────────────────────────────────────────────────────
+  // Tax is deducted on the consideration, not on GST charged over it. A deed
+  // quoting a tax-inclusive figure is the common way the gross amount ends up
+  // in the consideration field — particularly on an under-construction flat.
+  const gstText = `${deal.notes || ""} ${deal.propertyType || ""} ${deal.propertyAddress || ""}`;
+  if (/\bGST\b|inclusive of (all )?tax|tax[- ]inclusive/i.test(gstText)) {
+    findings.push({
+      code: "gst_in_consideration",
+      severity: "warning",
+      field: "totalSaleConsideration",
+      message:
+        "This transaction mentions GST or a tax-inclusive price. Tax is deducted on the consideration for the property, not on GST charged over it — confirm the figure entered excludes GST.",
+    });
+  }
+
+  // Matched across the type AND the address: a deed reading "Survey No. 142,
+  // Village Karjat" is agricultural land that names itself nowhere in the
+  // property-type field.
+  if (/agricultur|farm|krishi|kheti|survey no|gut no|khasra/i.test(
+    `${deal.propertyType || ""} ${deal.propertyAddress || ""}`,
+  )) {
     findings.push({
       code: "agricultural_land",
       severity: "warning",
@@ -458,6 +585,26 @@ export function validateDeal(
       severity: "blocking",
       field: "paymentMode",
       message: `The payment is marked Lumpsum but ${deal.instalments.length} instalments are recorded. Change the mode to Instalments, or merge the payments.`,
+    });
+  }
+
+  // The engine carries "previous instalments" forward in DATE order, because
+  // that is what the column means. Where the sequence numbers disagree with
+  // the chronology — a forgotten earlier payment entered last, which is how
+  // it usually happens — the statements will not print in the order the user
+  // typed them, and that is worth saying out loud rather than letting them
+  // wonder.
+  const bySeq = [...deal.instalments].sort((a, b) => a.seq - b.seq);
+  const outOfOrder = bySeq.some(
+    (inst, idx) => idx > 0 && inst.datePaidOrCredited < bySeq[idx - 1].datePaidOrCredited,
+  );
+  if (outOfOrder) {
+    findings.push({
+      code: "instalments_out_of_date_order",
+      severity: "warning",
+      field: "instalments",
+      message:
+        "The instalments are not numbered in the order they were paid. Tax is computed in date order — which is what the form's \u201cprevious instalments\u201d column means — so the statements will follow the payment dates, not the sequence numbers. Renumber them if the order shown is not what you expect.",
     });
   }
 
@@ -527,7 +674,7 @@ export function validateDeal(
     }
     if (!inst.dateOfDeposit) {
       const due = form141DueDate(inst.dateOfDeduction);
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayInIndia();
       if (today > due) {
         findings.push({
           code: "past_due_unpaid",
@@ -616,6 +763,68 @@ export function compareWithComputed(
   return findings;
 }
 
+// ─── 4. Why each row carries the rate it does ───────────────────────────────
+
+/**
+ * Turn the engine's rate fallbacks into findings.
+ *
+ * A section 395(1) certificate that was held but did not govern a deduction —
+ * because it had expired, or because the deal had already used up the amount
+ * it covers — is invisible on the face of the form: the row simply shows the
+ * standard rate. It is also exactly the thing the seller telephones about.
+ * Reading it off `rateBasis` keeps the reasoning in the engine and the
+ * reporting here, rather than re-deriving the cumulative amounts twice.
+ *
+ * Both are warnings, not blockers. The rate the engine fell back to is the
+ * correct one; the finding exists so nobody is surprised by it.
+ */
+export function checkRateBases(computation: Form141Computation): Form141Finding[] {
+  const findings: Form141Finding[] = [];
+  const reported = new Set<string>();
+
+  for (const stmt of computation.statements) {
+    for (const row of stmt.rows) {
+      const ref = row.sellerPan || row.sellerName;
+      const key = `${row.rateBasis}:${ref}`;
+
+      if (row.rateBasis === "certificate_expired" && !reported.has(key)) {
+        reported.add(key);
+        findings.push({
+          code: "certificate_expired",
+          severity: "warning",
+          field: "sellers",
+          ref,
+          message: `${row.sellerName}'s section 395(1) certificate (${row.section395CertificateNo}) does not cover the deduction made on ${row.dateOfDeduction}, so that instalment is deducted at the standard ${RATE_STANDARD}%. A certificate authorises deductions inside its own validity period only.`,
+        });
+      }
+
+      if (row.rateBasis === "certificate_exhausted" && !reported.has(key)) {
+        reported.add(key);
+        findings.push({
+          code: "certificate_ceiling_exceeded",
+          severity: "warning",
+          field: "sellers",
+          ref,
+          message: `${row.sellerName}'s section 395(1) certificate has been used up by earlier instalments on this deal, so instalment ${stmt.instalmentSeq} is deducted at the standard ${RATE_STANDARD}% rather than the certificate rate. The certificate covers an amount, not the whole transaction.`,
+        });
+      }
+
+      if (row.rateBasis === "inoperative_pan" && !reported.has(key)) {
+        reported.add(key);
+        findings.push({
+          code: "rate_from_inoperative_pan",
+          severity: "warning",
+          field: "sellers",
+          ref,
+          message: `Tax on ${row.sellerName} is computed at ${row.ratePct}% because their PAN is recorded as inoperative. Confirm the status before filing — this trebles the deduction and the seller cannot claim credit for it.`,
+        });
+      }
+    }
+  }
+
+  return findings;
+}
+
 // ─── Entry point ────────────────────────────────────────────────────────────
 
 export interface ValidateOptions {
@@ -642,6 +851,8 @@ export function validateForm141(
 
   // Engine blockers that the deal checks do not already cover, so a caller
   // holding only a ValidationResult still sees everything that stops a draft.
+  findings.push(...checkRateBases(computation));
+
   const covered = new Set(findings.map((f) => f.code));
   for (const b of computation.blockers) {
     if (b.code === "non_resident_seller" && covered.has("non_resident_seller")) continue;
