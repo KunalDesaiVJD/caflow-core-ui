@@ -5,6 +5,8 @@ import {
   toForm141Deal,
   formatInr,
   emptyTransaction,
+  resolveFilingBuyerPan,
+  dbSaveBlockers,
   type PropertyDealBundle,
   type PropertyPartyRow,
 } from "./propertyDeal";
@@ -30,8 +32,12 @@ const party = (over: Partial<PropertyPartyRow>): PropertyPartyRow => ({
   email: null,
   share_pct: "50",
   residential_status: "resident",
+  pan_status: "unknown",
   section_395_certificate_no: null,
   section_395_rate: null,
+  section_395_valid_from: null,
+  section_395_valid_to: null,
+  section_395_ceiling_amount: null,
   ...over,
 });
 
@@ -45,8 +51,10 @@ const BUNDLE: PropertyDealBundle = {
     property_address: "MOJE GAM- KADADRA, TALUKA- DEHGAM, GANDHI NAGAR",
     property_pin: "382305",
     date_of_agreement: "2026-09-02",
+    date_of_registration: null,
     total_sale_consideration: "25600000",
     total_stamp_duty_value: "25600000",
+    stamp_duty_value_as_on: null,
     payment_mode: "lumpsum",
     filing_buyer_pan: "ADFPB0000E",
     tax_year: "2026-27",
@@ -163,5 +171,97 @@ describe("emptyTransaction", () => {
     expect(t.status).toBe("draft");
     expect(t.source).toBe("manual");
     expect(t.payment_mode).toBe("lumpsum");
+  });
+});
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * The audit fixes
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+
+describe("resolveFilingBuyerPan — one answer, not three", () => {
+  const buyer = (over: Partial<PropertyPartyRow>) =>
+    party({ party_role: "buyer", share_pct: "100", ...over });
+
+  it("uses the stored PAN when one is set", () => {
+    expect(resolveFilingBuyerPan(BUNDLE)).toBe("ADFPB0000E");
+  });
+
+  it("falls back to the only buyer when the column is empty", () => {
+    // The case that used to break: the editor showed this PAN, the save path
+    // did not, and the challan details were silently dropped.
+    const b: PropertyDealBundle = {
+      ...BUNDLE,
+      transaction: { ...BUNDLE.transaction, filing_buyer_pan: null },
+      parties: [buyer({ id: "b1", pan: "ADFPB0000E", name: "Only Buyer" })],
+    };
+    expect(resolveFilingBuyerPan(b)).toBe("ADFPB0000E");
+  });
+
+  it("refuses to guess between two buyers", () => {
+    // With a real choice there is no honest default; the validation layer
+    // reports the gap rather than a guess being filed.
+    const b: PropertyDealBundle = {
+      ...BUNDLE,
+      transaction: { ...BUNDLE.transaction, filing_buyer_pan: null },
+      parties: [
+        buyer({ id: "b1", seq: 1, pan: "ADFPB0000E", name: "Buyer One", share_pct: "50" }),
+        buyer({ id: "b2", seq: 2, pan: "ACTPP0000E", name: "Buyer Two", share_pct: "50" }),
+      ],
+    };
+    expect(resolveFilingBuyerPan(b)).toBe("");
+  });
+
+  it("returns empty rather than null when the only buyer has no PAN yet", () => {
+    const b: PropertyDealBundle = {
+      ...BUNDLE,
+      transaction: { ...BUNDLE.transaction, filing_buyer_pan: null },
+      parties: [buyer({ id: "b1", pan: null, name: "Unidentified" })],
+    };
+    expect(resolveFilingBuyerPan(b)).toBe("");
+  });
+});
+
+describe("dbSaveBlockers — what Postgres would refuse, said first", () => {
+  it("passes a complete transaction", () => {
+    expect(dbSaveBlockers(BUNDLE)).toEqual([]);
+  });
+
+  it("catches a zero consideration before the CHECK constraint does", () => {
+    const b = { ...BUNDLE, transaction: { ...BUNDLE.transaction, total_sale_consideration: 0 } };
+    expect(dbSaveBlockers(b).join(" ")).toContain("total sale consideration");
+  });
+
+  it("catches a blank address", () => {
+    const b = { ...BUNDLE, transaction: { ...BUNDLE.transaction, property_address: "   " } };
+    expect(dbSaveBlockers(b).join(" ")).toContain("property address");
+  });
+
+  it("catches a party row added but not filled in", () => {
+    // share_pct > 0 is a CHECK constraint; a blank row starts at 0. This is
+    // the exact sequence that used to surface a raw constraint name.
+    const b = { ...BUNDLE, parties: [...BUNDLE.parties, party({ id: "new-seller-3", seq: 3, name: "", share_pct: 0 })] };
+    expect(dbSaveBlockers(b).join(" ")).toContain("Seller 3");
+  });
+
+  it("catches a share above 100%", () => {
+    const b = { ...BUNDLE, parties: [party({ id: "p9", name: "Greedy", share_pct: "140" })] };
+    expect(dbSaveBlockers(b).join(" ")).toContain("more than 100%");
+  });
+
+  it("catches a payment row left at zero", () => {
+    const b = {
+      ...BUNDLE,
+      instalments: [{ ...BUNDLE.instalments[0], id: "new-inst-2", seq: 2, amount_paid_by_buyer: 0 }],
+    };
+    expect(dbSaveBlockers(b).join(" ")).toContain("payment 2");
+  });
+
+  it("has no opinion about anything the database would accept", () => {
+    // A draft with no sellers and no payments is incomplete, not unsaveable.
+    // Judging that is form141Validate.ts's job, not this one's.
+    const b = { ...BUNDLE, parties: BUNDLE.parties.filter((p) => p.party_role === "buyer"), instalments: [] };
+    expect(dbSaveBlockers(b)).toEqual([]);
   });
 });

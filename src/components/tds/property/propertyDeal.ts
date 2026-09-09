@@ -22,7 +22,9 @@ import type {
   Form141Seller,
   Form141Instalment,
   ResidentialStatus,
+  PanStatus,
 } from "@/lib/tds/form141ScheduleB";
+import { todayInIndia } from "@/lib/tds/form141";
 
 // ─── Database rows ──────────────────────────────────────────────────────────
 
@@ -37,8 +39,10 @@ export interface PropertyTransactionRow {
   property_address: string;
   property_pin: string | null;
   date_of_agreement: string;
+  date_of_registration: string | null;
   total_sale_consideration: number | string;
   total_stamp_duty_value: number | string | null;
+  stamp_duty_value_as_on: string | null;
   payment_mode: "lumpsum" | "instalments";
   filing_buyer_pan: string | null;
   tax_year: string | null;
@@ -61,8 +65,12 @@ export interface PropertyPartyRow {
   email: string | null;
   share_pct: number | string;
   residential_status: ResidentialStatus;
+  pan_status: PanStatus | null;
   section_395_certificate_no: string | null;
   section_395_rate: number | string | null;
+  section_395_valid_from: string | null;
+  section_395_valid_to: string | null;
+  section_395_ceiling_amount: number | string | null;
 }
 
 export interface PropertyInstalmentRow {
@@ -145,8 +153,12 @@ export function toSeller(row: PropertyPartyRow): Form141Seller {
     email: row.email,
     sharePct: num(row.share_pct),
     residentialStatus: row.residential_status,
+    panStatus: row.pan_status || "unknown",
     section395CertificateNo: row.section_395_certificate_no,
     section395Rate: numOrNull(row.section_395_rate),
+    section395ValidFrom: row.section_395_valid_from,
+    section395ValidTo: row.section_395_valid_to,
+    section395CeilingAmount: numOrNull(row.section_395_ceiling_amount),
   };
 }
 
@@ -177,13 +189,89 @@ export function toForm141Deal(bundle: PropertyDealBundle): Form141Deal {
     propertyType: t.property_type,
     propertyAddress: t.property_address,
     dateOfAgreement: dateOnly(t.date_of_agreement),
+    dateOfRegistration: t.date_of_registration ? dateOnly(t.date_of_registration) : null,
     totalSaleConsideration: num(t.total_sale_consideration),
     totalStampDutyValue: num(t.total_stamp_duty_value),
+    stampDutyValueAsOn: t.stamp_duty_value_as_on ? dateOnly(t.stamp_duty_value_as_on) : null,
     paymentMode: t.payment_mode,
+    notes: t.notes,
     buyers: bundle.parties.filter((p) => p.party_role === "buyer").sort(bySeq).map(toBuyer),
     sellers: bundle.parties.filter((p) => p.party_role === "seller").sort(bySeq).map(toSeller),
     instalments: [...bundle.instalments].sort(bySeq).map(toInstalment),
   };
+}
+
+// ─── Filing buyer ───────────────────────────────────────────────────────────
+
+/**
+ * Which buyer's PAN this statement is filed under.
+ *
+ * ONE definition, because three sites used to answer this question and one of
+ * them answered it differently. The editor and the list both fell back to the
+ * first buyer when the column was null; the save path did not — so on a
+ * single-buyer deal the screen showed a PAN selected, the column stayed null,
+ * and the engine was handed "" at save time. It returned a `no_filing_buyer`
+ * blocker, produced no statements, and the loop that writes challan details
+ * silently skipped every one of them: the acknowledgement number and CIN the
+ * government had issued were dropped without an error.
+ *
+ * The fallback is safe because a single-buyer deal has exactly one answer.
+ * With two or more buyers there is a real choice and no default is honest, so
+ * the caller must have made one — `filing_buyer_not_listed` then reports the
+ * gap rather than a guess being quietly filed.
+ */
+export function resolveFilingBuyerPan(bundle: PropertyDealBundle): string {
+  const stored = bundle.transaction.filing_buyer_pan;
+  if (stored) return stored;
+  const buyers = bundle.parties
+    .filter((p) => p.party_role === "buyer")
+    .sort((a, b) => a.seq - b.seq);
+  return buyers.length === 1 ? buyers[0].pan || "" : "";
+}
+
+// ─── Save preconditions ─────────────────────────────────────────────────────
+
+/**
+ * What the DATABASE will refuse, in the user's words rather than Postgres's.
+ *
+ * Three CHECK constraints in migration 20260907090000 require positive
+ * numbers — `total_sale_consideration > 0`, `share_pct > 0 AND <= 100`,
+ * `amount_paid_by_buyer > 0` — while the blank rows this editor creates start
+ * at zero, which is the right default for a field nobody has typed into yet.
+ * Between the two sat a Save button that checked only the address, so adding
+ * a party row and saving before filling it in produced a raw
+ * `new row violates check constraint "tds_property_share_range"` in a toast.
+ *
+ * This is deliberately NOT the validation layer. form141Validate.ts answers
+ * "is this deal correct enough to file"; this answers the much narrower "will
+ * the insert succeed", and only ever grows a line when a constraint does.
+ * A part-built draft must stay saveable — that is the whole point of a draft
+ * — so nothing here has an opinion about missing sellers or unrecorded dates.
+ */
+export function dbSaveBlockers(bundle: PropertyDealBundle): string[] {
+  const out: string[] = [];
+  const t = bundle.transaction;
+
+  if (!t.property_address.trim()) out.push("Enter the property address.");
+  if (!t.property_type.trim()) out.push("Choose a property type.");
+  if (num(t.total_sale_consideration) <= 0) {
+    out.push("Enter the total sale consideration — it cannot be left at zero.");
+  }
+
+  for (const p of bundle.parties) {
+    const who = p.name.trim() || `${p.party_role === "buyer" ? "Buyer" : "Seller"} ${p.seq}`;
+    const share = num(p.share_pct);
+    if (share <= 0) out.push(`Enter a share percentage for ${who} — it must be more than 0.`);
+    else if (share > 100) out.push(`${who}'s share of ${share}% is more than 100%.`);
+  }
+
+  for (const i of bundle.instalments) {
+    if (num(i.amount_paid_by_buyer) <= 0) {
+      out.push(`Enter the amount for payment ${i.seq} — it must be more than 0.`);
+    }
+  }
+
+  return out;
 }
 
 // ─── Display ────────────────────────────────────────────────────────────────
@@ -212,7 +300,7 @@ export const STATUS_LABEL: Record<PropertyTxnStatus, string> = {
  *  while the amounts start empty because guessing them would be worse than
  *  leaving them blank. */
 export function emptyTransaction(clientId: string, firmId: string): PropertyTransactionRow {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInIndia();
   return {
     id: "",
     firm_id: firmId,
@@ -221,8 +309,10 @@ export function emptyTransaction(clientId: string, firmId: string): PropertyTran
     property_address: "",
     property_pin: null,
     date_of_agreement: today,
+    date_of_registration: null,
     total_sale_consideration: 0,
     total_stamp_duty_value: null,
+    stamp_duty_value_as_on: null,
     payment_mode: "lumpsum",
     filing_buyer_pan: null,
     tax_year: null,

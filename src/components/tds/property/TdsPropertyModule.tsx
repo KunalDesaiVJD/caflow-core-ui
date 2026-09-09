@@ -15,7 +15,7 @@
  * Database access goes through the single `propertyTable` helper below rather
  * than casting at each call site — see its own note for why.
  */
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -29,7 +29,7 @@ import { Plus, Home, ArrowLeft, CalendarClock } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { computeForm141ScheduleB } from "@/lib/tds/form141ScheduleB";
-import { taxYearForDate, FORM_141_FIRST_TAX_YEAR } from "@/lib/tds/form141";
+import { taxYearForDate, todayInIndia, FORM_141_FIRST_TAX_YEAR } from "@/lib/tds/form141";
 import { TdsPropertyEditor } from "./TdsPropertyEditor";
 import type { StoredDocument } from "./TdsPropertyUpload";
 import type { AppliedExtraction, ResolvedQuery, FieldProvenance } from "./agreementExtraction";
@@ -38,11 +38,13 @@ import {
   toForm141Deal,
   formatInr,
   emptyTransaction,
+  resolveFilingBuyerPan,
   num,
   STATUS_BADGE,
   STATUS_LABEL,
   type PropertyDealBundle,
   type PropertyTransactionRow,
+  type PropertyTxnStatus,
   type PropertyPartyRow,
   type PropertyInstalmentRow,
 } from "./propertyDeal";
@@ -85,7 +87,7 @@ interface Props {
 /** Tax Years to offer. Form 141 begins at 2026-27; there is no earlier year to
  *  show, because before that the form did not exist. */
 function taxYearOptions(): string[] {
-  const current = taxYearForDate(new Date().toISOString().slice(0, 10));
+  const current = taxYearForDate(todayInIndia());
   const start = parseInt(FORM_141_FIRST_TAX_YEAR.slice(0, 4), 10);
   const now = Math.max(start, parseInt(current.slice(0, 4), 10));
   const years: string[] = [];
@@ -178,6 +180,74 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
 
   useEffect(() => { load(); }, [load]);
 
+  // ── PAN operativeness, from what the firm already knows ──────────────────
+  //
+  // An inoperative PAN carries 20% instead of 1%, and the firm usually
+  // already has the answer: every TRACES PAN-verification file imported for a
+  // quarterly return lands in tds_pan_verification_rows with a pan_status
+  // against it. Re-typing that here would be both effort and a second chance
+  // to get it wrong, so any seller whose status is still unknown is filled in
+  // from the most recent verification row for the same PAN.
+  //
+  // Best-effort by design: no match simply leaves the status unknown, which
+  // the validation layer already reports as unchecked. A failed query must
+  // never block entry.
+  const panLookupDone = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!editing) return;
+    const wanted = editing.parties
+      .filter((p) => p.party_role === "seller" && p.pan && (!p.pan_status || p.pan_status === "unknown"))
+      .map((p) => p.pan as string)
+      .filter((pan) => !panLookupDone.current.has(pan));
+    if (!wanted.length) return;
+
+    let cancelled = false;
+    (async () => {
+      for (const pan of wanted) panLookupDone.current.add(pan);
+      const { data, error } = await propertyTable("tds_pan_verification_rows")
+        .select("pan, pan_status, created_at")
+        .in("pan", wanted)
+        .order("created_at", { ascending: false });
+      if (cancelled || error || !data) return;
+
+      // First row per PAN wins — the query is newest-first.
+      const latest = new Map<string, string>();
+      for (const r of data as { pan: string | null; pan_status: string | null }[]) {
+        if (r.pan && r.pan_status && !latest.has(r.pan)) latest.set(r.pan, r.pan_status);
+      }
+      if (!latest.size) return;
+
+      let filled = 0;
+      setEditing((cur) => {
+        if (!cur) return cur;
+        const parties = cur.parties.map((p) => {
+          if (p.party_role !== "seller" || !p.pan) return p;
+          if (p.pan_status && p.pan_status !== "unknown") return p;
+          const status = latest.get(p.pan);
+          if (!status) return p;
+          // TRACES wording varies; only the two states that change the rate
+          // are read strictly, and anything else is treated as operative.
+          const mapped = /inoperative/i.test(status)
+            ? "inoperative"
+            : /invalid|not found/i.test(status)
+              ? "invalid"
+              : "operative";
+          filled += 1;
+          return { ...p, pan_status: mapped as PropertyPartyRow["pan_status"] };
+        });
+        return filled ? { ...cur, parties } : cur;
+      });
+      if (filled) {
+        toast.info(
+          `PAN status filled in for ${filled} seller${filled === 1 ? "" : "s"} from your PAN verification records. Check it before filing.`,
+        );
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [editing]);
+
   // ── Save ─────────────────────────────────────────────────────────────────
   //
   // Children are synced three ways — update what changed, insert what is new,
@@ -186,7 +256,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
   // CASCADE, so wiping and recreating them would silently destroy the filed
   // acknowledgement, CIN and challan details attached to a payment the user
   // only meant to correct the date of.
-  const save = async () => {
+  const save = async (statusOverride?: PropertyTxnStatus) => {
     if (!editing) return;
     setSaving(true);
     try {
@@ -194,6 +264,11 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
       if (!firmId) throw new Error("Could not resolve your firm.");
 
       const t = editing.transaction;
+      // Resolved ONCE, here, and written to the column — so the PAN the editor
+      // showed and the PAN the filings loop computes against are the same
+      // value. They used not to be, and the cost was silently discarded
+      // challan details. See resolveFilingBuyerPan for the full account.
+      const filingPan = resolveFilingBuyerPan(editing);
       const firstPayment = [...editing.instalments].sort((a, b) => a.seq - b.seq)[0];
       const txnPayload = {
         firm_id: firmId,
@@ -202,13 +277,15 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
         property_address: t.property_address,
         property_pin: t.property_pin,
         date_of_agreement: t.date_of_agreement,
+        date_of_registration: t.date_of_registration,
         total_sale_consideration: num(t.total_sale_consideration),
         total_stamp_duty_value: t.total_stamp_duty_value === null ? null : num(t.total_stamp_duty_value),
+        stamp_duty_value_as_on: t.stamp_duty_value_as_on,
         payment_mode: t.payment_mode,
-        filing_buyer_pan: t.filing_buyer_pan,
+        filing_buyer_pan: filingPan || null,
         // Denormalised for listing only; the engine re-derives it per payment.
         tax_year: firstPayment ? taxYearForDate(firstPayment.date_paid_or_credited) : null,
-        status: t.status,
+        status: statusOverride ?? t.status,
         source: t.source,
         notes: t.notes,
       };
@@ -244,8 +321,13 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
           pan: p.pan, name: p.name, contact: p.contact, email: p.email,
           share_pct: num(p.share_pct),
           residential_status: p.residential_status,
+          pan_status: p.pan_status || "unknown",
           section_395_certificate_no: p.section_395_certificate_no,
           section_395_rate: p.section_395_rate === null ? null : num(p.section_395_rate),
+          section_395_valid_from: p.section_395_valid_from,
+          section_395_valid_to: p.section_395_valid_to,
+          section_395_ceiling_amount:
+            p.section_395_ceiling_amount === null ? null : num(p.section_395_ceiling_amount),
         };
         const { error } = isNew(p.id)
           ? await propertyTable("tds_property_parties").insert(payload)
@@ -286,13 +368,30 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
         const idBySeq = new Map<number, string>(
           ((savedInst || []) as { id: string; seq: number }[]).map((r) => [r.seq, r.id]),
         );
-        const computed = computeForm141ScheduleB(toForm141Deal(editing), t.filing_buyer_pan || "");
+        const computed = computeForm141ScheduleB(toForm141Deal(editing), filingPan);
+
+        // A challan carries an acknowledgement number and a CIN that no
+        // computation can reproduce and the portal will not reissue. If one
+        // cannot be written, the user has to hear about it — this loop used
+        // to `continue` past every failure in silence, so a save reported
+        // success while dropping the only copy of the government's own
+        // reference.
+        const undelivered: string[] = [];
 
         for (const [seqStr, fields] of Object.entries(attachedChallans)) {
           const seq = Number(seqStr);
           const instalmentId = idBySeq.get(seq);
           const statement = computed.statements.find((x) => x.instalmentSeq === seq);
-          if (!instalmentId || !statement) continue;
+          if (!instalmentId || !statement) {
+            undelivered.push(
+              `payment ${seq}${
+                computed.blockers.length
+                  ? ` (${computed.blockers[0].message})`
+                  : " (no statement could be computed for it)"
+              }`,
+            );
+            continue;
+          }
 
           const { error } = await propertyTable("tds_property_filings").upsert({
             firm_id: firmId,
@@ -307,7 +406,18 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
             created_by: user?.id ?? null,
             ...challanFilingUpdate(fields),
           }, { onConflict: "instalment_id" });
-          if (error) console.error("property filing not recorded:", error.message);
+          if (error) {
+            console.error("property filing not recorded:", error.message);
+            undelivered.push(`payment ${seq} (${error.message})`);
+          }
+        }
+
+        if (undelivered.length) {
+          toast.warning(
+            `Challan details were not saved for ${undelivered.join("; ")}. ` +
+              "The transaction itself saved — fix the blocking findings and save again to record them.",
+            { duration: 12000 },
+          );
         }
       }
 
@@ -329,7 +439,11 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
         if (error) console.error("property document not recorded:", error.message);
       }
 
-      toast.success("Transaction saved.");
+      toast.success(
+        statusOverride === "ready"
+          ? "Transaction saved and marked ready to file."
+          : "Transaction saved.",
+      );
       setEditing(null);
       resetExtraction();
       await load();
@@ -352,12 +466,45 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
       parties: [{
         id: "new-buyer-1", firm_id: firmId, transaction_id: "", party_role: "buyer", seq: 1,
         pan: client?.pan || null, name: client?.name || "", contact: null, email: null,
-        share_pct: 100, residential_status: "resident",
+        share_pct: 100, residential_status: "resident", pan_status: "unknown",
         section_395_certificate_no: null, section_395_rate: null,
+        section_395_valid_from: null, section_395_valid_to: null,
+        section_395_ceiling_amount: null,
       }],
       instalments: [],
     });
   };
+
+  // ── List figures ─────────────────────────────────────────────────────────
+  // Computed ABOVE the editor's early return, because hooks must run in the
+  // same order on every render and the editor branch returns before the list
+  // is ever reached.
+  const visible = useMemo(
+    () => bundles.filter((b) => !selTaxYear || !b.transaction.tax_year || b.transaction.tax_year === selTaxYear),
+    [bundles, selTaxYear],
+  );
+
+  /**
+   * The list's figures, computed once per change rather than once per render.
+   *
+   * Every row runs the full engine — mapping, threshold, apportionment,
+   * interest and fee across every instalment and seller. Unmemoised that ran
+   * again on each keystroke in the header controls and on every unrelated
+   * state change; at forty property deals it was visible.
+   */
+  const listRows = useMemo(
+    () =>
+      visible.map((b) => {
+        const deal = toForm141Deal(b);
+        const computed = computeForm141ScheduleB(deal, resolveFilingBuyerPan(b));
+        const nextDue = computed.statements.find((st) => {
+          const inst = b.instalments.find((i) => i.seq === st.instalmentSeq);
+          return !inst?.date_of_deposit;
+        });
+        return { bundle: b, deal, computed, nextDue };
+      }),
+    [visible],
+  );
 
   // ── Editor ───────────────────────────────────────────────────────────────
   if (editing) {
@@ -396,8 +543,6 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
     );
   }
 
-  // ── List ─────────────────────────────────────────────────────────────────
-  const visible = bundles.filter((b) => !selTaxYear || !b.transaction.tax_year || b.transaction.tax_year === selTaxYear);
 
   return (
     <div>
@@ -468,14 +613,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
 
       {selClient && !loading && visible.length > 0 && (
         <div className="space-y-2">
-          {visible.map((b) => {
-            const deal = toForm141Deal(b);
-            const filingPan = b.transaction.filing_buyer_pan || deal.buyers[0]?.pan || "";
-            const computed = computeForm141ScheduleB(deal, filingPan);
-            const nextDue = computed.statements.find((s) => {
-              const inst = b.instalments.find((i) => i.seq === s.instalmentSeq);
-              return !inst?.date_of_deposit;
-            });
+          {listRows.map(({ bundle: b, deal, computed, nextDue }) => {
             return (
               <Card
                 key={b.transaction.id}

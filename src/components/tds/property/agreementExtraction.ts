@@ -319,8 +319,16 @@ export function applyExtraction(
       // finding rather than being quietly smoothed over.
       share_pct: Number(leaf(p.share_pct)) || 0,
       residential_status: "resident",
+      // Nothing in a sale deed says whether a PAN is operative, and nothing
+      // in it mentions a lower-deduction certificate either. Both start
+      // unknown/absent and are filled in from the firm's own records or by
+      // hand — never inferred from the document.
+      pan_status: "unknown",
       section_395_certificate_no: null,
       section_395_rate: null,
+      section_395_valid_from: null,
+      section_395_valid_to: null,
+      section_395_ceiling_amount: null,
     }));
   };
 
