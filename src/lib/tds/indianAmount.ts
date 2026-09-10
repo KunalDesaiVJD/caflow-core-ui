@@ -21,6 +21,54 @@ const CRORE = 10_000_000;
 const LAKH = 100_000;
 
 /**
+ * Indian-script digits, mapped back to ASCII before anything tries to read a
+ * number out of them.
+ *
+ * A registered દસ્તાવેજ is commonly typeset in Gujarati, and its figures come
+ * with it: ૨,૫૬,૦૦,૦૦૦ is 2,56,00,000. The extractor's prompt asks the model
+ * to return plain integers, and it usually does — but when it QUOTES a figure
+ * rather than normalising it, the native numerals arrive here intact.
+ *
+ * JavaScript is no help at that point. `\d` in a regex means [0-9] and nothing
+ * else, even with the /u flag, and `Number("૨૫૬૦૦૦૦૦")` is NaN — so the parse
+ * failed silently and returned null, which for an instalment meant the whole
+ * payment row was dropped without a word.
+ *
+ * Every Indian script places its ten digits contiguously from a block zero, so
+ * the whole family is a subtraction. Listed rather than derived because the
+ * list is short, fixed, and reads as documentation of what is covered.
+ */
+const DIGIT_BLOCK_ZEROS = [
+  0x0966, // Devanagari  ० — Hindi, Marathi
+  0x09e6, // Bengali     ০
+  0x0a66, // Gurmukhi    ੦ — Punjabi
+  0x0ae6, // Gujarati    ૦
+  0x0b66, // Oriya       ୦
+  0x0be6, // Tamil       ௦
+  0x0c66, // Telugu      ౦
+  0x0ce6, // Kannada     ೦
+  0x0d66, // Malayalam   ൦
+];
+
+/** "૨,૫૬,૦૦,૦૦૦" → "2,56,00,000". Anything that is not an Indian-script digit
+ *  passes through untouched, so mixed Gujarati-and-Latin text survives. */
+export function normaliseIndianDigits(raw: string): string {
+  let out = "";
+  for (const ch of raw) {
+    const code = ch.codePointAt(0)!;
+    let mapped = ch;
+    for (const zero of DIGIT_BLOCK_ZEROS) {
+      if (code >= zero && code <= zero + 9) {
+        mapped = String(code - zero);
+        break;
+      }
+    }
+    out += mapped;
+  }
+  return out;
+}
+
+/**
  * Returns null — never 0 — for anything unreadable.
  *
  * Zero is a legitimate amount (a challan's interest line is normally ₹0), so
@@ -32,7 +80,7 @@ export function parseIndianAmount(raw: unknown): number | null {
   if (typeof raw === "number") return Number.isFinite(raw) ? raw : null;
   if (typeof raw !== "string") return null;
 
-  const s = raw.trim().toLowerCase();
+  const s = normaliseIndianDigits(raw).trim().toLowerCase();
   if (!s) return null;
 
   const cleaned = s
@@ -69,7 +117,10 @@ const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "
  */
 export function parseIndianDate(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
-  const s = raw.trim();
+  // Same treatment as amounts, and for the same reason: a date carrying
+  // native numerals used to fail the parse, and a null date drops the
+  // instalment row it belongs to just as surely as a null amount does.
+  const s = normaliseIndianDigits(raw).trim();
   if (!s) return null;
 
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);

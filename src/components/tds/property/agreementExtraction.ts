@@ -142,7 +142,25 @@ export interface AppliedExtraction {
    * below-threshold deal.
    */
   unreadable: string[];
+  /**
+   * Rows the model returned that could not be turned into records — a partial
+   * loss, distinct from `unreadable`'s total one.
+   *
+   * A deed with three payments whose middle amount would not parse used to
+   * produce two instalments and no word about the third. That understates the
+   * consideration paid, and every statement computed from it, while looking
+   * exactly like a two-payment deal. Reporting kept-of-total is the only way
+   * the user can tell the difference.
+   */
+  dropped: DroppedRows[];
   queries: ResolvedQuery[];
+}
+
+export interface DroppedRows {
+  /** Field key, for FIELD_LABEL. */
+  field: string;
+  kept: number;
+  total: number;
 }
 
 const field = (ex: AgreementExtraction, key: string): ExtractedField | undefined => ex.fields?.[key];
@@ -235,6 +253,7 @@ export function applyExtraction(
   const needsConfirmation: string[] = [];
   const withheld: string[] = [];
   const unreadable: string[] = [];
+  const dropped: DroppedRows[] = [];
 
   const txn: PropertyTransactionRow = { ...base.transaction, source: "agreement_upload" };
 
@@ -257,6 +276,7 @@ export function applyExtraction(
       needsConfirmation: [],
       withheld: [],
       unreadable: [],
+      dropped: [],
       queries: (extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null })),
     };
   }
@@ -370,6 +390,14 @@ export function applyExtraction(
         })
         .filter((x): x is PropertyInstalmentRow => x !== null);
 
+  // An instalment needs BOTH an amount and a date; a row missing either is
+  // unusable. Dropping it is right — inventing the missing half would be
+  // worse — but doing it in silence is not, because what reaches the screen
+  // is a shorter, cheaper, entirely plausible-looking payment schedule.
+  if (instalments.length < instRows.length) {
+    dropped.push({ field: "instalments", kept: instalments.length, total: instRows.length });
+  }
+
   if (filingBuyer?.pan && !txn.filing_buyer_pan) txn.filing_buyer_pan = filingBuyer.pan;
 
   return {
@@ -382,6 +410,7 @@ export function applyExtraction(
     needsConfirmation,
     withheld,
     unreadable,
+    dropped,
     queries: (extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null })),
   };
 }

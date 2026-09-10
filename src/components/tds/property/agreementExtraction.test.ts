@@ -14,6 +14,7 @@ import {
   type ExtractedField,
 } from "./agreementExtraction";
 import { emptyTransaction, toForm141Deal, type PropertyDealBundle } from "./propertyDeal";
+import { normaliseIndianDigits } from "@/lib/tds/indianAmount";
 import { computeForm141ScheduleB } from "@/lib/tds/form141ScheduleB";
 
 const BASE: PropertyDealBundle = {
@@ -458,5 +459,120 @@ describe("confirming a reading", () => {
 
   it("is a no-op on a field that was never extracted", () => {
     expect(confirmField(r.provenance, "nonexistent")).toBe(r.provenance);
+  });
+});
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * Gujarati દસ્તાવેજ — native numerals, and rows that must not vanish
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+
+describe("normaliseIndianDigits", () => {
+  it("reads Gujarati numerals", () => {
+    expect(normaliseIndianDigits("૨,૫૬,૦૦,૦૦૦")).toBe("2,56,00,000");
+  });
+
+  it("reads the other Indian scripts a deed might arrive in", () => {
+    expect(normaliseIndianDigits("१२८०००")).toBe("128000");   // Devanagari
+    expect(normaliseIndianDigits("੫੦੦੦੦੦੦")).toBe("5000000"); // Gurmukhi
+    expect(normaliseIndianDigits("১২৮")).toBe("128");          // Bengali
+  });
+
+  it("leaves everything that is not a digit alone", () => {
+    // Mixed script is the normal case: a Gujarati deed with an English schedule.
+    expect(normaliseIndianDigits("સર્વે નં. ૧૪૨, Block ૭૨૩/૨"))
+      .toBe("સર્વે નં. 142, Block 723/2");
+    expect(normaliseIndianDigits("₹2,56,00,000/-")).toBe("₹2,56,00,000/-");
+  });
+});
+
+describe("parseIndianAmount — Gujarati figures", () => {
+  it("reads an amount written in Gujarati numerals", () => {
+    // JS gives up here on its own: Number("૨૫૬૦૦૦૦૦") is NaN and /\d/ does not
+    // match a Gujarati digit, so this used to return null — and a null amount
+    // silently dropped the whole instalment row.
+    expect(parseIndianAmount("૨,૫૬,૦૦,૦૦૦")).toBe(25600000);
+    expect(parseIndianAmount("₹ ૬૪,૦૦,૦૦૦/-")).toBe(6400000);
+  });
+
+  it("still applies the lakh/crore multipliers to native numerals", () => {
+    expect(parseIndianAmount("૫૦ lacs")).toBe(5000000);
+  });
+
+  it("has not changed how Latin figures read", () => {
+    expect(parseIndianAmount("₹2,56,00,000")).toBe(25600000);
+    expect(parseIndianAmount("Rs. 1.28 Cr")).toBe(12800000);
+    expect(parseIndianAmount("not an amount")).toBeNull();
+  });
+});
+
+describe("normaliseDate — Gujarati figures", () => {
+  it("reads a date written in Gujarati numerals", () => {
+    expect(normaliseDate("૦૨/૦૯/૨૦૨૬")).toBe("2026-09-02");
+    expect(normaliseDate("૦૨-Sep-૨૦૨૬")).toBe("2026-09-02");
+  });
+});
+
+describe("instalment rows that cannot be read are reported, not swallowed", () => {
+  const withInstalments = (rows: unknown[]): AgreementExtraction => ({
+    ...GOOD_EXTRACTION,
+    fields: {
+      ...GOOD_EXTRACTION.fields,
+      payment_mode: f("instalments"),
+      instalments: f(rows),
+    },
+  });
+
+  it("says how many of how many survived", () => {
+    const r = applyExtraction(
+      withInstalments([
+        { amount: 5000000, date_paid_or_credited: "2026-06-01" },
+        { amount: "could not read", date_paid_or_credited: "2026-07-01" },
+        { amount: 5000000, date_paid_or_credited: "2026-08-01" },
+      ]),
+      BASE,
+    );
+    expect(r.bundle.instalments).toHaveLength(2);
+    expect(r.dropped).toEqual([{ field: "instalments", kept: 2, total: 3 }]);
+  });
+
+  it("catches a row whose DATE is the unreadable half", () => {
+    const r = applyExtraction(
+      withInstalments([
+        { amount: 5000000, date_paid_or_credited: "2026-06-01" },
+        { amount: 5000000, date_paid_or_credited: "sometime after Diwali" },
+      ]),
+      BASE,
+    );
+    expect(r.dropped).toEqual([{ field: "instalments", kept: 1, total: 2 }]);
+  });
+
+  it("reports nothing when every row was usable", () => {
+    const r = applyExtraction(
+      withInstalments([
+        { amount: 5000000, date_paid_or_credited: "2026-06-01" },
+        { amount: 5000000, date_paid_or_credited: "2026-08-01" },
+      ]),
+      BASE,
+    );
+    expect(r.dropped).toEqual([]);
+  });
+
+  it("no longer drops a row merely for being written in Gujarati", () => {
+    // The regression this pair of fixes exists for: before the digit
+    // normalisation, this row parsed to null and disappeared.
+    const r = applyExtraction(
+      withInstalments([
+        { amount: "૫૦,૦૦,૦૦૦", date_paid_or_credited: "૦૧/૦૬/૨૦૨૬" },
+        { amount: 5000000, date_paid_or_credited: "2026-08-01" },
+      ]),
+      BASE,
+    );
+    expect(r.dropped).toEqual([]);
+    expect(r.bundle.instalments).toHaveLength(2);
+    // Buyer One holds 50%, so their share of a ₹50,00,000 payment is ₹25,00,000.
+    expect(r.bundle.instalments[0].amount_paid_by_buyer).toBe(2500000);
+    expect(r.bundle.instalments[0].date_paid_or_credited).toBe("2026-06-01");
   });
 });

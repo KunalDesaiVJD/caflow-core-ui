@@ -41,6 +41,7 @@ import {
   FIELD_LABEL,
   type AgreementExtraction,
   type AppliedExtraction,
+  type DroppedRows,
   type ResolvedQuery,
   type FieldProvenance,
 } from "./agreementExtraction";
@@ -187,7 +188,12 @@ export function TdsPropertyUpload({
   const inputRef = useRef<HTMLInputElement>(null);
   const [reading, setReading] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
-  const [summary, setSummary] = useState<{ needsConfirmation: string[]; withheld: string[]; unreadable: string[] } | null>(null);
+  const [summary, setSummary] = useState<{
+    needsConfirmation: string[];
+    withheld: string[];
+    unreadable: string[];
+    dropped: DroppedRows[];
+  } | null>(null);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [showEvidence, setShowEvidence] = useState<string | null>(null);
 
@@ -245,6 +251,7 @@ export function TdsPropertyUpload({
         needsConfirmation: applied.needsConfirmation,
         withheld: applied.withheld,
         unreadable: applied.unreadable,
+        dropped: applied.dropped,
       });
 
       const open = openQueries(applied.queries).length;
@@ -310,6 +317,24 @@ export function TdsPropertyUpload({
               Enter {summary.unreadable.length === 1 ? "it" : "them"} by hand — and please report this, because
               it is a bug rather than a limit of the document.
             </p>
+          </div>
+        )}
+
+        {/* Rows that came back but could not be used. Red, not amber: a
+            payment schedule silently one row short is not a caution, it is a
+            wrong number that looks right. */}
+        {summary && summary.dropped.length > 0 && (
+          <div className="rounded-md border border-red-200 bg-red-50 dark:border-red-900 dark:bg-red-950/40 p-3">
+            <p className="text-xs font-medium mb-1">Some rows could not be read</p>
+            {summary.dropped.map((d) => (
+              <p key={d.field} className="text-xs text-muted-foreground">
+                The reader found {d.total} {(FIELD_LABEL[d.field] || d.field).toLowerCase()} but only{" "}
+                {d.kept} could be used — {d.total - d.kept} had an amount or a date this app could not
+                parse. Check the schedule below against the document and add the missing{" "}
+                {d.total - d.kept === 1 ? "one" : "ones"} by hand, because the tax computed from a short
+                schedule will be short too.
+              </p>
+            ))}
           </div>
         )}
 
