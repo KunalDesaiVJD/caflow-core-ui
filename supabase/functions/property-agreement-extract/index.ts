@@ -66,7 +66,16 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const REQUEST_TIMEOUT_MS = 120_000;
+/**
+ * Below Supabase's 150s request idle timeout, with room for the base64
+ * document to travel up and the reply to travel back.
+ *
+ * The point is not to make a slow read fast — it is to make sure THIS function
+ * answers first. Past 150s the platform closes the connection and whatever the
+ * model eventually returns is delivered to nobody, which is how an upload ends
+ * up spinning with no error at all.
+ */
+const REQUEST_TIMEOUT_MS = 110_000;
 
 /**
  * Opus, not the cheaper tier msme-extract-ledger settled on for ledgers.
@@ -99,6 +108,18 @@ STEP 2 — EXTRACT. Every field is an object: {"value": <value or null>, "confid
   "medium" — inferred, or stated once in a way you could be misreading.
   "low"    — a guess from context.
 Never invent a snippet. If you cannot find a field, return value null, confidence "low", snippet null — do not omit the key.
+
+THE ENVELOPE APPLIES TO EVERY FIELD, INCLUDING THE LIST ONES. A list field carries the ARRAY as its "value", and the objects inside the array are PLAIN — their properties are bare strings and numbers, NOT further envelopes. Exactly this shape:
+
+  "buyers": {
+    "value": [
+      {"name": "Girishbhai Madhavji Barochia", "pan": "ABCDE1234F", "share_pct": 50},
+      {"name": "Pratapbhai Girishbhai Solanki", "pan": null, "share_pct": 50}
+    ],
+    "confidence": "high", "page": 2, "snippet": "PURCHASERS: 1) Girishbhai ..."
+  }
+
+Do NOT return the bare array without the envelope, and do NOT wrap "name" or "pan" in their own {"value": ...} objects. One envelope per field, plain objects inside.
 
 Fields to extract:
   property_type            — LAND, BUILDING, LAND & BUILDING, FLAT / APARTMENT, or OTHER.
@@ -236,7 +257,15 @@ serve(async (req) => {
     const reply = await callModel(
       SYSTEM_PROMPT,
       parts,
-      { modelEnv: MODEL_ENV, defaultModel: DEFAULT_MODEL, appTitle: "CAFlow Property TDS", maxTokens: 16000 },
+      {
+        modelEnv: MODEL_ENV,
+        defaultModel: DEFAULT_MODEL,
+        appTitle: "CAFlow Property TDS",
+        maxTokens: 16000,
+        // Keeps Opus's reading quality while cutting the thinking that pushed a
+        // real deed to 173s — see the note on CallOptions.effort.
+        effort: "low",
+      },
       REQUEST_TIMEOUT_MS,
     );
 

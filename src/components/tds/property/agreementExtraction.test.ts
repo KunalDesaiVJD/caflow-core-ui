@@ -14,6 +14,7 @@ import {
   type ExtractedField,
 } from "./agreementExtraction";
 import { emptyTransaction, toForm141Deal, type PropertyDealBundle } from "./propertyDeal";
+import { normaliseIndianDigits } from "@/lib/tds/indianAmount";
 import { computeForm141ScheduleB } from "@/lib/tds/form141ScheduleB";
 
 const BASE: PropertyDealBundle = {
@@ -217,6 +218,103 @@ describe("confidence gating", () => {
   });
 });
 
+/**
+ * The three shapes a model actually returns for a list field.
+ *
+ * The prompt says "every field is an object {value, confidence, page,
+ * snippet}" AND "buyers — array of {...}". Both are satisfiable three
+ * different ways, and requiring only the specified one is what made a real
+ * registered deed come back with no parties, no payments and therefore no
+ * tax — silently, which is the worst part: zero tax looks exactly like a
+ * below-threshold deal.
+ */
+describe("list fields — every shape a model returns", () => {
+  const BUYERS = [
+    { name: "Buyer One", pan: "ADFPB0000E", share_pct: 50 },
+    { name: "Buyer Two", pan: "ACTPP0000E", share_pct: 50 },
+  ];
+
+  const withBuyers = (buyers: unknown): AgreementExtraction => ({
+    ...GOOD_EXTRACTION,
+    fields: { ...GOOD_EXTRACTION.fields, buyers: buyers as never },
+  });
+
+  it("reads the specified shape: {value: [...]}", () => {
+    const r = applyExtraction(withBuyers(f(BUYERS)), BASE);
+    expect(r.bundle.parties.filter((p) => p.party_role === "buyer")).toHaveLength(2);
+    expect(r.unreadable).not.toContain("buyers");
+  });
+
+  it("reads a BARE array with no envelope", () => {
+    const r = applyExtraction(withBuyers(BUYERS), BASE);
+    const buyers = r.bundle.parties.filter((p) => p.party_role === "buyer");
+    expect(buyers).toHaveLength(2);
+    expect(buyers[0].name).toBe("Buyer One");
+    expect(buyers[0].pan).toBe("ADFPB0000E");
+    expect(buyers[0].share_pct).toBe(50);
+  });
+
+  it("reads rows whose every leaf carries its OWN envelope", () => {
+    const nested = f([
+      {
+        name: { value: "Buyer One", confidence: "high", page: 2, snippet: "..." },
+        pan: { value: "ADFPB0000E", confidence: "high", page: 2, snippet: "..." },
+        share_pct: { value: 50, confidence: "medium", page: 2, snippet: "..." },
+      },
+    ]);
+    const r = applyExtraction(withBuyers(nested), BASE);
+    const buyers = r.bundle.parties.filter((p) => p.party_role === "buyer");
+    expect(buyers).toHaveLength(1);
+    expect(buyers[0].name).toBe("Buyer One");
+    expect(buyers[0].pan).toBe("ADFPB0000E");
+    expect(buyers[0].share_pct).toBe(50);
+  });
+
+  it("reads instalments in a bare-array shape too, and computes tax from them", () => {
+    const ex: AgreementExtraction = {
+      ...GOOD_EXTRACTION,
+      fields: {
+        ...GOOD_EXTRACTION.fields,
+        buyers: BUYERS as never,
+        sellers: [
+          { name: "Seller One", pan: "ANRPP0000R", share_pct: 50 },
+          { name: "Seller Two", pan: "CBNPM0000M", share_pct: 50 },
+        ] as never,
+        instalments: [{ amount: 25600000, date_paid_or_credited: "2026-09-02" }] as never,
+      },
+    };
+    const r = applyExtraction(ex, BASE);
+    expect(r.unreadable).toEqual([]);
+    const computed = computeForm141ScheduleB(toForm141Deal(r.bundle), "ADFPB0000E");
+    expect(computed.statements[0].totalTds).toBe(128000);
+  });
+
+  it("SAYS SO when a field arrives in a shape it cannot read", () => {
+    // The old failure was silent. A list that yields nothing must be reported,
+    // because an empty seller list computes zero tax.
+    const r = applyExtraction(withBuyers(f("Girishbhai and Pratapbhai")), BASE);
+    expect(r.bundle.parties.filter((p) => p.party_role === "buyer")).toHaveLength(0);
+    expect(r.unreadable).toContain("buyers");
+  });
+
+  it("does NOT report a field the model legitimately left empty", () => {
+    const r = applyExtraction(withBuyers(f(null)), BASE);
+    expect(r.unreadable).not.toContain("buyers");
+  });
+
+  it("tolerates an enveloped scalar and a bare scalar alike", () => {
+    const bare: AgreementExtraction = {
+      ...GOOD_EXTRACTION,
+      fields: {
+        ...GOOD_EXTRACTION.fields,
+        property_type: "LAND" as never,
+        total_sale_consideration: f(25600000),
+      },
+    };
+    expect(applyExtraction(bare, BASE).bundle.transaction.property_type).toBe("LAND");
+  });
+});
+
 describe("shares are never re-normalised", () => {
   it("carries a deed whose shares do not total 100% straight through", () => {
     // Smoothing 60+60 to 50+50 would hide a real defect behind a plausible
@@ -361,5 +459,120 @@ describe("confirming a reading", () => {
 
   it("is a no-op on a field that was never extracted", () => {
     expect(confirmField(r.provenance, "nonexistent")).toBe(r.provenance);
+  });
+});
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * Gujarati દસ્તાવેજ — native numerals, and rows that must not vanish
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+
+describe("normaliseIndianDigits", () => {
+  it("reads Gujarati numerals", () => {
+    expect(normaliseIndianDigits("૨,૫૬,૦૦,૦૦૦")).toBe("2,56,00,000");
+  });
+
+  it("reads the other Indian scripts a deed might arrive in", () => {
+    expect(normaliseIndianDigits("१२८०००")).toBe("128000");   // Devanagari
+    expect(normaliseIndianDigits("੫੦੦੦੦੦੦")).toBe("5000000"); // Gurmukhi
+    expect(normaliseIndianDigits("১২৮")).toBe("128");          // Bengali
+  });
+
+  it("leaves everything that is not a digit alone", () => {
+    // Mixed script is the normal case: a Gujarati deed with an English schedule.
+    expect(normaliseIndianDigits("સર્વે નં. ૧૪૨, Block ૭૨૩/૨"))
+      .toBe("સર્વે નં. 142, Block 723/2");
+    expect(normaliseIndianDigits("₹2,56,00,000/-")).toBe("₹2,56,00,000/-");
+  });
+});
+
+describe("parseIndianAmount — Gujarati figures", () => {
+  it("reads an amount written in Gujarati numerals", () => {
+    // JS gives up here on its own: Number("૨૫૬૦૦૦૦૦") is NaN and /\d/ does not
+    // match a Gujarati digit, so this used to return null — and a null amount
+    // silently dropped the whole instalment row.
+    expect(parseIndianAmount("૨,૫૬,૦૦,૦૦૦")).toBe(25600000);
+    expect(parseIndianAmount("₹ ૬૪,૦૦,૦૦૦/-")).toBe(6400000);
+  });
+
+  it("still applies the lakh/crore multipliers to native numerals", () => {
+    expect(parseIndianAmount("૫૦ lacs")).toBe(5000000);
+  });
+
+  it("has not changed how Latin figures read", () => {
+    expect(parseIndianAmount("₹2,56,00,000")).toBe(25600000);
+    expect(parseIndianAmount("Rs. 1.28 Cr")).toBe(12800000);
+    expect(parseIndianAmount("not an amount")).toBeNull();
+  });
+});
+
+describe("normaliseDate — Gujarati figures", () => {
+  it("reads a date written in Gujarati numerals", () => {
+    expect(normaliseDate("૦૨/૦૯/૨૦૨૬")).toBe("2026-09-02");
+    expect(normaliseDate("૦૨-Sep-૨૦૨૬")).toBe("2026-09-02");
+  });
+});
+
+describe("instalment rows that cannot be read are reported, not swallowed", () => {
+  const withInstalments = (rows: unknown[]): AgreementExtraction => ({
+    ...GOOD_EXTRACTION,
+    fields: {
+      ...GOOD_EXTRACTION.fields,
+      payment_mode: f("instalments"),
+      instalments: f(rows),
+    },
+  });
+
+  it("says how many of how many survived", () => {
+    const r = applyExtraction(
+      withInstalments([
+        { amount: 5000000, date_paid_or_credited: "2026-06-01" },
+        { amount: "could not read", date_paid_or_credited: "2026-07-01" },
+        { amount: 5000000, date_paid_or_credited: "2026-08-01" },
+      ]),
+      BASE,
+    );
+    expect(r.bundle.instalments).toHaveLength(2);
+    expect(r.dropped).toEqual([{ field: "instalments", kept: 2, total: 3 }]);
+  });
+
+  it("catches a row whose DATE is the unreadable half", () => {
+    const r = applyExtraction(
+      withInstalments([
+        { amount: 5000000, date_paid_or_credited: "2026-06-01" },
+        { amount: 5000000, date_paid_or_credited: "sometime after Diwali" },
+      ]),
+      BASE,
+    );
+    expect(r.dropped).toEqual([{ field: "instalments", kept: 1, total: 2 }]);
+  });
+
+  it("reports nothing when every row was usable", () => {
+    const r = applyExtraction(
+      withInstalments([
+        { amount: 5000000, date_paid_or_credited: "2026-06-01" },
+        { amount: 5000000, date_paid_or_credited: "2026-08-01" },
+      ]),
+      BASE,
+    );
+    expect(r.dropped).toEqual([]);
+  });
+
+  it("no longer drops a row merely for being written in Gujarati", () => {
+    // The regression this pair of fixes exists for: before the digit
+    // normalisation, this row parsed to null and disappeared.
+    const r = applyExtraction(
+      withInstalments([
+        { amount: "૫૦,૦૦,૦૦૦", date_paid_or_credited: "૦૧/૦૬/૨૦૨૬" },
+        { amount: 5000000, date_paid_or_credited: "2026-08-01" },
+      ]),
+      BASE,
+    );
+    expect(r.dropped).toEqual([]);
+    expect(r.bundle.instalments).toHaveLength(2);
+    // Buyer One holds 50%, so their share of a ₹50,00,000 payment is ₹25,00,000.
+    expect(r.bundle.instalments[0].amount_paid_by_buyer).toBe(2500000);
+    expect(r.bundle.instalments[0].date_paid_or_credited).toBe("2026-06-01");
   });
 });

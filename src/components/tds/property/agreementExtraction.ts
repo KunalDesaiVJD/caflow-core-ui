@@ -134,10 +134,84 @@ export interface AppliedExtraction {
   needsConfirmation: string[];
   /** Critical fields deliberately left empty because the reading was weak. */
   withheld: string[];
+  /**
+   * Fields the model DID return but that this code could not parse into
+   * anything usable. Distinct from `withheld`, which is a deliberate refusal:
+   * this is a failure to understand, and it has to be visible. An empty seller
+   * list computes zero tax, which on screen is indistinguishable from a
+   * below-threshold deal.
+   */
+  unreadable: string[];
+  /**
+   * Rows the model returned that could not be turned into records — a partial
+   * loss, distinct from `unreadable`'s total one.
+   *
+   * A deed with three payments whose middle amount would not parse used to
+   * produce two instalments and no word about the third. That understates the
+   * consideration paid, and every statement computed from it, while looking
+   * exactly like a two-payment deal. Reporting kept-of-total is the only way
+   * the user can tell the difference.
+   */
+  dropped: DroppedRows[];
   queries: ResolvedQuery[];
 }
 
+export interface DroppedRows {
+  /** Field key, for FIELD_LABEL. */
+  field: string;
+  kept: number;
+  total: number;
+}
+
 const field = (ex: AgreementExtraction, key: string): ExtractedField | undefined => ex.fields?.[key];
+
+/**
+ * Read a field's payload whichever shape the model chose.
+ *
+ * The prompt asks for every field as {value, confidence, page, snippet}, and
+ * ALSO describes buyers/sellers/instalments as "array of {...}". Those two
+ * instructions can be satisfied three different ways, and a model will pick
+ * any of them:
+ *
+ *   1. {value: [ {name, pan} ], confidence: "high", ...}   ← as specified
+ *   2. [ {name, pan} ]                                      ← array, no envelope
+ *   3. {value: [ {name: {value: "X", confidence: "high"}} ]} ← envelope per leaf
+ *
+ * Requiring only shape 1 is what made a real deed come back with no parties
+ * and no payments, and therefore no tax. The reader accepts all three, because
+ * which one arrives is not something this code gets to decide.
+ */
+function unwrapValue(v: unknown): unknown {
+  if (v === null || v === undefined || Array.isArray(v) || typeof v !== "object") return v;
+  const o = v as Record<string, unknown>;
+  return "value" in o && ("confidence" in o || "page" in o || "snippet" in o) ? o.value : v;
+}
+
+/** A scalar leaf, tolerating a per-leaf envelope. */
+const leaf = (v: unknown): unknown => unwrapValue(v);
+
+/** A trimmed string leaf, or null. */
+function leafText(v: unknown): string | null {
+  const u = unwrapValue(v);
+  if (typeof u === "number") return String(u);
+  return typeof u === "string" && u.trim() ? u.trim() : null;
+}
+
+/** The object rows behind an array-valued field, whichever shape it arrived in. */
+function fieldRows(f: unknown): Record<string, unknown>[] {
+  const v = unwrapValue(f);
+  return Array.isArray(v)
+    ? (v.filter((r) => r && typeof r === "object" && !Array.isArray(r)) as Record<string, unknown>[])
+    : [];
+}
+
+/** True when the model returned SOMETHING for a field, in any shape. */
+function fieldHasContent(f: unknown): boolean {
+  const v = unwrapValue(f);
+  if (v === null || v === undefined || v === "") return false;
+  if (Array.isArray(v)) return v.length > 0;
+  return true;
+}
 
 function provenanceOf(f: ExtractedField | undefined): FieldProvenance {
   return {
@@ -159,8 +233,8 @@ function provenanceOf(f: ExtractedField | undefined): FieldProvenance {
  * consideration is invisible and costs a misfiled return.
  */
 function shouldApply(key: string, f: ExtractedField | undefined): boolean {
-  if (!f || f.value === null || f.value === undefined || f.value === "") return false;
-  if (CRITICAL_FIELDS.has(key)) return f.confidence !== "low";
+  if (!fieldHasContent(f)) return false;
+  if (CRITICAL_FIELDS.has(key)) return (f?.confidence ?? "low") !== "low";
   return true;
 }
 
@@ -178,6 +252,8 @@ export function applyExtraction(
   const provenance: Record<string, FieldProvenance> = {};
   const needsConfirmation: string[] = [];
   const withheld: string[] = [];
+  const unreadable: string[] = [];
+  const dropped: DroppedRows[] = [];
 
   const txn: PropertyTransactionRow = { ...base.transaction, source: "agreement_upload" };
 
@@ -199,39 +275,42 @@ export function applyExtraction(
       provenance: {},
       needsConfirmation: [],
       withheld: [],
+      unreadable: [],
+      dropped: [],
       queries: (extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null })),
     };
   }
 
   const propType = field(extraction, "property_type");
-  if (shouldApply("property_type", propType)) txn.property_type = String(propType!.value).toUpperCase();
+  if (shouldApply("property_type", propType)) txn.property_type = String(leaf(propType!.value ?? propType)).toUpperCase();
   note("property_type", propType, shouldApply("property_type", propType));
 
   const addr = field(extraction, "property_address");
-  if (shouldApply("property_address", addr)) txn.property_address = String(addr!.value);
+  if (shouldApply("property_address", addr)) txn.property_address = String(leafText(addr!.value ?? addr) ?? "");
   note("property_address", addr, shouldApply("property_address", addr));
 
   const agrDate = field(extraction, "date_of_agreement");
-  const agrDateVal = normaliseDate(agrDate?.value);
+  const agrDateVal = normaliseDate(leafText(agrDate?.value ?? agrDate));
   const agrOk = shouldApply("date_of_agreement", agrDate) && agrDateVal !== null;
   if (agrOk) txn.date_of_agreement = agrDateVal!;
   note("date_of_agreement", agrDate, agrOk);
 
   const cons = field(extraction, "total_sale_consideration");
-  const consVal = parseIndianAmount(cons?.value);
+  const consVal = parseIndianAmount(leaf(cons?.value ?? cons));
   const consOk = shouldApply("total_sale_consideration", cons) && consVal !== null;
   if (consOk) txn.total_sale_consideration = consVal!;
   note("total_sale_consideration", cons, consOk);
 
   const sdv = field(extraction, "total_stamp_duty_value");
-  const sdvVal = parseIndianAmount(sdv?.value);
+  const sdvVal = parseIndianAmount(leaf(sdv?.value ?? sdv));
   const sdvOk = shouldApply("total_stamp_duty_value", sdv) && sdvVal !== null;
   if (sdvOk) txn.total_stamp_duty_value = sdvVal!;
   note("total_stamp_duty_value", sdv, sdvOk);
 
   const mode = field(extraction, "payment_mode");
-  if (shouldApply("payment_mode", mode) && (mode!.value === "lumpsum" || mode!.value === "instalments")) {
-    txn.payment_mode = mode!.value as "lumpsum" | "instalments";
+  const modeVal = leafText(mode?.value ?? mode);
+  if (shouldApply("payment_mode", mode) && (modeVal === "lumpsum" || modeVal === "instalments")) {
+    txn.payment_mode = modeVal;
   }
   note("payment_mode", mode, shouldApply("payment_mode", mode));
 
@@ -239,24 +318,37 @@ export function applyExtraction(
   const readParties = (key: "buyers" | "sellers", role: "buyer" | "seller"): PropertyPartyRow[] => {
     const raw = field(extraction, key);
     note(key, raw, shouldApply(key, raw));
-    if (!Array.isArray(raw?.value)) return [];
-    return (raw!.value as Record<string, unknown>[]).map((p, idx) => ({
+    const rows = fieldRows(raw);
+    // The model returned something for this field but nothing survived the
+    // read. That must never be silent — an empty party list produces zero tax,
+    // which looks exactly like a below-threshold deal.
+    if (!rows.length && fieldHasContent(raw)) unreadable.push(key);
+    if (!rows.length) return [];
+    return rows.map((p, idx) => ({
       id: `new-${role}-${idx + 1}-x`,
       firm_id: base.transaction.firm_id,
       transaction_id: base.transaction.id,
       party_role: role,
       seq: idx + 1,
-      pan: normalisePan(p.pan),
-      name: typeof p.name === "string" ? p.name : "",
-      contact: typeof p.contact === "string" ? p.contact : null,
-      email: typeof p.email === "string" ? p.email : null,
+      pan: normalisePan(leafText(p.pan)),
+      name: leafText(p.name) ?? "",
+      contact: leafText(p.contact),
+      email: leafText(p.email),
       // Shares are taken exactly as read and never re-normalised to 100%.
       // If the deed's shares don't add up, that surfaces as a blocking
       // finding rather than being quietly smoothed over.
-      share_pct: typeof p.share_pct === "number" ? p.share_pct : Number(p.share_pct) || 0,
+      share_pct: Number(leaf(p.share_pct)) || 0,
       residential_status: "resident",
+      // Nothing in a sale deed says whether a PAN is operative, and nothing
+      // in it mentions a lower-deduction certificate either. Both start
+      // unknown/absent and are filled in from the firm's own records or by
+      // hand — never inferred from the document.
+      pan_status: "unknown",
       section_395_certificate_no: null,
       section_395_rate: null,
+      section_395_valid_from: null,
+      section_395_valid_to: null,
+      section_395_ceiling_amount: null,
     }));
   };
 
@@ -273,11 +365,13 @@ export function applyExtraction(
   const filingBuyer = buyers.find((b) => b.pan === txn.filing_buyer_pan) || buyers[0];
   const buyerShare = filingBuyer && Number(filingBuyer.share_pct) > 0 ? Number(filingBuyer.share_pct) / 100 : 1;
 
-  const instalments: PropertyInstalmentRow[] = Array.isArray(instRaw?.value)
-    ? (instRaw!.value as Record<string, unknown>[])
+  const instRows = fieldRows(instRaw);
+  if (!instRows.length && fieldHasContent(instRaw)) unreadable.push("instalments");
+
+  const instalments: PropertyInstalmentRow[] = instRows
         .map((r, idx) => {
-          const amount = parseIndianAmount(r.amount);
-          const date = normaliseDate(r.date_paid_or_credited);
+          const amount = parseIndianAmount(leaf(r.amount));
+          const date = normaliseDate(leafText(r.date_paid_or_credited));
           if (amount === null || date === null) return null;
           return {
             id: `new-inst-${idx + 1}-x`,
@@ -294,8 +388,15 @@ export function applyExtraction(
             date_of_filing: null,
           } as PropertyInstalmentRow;
         })
-        .filter((x): x is PropertyInstalmentRow => x !== null)
-    : [];
+        .filter((x): x is PropertyInstalmentRow => x !== null);
+
+  // An instalment needs BOTH an amount and a date; a row missing either is
+  // unusable. Dropping it is right — inventing the missing half would be
+  // worse — but doing it in silence is not, because what reaches the screen
+  // is a shorter, cheaper, entirely plausible-looking payment schedule.
+  if (instalments.length < instRows.length) {
+    dropped.push({ field: "instalments", kept: instalments.length, total: instRows.length });
+  }
 
   if (filingBuyer?.pan && !txn.filing_buyer_pan) txn.filing_buyer_pan = filingBuyer.pan;
 
@@ -308,6 +409,8 @@ export function applyExtraction(
     provenance,
     needsConfirmation,
     withheld,
+    unreadable,
+    dropped,
     queries: (extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null })),
   };
 }

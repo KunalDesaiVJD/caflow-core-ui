@@ -69,6 +69,23 @@ export interface Form141Buyer {
   sharePct: number;
 }
 
+/**
+ * Whether the deductee's PAN is live on the department's records.
+ *
+ * A PAN that EXISTS but is inoperative — not linked to Aadhaar — attracts the
+ * same higher rate as no PAN at all. The seller will not volunteer this, and
+ * nothing on the face of the deed reveals it, so it is carried as its own
+ * field rather than inferred from the PAN string.
+ *
+ * "unknown" is the honest default and is deliberately not treated as
+ * operative: it produces a warning telling the firm to check, rather than a
+ * quiet 1% that becomes a demand two years later.
+ */
+export type PanStatus = "unknown" | "operative" | "inoperative" | "invalid";
+
+/** PAN states that carry the no-PAN rate. */
+export const PAN_STATUSES_AT_HIGHER_RATE: PanStatus[] = ["inoperative", "invalid"];
+
 export interface Form141Seller {
   pan: string | null;
   name: string;
@@ -77,11 +94,22 @@ export interface Form141Seller {
   /** Proportion of TOTAL sale consideration received by this seller (%). */
   sharePct: number;
   residentialStatus: ResidentialStatus;
+  /** Operative / inoperative, from the department's records. Absent is read
+   *  as "unknown" — see PanStatus. */
+  panStatus?: PanStatus | null;
   /** Lower/nil deduction certificate under s.395(1), when one is held. */
   section395CertificateNo?: string | null;
   /** Rate the certificate permits, as a percentage. Null with a certificate
    *  number present is itself a validation error, not a silent fall-back. */
   section395Rate?: number | null;
+  /** The certificate's own validity window. A certificate is not a standing
+   *  concession: it covers deductions made between these dates and nothing
+   *  outside them. */
+  section395ValidFrom?: string | null;
+  section395ValidTo?: string | null;
+  /** The ceiling the certificate carries — the total amount it covers. Tax on
+   *  anything beyond it reverts to the standard rate. */
+  section395CeilingAmount?: number | null;
 }
 
 export interface Form141Instalment {
@@ -106,9 +134,19 @@ export interface Form141Deal {
   propertyType: string;
   propertyAddress: string;
   dateOfAgreement: string;
+  /** When the deed was registered, where that differs from the agreement
+   *  date. Optional because an unregistered draft agreement has none yet. */
+  dateOfRegistration?: string | null;
   totalSaleConsideration: number;
   totalStampDutyValue: number;
+  /** The date the stamp duty value was taken AS AT. Circle rates move, so a
+   *  deal signed in one year and registered the next has two of them, and
+   *  which one governs is a question of fact — see validateDeal. */
+  stampDutyValueAsOn?: string | null;
   paymentMode: "lumpsum" | "instalments";
+  /** Free text carried through only so the checks can read it — a deed
+   *  described as GST-inclusive, for instance. */
+  notes?: string | null;
   buyers: Form141Buyer[];
   sellers: Form141Seller[];
   instalments: Form141Instalment[];
@@ -139,9 +177,16 @@ export interface Form141Row {
   amountLiable: number;
   datePaidOrCredited: string;
   dateOfDeduction: string;
+  /** Whether the certificate ACTUALLY governed this row's rate. A held-but-
+   *  expired or held-but-exhausted certificate reads false here while its
+   *  number still prints below, which is the honest pairing: the form should
+   *  not say a concessional rate was applied under a certificate that did not
+   *  cover the deduction. `rateBasis` says which it was. */
   section395Applicable: boolean;
   section395CertificateNo: string | null;
   ratePct: number;
+  /** WHY this rate, so a panel can explain a 20% row without re-deriving it. */
+  rateBasis: RateBasis;
   tdsAmount: number;
 }
 
@@ -236,10 +281,51 @@ export function evaluateThreshold(deal: Form141Deal): ThresholdResult {
 // ─── Rate ───────────────────────────────────────────────────────────────────
 
 /**
+ * Why a row carries the rate it carries.
+ *
+ * The three `certificate_*` values all resolve to the STANDARD rate — they
+ * record a certificate that was held but did not govern this deduction, which
+ * is the difference the deductee will ask about and the difference the
+ * validation layer turns into a finding. Collapsing them into "standard"
+ * would lose exactly the fact worth reporting.
+ */
+export type RateBasis =
+  | "no_pan"
+  | "inoperative_pan"
+  | "section_395"
+  | "certificate_rate_missing"
+  | "certificate_expired"
+  | "certificate_exhausted"
+  | "standard";
+
+/** Everything about the moment of deduction that can change the rate. All
+ *  optional: called with no context, resolveRate answers the timeless part of
+ *  the question, which is what the deal-level checks want. */
+export interface RateContext {
+  /** Tested against the certificate's validity window. */
+  dateOfDeduction?: string;
+  /** Amount already covered by this certificate on earlier instalments. */
+  alreadyCovered?: number;
+  /** Amount this instalment would put through it. */
+  amountLiable?: number;
+}
+
+export interface RateResolution {
+  ratePct: number;
+  basis: RateBasis;
+  /** A certificate number was supplied with no rate. */
+  certificateRateMissing: boolean;
+  /** The deduction falls outside the certificate's validity window. */
+  certificateExpired: boolean;
+  /** This instalment would take the certificate past the amount it covers. */
+  certificateCeilingExceeded: boolean;
+}
+
+/**
  * Rate for one seller, in priority order:
- *   1. No PAN                    → 20%
- *   2. Valid s.395(1) certificate → the rate it permits
- *   3. Otherwise                  → 1%
+ *   1. No PAN, or a PAN that is inoperative → 20%
+ *   2. Valid s.395(1) certificate            → the rate it permits
+ *   3. Otherwise                             → 1%
  *
  * A certificate NUMBER without a rate does not silently fall through to 1% —
  * it returns 1% but flags `certificateRateMissing`, which form141Validate.ts
@@ -247,22 +333,67 @@ export function evaluateThreshold(deal: Form141Deal): ThresholdResult {
  * otherwise over-deducts the seller's money; deducting at a rate nobody
  * supplied under-deducts the government's. Neither is a default worth
  * guessing.
+ *
+ * A certificate is not a standing concession, and the two ways it stops
+ * applying are the ones firms actually get caught by:
+ *
+ *   • it EXPIRES — it authorises deductions made inside its own window, so a
+ *     later instalment on the same deal is back at the standard rate;
+ *   • it is EXHAUSTED — it covers an amount, and tax on anything past that
+ *     ceiling is due at the standard rate.
+ *
+ * In both cases the rate falls back to the standard one rather than the
+ * concessional one, and the caller is told which happened so it can say so.
+ * Falling back UP is the safe direction: over-deducting is the seller's
+ * refund claim, under-deducting is the buyer's demand.
+ *
+ * The ceiling is applied per instalment rather than split mid-instalment: the
+ * form carries one rate per deductee row, so an instalment that would breach
+ * the ceiling goes through wholly at the standard rate. That over-deducts
+ * slightly on the breaching instalment, in the safe direction, and the
+ * finding tells the user exactly that.
  */
-export function resolveRate(seller: Form141Seller): {
-  ratePct: number;
-  basis: "no_pan" | "section_395" | "standard";
-  certificateRateMissing: boolean;
-} {
-  if (!seller.pan) {
-    return { ratePct: RATE_NO_PAN, basis: "no_pan", certificateRateMissing: false };
+export function resolveRate(seller: Form141Seller, ctx: RateContext = {}): RateResolution {
+  const clean: RateResolution = {
+    ratePct: RATE_STANDARD,
+    basis: "standard",
+    certificateRateMissing: false,
+    certificateExpired: false,
+    certificateCeilingExceeded: false,
+  };
+
+  if (!seller.pan) return { ...clean, ratePct: RATE_NO_PAN, basis: "no_pan" };
+
+  // An inoperative PAN is treated exactly as an absent one. "unknown" is NOT
+  // — it means nobody has checked, which the validation layer reports rather
+  // than silently pricing at either rate.
+  if (seller.panStatus && PAN_STATUSES_AT_HIGHER_RATE.includes(seller.panStatus)) {
+    return { ...clean, ratePct: RATE_NO_PAN, basis: "inoperative_pan" };
   }
-  if (seller.section395CertificateNo) {
-    if (seller.section395Rate === null || seller.section395Rate === undefined) {
-      return { ratePct: RATE_STANDARD, basis: "standard", certificateRateMissing: true };
+
+  if (!seller.section395CertificateNo) return clean;
+
+  if (seller.section395Rate === null || seller.section395Rate === undefined) {
+    return { ...clean, basis: "certificate_rate_missing", certificateRateMissing: true };
+  }
+
+  const on = ctx.dateOfDeduction;
+  const expired = Boolean(
+    on &&
+      ((seller.section395ValidFrom && on < seller.section395ValidFrom) ||
+        (seller.section395ValidTo && on > seller.section395ValidTo)),
+  );
+  if (expired) return { ...clean, basis: "certificate_expired", certificateExpired: true };
+
+  const ceiling = seller.section395CeilingAmount;
+  if (ceiling !== null && ceiling !== undefined && ceiling > 0) {
+    const wouldCover = (ctx.alreadyCovered || 0) + (ctx.amountLiable || 0);
+    if (wouldCover > ceiling + 1) {
+      return { ...clean, basis: "certificate_exhausted", certificateCeilingExceeded: true };
     }
-    return { ratePct: seller.section395Rate, basis: "section_395", certificateRateMissing: false };
   }
-  return { ratePct: RATE_STANDARD, basis: "standard", certificateRateMissing: false };
+
+  return { ...clean, ratePct: seller.section395Rate, basis: "section_395" };
 }
 
 // ─── Taxable base ───────────────────────────────────────────────────────────
@@ -416,12 +547,27 @@ export function computeForm141ScheduleB(
   }
 
   const buyerShare = pct(buyer.sharePct);
-  const ordered = [...deal.instalments].sort((a, b) => a.seq - b.seq);
+
+  // Ordered by WHEN THE MONEY MOVED, not by the sequence number the user
+  // happened to type. "Previous instalments" is a statement of historical
+  // fact — what had already been paid to this seller when this payment was
+  // made — and a payment remembered late and entered as instalment 4 was
+  // still, in fact, the first one. Ordering by seq would report it as the
+  // last, overstating the earlier statements' carry-forward and understating
+  // its own. The seq is the tie-breaker, so same-day payments keep the order
+  // the user gave them.
+  const ordered = [...deal.instalments].sort(
+    (a, b) => a.datePaidOrCredited.localeCompare(b.datePaidOrCredited) || a.seq - b.seq,
+  );
 
   // Cumulative amount already paid to each seller, carried across instalments
   // — and across tax years, since a schedule straddling 31 March is ordinary
   // and each instalment is simply its own statement under its own month.
   const paidSoFar = new Map<string, number>();
+  // Cumulative amount already put through each seller's s.395(1) certificate,
+  // for the ceiling test. Tracked separately from paidSoFar because only the
+  // instalments the certificate ACTUALLY covered count against it.
+  const coveredByCertificate = new Map<string, number>();
   const sellerKey = (s: Form141Seller) => s.pan || s.name;
 
   const statements: Form141Statement[] = ordered.map((inst) => {
@@ -447,7 +593,13 @@ export function computeForm141ScheduleB(
         deal.totalStampDutyValue,
       );
 
-      const { ratePct } = resolveRate(seller);
+      const covered = coveredByCertificate.get(key) || 0;
+      const { ratePct, basis } = resolveRate(seller, {
+        dateOfDeduction: inst.dateOfDeduction,
+        alreadyCovered: covered,
+        amountLiable,
+      });
+      if (basis === "section_395") coveredByCertificate.set(key, covered + amountLiable);
       const tdsAmount = rupees(amountLiable * (ratePct / 100));
 
       return {
@@ -459,9 +611,10 @@ export function computeForm141ScheduleB(
         amountLiable: rupees(amountLiable),
         datePaidOrCredited: inst.datePaidOrCredited,
         dateOfDeduction: inst.dateOfDeduction,
-        section395Applicable: Boolean(seller.section395CertificateNo),
+        section395Applicable: basis === "section_395",
         section395CertificateNo: seller.section395CertificateNo || null,
         ratePct,
+        rateBasis: basis,
         tdsAmount,
       };
     });

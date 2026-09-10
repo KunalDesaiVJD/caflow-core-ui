@@ -485,14 +485,62 @@ export function challanFilingUpdate(fields: ChallanFields): Record<string, unkno
   };
 }
 
-/** Derive the period a challan belongs to, for attaching it to the right
- *  instalment when several are outstanding. */
-export function challanPeriod(fields: ChallanFields): { taxYear: string | null; month: string | null } {
+export interface ChallanPeriod {
+  taxYear: string | null;
+  /** Month of Deduction as the document STATES it. Null when the document
+   *  does not state it — never guessed from the deposit date. */
+  month: string | null;
+  /** True when the tax year had to be derived rather than read. */
+  inferred: boolean;
+}
+
+/**
+ * Derive the period a challan belongs to, for attaching it to the right
+ * instalment when several are outstanding.
+ *
+ * The month is taken from the document or not at all. Tax deducted on 28
+ * September and deposited on 3 October belongs to Sep-2026 — the deposit date
+ * says nothing about the month of DEDUCTION, and the two fall in different
+ * months on a large share of real filings. Deriving one from the other used
+ * to look harmless because a wrong month usually matched nothing; the case
+ * that is not harmless is a deal with a statement in the deposit month too,
+ * where the challan silently attached to the wrong payment and carried its
+ * acknowledgement number onto someone else's statement.
+ *
+ * So an unstated month stays null and the caller resolves it against the
+ * statements it actually has — which it can do safely, because it knows how
+ * many are outstanding. The tax year is still derived from the deposit date:
+ * it is a far coarser bucket, and a deposit is always in the same tax year as
+ * its deduction or the one after, which the caller's candidate check catches.
+ */
+export function challanPeriod(fields: ChallanFields): ChallanPeriod {
   if (fields.taxYear || fields.monthOfDeduction) {
-    return { taxYear: fields.taxYear, month: fields.monthOfDeduction };
+    return { taxYear: fields.taxYear, month: fields.monthOfDeduction, inferred: false };
   }
   if (fields.dateOfDeposit) {
-    return { taxYear: taxYearForDate(fields.dateOfDeposit), month: monthOfDeduction(fields.dateOfDeposit) };
+    return { taxYear: taxYearForDate(fields.dateOfDeposit), month: null, inferred: true };
   }
-  return { taxYear: null, month: null };
+  return { taxYear: null, month: null, inferred: true };
+}
+
+/**
+ * Which computed statement this challan belongs to.
+ *
+ * With a stated month it is an exact match and there is nothing to decide.
+ * Without one, the only safe answer is "the one candidate, if there is
+ * exactly one" — a challan whose period the document does not state, on a
+ * deal with several statements in the same tax year, is genuinely ambiguous,
+ * and attaching it to a guess would write a government acknowledgement number
+ * onto the wrong payment. Returning null makes the UI say so instead.
+ */
+export function matchChallanToStatement<T extends { taxYear: string; month: string }>(
+  statements: T[],
+  period: ChallanPeriod | null,
+): T | null {
+  if (!period?.taxYear) return null;
+  if (period.month) {
+    return statements.find((s) => s.taxYear === period.taxYear && s.month === period.month) ?? null;
+  }
+  const candidates = statements.filter((s) => s.taxYear === period.taxYear);
+  return candidates.length === 1 ? candidates[0] : null;
 }

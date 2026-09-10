@@ -229,6 +229,34 @@ const pad2 = (n: number) => String(n).padStart(2, "0");
 const toIso = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 
 /**
+ * Today, in India.
+ *
+ * `new Date().toISOString().slice(0, 10)` is UTC, and IST runs 5½ hours ahead
+ * of it — so between midnight and 05:30 IST that expression returns
+ * YESTERDAY. Every consequence of that is silent and wrong in the same
+ * direction: a deduction dated a day early, a statement not yet reported as
+ * overdue on the morning it fell due, and — for six hours every 1 April — the
+ * previous Tax Year offered as the default.
+ *
+ * A CA firm working at 4 a.m. in filing season is not a hypothetical, so the
+ * whole module reads its "today" from here rather than from the host clock's
+ * timezone, which on a server is UTC and on a laptop is whatever the traveller
+ * last set.
+ */
+export const INDIA_TIME_ZONE = "Asia/Kolkata";
+
+export function todayInIndia(now: Date = new Date()): string {
+  // en-CA formats as YYYY-MM-DD, which is already the wire format used
+  // everywhere else in this module.
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: INDIA_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+}
+
+/**
  * Tax Year containing a date, in "YYYY-YY" form ("2026-27").
  *
  * The Indian tax year runs 1 April → 31 March, so January–March belong to the

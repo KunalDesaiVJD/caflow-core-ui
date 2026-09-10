@@ -409,3 +409,180 @@ describe("date helpers", () => {
     expect(daysLate("2026-11-01", "2026-10-30")).toBe(0);
   });
 });
+
+/**
+ * ════════════════════════════════════════════════════════════════════════════
+ * The audit fixes
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+
+describe("an inoperative PAN carries the no-PAN rate", () => {
+  it("charges 20% on a PAN that exists but is not operative", () => {
+    const seller = RESIDENT_SELLER({ panStatus: "inoperative" });
+    const r = resolveRate(seller);
+    expect(r.ratePct).toBe(20);
+    expect(r.basis).toBe("inoperative_pan");
+  });
+
+  it("charges 20% on an invalid PAN too", () => {
+    expect(resolveRate(RESIDENT_SELLER({ panStatus: "invalid" })).ratePct).toBe(20);
+  });
+
+  it("leaves an operative PAN at the standard rate", () => {
+    const r = resolveRate(RESIDENT_SELLER({ panStatus: "operative" }));
+    expect(r.ratePct).toBe(1);
+    expect(r.basis).toBe("standard");
+  });
+
+  it("does NOT treat 'unknown' as inoperative — it is unchecked, not bad", () => {
+    // Pricing an unchecked PAN at 20% would over-deduct on every ordinary
+    // deal. The validation layer reports it instead.
+    expect(resolveRate(RESIDENT_SELLER({ panStatus: "unknown" })).ratePct).toBe(1);
+    expect(resolveRate(RESIDENT_SELLER({})).ratePct).toBe(1);
+  });
+
+  it("carries the higher rate all the way through to the computed tax", () => {
+    const deal: Form141Deal = {
+      ...SAMPLE_DEAL,
+      sellers: [RESIDENT_SELLER({ pan: "ANRPP0000R", name: "Inoperative", sharePct: 100, panStatus: "inoperative" })],
+    };
+    const out = computeForm141ScheduleB(deal, FILING_BUYER);
+    const row = out.statements[0].rows[0];
+    // Buyer's 50% of ₹2,56,00,000 = ₹1,28,00,000, at 20% rather than 1%.
+    expect(row.amountLiable).toBe(12800000);
+    expect(row.ratePct).toBe(20);
+    expect(row.rateBasis).toBe("inoperative_pan");
+    expect(row.tdsAmount).toBe(2560000);
+  });
+});
+
+describe("a section 395(1) certificate is not a standing concession", () => {
+  const CERTIFIED = (over: Partial<Form141Seller> = {}) =>
+    RESIDENT_SELLER({
+      pan: "ANRPP0000R",
+      name: "Certified Seller",
+      sharePct: 100,
+      section395CertificateNo: "CERT/2026/001",
+      section395Rate: 0.1,
+      ...over,
+    });
+
+  it("applies the certificate rate inside the validity window", () => {
+    const r = resolveRate(
+      CERTIFIED({ section395ValidFrom: "2026-04-01", section395ValidTo: "2027-03-31" }),
+      { dateOfDeduction: "2026-09-02" },
+    );
+    expect(r.ratePct).toBe(0.1);
+    expect(r.basis).toBe("section_395");
+  });
+
+  it("reverts to the standard rate for a deduction after the certificate expires", () => {
+    const r = resolveRate(
+      CERTIFIED({ section395ValidFrom: "2026-04-01", section395ValidTo: "2026-08-31" }),
+      { dateOfDeduction: "2026-09-02" },
+    );
+    expect(r.ratePct).toBe(1);
+    expect(r.basis).toBe("certificate_expired");
+    expect(r.certificateExpired).toBe(true);
+  });
+
+  it("reverts for a deduction BEFORE the certificate takes effect", () => {
+    const r = resolveRate(
+      CERTIFIED({ section395ValidFrom: "2026-10-01", section395ValidTo: "2027-03-31" }),
+      { dateOfDeduction: "2026-09-02" },
+    );
+    expect(r.basis).toBe("certificate_expired");
+  });
+
+  it("reverts once the amount the certificate covers is used up", () => {
+    const r = resolveRate(CERTIFIED({ section395CeilingAmount: 10000000 }), {
+      dateOfDeduction: "2026-09-02",
+      alreadyCovered: 9000000,
+      amountLiable: 2000000,
+    });
+    expect(r.ratePct).toBe(1);
+    expect(r.basis).toBe("certificate_exhausted");
+    expect(r.certificateCeilingExceeded).toBe(true);
+  });
+
+  it("stays on the certificate rate right up to the ceiling", () => {
+    const r = resolveRate(CERTIFIED({ section395CeilingAmount: 10000000 }), {
+      dateOfDeduction: "2026-09-02",
+      alreadyCovered: 8000000,
+      amountLiable: 2000000,
+    });
+    expect(r.basis).toBe("section_395");
+  });
+
+  it("exhausts the ceiling across instalments, not within one", () => {
+    // ₹1,28,00,000 of the buyer's obligation, paid in two equal halves,
+    // against a certificate covering ₹70,00,000. The first instalment
+    // (₹64,00,000) fits; the second would take it to ₹1,28,00,000, so it
+    // goes through wholly at the standard rate.
+    const deal: Form141Deal = {
+      ...SAMPLE_DEAL,
+      paymentMode: "instalments",
+      sellers: [CERTIFIED({ section395CeilingAmount: 7000000 })],
+      instalments: [
+        { seq: 1, amountPaidByBuyer: 6400000, datePaidOrCredited: "2026-09-02", dateOfDeduction: "2026-09-02", dateOfDeposit: "2026-09-02", dateOfFiling: "2026-09-02" },
+        { seq: 2, amountPaidByBuyer: 6400000, datePaidOrCredited: "2026-10-02", dateOfDeduction: "2026-10-02", dateOfDeposit: "2026-10-02", dateOfFiling: "2026-10-02" },
+      ],
+    };
+    const out = computeForm141ScheduleB(deal, FILING_BUYER);
+    expect(out.statements[0].rows[0].rateBasis).toBe("section_395");
+    expect(out.statements[0].rows[0].ratePct).toBe(0.1);
+    expect(out.statements[1].rows[0].rateBasis).toBe("certificate_exhausted");
+    expect(out.statements[1].rows[0].ratePct).toBe(1);
+  });
+
+  it("reports the certificate as not applied when it did not govern the rate", () => {
+    const deal: Form141Deal = {
+      ...SAMPLE_DEAL,
+      sellers: [CERTIFIED({ section395ValidFrom: "2026-04-01", section395ValidTo: "2026-08-31" })],
+    };
+    const row = computeForm141ScheduleB(deal, FILING_BUYER).statements[0].rows[0];
+    expect(row.section395Applicable).toBe(false);
+    // The number still prints — it was held, it just did not cover this.
+    expect(row.section395CertificateNo).toBe("CERT/2026/001");
+  });
+});
+
+describe("previous instalments follow the money, not the sequence number", () => {
+  /** A forgotten earlier payment, entered last — which is how it happens. */
+  const BACK_ENTERED: Form141Deal = {
+    ...SAMPLE_DEAL,
+    paymentMode: "instalments",
+    sellers: [RESIDENT_SELLER({ pan: "ANRPP0000R", name: "Only Seller", sharePct: 100 })],
+    instalments: [
+      { seq: 1, amountPaidByBuyer: 5000000, datePaidOrCredited: "2026-08-01", dateOfDeduction: "2026-08-01", dateOfDeposit: null, dateOfFiling: null },
+      { seq: 2, amountPaidByBuyer: 3000000, datePaidOrCredited: "2026-06-01", dateOfDeduction: "2026-06-01", dateOfDeposit: null, dateOfFiling: null },
+    ],
+  };
+
+  it("orders the statements by payment date", () => {
+    const out = computeForm141ScheduleB(BACK_ENTERED, FILING_BUYER);
+    expect(out.statements.map((s) => s.instalmentSeq)).toEqual([2, 1]);
+    expect(out.statements.map((s) => s.month)).toEqual(["Jun-2026", "Aug-2026"]);
+  });
+
+  it("carries forward what had actually been paid by that date", () => {
+    const out = computeForm141ScheduleB(BACK_ENTERED, FILING_BUYER);
+    const june = out.statements.find((s) => s.instalmentSeq === 2)!;
+    const august = out.statements.find((s) => s.instalmentSeq === 1)!;
+
+    // June came first in fact, so nothing preceded it.
+    expect(june.rows[0].previousInstalments).toBe(0);
+    // By August, the June payment of ₹30,00,000 had been made. Ordering by
+    // seq would have reported ₹0 here and ₹50,00,000 against June — both
+    // statements wrong, in opposite directions.
+    expect(august.rows[0].previousInstalments).toBe(3000000);
+  });
+
+  it("keeps the entered order for payments made the same day", () => {
+    const sameDay: Form141Deal = {
+      ...BACK_ENTERED,
+      instalments: BACK_ENTERED.instalments.map((i) => ({ ...i, datePaidOrCredited: "2026-07-01", dateOfDeduction: "2026-07-01" })),
+    };
+    expect(computeForm141ScheduleB(sameDay, FILING_BUYER).statements.map((s) => s.instalmentSeq)).toEqual([1, 2]);
+  });
+});

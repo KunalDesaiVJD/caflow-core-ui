@@ -38,14 +38,19 @@ import {
   FORM_141_DISCLAIMER,
   SCHEDULE_B,
   resolveForm141Period,
+  todayInIndia,
+  RATE_STANDARD,
 } from "@/lib/tds/form141";
 import {
   toForm141Deal,
   formatInr,
   num,
+  resolveFilingBuyerPan,
+  dbSaveBlockers,
   type PropertyDealBundle,
   type PropertyPartyRow,
   type PropertyInstalmentRow,
+  type PropertyTxnStatus,
 } from "./propertyDeal";
 import { TdsPropertyUpload, type StoredDocument } from "./TdsPropertyUpload";
 import { TdsPropertyChallan } from "./TdsPropertyChallan";
@@ -61,7 +66,10 @@ import {
 interface Props {
   bundle: PropertyDealBundle;
   onChange: (next: PropertyDealBundle) => void;
-  onSave: () => void;
+  /** Saves the transaction. A status may be supplied to move it on at the
+   *  same time — the editor never mutates status and then saves, because the
+   *  parent holds the bundle and the write would race the state update. */
+  onSave: (status?: PropertyTxnStatus) => void;
   onCancel: () => void;
   saving?: boolean;
   /** PAN of the client whose file this is, cross-checked against the buyers. */
@@ -102,12 +110,16 @@ const blankParty = (
   email: null,
   share_pct: 0,
   residential_status: "resident",
+  pan_status: "unknown",
   section_395_certificate_no: null,
   section_395_rate: null,
+  section_395_valid_from: null,
+  section_395_valid_to: null,
+  section_395_ceiling_amount: null,
 });
 
 const blankInstalment = (seq: number, firmId: string, txnId: string): PropertyInstalmentRow => {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayInIndia();
   return {
     id: `new-inst-${seq}-${Math.random().toString(36).slice(2, 8)}`,
     firm_id: firmId,
@@ -162,7 +174,7 @@ export function TdsPropertyEditor({
 
   // ── The engine, live ─────────────────────────────────────────────────────
   const deal = useMemo(() => toForm141Deal(bundle), [bundle]);
-  const filingPan = t.filing_buyer_pan || buyers[0]?.pan || "";
+  const filingPan = resolveFilingBuyerPan(bundle);
   const result = useMemo(
     () => validateForm141(deal, filingPan, { selectedClientPan }),
     [deal, filingPan, selectedClientPan],
@@ -244,7 +256,21 @@ export function TdsPropertyEditor({
     onAttachChallan(seq, fields);
   };
 
-  const canSave = Boolean(t.property_address.trim()) && !saving;
+  /**
+   * Two gates, deliberately different.
+   *
+   * `saveBlockers` is what the DATABASE will refuse — the positive-number
+   * CHECK constraints on consideration, share and instalment amount. Hitting
+   * one used to surface a raw Postgres constraint name in a toast, because
+   * the button only ever checked the address. A part-built draft must still
+   * save, so this list is as short as the constraints and no shorter.
+   *
+   * `blockingCount` is what the STATUTE will refuse. That never stops a
+   * draft being saved — it stops the deal being marked ready to file.
+   */
+  const saveBlockers = useMemo(() => dbSaveBlockers(bundle), [bundle]);
+  const canSave = saveBlockers.length === 0 && !saving;
+  const canMarkReady = canSave && blockingCount === 0 && t.status !== "filed";
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
@@ -281,6 +307,17 @@ export function TdsPropertyEditor({
                   onChange={(e) => patchTxn({ date_of_agreement: e.target.value })}
                 />
               </div>
+              <div className="space-y-1.5">
+                <Label>Date of registration</Label>
+                <Input
+                  type="date"
+                  value={t.date_of_registration || ""}
+                  onChange={(e) => patchTxn({ date_of_registration: e.target.value || null })}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Only if it differs from the agreement date — it decides which circle rate applies.
+                </p>
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label>Address of property transferred / to be transferred</Label>
@@ -307,6 +344,18 @@ export function TdsPropertyEditor({
                   placeholder="Usually on Index-II"
                   onChange={(e) => patchTxn({ total_stamp_duty_value: e.target.value === "" ? null : Number(e.target.value) })}
                 />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Stamp duty value as at</Label>
+                <Input
+                  type="date"
+                  value={t.stamp_duty_value_as_on || ""}
+                  onChange={(e) => patchTxn({ stamp_duty_value_as_on: e.target.value || null })}
+                />
+                <p className="text-[11px] text-muted-foreground">
+                  Index-II carries the registration-date value. Where part-consideration moved by
+                  banking channel on or before the agreement date, the agreement-date value governs.
+                </p>
               </div>
               <div className="space-y-1.5">
                 <Label>Payment</Label>
@@ -437,6 +486,23 @@ export function TdsPropertyEditor({
                       </SelectContent>
                     </Select>
                   </div>
+                  {/* An inoperative PAN carries 20%, not 1% — and nothing on
+                      the deed reveals it. Sits beside the PAN it qualifies. */}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">PAN status</Label>
+                    <Select
+                      value={s.pan_status || "unknown"}
+                      onValueChange={(v: PropertyPartyRow["pan_status"]) => patchParty(s.id, { pan_status: v })}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unknown">Not checked</SelectItem>
+                        <SelectItem value="operative">Operative</SelectItem>
+                        <SelectItem value="inoperative">Inoperative → 20%</SelectItem>
+                        <SelectItem value="invalid">Invalid → 20%</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <div className="space-y-1.5">
                     <Label className="text-xs">Contact</Label>
                     <Input value={s.contact || ""} onChange={(e) => patchParty(s.id, { contact: e.target.value || null })} />
@@ -445,23 +511,62 @@ export function TdsPropertyEditor({
                     <Label className="text-xs">Email</Label>
                     <Input value={s.email || ""} onChange={(e) => patchParty(s.id, { email: e.target.value || null })} />
                   </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">s.395(1) cert.</Label>
-                      <Input
-                        value={s.section_395_certificate_no || ""}
-                        onChange={(e) => patchParty(s.id, { section_395_certificate_no: e.target.value || null })}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">Cert. rate %</Label>
-                      <Input
-                        type="number" step="0.01"
-                        value={s.section_395_rate === null ? "" : String(s.section_395_rate)}
-                        onChange={(e) => patchParty(s.id, { section_395_rate: e.target.value === "" ? null : Number(e.target.value) })}
-                      />
-                    </div>
+                </div>
+
+                {/* Lower-deduction certificate. The window and the ceiling
+                    appear once there is a certificate to qualify — a
+                    certificate is not a standing concession, and without them
+                    the concessional rate runs on past its expiry and past the
+                    amount it covers. */}
+                <div className="grid gap-3 sm:grid-cols-4">
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">s.395(1) cert.</Label>
+                    <Input
+                      placeholder="If held"
+                      value={s.section_395_certificate_no || ""}
+                      onChange={(e) => patchParty(s.id, { section_395_certificate_no: e.target.value || null })}
+                    />
                   </div>
+                  {s.section_395_certificate_no && (
+                    <>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Cert. rate %</Label>
+                        <Input
+                          type="number" step="0.01"
+                          value={s.section_395_rate === null ? "" : String(s.section_395_rate)}
+                          onChange={(e) => patchParty(s.id, { section_395_rate: e.target.value === "" ? null : Number(e.target.value) })}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Valid from</Label>
+                        <Input
+                          type="date"
+                          value={s.section_395_valid_from || ""}
+                          onChange={(e) => patchParty(s.id, { section_395_valid_from: e.target.value || null })}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Valid to</Label>
+                        <Input
+                          type="date"
+                          value={s.section_395_valid_to || ""}
+                          onChange={(e) => patchParty(s.id, { section_395_valid_to: e.target.value || null })}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Amount covered</Label>
+                        <Input
+                          type="number" inputMode="numeric"
+                          placeholder="Ceiling on the certificate"
+                          value={s.section_395_ceiling_amount === null ? "" : String(s.section_395_ceiling_amount)}
+                          onChange={(e) => patchParty(s.id, { section_395_ceiling_amount: e.target.value === "" ? null : Number(e.target.value) })}
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                          Tax beyond this reverts to {RATE_STANDARD}%.
+                        </p>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             ))}
@@ -485,7 +590,7 @@ export function TdsPropertyEditor({
                 <Plus size={14} className="mr-1" /> Add payment
               </Button>
             </div>
-            {bundle.instalments.sort((a, b) => a.seq - b.seq).map((i) => (
+            {[...bundle.instalments].sort((a, b) => a.seq - b.seq).map((i) => (
               <div key={i.id} className="grid gap-3 sm:grid-cols-[140px_1fr_1fr_1fr_auto] items-end border-t pt-3">
                 <div className="space-y-1.5">
                   <Label className="text-xs">Amount</Label>
@@ -536,16 +641,41 @@ export function TdsPropertyEditor({
           attached={attachedChallans}
         />
 
-        <div className="flex items-center gap-2">
-          <Button onClick={onSave} disabled={!canSave}>
-            {saving && <Loader2 size={14} className="mr-1.5 animate-spin" />}
-            Save transaction
-          </Button>
-          <Button variant="ghost" onClick={onCancel} disabled={saving}>Cancel</Button>
-          {blockingCount > 0 && (
-            <span className="text-xs text-muted-foreground">
-              Saving is allowed with findings open — filing is not.
-            </span>
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button onClick={() => onSave()} disabled={!canSave}>
+              {saving && <Loader2 size={14} className="mr-1.5 animate-spin" />}
+              Save draft
+            </Button>
+            <Button variant="secondary" onClick={() => onSave("ready")} disabled={!canMarkReady}>
+              {saving && <Loader2 size={14} className="mr-1.5 animate-spin" />}
+              Mark ready to file
+            </Button>
+            <Button variant="ghost" onClick={onCancel} disabled={saving}>Cancel</Button>
+          </div>
+
+          {saveBlockers.length > 0 && (
+            <div className="rounded-md border border-amber-300/60 bg-amber-50 dark:bg-amber-900/15 px-3 py-2">
+              <p className="text-xs font-medium text-amber-900 dark:text-amber-200 mb-1">
+                Before this can be saved:
+              </p>
+              <ul className="text-xs text-amber-800 dark:text-amber-300 space-y-0.5 list-disc pl-4">
+                {saveBlockers.map((r) => <li key={r}>{r}</li>)}
+              </ul>
+            </div>
+          )}
+
+          {saveBlockers.length === 0 && blockingCount > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {blockingCount} blocking finding{blockingCount === 1 ? "" : "s"} — the draft saves, but the
+              transaction cannot be marked ready to file until they are cleared.
+            </p>
+          )}
+
+          {canMarkReady && t.status === "draft" && (
+            <p className="text-xs text-muted-foreground">
+              Nothing is blocking this transaction. Marking it ready records that it has been checked.
+            </p>
           )}
         </div>
       </div>

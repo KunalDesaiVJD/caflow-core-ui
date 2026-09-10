@@ -30,6 +30,7 @@ import {
   mergeChallanDocuments,
   reconcileChallan,
   challanPeriod,
+  matchChallanToStatement,
   type ChallanFields,
   type MergedChallan,
 } from "@/lib/tds/form141Challan";
@@ -118,11 +119,12 @@ export function TdsPropertyChallan({ statements, filingBuyerPan, clientName, onA
   };
 
   // Which computed payment does this challan belong to? Matched on the
-  // period the document itself states, never on upload order.
+  // period the document itself states, never on upload order — and never on a
+  // month derived from the deposit date, which is a different month from the
+  // month of deduction often enough to matter. See matchChallanToStatement.
   const period = merged ? challanPeriod(merged.fields) : null;
-  const target = merged
-    ? statements.find((s) => s.taxYear === period?.taxYear && s.month === period?.month) ?? null
-    : null;
+  const target = merged ? matchChallanToStatement(statements, period) : null;
+  const ambiguousPeriod = Boolean(merged && !target && period?.taxYear && !period.month);
 
   const findings: Form141Finding[] = merged && target
     ? reconcileChallan(merged.fields, target, { filingBuyerPan, clientName }, merged.conflicts)
@@ -195,7 +197,16 @@ export function TdsPropertyChallan({ statements, filingBuyerPan, clientName, onA
               ))}
             </dl>
 
-            {!target && period && (
+            {ambiguousPeriod && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                This challan does not state its Month of Deduction, and more than one payment above falls in{" "}
+                {period?.taxYear}. It is not attached automatically, because the deposit date does not say which
+                month the tax was deducted in — record the deposit date against the right payment above, then
+                upload the challan again.
+              </p>
+            )}
+
+            {!target && !ambiguousPeriod && period && (
               <p className="text-xs text-amber-700 dark:text-amber-400">
                 This challan is for {period.month || "an unstated period"} in {period.taxYear || "an unstated Tax Year"},
                 which does not match any payment recorded above. Check the payment dates, or that the right challan
