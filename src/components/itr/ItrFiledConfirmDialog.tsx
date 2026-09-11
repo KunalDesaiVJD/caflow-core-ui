@@ -1,17 +1,19 @@
 /**
  * ItrFiledConfirmDialog
  *
- * Gates the "Filed" (and "Sent to CPC") status transition for Audited
- * clients in IT Returns. Nothing is saved to the row until all four are
- * present together:
- *  1. ITR Form — PDF only, rejected client-side otherwise
- *  2. Computation of Income — PDF only, rejected client-side otherwise
- *  3. Acknowledgement Number — AI-read off the ITR Form, always editable
+ * Gates the "Filed" (and "Sent to CPC") status transition for every IT
+ * Returns sub-tab except Non-ITR. Nothing is saved to the row until all
+ * four are present together:
+ *  1. ITR Acknowledgement (ITR-V) — PDF only, rejected client-side otherwise
+ *  2. Computation of Income — PDF or Word, rejected client-side otherwise
+ *  3. Acknowledgement Number — AI-read off the Acknowledgement, always editable
  *  4. Filed By — defaults to the logged-in user, always editable
  *
  * Mirrors src/components/audit-tracker/audit-status/UploadConfirmDialog.tsx.
  * Re-openable afterward (existing files/ack-no/name prefill) so a mistake
- * can be corrected later.
+ * can be corrected later. Internally the upload `kind` stays "itr_form"
+ * (DB/storage identifier, invisible to the user) — only the user-facing
+ * label changed to match what auditors actually call this document.
  */
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -170,7 +172,7 @@ export default function ItrFiledConfirmDialog({
     setItrFormTypeError(null);
     if (!file) return;
     if (!isPdf(file)) {
-      setItrFormTypeError("Only PDF files are allowed for the ITR Form.");
+      setItrFormTypeError("Only PDF files are allowed for the ITR Acknowledgement.");
       setItrFormFile(null);
       return;
     }
@@ -220,7 +222,7 @@ export default function ItrFiledConfirmDialog({
           itrProfileId: realId, firmId: resolvedFirmId, kind: "itr_form",
           file: itrFormFile, userId: currentUserId, userName: currentUserName,
         });
-        if (r.error) throw new Error(`ITR Form upload failed: ${r.error}`);
+        if (r.error) throw new Error(`ITR Acknowledgement upload failed: ${r.error}`);
       }
       if (computationFile) {
         const r = await storeItrUpload({
@@ -254,7 +256,7 @@ export default function ItrFiledConfirmDialog({
         ) : (
           <div className="space-y-4">
             <FilePickerRow
-              label="ITR Form"
+              label="ITR Acknowledgement"
               icon={<FileText size={13} className="text-slate-500" />}
               existing={existing.itr_form}
               picked={itrFormFile}
@@ -277,7 +279,7 @@ export default function ItrFiledConfirmDialog({
 
             <div className="space-y-1.5">
               <Label className="text-xs font-medium">
-                Acknowledgement Number {ackChecking && <span className="text-indigo-500 font-normal">(reading from ITR Form…)</span>}
+                Acknowledgement Number {ackChecking && <span className="text-indigo-500 font-normal">(reading from ITR Acknowledgement…)</span>}
               </Label>
               <Input
                 value={ackNo}
