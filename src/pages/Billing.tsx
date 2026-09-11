@@ -131,6 +131,7 @@ function DocumentFilterBar({
   search, setSearch, statusFilter, setStatusFilter,
   firmFilter, setFirmFilter, groupFilter, setGroupFilter,
   responsibleFilter, setResponsibleFilter, multiFirmFilter, setMultiFirmFilter,
+  fromDate, setFromDate, toDate, setToDate,
   firms, groups, responsiblePersons,
   statusOptions,
 }: {
@@ -140,6 +141,8 @@ function DocumentFilterBar({
   groupFilter: string; setGroupFilter: (v: string) => void;
   responsibleFilter: string; setResponsibleFilter: (v: string) => void;
   multiFirmFilter: string[]; setMultiFirmFilter: (v: string[]) => void;
+  fromDate: string; setFromDate: (v: string) => void;
+  toDate: string; setToDate: (v: string) => void;
   firms: { id: string; name: string }[];
   groups: { id: string; name: string }[];
   responsiblePersons: { id: string; name: string }[];
@@ -175,6 +178,14 @@ function DocumentFilterBar({
           {statusOptions.map(s => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
         </SelectContent>
       </Select>
+      <div className="space-y-1">
+        <Label className="text-xs text-muted-foreground">From</Label>
+        <Input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} className="w-36" />
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs text-muted-foreground">To</Label>
+        <Input type="date" value={toDate} onChange={e => setToDate(e.target.value)} className="w-36" />
+      </div>
       <Input placeholder="Search number, client, or firm..." value={search} onChange={e => setSearch(e.target.value)} className="w-[260px]" />
     </div>
   );
@@ -329,6 +340,8 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   const [groupFilter, setGroupFilter] = useState("all");
   const [responsibleFilter, setResponsibleFilter] = useState("all");
   const [multiFirmFilter, setMultiFirmFilter] = useState<string[]>([]);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
   const [viewBy, setViewBy] = useState<"all" | "responsible" | "group" | "firm" | "multifirm">("all");
   const [deleteId, setDeleteId] = useState<string | null>(null);
 
@@ -496,6 +509,8 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     if (groupFilter !== "all" && !groupClientIds.includes(inv.client_id || "")) return false;
     if (responsibleFilter !== "all" && !responsibleClientIds.includes(inv.client_id || "")) return false;
     if (multiFirmFilter.length > 0 && !multiFirmFilter.includes(inv.firm_id || "")) return false;
+    if (fromDate && (!inv.invoice_date || inv.invoice_date < fromDate)) return false;
+    if (toDate && (!inv.invoice_date || inv.invoice_date > toDate)) return false;
     if (search) {
       const s = search.toLowerCase();
       const cn = clientMap[inv.client_id || ""]?.name || "";
@@ -505,7 +520,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
         !fn.toLowerCase().includes(s)) return false;
     }
     return true;
-  }), [enriched, statusFilter, search, clientMap, firmMap, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds]);
+  }), [enriched, statusFilter, search, clientMap, firmMap, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds, fromDate, toDate]);
 
   // Grouped data for view modes
   const groupedInvoices = useMemo(() => {
@@ -1240,6 +1255,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
           groupFilter={groupFilter} setGroupFilter={setGroupFilter}
           responsibleFilter={responsibleFilter} setResponsibleFilter={setResponsibleFilter}
           multiFirmFilter={multiFirmFilter} setMultiFirmFilter={setMultiFirmFilter}
+          fromDate={fromDate} setFromDate={setFromDate} toDate={toDate} setToDate={setToDate}
           firms={firms} groups={groups} responsiblePersons={responsiblePersons}
           statusOptions={statusOptions}
         />
@@ -1411,9 +1427,13 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
             </TableBody>
           </Table>
         )}
-        {viewBy !== "all" && groupedInvoices && groupedInvoices.length > 1 && (
+        {filtered.length > 0 && (
           <div className="px-4 py-3 border-t bg-muted/30 flex justify-between items-center">
-            <span className="text-sm font-semibold text-foreground">Grand Total ({groupedInvoices.length} groups)</span>
+            <span className="text-sm font-semibold text-foreground">
+              {viewBy !== "all" && groupedInvoices && groupedInvoices.length > 1
+                ? `Grand Total (${groupedInvoices.length} groups)`
+                : `Total (${filtered.length} document${filtered.length !== 1 ? "s" : ""})`}
+            </span>
             <span className="text-base font-bold tabular-nums text-foreground">₹{filtered.reduce((s, i) => s + (i.total_amount || i.amount || 0), 0).toLocaleString("en-IN")}</span>
           </div>
         )}
