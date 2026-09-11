@@ -154,6 +154,35 @@ function StatusIcon({ status }: { status: string }) {
   return <Clock className="h-4 w-4 text-muted-foreground" />;
 }
 
+// ─── Zombie-state sweep ─────────────────────────────────────────────────────
+// A sync run that never reaches completed/failed (agent crashed, hung on a
+// Tally socket read with no timeout, PC slept, terminal closed) leaves
+// sync_batches stuck at "running"/"processing" and/or sync_requests stuck at
+// "pending" — only the desktop agent would normally flip those rows, and
+// it's gone. This must run every time we're about to ask "are we done yet?"
+// (mount AND each poll tick) — a sweep that only fires when a caller already
+// got a fresh non-terminal status back never gets invoked again once a batch
+// is truly stuck, so "Running" would otherwise persist until someone happens
+// to hard-reload the page.
+async function sweepStaleSyncState(engId: string) {
+  const tenMinAgo    = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+  const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  await Promise.all([
+    supabase
+      .from("sync_batches" as any)
+      .update({ status: "failed", completed_at: new Date().toISOString(), warnings: [{ message: "Auto-failed: no progress for 10 min (agent likely crashed)" }] })
+      .eq("engagement_id", engId)
+      .in("status", ["running", "processing"])
+      .lt("started_at", tenMinAgo),
+    supabase
+      .from("sync_requests" as any)
+      .update({ status: "failed" })
+      .eq("engagement_id", engId)
+      .eq("status", "pending")
+      .lt("requested_at", thirtyMinAgo),
+  ]);
+}
+
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface TallySyncPageProps {
@@ -324,16 +353,10 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
       return { data: all };
     }
 
-    // Clean zombie batches: anything still "running" with no update for 10 min
-    // is almost certainly a crashed agent. Without this the UI shows a stale
+    // Clean zombie batches/requests before reading them below — see
+    // sweepStaleSyncState(). Without this the UI can show a stale "Running" /
     // "Sync Queued…" pill forever.
-    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    await supabase
-      .from("sync_batches" as any)
-      .update({ status: "failed", completed_at: new Date().toISOString(), warnings: [{ message: "Auto-failed: no progress for 10 min (agent likely crashed)" }] })
-      .eq("engagement_id", engId)
-      .in("status", ["running", "processing"])
-      .lt("started_at", tenMinAgo);
+    await sweepStaleSyncState(engId);
 
     const [batchRes, grpRes, ledRes, tbRes, vchRes, grpData, ledData, tbData, vchData] = await Promise.all([
       supabase.from("sync_batches" as any).select("*").eq("engagement_id", engId).order("started_at", { ascending: false }).limit(20),
@@ -513,17 +536,33 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
     const latestId   = batches[0]?.id ?? null;
 
     const interval = setInterval(async () => {
-      const { data } = await supabase
-        .from("sync_batches" as any)
-        .select("id, status")
-        .eq("engagement_id", tallyEngId)
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      const newId     = (data as any)?.id;
-      const newStatus = (data as any)?.status;
-      const finished  = newStatus === "completed" || newStatus === "failed";
-      if ((isInFlight && finished) || (!isInFlight && newId && newId !== latestId)) {
+      // Sweep BEFORE reading status. A batch that's genuinely stuck never
+      // changes status on its own, so if the sweep only ran at mount, this
+      // tick would poll "running" forever and `finished` would never flip —
+      // the exact deadlock that let a crashed-agent batch sit at "Running"
+      // well past its 10-min timeout until someone hard-reloaded the page.
+      await sweepStaleSyncState(tallyEngId);
+
+      const [{ data: batchData }, { data: reqData }] = await Promise.all([
+        supabase
+          .from("sync_batches" as any)
+          .select("id, status")
+          .eq("engagement_id", tallyEngId)
+          .order("started_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
+        supabase
+          .from("sync_requests" as any)
+          .select("id")
+          .eq("engagement_id", tallyEngId)
+          .eq("status", "pending")
+          .limit(1),
+      ]);
+      const newId        = (batchData as any)?.id;
+      const newStatus    = (batchData as any)?.status;
+      const nowInFlight   = ((reqData as any[])?.length ?? 0) > 0 ||
+        newStatus === "running" || newStatus === "processing";
+      if (isInFlight !== nowInFlight || (!isInFlight && newId && newId !== latestId)) {
         await loadData();
       }
     }, intervalMs);
@@ -593,20 +632,8 @@ export default function TallySyncPage({ engagementOverride, hideHeader = false }
 
     setSyncing(true);
 
-    // Auto-fail stuck batches + stale requests older than 30 min before queuing a new one
-    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    await supabase
-      .from("sync_batches" as any)
-      .update({ status: "failed", completed_at: new Date().toISOString(), warnings: [{ message: "Auto-failed: stuck in running state over 30 min" }] })
-      .eq("engagement_id", tallyEngId)
-      .in("status", ["running", "processing"])
-      .lt("started_at", thirtyMinAgo);
-    await supabase
-      .from("sync_requests" as any)
-      .update({ status: "failed" })
-      .eq("engagement_id", tallyEngId)
-      .eq("status", "pending")
-      .lt("requested_at", thirtyMinAgo);
+    // Auto-fail stuck batches + stale requests before queuing a new one.
+    await sweepStaleSyncState(tallyEngId);
 
     const { error } = await supabase
       .from("sync_requests" as any)

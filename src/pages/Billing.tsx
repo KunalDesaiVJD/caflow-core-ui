@@ -26,7 +26,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter,
 } from "@/components/ui/table";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -1425,17 +1425,22 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
                 ))
               ) : filtered.map(inv => renderInvoiceRow(inv))}
             </TableBody>
+            {filtered.length > 0 && (
+              <TableFooter>
+                <TableRow>
+                  <TableCell colSpan={colCount - 4} className="font-semibold text-foreground">
+                    {viewBy !== "all" && groupedInvoices && groupedInvoices.length > 1
+                      ? `Grand Total (${groupedInvoices.length} groups)`
+                      : `Total (${filtered.length} document${filtered.length !== 1 ? "s" : ""})`}
+                  </TableCell>
+                  <TableCell className="text-right font-bold tabular-nums text-foreground">
+                    ₹{filtered.reduce((s, i) => s + (i.total_amount || i.amount || 0), 0).toLocaleString("en-IN")}
+                  </TableCell>
+                  <TableCell colSpan={3} />
+                </TableRow>
+              </TableFooter>
+            )}
           </Table>
-        )}
-        {filtered.length > 0 && (
-          <div className="px-4 py-3 border-t bg-muted/30 flex justify-between items-center">
-            <span className="text-sm font-semibold text-foreground">
-              {viewBy !== "all" && groupedInvoices && groupedInvoices.length > 1
-                ? `Grand Total (${groupedInvoices.length} groups)`
-                : `Total (${filtered.length} document${filtered.length !== 1 ? "s" : ""})`}
-            </span>
-            <span className="text-base font-bold tabular-nums text-foreground">₹{filtered.reduce((s, i) => s + (i.total_amount || i.amount || 0), 0).toLocaleString("en-IN")}</span>
-          </div>
         )}
       </CardContent></Card>
 
