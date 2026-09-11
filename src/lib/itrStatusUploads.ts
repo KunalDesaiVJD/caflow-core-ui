@@ -10,7 +10,7 @@
 import { supabase } from '@/integrations/supabase/client';
 import { extractTaxDocFields } from '@/lib/taxDocExtract';
 
-export type ItrUploadKind = 'itr_form' | 'computation_of_income';
+export type ItrUploadKind = 'itr_acknowledgement' | 'computation_of_income' | 'itr_form';
 
 const BUCKET = 'itr-filing-uploads';
 
@@ -81,7 +81,7 @@ export async function listItrUploads(itrProfileId: string): Promise<Record<ItrUp
     .eq('itr_profile_id', itrProfileId)
     .order('created_at', { ascending: false });
 
-  const result: Record<ItrUploadKind, StoredItrUpload | null> = { itr_form: null, computation_of_income: null };
+  const result: Record<ItrUploadKind, StoredItrUpload | null> = { itr_acknowledgement: null, computation_of_income: null, itr_form: null };
   if (error || !data) return result;
   for (const row of data as StoredItrUpload[]) {
     if (!result[row.kind]) result[row.kind] = row;

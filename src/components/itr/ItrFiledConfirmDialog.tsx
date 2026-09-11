@@ -3,24 +3,23 @@
  *
  * Gates the "Filed" (and "Sent to CPC") status transition for every IT
  * Returns sub-tab except Non-ITR. Nothing is saved to the row until all
- * four are present together:
+ * five are present together:
  *  1. ITR Acknowledgement (ITR-V) — PDF only, rejected client-side otherwise
  *  2. Computation of Income — PDF or Word, rejected client-side otherwise
- *  3. Acknowledgement Number — AI-read off the Acknowledgement, always editable
- *  4. Filed By — defaults to the logged-in user, always editable
+ *  3. ITR Form (the filed return itself, e.g. ITR-1..ITR-7) — PDF only
+ *  4. Acknowledgement Number — AI-read off the Acknowledgement, always editable
+ *  5. Filed By — defaults to the logged-in user, always editable
  *
  * Mirrors src/components/audit-tracker/audit-status/UploadConfirmDialog.tsx.
  * Re-openable afterward (existing files/ack-no/name prefill) so a mistake
- * can be corrected later. Internally the upload `kind` stays "itr_form"
- * (DB/storage identifier, invisible to the user) — only the user-facing
- * label changed to match what auditors actually call this document.
+ * can be corrected later.
  */
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input }  from "@/components/ui/input";
 import { Label }  from "@/components/ui/label";
-import { FileText, Calculator, Loader2, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
+import { FileText, FileCheck2, Calculator, Loader2, CheckCircle2, AlertCircle, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { UserCombobox, type ComboUser } from "@/components/shared/UserCombobox";
@@ -66,6 +65,10 @@ function isPdf(file: File): boolean {
 function isPdfOrWord(file: File): boolean {
   return isPdf(file) || WORD_TYPES.includes(file.type) || /\.docx?$/i.test(file.name);
 }
+
+const EMPTY_UPLOADS: Record<ItrUploadKind, StoredItrUpload | null> = {
+  itr_acknowledgement: null, computation_of_income: null, itr_form: null,
+};
 
 function FilePickerRow({
   label, icon, existing, picked, onPick, checking, typeError, accept, typeHint,
@@ -130,12 +133,14 @@ export default function ItrFiledConfirmDialog({
   open, onClose, profile, pendingStatus, staffUsers,
   currentUserId, currentUserName, firmId, ensureRealProfileId, onConfirm,
 }: Props) {
-  const [existing, setExisting]                 = useState<Record<ItrUploadKind, StoredItrUpload | null>>({ itr_form: null, computation_of_income: null });
+  const [existing, setExisting]                 = useState<Record<ItrUploadKind, StoredItrUpload | null>>(EMPTY_UPLOADS);
   const [loadingExisting, setLoadingExisting]    = useState(false);
-  const [itrFormFile, setItrFormFile]            = useState<File | null>(null);
+  const [ackFile, setAckFile]                    = useState<File | null>(null);
   const [computationFile, setComputationFile]    = useState<File | null>(null);
-  const [itrFormTypeError, setItrFormTypeError]  = useState<string | null>(null);
+  const [itrFormFile, setItrFormFile]            = useState<File | null>(null);
+  const [ackTypeError, setAckTypeError]          = useState<string | null>(null);
   const [computationTypeError, setComputationTypeError] = useState<string | null>(null);
+  const [itrFormTypeError, setItrFormTypeError]  = useState<string | null>(null);
   const [ackChecking, setAckChecking]            = useState(false);
   const [ackNo, setAckNo]                        = useState("");
   const [filedByName, setFiledByName]            = useState("");
@@ -146,10 +151,12 @@ export default function ItrFiledConfirmDialog({
 
   useEffect(() => {
     if (!open) return;
-    setItrFormFile(null);
+    setAckFile(null);
     setComputationFile(null);
-    setItrFormTypeError(null);
+    setItrFormFile(null);
+    setAckTypeError(null);
     setComputationTypeError(null);
+    setItrFormTypeError(null);
     setError(null);
     setAckNo(profile.acknowledgment_no || "");
     // upload_by is a user-id FK — resolve it to a name for display; fall
@@ -163,17 +170,17 @@ export default function ItrFiledConfirmDialog({
         setLoadingExisting(false);
       });
     } else {
-      setExisting({ itr_form: null, computation_of_income: null });
+      setExisting(EMPTY_UPLOADS);
     }
   }, [open, profile.id]); // eslint-disable-line
 
-  function handleItrFormPick(file: File | null) {
-    setItrFormFile(file);
-    setItrFormTypeError(null);
+  function handleAckPick(file: File | null) {
+    setAckFile(file);
+    setAckTypeError(null);
     if (!file) return;
     if (!isPdf(file)) {
-      setItrFormTypeError("Only PDF files are allowed for the ITR Acknowledgement.");
-      setItrFormFile(null);
+      setAckTypeError("Only PDF files are allowed for the ITR Acknowledgement.");
+      setAckFile(null);
       return;
     }
     setAckChecking(true);
@@ -193,12 +200,23 @@ export default function ItrFiledConfirmDialog({
     }
   }
 
-  const hasItrForm     = !!itrFormFile || !!existing.itr_form;
+  function handleItrFormPick(file: File | null) {
+    setItrFormFile(file);
+    setItrFormTypeError(null);
+    if (!file) return;
+    if (!isPdf(file)) {
+      setItrFormTypeError("Only PDF files are allowed for the ITR Form.");
+      setItrFormFile(null);
+    }
+  }
+
+  const hasAck         = !!ackFile || !!existing.itr_acknowledgement;
   const hasComputation = !!computationFile || !!existing.computation_of_income;
+  const hasItrForm      = !!itrFormFile || !!existing.itr_form;
   const canConfirm =
-    hasItrForm && hasComputation &&
+    hasAck && hasComputation && hasItrForm &&
     ackNo.trim() !== "" && filedByName.trim() !== "" &&
-    !itrFormTypeError && !computationTypeError &&
+    !ackTypeError && !computationTypeError && !itrFormTypeError &&
     !ackChecking && !submitting;
 
   async function handleConfirm() {
@@ -217,10 +235,10 @@ export default function ItrFiledConfirmDialog({
       const resolvedFirmId = profile.firm_id || firmId;
       if (!resolvedFirmId) throw new Error("This row has no firm assigned — cannot attach files.");
 
-      if (itrFormFile) {
+      if (ackFile) {
         const r = await storeItrUpload({
-          itrProfileId: realId, firmId: resolvedFirmId, kind: "itr_form",
-          file: itrFormFile, userId: currentUserId, userName: currentUserName,
+          itrProfileId: realId, firmId: resolvedFirmId, kind: "itr_acknowledgement",
+          file: ackFile, userId: currentUserId, userName: currentUserName,
         });
         if (r.error) throw new Error(`ITR Acknowledgement upload failed: ${r.error}`);
       }
@@ -230,6 +248,13 @@ export default function ItrFiledConfirmDialog({
           file: computationFile, userId: currentUserId, userName: currentUserName,
         });
         if (r.error) throw new Error(`Computation of Income upload failed: ${r.error}`);
+      }
+      if (itrFormFile) {
+        const r = await storeItrUpload({
+          itrProfileId: realId, firmId: resolvedFirmId, kind: "itr_form",
+          file: itrFormFile, userId: currentUserId, userName: currentUserName,
+        });
+        if (r.error) throw new Error(`ITR Form upload failed: ${r.error}`);
       }
       await onConfirm(realId, { acknowledgment_no: ackNo.trim(), upload_by: filedById });
       toast.success(`Marked as ${pendingStatus}`);
@@ -258,11 +283,11 @@ export default function ItrFiledConfirmDialog({
             <FilePickerRow
               label="ITR Acknowledgement"
               icon={<FileText size={13} className="text-slate-500" />}
-              existing={existing.itr_form}
-              picked={itrFormFile}
-              onPick={handleItrFormPick}
+              existing={existing.itr_acknowledgement}
+              picked={ackFile}
+              onPick={handleAckPick}
               checking={ackChecking}
-              typeError={itrFormTypeError}
+              typeError={ackTypeError}
               accept="application/pdf,.pdf"
               typeHint="PDF only"
             />
@@ -275,6 +300,16 @@ export default function ItrFiledConfirmDialog({
               typeError={computationTypeError}
               accept="application/pdf,.pdf,.doc,.docx,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
               typeHint="PDF or Word"
+            />
+            <FilePickerRow
+              label="ITR Form"
+              icon={<FileCheck2 size={13} className="text-slate-500" />}
+              existing={existing.itr_form}
+              picked={itrFormFile}
+              onPick={handleItrFormPick}
+              typeError={itrFormTypeError}
+              accept="application/pdf,.pdf"
+              typeHint="PDF only"
             />
 
             <div className="space-y-1.5">
