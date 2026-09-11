@@ -1958,8 +1958,9 @@ function InlineEditableRow({
 
   // ── ITR upload-confirm gate (every filing sub-tab except Non-ITR) ────────
   // Marking "Filed" (or jumping straight to "Sent to CPC", which would
-  // otherwise skip the gate entirely) requires the ITR Form + Computation of
-  // Income + Ack No + Filed By to be confirmed together first. A row that's
+  // otherwise skip the gate entirely) requires the ITR Acknowledgement (ITR-V)
+  // + Computation of Income + Ack No + Filed By to be confirmed together
+  // first. A row that's
   // already been gated once (has an Ack No) can move freely between Filed
   // and Sent to CPC afterward without re-prompting. Applies to Audited,
   // Non-Audited, Non-Audit (BP) and Partner in Audited Firm alike — only
@@ -2077,7 +2078,7 @@ function InlineEditableRow({
 
         {/* Upload By — set via the ITR upload-confirm dialog (see
             handleStatusChange above), for every gated client. A gated-and-
-            confirmed row is clickable to view/replace the ITR Form +
+            confirmed row is clickable to view/replace the ITR Acknowledgement +
             Computation of Income. */}
         <TableCell className="text-xs px-2">
           {isGatedClient && (p as any).upload_by ? (

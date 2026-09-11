@@ -1,6 +1,6 @@
-// ITR Form / Computation of Income uploads — the files behind a "Filed"
-// IT Return. Every filed ITR Form and computation-of-income statement is
-// kept in the `itr-filing-uploads` storage bucket and indexed in
+// ITR Acknowledgement (ITR-V) / Computation of Income uploads — the files
+// behind a "Filed" IT Return. Every ITR Acknowledgement and computation-of-
+// income statement is kept in the `itr-filing-uploads` storage bucket and indexed in
 // itr_status_uploads, linked to the itr_profiles row it belongs to. Mirrors
 // src/lib/auditStatusUploads.ts.
 //
@@ -96,7 +96,7 @@ export async function itrUploadFileUrl(storagePath: string, expiresInSeconds = 3
   return data?.signedUrl ?? null;
 }
 
-/** AI-read the e-filing acknowledgement number off the uploaded ITR Form. Fails soft. */
+/** AI-read the e-filing acknowledgement number off the uploaded ITR Acknowledgement. Fails soft. */
 export async function extractAckNumber(file: File): Promise<{ acknowledgmentNo: string | null; confidence: string }> {
   const fields = await extractTaxDocFields(file, 'itr_form');
   return { acknowledgmentNo: fields.acknowledgmentNo, confidence: fields.ackConfidence };
