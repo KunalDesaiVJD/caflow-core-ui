@@ -1509,7 +1509,33 @@ const NewInvoice = () => {
                     showing the firm's own state. A client WITH a GSTIN is
                     unchanged — GST law ties place of supply to the GSTIN
                     there, so it stays derived-only. */}
-                {!toGstin ? (
+                {clientGstins.length > 1 && !toGstin ? (
+                  // Multi-GSTIN client, no GSTIN picked yet: let the user drive the
+                  // pick by STATE instead of only via "Bill from which GSTIN?" above.
+                  // Options are this client's own GSTINs (never the generic 36-state
+                  // list), so picking one sets toGstin directly — same variable the
+                  // GSTIN dropdown sets — and everything downstream (address autofill,
+                  // derived placeOfSupply) already reacts to toGstin unchanged.
+                  <Select
+                    value=""
+                    onValueChange={setToGstin}
+                    disabled={isLocked}
+                  >
+                    <SelectTrigger className="text-xs h-9">
+                      <SelectValue placeholder="Select state" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {clientGstins.map(g => {
+                        const stateName = clientGstinStates[g] || getStateFromGstin(g)?.name || "";
+                        return (
+                          <SelectItem key={g} value={g} className="text-xs">
+                            {stateName || "Unknown state"} <span className="ml-2 text-muted-foreground font-mono">{g}</span>
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                ) : !toGstin ? (
                   <Select
                     value={noGstinStateCode}
                     onValueChange={setManualPlaceOfSupplyCode}
