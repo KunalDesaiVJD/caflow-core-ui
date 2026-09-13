@@ -148,24 +148,37 @@ async function storeAgreement(
   }
 }
 
-/** How long each path waits for the upload. The short path is keeping a copy
- *  of a deed it has already read; the background path is storing the ONLY
- *  copy the worker will ever see. */
+/**
+ * How long each path waits for the upload.
+ *
+ * The short path is keeping a copy of a deed it has already read, so 30
+ * seconds is generous — losing it costs nothing. The background path is
+ * storing the ONLY copy the worker will ever see, and it may be storing
+ * 50 MB: at a typical Indian office upstream of 5 Mbps that is roughly 80
+ * seconds, and at 2 Mbps it is over three minutes. Five minutes covers the
+ * slow case rather than cutting off a transfer that was going to succeed.
+ */
 const STORE_TIMEOUT_KEEPSAKE_MS = 30_000;
-const STORE_TIMEOUT_REQUIRED_MS = 180_000;
+const STORE_TIMEOUT_REQUIRED_MS = 300_000;
 
 /**
- * The binding size limit, and deliberately the LOWEST one in the chain.
+ * The size a registered deed is allowed to be.
  *
- * Base64 inflates a file by a third and the model API caps a request at
- * 32 MB, but the tighter ceiling is the documents storage bucket, raised to
- * 25 MB by migration 20260913120000 precisely so this guard sits below it.
- * That ordering is the point: a file that passes here can always be stored,
- * so the only size message the user ever sees is this one, which says what
- * to do about it. When it was the other way round — guard 20 MB, bucket
- * 10 MB — a 19.7 MB deed was accepted here and silently refused by storage.
+ * Set to match the documents bucket exactly (migration 20260913120000), and
+ * the two must move together: when the guard was 20 MB and the bucket 10 MB,
+ * a 19.7 MB deed was accepted here and then silently refused by storage, and
+ * all the user saw was "The file could not be uploaded for reading."
+ *
+ * Equal rather than strictly lower is safe because both tests are inclusive —
+ * this rejects on `>`, and storage rejects on `>` — so a file of exactly this
+ * size passes both. 50 MB is also Supabase's own default ceiling for a
+ * project's Storage, so a higher number here would be clamped there and put
+ * the two back out of step.
+ *
+ * The file never enters Postgres: it goes to object storage, and the reader
+ * fetches page ranges from it. Size costs storage, not database.
  */
-const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
 
 /**
  * The guard that matters is PAGES, not bytes.
@@ -187,9 +200,15 @@ const SYNC_MAX_PAGES = 8;
  *  24,000 vision tokens, which reads in 30-50 seconds. */
 const JOB_CHUNK_PAGES = 12;
 
-/** Past this, reading the whole deed costs more than it can be worth — the
- *  facts live on a handful of pages and the user should say which. */
-const MAX_PAGES = 400;
+/**
+ * The longest deed the background reader will take on.
+ *
+ * 500 pages is 42 chunks of 12, which the worker chains through in roughly a
+ * dozen invocations — well inside its own MAX_ATTEMPTS of 40. Past this the
+ * facts still live on a handful of pages and the user is better off saying
+ * which, rather than paying for 500 pages of vision tokens to find them.
+ */
+const MAX_PAGES = 500;
 
 /** How often the browser asks the job row how far it has got. */
 const POLL_MS = 3000;
