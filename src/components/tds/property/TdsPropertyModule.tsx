@@ -101,12 +101,16 @@ function taxYearOptions(): string[] {
  *  rows to INSERT rather than UPDATE. */
 const isNew = (id: string) => !id || id.startsWith("new-");
 
+/** Sentinel for the Tax Year filter's "every year" option. Not a year, so it
+ *  can never collide with one. */
+const ALL_YEARS = "__all__";
+
 export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Props) {
   const { user } = useAuth();
   const years = useMemo(taxYearOptions, []);
 
   const [selClient, setSelClient] = useState("");
-  const [selTaxYear, setSelTaxYear] = useState(years[years.length - 2] || FORM_141_FIRST_TAX_YEAR);
+  const [selTaxYear, setSelTaxYear] = useState<string>(years[years.length - 2] || FORM_141_FIRST_TAX_YEAR);
   const [bundles, setBundles] = useState<PropertyDealBundle[]>([]);
   const [loading, setLoading] = useState(false);
   const [editing, setEditing] = useState<PropertyDealBundle | null>(null);
@@ -495,9 +499,36 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
   // same order on every render and the editor branch returns before the list
   // is ever reached.
   const visible = useMemo(
-    () => bundles.filter((b) => !selTaxYear || !b.transaction.tax_year || b.transaction.tax_year === selTaxYear),
+    () =>
+      bundles.filter(
+        (b) =>
+          selTaxYear === ALL_YEARS ||
+          !selTaxYear ||
+          !b.transaction.tax_year ||
+          b.transaction.tax_year === selTaxYear,
+      ),
     [bundles, selTaxYear],
   );
+
+  /**
+   * Years to offer, including any this client's data actually uses.
+   *
+   * The generated list runs from the Act's first Tax Year to next year, which
+   * is right for NEW work and wrong for anything already saved. A payment
+   * dated before 1 April 2026 derives tax_year "2025-26" — a legitimate
+   * transitional deal whose earlier instalments belong to Form 26QB — and
+   * that year was not in the list at all, so the transaction was filtered out
+   * of a dropdown that could not select it. It was in the database and
+   * unreachable from the screen, and the empty state read as if the save had
+   * failed.
+   */
+  const yearOptions = useMemo(() => {
+    const fromData = bundles.map((b) => b.transaction.tax_year).filter((y): y is string => !!y);
+    return [...new Set([...years, ...fromData])].sort();
+  }, [bundles, years]);
+
+  /** Saved for this client but hidden by the year filter. */
+  const hiddenByYear = bundles.length - visible.length;
 
   /**
    * The list's figures, computed once per change rather than once per render.
@@ -538,6 +569,10 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
             </p>
           </div>
         </div>
+        {/* selectedTaxYear: "All years" is a LIST filter, not a claim about
+            which year this transaction belongs to. Passing the sentinel down
+            would make resolveForm141Period report every transaction as
+            belonging to another Tax Year. */}
         <TdsPropertyEditor
           bundle={editing}
           onChange={setEditing}
@@ -545,7 +580,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
           onCancel={() => { setEditing(null); resetExtraction(); }}
           saving={saving}
           selectedClientPan={client?.pan || null}
-          selectedTaxYear={selTaxYear}
+          selectedTaxYear={selTaxYear === ALL_YEARS ? null : selTaxYear}
           provenance={provenance}
           queries={queries}
           onExtracted={handleExtracted}
@@ -590,12 +625,13 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
                 emptyText="No client matches that."
               />
             </div>
-            <div className="space-y-1.5 w-[140px]">
+            <div className="space-y-1.5 w-[150px]">
               <Label>Tax Year</Label>
               <Select value={selTaxYear} onValueChange={setSelTaxYear}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {years.map((y) => <SelectItem key={y} value={y}>{y}</SelectItem>)}
+                  <SelectItem value={ALL_YEARS}>All years</SelectItem>
+                  {yearOptions.map((y) => <SelectItem key={y} value={y}>{y}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
@@ -621,12 +657,35 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
 
       {selClient && !loading && visible.length === 0 && (
         <Card><CardContent className="py-10 text-center">
-          <p className="text-sm text-muted-foreground mb-3">
-            No property transactions recorded for {client?.name} in {selTaxYear}.
-          </p>
-          <Button variant="outline" onClick={startNew}>
-            <Plus size={14} className="mr-1.5" /> Record one
-          </Button>
+          {/* Nothing on screen may imply a save failed when it did not. If
+              this client HAS transactions and the year filter is hiding them,
+              say so and offer the way out — a saved transaction that cannot
+              be reached from the screen is indistinguishable from a lost one. */}
+          {hiddenByYear > 0 ? (
+            <>
+              <p className="text-sm mb-1">
+                {hiddenByYear} transaction{hiddenByYear === 1 ? " is" : "s are"} saved for {client?.name},
+                but in {hiddenByYear === 1 ? "a different Tax Year" : "other Tax Years"}.
+              </p>
+              <p className="text-xs text-muted-foreground mb-3">
+                The filter is set to {selTaxYear}. A transaction&apos;s Tax Year comes from its first
+                payment date, not the agreement date.
+              </p>
+              <Button variant="outline" onClick={() => setSelTaxYear(ALL_YEARS)}>
+                Show all years
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground mb-3">
+                No property transactions recorded for {client?.name}
+                {selTaxYear === ALL_YEARS ? "" : ` in ${selTaxYear}`}.
+              </p>
+              <Button variant="outline" onClick={startNew}>
+                <Plus size={14} className="mr-1.5" /> Record one
+              </Button>
+            </>
+          )}
         </CardContent></Card>
       )}
 
