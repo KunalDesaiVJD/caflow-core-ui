@@ -332,6 +332,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
           pan: p.pan, name: p.name, contact: p.contact, email: p.email,
           share_pct: num(p.share_pct),
           residential_status: p.residential_status,
+          entity_type: p.entity_type,
           pan_status: p.pan_status || "unknown",
           section_395_certificate_no: p.section_395_certificate_no,
           section_395_rate: p.section_395_rate === null ? null : num(p.section_395_rate),
@@ -361,6 +362,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
           date_of_deduction: i.date_of_deduction,
           date_of_deposit: i.date_of_deposit,
           date_of_filing: i.date_of_filing,
+          allocations: i.allocations,
         };
         const { error } = isNew(i.id)
           ? await propertyTable("tds_property_instalments").insert(payload)
@@ -477,7 +479,9 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
       parties: [{
         id: "new-buyer-1", firm_id: firmId, transaction_id: "", party_role: "buyer", seq: 1,
         pan: client?.pan || null, name: client?.name || "", contact: null, email: null,
-        share_pct: 100, residential_status: "resident", pan_status: "unknown",
+        // Residency is never read for a buyer — only a seller's picks the
+        // statute — so this value is inert and left as the plain case.
+        share_pct: 100, residential_status: "resident", pan_status: "unknown", entity_type: null,
         section_395_certificate_no: null, section_395_rate: null,
         section_395_valid_from: null, section_395_valid_to: null,
         section_395_ceiling_amount: null,

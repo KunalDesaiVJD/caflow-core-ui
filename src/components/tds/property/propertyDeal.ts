@@ -25,6 +25,7 @@ import type {
   PanStatus,
 } from "@/lib/tds/form141ScheduleB";
 import { todayInIndia } from "@/lib/tds/form141";
+import type { EntityType } from "@/lib/tds/partyFieldRules";
 
 // ─── Database rows ──────────────────────────────────────────────────────────
 
@@ -65,6 +66,9 @@ export interface PropertyPartyRow {
   email: string | null;
   share_pct: number | string;
   residential_status: ResidentialStatus;
+  /** Constitution — individual / huf / company / firm_llp / … Null means not
+   *  yet established; the PAN's 4th character suggests it, nobody defaults it. */
+  entity_type: EntityType | null;
   pan_status: PanStatus | null;
   section_395_certificate_no: string | null;
   section_395_rate: number | string | null;
@@ -83,6 +87,8 @@ export interface PropertyInstalmentRow {
   date_of_deduction: string;
   date_of_deposit: string | null;
   date_of_filing: string | null;
+  /** Optional [{seller_key, amount}] split across sellers. Null = pro-rata. */
+  allocations: { seller_key: string; amount: number | string }[] | null;
 }
 
 export interface PropertyFilingRow {
@@ -142,7 +148,7 @@ const dateOnly = (d: string): string => (d || "").slice(0, 10);
 // ─── DB → engine ────────────────────────────────────────────────────────────
 
 export function toBuyer(row: PropertyPartyRow): Form141Buyer {
-  return { pan: row.pan, name: row.name, sharePct: num(row.share_pct) };
+  return { pan: row.pan, name: row.name, sharePct: num(row.share_pct), entityType: row.entity_type };
 }
 
 export function toSeller(row: PropertyPartyRow): Form141Seller {
@@ -152,6 +158,7 @@ export function toSeller(row: PropertyPartyRow): Form141Seller {
     contact: row.contact,
     email: row.email,
     sharePct: num(row.share_pct),
+    entityType: row.entity_type,
     residentialStatus: row.residential_status,
     panStatus: row.pan_status || "unknown",
     section395CertificateNo: row.section_395_certificate_no,
@@ -170,6 +177,11 @@ export function toInstalment(row: PropertyInstalmentRow): Form141Instalment {
     dateOfDeduction: dateOnly(row.date_of_deduction),
     dateOfDeposit: row.date_of_deposit ? dateOnly(row.date_of_deposit) : null,
     dateOfFiling: row.date_of_filing ? dateOnly(row.date_of_filing) : null,
+    // snake_case in Postgres, camelCase in the engine — converted here, the
+    // one seam where the two naming conventions meet.
+    allocations: row.allocations?.length
+      ? row.allocations.map((a) => ({ sellerKey: a.seller_key, amount: num(a.amount) }))
+      : null,
   };
 }
 

@@ -8,8 +8,10 @@ import {
   openQueries,
   resolveQuery,
   skipQuery,
+  canSkip,
   skippedBlocking,
   applyAnswer,
+  reassess,
   confirmField,
   unconfirmedFields,
   CRITICAL_FIELDS,
@@ -124,6 +126,21 @@ describe("normalisePan", () => {
   });
 });
 
+
+/**
+ * Residency, asserted by a human.
+ *
+ * Extraction leaves every seller "unknown" on purpose — the deed does not say,
+ * and the old "resident" default silently computed 1% on NRI sales where s.195
+ * needed twenty-something. Tests that go on to exercise the ENGINE have to
+ * settle it first, exactly as a preparer does.
+ */
+const withResidencySettled = (b: PropertyDealBundle): PropertyDealBundle => ({
+  ...b,
+  parties: b.parties.map((p) =>
+    p.party_role === "seller" ? { ...p, residential_status: "resident" as const } : p),
+});
+
 describe("applyExtraction — a clean read", () => {
   const r = applyExtraction(GOOD_EXTRACTION, BASE);
 
@@ -160,10 +177,20 @@ describe("applyExtraction — a clean read", () => {
     expect(r.withheld).toEqual([]);
   });
 
-  it("produces a transaction the engine computes correctly", () => {
+  it("leaves every seller's residency unestablished, and the engine refuses to compute", () => {
+    // The deed does not state residency, so the reader must not either. This
+    // is the guard against an NRI sale computing 1% where s.195 needs ~20%.
+    expect(r.bundle.parties.filter((p) => p.party_role === "seller")
+      .every((p) => p.residential_status === "unknown")).toBe(true);
+    const computed = computeForm141ScheduleB(toForm141Deal(r.bundle), "ADFPB0000E");
+    expect(computed.blockers.map((b) => b.code)).toContain("seller_residency_unknown");
+    expect(computed.statements).toEqual([]);
+  });
+
+  it("produces a transaction the engine computes correctly once residency is settled", () => {
     // The real proof of the whole pipeline: deed → extraction → bundle →
     // engine → the acknowledgement's own figures.
-    const computed = computeForm141ScheduleB(toForm141Deal(r.bundle), "ADFPB0000E");
+    const computed = computeForm141ScheduleB(toForm141Deal(withResidencySettled(r.bundle)), "ADFPB0000E");
     expect(computed.blockers).toEqual([]);
     expect(computed.statements[0].totalTds).toBe(128000);
     expect(computed.statements[0].rows.map((x) => x.tdsAmount)).toEqual([64000, 64000]);
@@ -289,7 +316,8 @@ describe("list fields — every shape a model returns", () => {
     };
     const r = applyExtraction(ex, BASE);
     expect(r.unreadable).toEqual([]);
-    const computed = computeForm141ScheduleB(toForm141Deal(r.bundle), "ADFPB0000E");
+    const computed = computeForm141ScheduleB(
+      toForm141Deal(withResidencySettled(r.bundle)), "ADFPB0000E");
     expect(computed.statements[0].totalTds).toBe(128000);
   });
 
@@ -464,20 +492,32 @@ describe("skipping a question", () => {
     },
   ];
 
-  it("stops a skipped question blocking the filing", () => {
-    // Nobody should be locked out of their own file by a question they cannot
-    // answer today.
+  it("REFUSES to skip a critical question", () => {
+    // Index 0 is blocking: the statement cannot be correct without it. Waving
+    // it away would put a wrong filing in front of the department under the
+    // buyer's own PAN, so the refusal is in the function and not only in the
+    // UI that hides the button.
     const after = skipQuery(QUERIES, 0);
-    expect(blockingQueries(after)).toHaveLength(0);
+    expect(after[0].skipped).toBe(false);
+    expect(blockingQueries(after)).toHaveLength(1);
+    expect(canSkip(QUERIES[0])).toBe(false);
+  });
+
+  it("allows a non-critical question to be skipped", () => {
+    // Nobody should be locked out of their own file by a question they cannot
+    // answer today — where the answer is not load-bearing.
+    const after = skipQuery(QUERIES, 1);
+    expect(after[1].skipped).toBe(true);
+    expect(canSkip(QUERIES[1])).toBe(true);
     expect(openQueries(after)).toHaveLength(1);
   });
 
-  it("keeps a skipped blocking question visible as a warning", () => {
-    // Skipping unblocks. It does not make the reason for the question untrue,
-    // and the file has to carry the fact that nobody answered it.
-    const after = skipQuery(QUERIES, 0);
-    expect(skippedBlocking(after)).toHaveLength(1);
-    expect(skippedBlocking(after)[0].question).toContain("Which is right?");
+  it("puts a critical question back in the way even if the flag was set directly", () => {
+    // An old saved document, from when skipping was unrestricted, must not
+    // smuggle a waved-away critical question past the filing gate.
+    const forced = QUERIES.map((q, i) => (i === 0 ? { ...q, skipped: true } : q));
+    expect(blockingQueries(forced)).toHaveLength(1);
+    expect(skippedBlocking(forced)).toHaveLength(1);
   });
 
   it("does not treat a skipped non-blocking question as a warning", () => {
@@ -486,10 +526,10 @@ describe("skipping a question", () => {
   });
 
   it("keeps the question itself, and every other one, intact", () => {
-    const after = skipQuery(QUERIES, 0);
+    const after = skipQuery(QUERIES, 1);
     expect(after).toHaveLength(2);
-    expect(after[0].answer).toBeNull();
-    expect(after[1].skipped).toBe(false);
+    expect(after[1].answer).toBeNull();
+    expect(after[0].skipped).toBe(false);
   });
 });
 
@@ -713,5 +753,141 @@ describe("instalment rows that cannot be read are reported, not swallowed", () =
     // Buyer One holds 50%, so their share of a ₹50,00,000 payment is ₹25,00,000.
     expect(r.bundle.instalments[0].amount_paid_by_buyer).toBe(2500000);
     expect(r.bundle.instalments[0].date_paid_or_credited).toBe("2026-06-01");
+  });
+});
+
+describe("reassess — every answer replayed together", () => {
+  /**
+   * Why one answer at a time is not enough.
+   *
+   * applyAnswer writes one answer into one field, which is right as far as it
+   * goes. What it cannot see is that answers INTERACT: a corrected
+   * consideration moves the ₹50,00,000 threshold and the
+   * payments-reconcile check with it, and an answer given later to the same
+   * field has to REPLACE the earlier one rather than layer on top of it.
+   */
+  const q = (field: string, answer: string | null, at: string | null, blocking = true): ResolvedQuery => ({
+    field,
+    question: `What is the ${field}?`,
+    why: "because",
+    blocking,
+    answer,
+    resolvedAt: at,
+    skipped: false,
+  });
+
+  const base = (over: Partial<PropertyTransactionRow> = {}): PropertyDealBundle => ({
+    ...BASE,
+    transaction: { ...BASE.transaction, ...over },
+  });
+
+  it("applies every answered question, not just the last one", () => {
+    const out = reassess(
+      [
+        q("total_sale_consideration", "2,56,00,000", "2026-09-13T10:00:00Z"),
+        q("property_address", "Survey 389, Hathijan", "2026-09-13T10:01:00Z"),
+      ],
+      base({ total_sale_consideration: 0, property_address: "" }),
+    );
+    expect(out.bundle.transaction.total_sale_consideration).toBe(25600000);
+    expect(out.bundle.transaction.property_address).toBe("Survey 389, Hathijan");
+  });
+
+  it("gives the same form whatever order the answers were given in", () => {
+    // The user works through the panel in whatever order suits them. The form
+    // must not depend on it.
+    const a = q("total_sale_consideration", "2,56,00,000", "2026-09-13T10:00:00Z");
+    const b = q("property_address", "Survey 389", "2026-09-13T10:01:00Z");
+    const forward = reassess([a, b], base({ total_sale_consideration: 0 }));
+    const backward = reassess([b, a], base({ total_sale_consideration: 0 }));
+    expect(backward.bundle.transaction).toEqual(forward.bundle.transaction);
+  });
+
+  it("lets a later answer REPLACE an earlier one on the same field", () => {
+    // Re-answering must not layer on top of the first answer.
+    const out = reassess(
+      [
+        q("total_sale_consideration", "2,65,00,000", "2026-09-13T10:00:00Z"),
+        q("total_sale_consideration", "2,56,00,000", "2026-09-13T10:05:00Z"),
+      ],
+      base({ total_sale_consideration: 0 }),
+    );
+    expect(out.bundle.transaction.total_sale_consideration).toBe(25600000);
+  });
+
+  it("says so when the same field was answered twice with different values", () => {
+    // Silently picking one would leave the user unaware they contradicted
+    // themselves about the number the whole computation rests on.
+    const out = reassess(
+      [
+        q("total_sale_consideration", "2,65,00,000", "2026-09-13T10:00:00Z"),
+        q("total_sale_consideration", "2,56,00,000", "2026-09-13T10:05:00Z"),
+      ],
+      base({ total_sale_consideration: 0 }),
+    );
+    expect(out.conflicts).toHaveLength(1);
+    expect(out.conflicts[0].field).toBe("total_sale_consideration");
+    expect(out.conflicts[0].values).toHaveLength(2);
+  });
+
+  it("does not report a conflict when the same answer is given twice", () => {
+    const out = reassess(
+      [
+        q("total_sale_consideration", "2,56,00,000", "2026-09-13T10:00:00Z"),
+        q("total_sale_consideration", "2,56,00,000", "2026-09-13T10:05:00Z"),
+      ],
+      base({ total_sale_consideration: 0 }),
+    );
+    expect(out.conflicts).toEqual([]);
+  });
+
+  it("diffs against where the READER left the form, not against each step", () => {
+    // The only comparison that means anything to the user.
+    const out = reassess(
+      [q("total_sale_consideration", "2,56,00,000", "2026-09-13T10:00:00Z")],
+      base({ total_sale_consideration: 26500000 }),
+    );
+    expect(out.amended).toHaveLength(1);
+    expect(out.amended[0].field).toBe("total_sale_consideration");
+    expect(out.amended[0].from).toContain("2,65,00,000");
+    expect(out.amended[0].to).toContain("2,56,00,000");
+  });
+
+  it("reports nothing amended when the answer matches what was already there", () => {
+    const out = reassess(
+      [q("total_sale_consideration", "2,56,00,000", "2026-09-13T10:00:00Z")],
+      base({ total_sale_consideration: 25600000 }),
+    );
+    expect(out.amended).toEqual([]);
+  });
+
+  it("leaves the form alone when nothing has been answered", () => {
+    const out = reassess([q("total_sale_consideration", null, null)], base({ total_sale_consideration: 25600000 }));
+    expect(out.bundle).toEqual(base({ total_sale_consideration: 25600000 }));
+    expect(out.amended).toEqual([]);
+  });
+
+  it("names the answers it could record but not apply", () => {
+    // Prose cannot become party rows without guessing a share, and a guessed
+    // share silently mis-splits the tax.
+    const out = reassess(
+      [q("sellers", "there are three sellers, equally", "2026-09-13T10:00:00Z")],
+      base(),
+    );
+    expect(out.recordedOnly).toContain("sellers");
+    expect(out.amended).toEqual([]);
+  });
+
+  it("keeps going past an answer it cannot parse", () => {
+    // One unusable answer must not stop the usable ones being applied.
+    const out = reassess(
+      [
+        q("total_sale_consideration", "ask the client", "2026-09-13T10:00:00Z"),
+        q("property_address", "Survey 389, Hathijan", "2026-09-13T10:01:00Z"),
+      ],
+      base({ total_sale_consideration: 25600000, property_address: "" }),
+    );
+    expect(out.bundle.transaction.total_sale_consideration).toBe(25600000);
+    expect(out.bundle.transaction.property_address).toBe("Survey 389, Hathijan");
   });
 });

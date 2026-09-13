@@ -34,8 +34,10 @@ import { cn } from "@/lib/utils";
 
 import {
   applyExtraction,
-  applyAnswer,
+  reassess,
+  resolveQuery,
   skipQuery,
+  canSkip,
   confirmField,
   openQueries,
   blockingQueries,
@@ -349,19 +351,49 @@ export function TdsPropertyUpload({
    * written in, overriding whatever the reader had put there, with the
    * displaced value named out loud rather than replaced in silence.
    */
+  /**
+   * The bundle as the READER left it, before any answer touched it.
+   *
+   * Kept so every answer can be replayed against it together — see reassess.
+   * Without it, re-answering a question would layer on top of the previous
+   * answer instead of replacing it, and the order the user happened to work
+   * through the panel would change the result.
+   */
+  const readerBundle = useRef<PropertyDealBundle | null>(null);
+  const readerProvenance = useRef<Record<string, FieldProvenance>>({});
+
   const answerQuery = (idx: number, answer: string) => {
-    const result = applyAnswer(queries, idx, answer, bundle, provenance);
-    onQueriesChange(result.queries);
-    if (result.applied) {
-      onBundleChange(result.bundle);
-      onProvenanceChange(result.provenance);
-      for (const a of result.amended) {
-        toast.info(`${FIELD_LABEL[a.field] || a.field} changed from ${a.from} to ${a.to}.`);
+    // First answer on this reading: remember where the reader left things.
+    if (!readerBundle.current) {
+      readerBundle.current = bundle;
+      readerProvenance.current = provenance;
+    }
+
+    const nextQueries = resolveQuery(queries, idx, answer);
+    // Every answer replayed together, not just this one. An answer changes
+    // more than its own field — a corrected consideration moves the ₹50L
+    // threshold and the payments-reconcile check with it — and answers given
+    // in any order must land on the same form.
+    const out = reassess(nextQueries, readerBundle.current, readerProvenance.current);
+
+    onQueriesChange(nextQueries);
+    onBundleChange(out.bundle);
+    onProvenanceChange(out.provenance);
+    setAnswers((a) => ({ ...a, [idx]: "" }));
+
+    for (const c of out.conflicts) {
+      toast.warning(
+        `${FIELD_LABEL[c.field] || c.field} was answered more than once (${c.values.join(" / ")}). The latest answer is the one in the form.`,
+        { duration: 9000 },
+      );
+    }
+    if (out.amended.length) {
+      for (const a of out.amended) {
+        toast.info(`${FIELD_LABEL[a.field] || a.field}: ${a.from} → ${a.to}`);
       }
-    } else {
+    } else if (out.recordedOnly.includes(queries[idx]?.field)) {
       toast.info("Answer recorded. It needs a change to the rows below that this cannot make for you.");
     }
-    setAnswers((a) => ({ ...a, [idx]: "" }));
   };
   const [showEvidence, setShowEvidence] = useState<string | null>(null);
 
@@ -826,7 +858,7 @@ export function TdsPropertyUpload({
               <p className="text-xs font-medium">Questions to answer</p>
               {blocking.length > 0 && (
                 <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 text-[10px]">
-                  {blocking.length} blocking
+                  {blocking.length} must be answered
                 </Badge>
               )}
             </div>
@@ -890,17 +922,27 @@ export function TdsPropertyUpload({
                     <p className="text-[10px] text-muted-foreground">
                       Your answer is written into the matching field and recorded on this transaction.
                     </p>
-                    {/* Nobody should be locked out of their own file by a
-                        question they cannot answer today. A skipped question
-                        stops blocking but stays on the record, and a skipped
-                        BLOCKING one comes back as a warning. */}
-                    <Button
-                      size="sm" variant="ghost"
-                      className="h-6 text-[11px] px-2 shrink-0 text-muted-foreground"
-                      onClick={() => onQueriesChange(skipQuery(queries, idx))}
-                    >
-                      Skip
-                    </Button>
+                    {/* Skipping is a NON-CRITICAL affordance. Nobody should
+                        be locked out of their own file by a question they
+                        cannot answer today — but a critical question is one
+                        the statement cannot be correct without, and waving it
+                        away would put a wrong filing in front of the
+                        department under the buyer's own PAN. So the button is
+                        simply not offered, and the reason is said rather than
+                        left to be discovered. */}
+                    {canSkip(q) ? (
+                      <Button
+                        size="sm" variant="ghost"
+                        className="h-6 text-[11px] px-2 shrink-0 text-muted-foreground"
+                        onClick={() => onQueriesChange(skipQuery(queries, idx))}
+                      >
+                        Skip
+                      </Button>
+                    ) : (
+                      <span className="text-[10px] text-red-700 dark:text-red-300 shrink-0 font-medium">
+                        Must be answered
+                      </span>
+                    )}
                   </div>
                 </div>
               );

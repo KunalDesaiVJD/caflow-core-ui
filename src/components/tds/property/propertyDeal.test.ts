@@ -33,6 +33,7 @@ const party = (over: Partial<PropertyPartyRow>): PropertyPartyRow => ({
   email: null,
   share_pct: "50",
   residential_status: "resident",
+  entity_type: null,
   pan_status: "unknown",
   section_395_certificate_no: null,
   section_395_rate: null,
@@ -81,6 +82,7 @@ const BUNDLE: PropertyDealBundle = {
       date_of_deduction: "2026-09-02",
       date_of_deposit: "2026-09-02",
       date_of_filing: "2026-09-02",
+      allocations: null,
     },
   ],
 };
