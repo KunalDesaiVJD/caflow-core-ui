@@ -7,6 +7,7 @@ import {
   emptyTransaction,
   resolveFilingBuyerPan,
   dbSaveBlockers,
+  readyBlockers,
   type PropertyDealBundle,
   type PropertyPartyRow,
 } from "./propertyDeal";
@@ -32,6 +33,7 @@ const party = (over: Partial<PropertyPartyRow>): PropertyPartyRow => ({
   email: null,
   share_pct: "50",
   residential_status: "resident",
+  entity_type: null,
   pan_status: "unknown",
   section_395_certificate_no: null,
   section_395_rate: null,
@@ -80,6 +82,7 @@ const BUNDLE: PropertyDealBundle = {
       date_of_deduction: "2026-09-02",
       date_of_deposit: "2026-09-02",
       date_of_filing: "2026-09-02",
+      allocations: null,
     },
   ],
 };
@@ -223,45 +226,92 @@ describe("resolveFilingBuyerPan — one answer, not three", () => {
   });
 });
 
-describe("dbSaveBlockers — what Postgres would refuse, said first", () => {
+describe("dbSaveBlockers — only what Postgres would still refuse", () => {
   it("passes a complete transaction", () => {
     expect(dbSaveBlockers(BUNDLE)).toEqual([]);
   });
 
-  it("catches a zero consideration before the CHECK constraint does", () => {
+  /**
+   * The four cases below are the whole point of migration 20260913140000.
+   *
+   * Each of them used to make Save unclickable, so a user who uploaded a deed
+   * the reader could only partly read had no way to keep ANY of it — the work
+   * went when they navigated away. A draft is incomplete by definition;
+   * demanding completeness of one was a category error, and these assert that
+   * the demand has moved to readyBlockers rather than being dropped.
+   */
+  it("lets a zero consideration save as a draft", () => {
     const b = { ...BUNDLE, transaction: { ...BUNDLE.transaction, total_sale_consideration: 0 } };
-    expect(dbSaveBlockers(b).join(" ")).toContain("total sale consideration");
+    expect(dbSaveBlockers(b)).toEqual([]);
+    expect(readyBlockers(b).join(" ")).toContain("total sale consideration");
   });
 
-  it("catches a blank address", () => {
+  it("lets a blank address save as a draft", () => {
     const b = { ...BUNDLE, transaction: { ...BUNDLE.transaction, property_address: "   " } };
-    expect(dbSaveBlockers(b).join(" ")).toContain("property address");
+    expect(dbSaveBlockers(b)).toEqual([]);
+    expect(readyBlockers(b).join(" ")).toContain("property address");
   });
 
-  it("catches a party row added but not filled in", () => {
-    // share_pct > 0 is a CHECK constraint; a blank row starts at 0. This is
-    // the exact sequence that used to surface a raw constraint name.
+  it("lets a half-filled party row save as a draft", () => {
     const b = { ...BUNDLE, parties: [...BUNDLE.parties, party({ id: "new-seller-3", seq: 3, name: "", share_pct: 0 })] };
-    expect(dbSaveBlockers(b).join(" ")).toContain("Seller 3");
+    expect(dbSaveBlockers(b)).toEqual([]);
+    expect(readyBlockers(b).join(" ")).toContain("Seller 3");
   });
 
-  it("catches a share above 100%", () => {
-    const b = { ...BUNDLE, parties: [party({ id: "p9", name: "Greedy", share_pct: "140" })] };
-    expect(dbSaveBlockers(b).join(" ")).toContain("more than 100%");
-  });
-
-  it("catches a payment row left at zero", () => {
+  it("lets a payment row at zero save as a draft", () => {
     const b = {
       ...BUNDLE,
       instalments: [{ ...BUNDLE.instalments[0], id: "new-inst-2", seq: 2, amount_paid_by_buyer: 0 }],
     };
-    expect(dbSaveBlockers(b).join(" ")).toContain("payment 2");
+    expect(dbSaveBlockers(b)).toEqual([]);
+    expect(readyBlockers(b).join(" ")).toContain("payment 2");
+  });
+
+  // What the database still refuses, draft or not — a percentage outside
+  // 0-100 and a negative amount remain impossible at every status.
+  it("still catches a share above 100%", () => {
+    const b = { ...BUNDLE, parties: [party({ id: "p9", name: "Greedy", share_pct: "140" })] };
+    expect(dbSaveBlockers(b).join(" ")).toContain("more than 100%");
+  });
+
+  it("still catches a negative share", () => {
+    const b = { ...BUNDLE, parties: [party({ id: "p9", name: "Backwards", share_pct: "-5" })] };
+    expect(dbSaveBlockers(b).join(" ")).toContain("cannot be negative");
+  });
+
+  it("still catches a negative payment", () => {
+    const b = {
+      ...BUNDLE,
+      instalments: [{ ...BUNDLE.instalments[0], amount_paid_by_buyer: -1 }],
+    };
+    expect(dbSaveBlockers(b).join(" ")).toContain("negative");
   });
 
   it("has no opinion about anything the database would accept", () => {
-    // A draft with no sellers and no payments is incomplete, not unsaveable.
-    // Judging that is form141Validate.ts's job, not this one's.
     const b = { ...BUNDLE, parties: BUNDLE.parties.filter((p) => p.party_role === "buyer"), instalments: [] };
     expect(dbSaveBlockers(b)).toEqual([]);
+  });
+});
+
+describe("readyBlockers — completeness, demanded at the filing gate", () => {
+  it("passes a complete transaction", () => {
+    expect(readyBlockers(BUNDLE)).toEqual([]);
+  });
+
+  it("names every missing piece at once rather than one at a time", () => {
+    const b = {
+      ...BUNDLE,
+      transaction: { ...BUNDLE.transaction, property_address: "", property_type: "", total_sale_consideration: 0 },
+    };
+    const out = readyBlockers(b).join(" ");
+    expect(out).toContain("property address");
+    expect(out).toContain("property type");
+    expect(out).toContain("total sale consideration");
+  });
+
+  it("wants a name on every party, which the draft gate does not", () => {
+    const b = { ...BUNDLE, parties: [party({ id: "p1", name: "  ", share_pct: 100 })] };
+    expect(dbSaveBlockers(b)).toEqual([]);
+    expect(readyBlockers(b).join(" ")).toContain("Enter a name");
   });
 });

@@ -29,12 +29,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Upload, FileText, Loader2, CheckCircle2, AlertCircle, HelpCircle, Eye } from "lucide-react";
+import { Upload, FileText, Loader2, CheckCircle2, AlertCircle, HelpCircle, Eye, MinusCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import {
   applyExtraction,
+  reassess,
   resolveQuery,
+  skipQuery,
+  canSkip,
   confirmField,
   openQueries,
   blockingQueries,
@@ -294,6 +297,8 @@ interface Props {
   onExtracted: (applied: AppliedExtraction, doc: StoredDocument | null) => void;
   onProvenanceChange: (next: Record<string, FieldProvenance>) => void;
   onQueriesChange: (next: ResolvedQuery[]) => void;
+  /** Applying an answer can amend the transaction itself — see applyAnswer. */
+  onBundleChange: (next: PropertyDealBundle) => void;
 }
 
 /** File → base64 payload, without the data: prefix the API rejects. */
@@ -318,7 +323,7 @@ type UntypedQuery = any;
 const jobsTable = () => (supabase as UntypedQuery).from("tds_property_extraction_jobs");
 
 export function TdsPropertyUpload({
-  bundle, provenance, queries, onExtracted, onProvenanceChange, onQueriesChange,
+  bundle, provenance, queries, onExtracted, onProvenanceChange, onQueriesChange, onBundleChange,
 }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const { user } = useAuth();
@@ -335,6 +340,61 @@ export function TdsPropertyUpload({
     dropped: DroppedRows[];
   } | null>(null);
   const [answers, setAnswers] = useState<Record<number, string>>({});
+
+  /**
+   * Answer a question and let the answer take effect.
+   *
+   * The panel used to store the text and tell the user to "update the fields
+   * below to match", which left the form showing a figure the user had just
+   * contradicted in writing — and a transaction could be filed carrying both.
+   * Now the answer is parsed against the field the question was about and
+   * written in, overriding whatever the reader had put there, with the
+   * displaced value named out loud rather than replaced in silence.
+   */
+  /**
+   * The bundle as the READER left it, before any answer touched it.
+   *
+   * Kept so every answer can be replayed against it together — see reassess.
+   * Without it, re-answering a question would layer on top of the previous
+   * answer instead of replacing it, and the order the user happened to work
+   * through the panel would change the result.
+   */
+  const readerBundle = useRef<PropertyDealBundle | null>(null);
+  const readerProvenance = useRef<Record<string, FieldProvenance>>({});
+
+  const answerQuery = (idx: number, answer: string) => {
+    // First answer on this reading: remember where the reader left things.
+    if (!readerBundle.current) {
+      readerBundle.current = bundle;
+      readerProvenance.current = provenance;
+    }
+
+    const nextQueries = resolveQuery(queries, idx, answer);
+    // Every answer replayed together, not just this one. An answer changes
+    // more than its own field — a corrected consideration moves the ₹50L
+    // threshold and the payments-reconcile check with it — and answers given
+    // in any order must land on the same form.
+    const out = reassess(nextQueries, readerBundle.current, readerProvenance.current);
+
+    onQueriesChange(nextQueries);
+    onBundleChange(out.bundle);
+    onProvenanceChange(out.provenance);
+    setAnswers((a) => ({ ...a, [idx]: "" }));
+
+    for (const c of out.conflicts) {
+      toast.warning(
+        `${FIELD_LABEL[c.field] || c.field} was answered more than once (${c.values.join(" / ")}). The latest answer is the one in the form.`,
+        { duration: 9000 },
+      );
+    }
+    if (out.amended.length) {
+      for (const a of out.amended) {
+        toast.info(`${FIELD_LABEL[a.field] || a.field}: ${a.from} → ${a.to}`);
+      }
+    } else if (out.recordedOnly.includes(queries[idx]?.field)) {
+      toast.info("Answer recorded. It needs a change to the rows below that this cannot make for you.");
+    }
+  };
   const [showEvidence, setShowEvidence] = useState<string | null>(null);
 
   /**
@@ -798,12 +858,12 @@ export function TdsPropertyUpload({
               <p className="text-xs font-medium">Questions to answer</p>
               {blocking.length > 0 && (
                 <Badge className="bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300 text-[10px]">
-                  {blocking.length} blocking
+                  {blocking.length} must be answered
                 </Badge>
               )}
             </div>
             {queries.map((q, idx) => {
-              if (q.resolvedAt) return null;
+              if (q.resolvedAt || q.skipped) return null;
               return (
                 <div
                   key={`${q.field}-${idx}`}
@@ -835,7 +895,7 @@ export function TdsPropertyUpload({
                       {q.options.map((opt) => (
                         <Button
                           key={opt} size="sm" variant="outline" className="h-6 text-[11px] px-2"
-                          onClick={() => onQueriesChange(resolveQuery(queries, idx, opt))}
+                          onClick={() => answerQuery(idx, opt)}
                         >
                           {opt}
                         </Button>
@@ -852,38 +912,81 @@ export function TdsPropertyUpload({
                       <Button
                         size="sm" className="h-7 text-[11px]"
                         disabled={!(answers[idx] ?? "").trim()}
-                        onClick={() => {
-                          onQueriesChange(resolveQuery(queries, idx, answers[idx].trim()));
-                          setAnswers((a) => ({ ...a, [idx]: "" }));
-                        }}
+                        onClick={() => answerQuery(idx, answers[idx].trim())}
                       >
                         Answer
                       </Button>
                     </div>
                   )}
-                  <p className="text-[10px] text-muted-foreground pl-6">
-                    Answering records the question and your answer on this transaction. Update the fields
-                    below to match.
-                  </p>
+                  <div className="flex items-center justify-between gap-2 pl-6">
+                    <p className="text-[10px] text-muted-foreground">
+                      Your answer is written into the matching field and recorded on this transaction.
+                    </p>
+                    {/* Skipping is a NON-CRITICAL affordance. Nobody should
+                        be locked out of their own file by a question they
+                        cannot answer today — but a critical question is one
+                        the statement cannot be correct without, and waving it
+                        away would put a wrong filing in front of the
+                        department under the buyer's own PAN. So the button is
+                        simply not offered, and the reason is said rather than
+                        left to be discovered. */}
+                    {canSkip(q) ? (
+                      <Button
+                        size="sm" variant="ghost"
+                        className="h-6 text-[11px] px-2 shrink-0 text-muted-foreground"
+                        onClick={() => onQueriesChange(skipQuery(queries, idx))}
+                      >
+                        Skip
+                      </Button>
+                    ) : (
+                      <span className="text-[10px] text-red-700 dark:text-red-300 shrink-0 font-medium">
+                        Must be answered
+                      </span>
+                    )}
+                  </div>
                 </div>
               );
             })}
           </div>
         )}
 
-        {/* Answered questions stay visible — the decision is part of the record. */}
-        {queries.some((q) => q.resolvedAt) && (
+        {/* Answered and skipped questions both stay visible — each is a
+            decision the transaction carries, and a skipped question is the one
+            most worth being able to find again. */}
+        {queries.some((q) => q.resolvedAt || q.skipped) && (
           <details className="text-xs">
             <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
               {queries.filter((q) => q.resolvedAt).length} answered
+              {queries.some((q) => q.skipped) &&
+                `, ${queries.filter((q) => q.skipped && !q.resolvedAt).length} skipped`}
             </summary>
             <ul className="mt-2 space-y-1.5">
-              {queries.filter((q) => q.resolvedAt).map((q, i) => (
-                <li key={`${q.field}-answered-${i}`} className="flex items-start gap-2">
-                  <CheckCircle2 size={12} className="text-emerald-600 shrink-0 mt-0.5" />
+              {queries.filter((q) => q.resolvedAt || q.skipped).map((q, i) => (
+                <li key={`${q.field}-done-${i}`} className="flex items-start gap-2">
+                  {q.resolvedAt ? (
+                    <CheckCircle2 size={12} className="text-emerald-600 shrink-0 mt-0.5" />
+                  ) : (
+                    <MinusCircle size={12} className="text-muted-foreground shrink-0 mt-0.5" />
+                  )}
                   <span className="text-muted-foreground">
-                    {q.question} <span className="text-foreground">— {q.answer}</span>
+                    {q.question}{" "}
+                    {q.resolvedAt ? (
+                      <span className="text-foreground">— {q.answer}</span>
+                    ) : (
+                      <span className="italic">— skipped, left unanswered</span>
+                    )}
                   </span>
+                  {!q.resolvedAt && q.skipped && (
+                    <Button
+                      size="sm" variant="ghost"
+                      className="h-5 text-[10px] px-1.5 shrink-0"
+                      onClick={() => onQueriesChange(
+                        queries.map((x) => (x === q ? { ...x, skipped: false } : x)),
+                      )}
+                    >
+                      Undo
+                    </Button>
+                  )}
                 </li>
               ))}
             </ul>

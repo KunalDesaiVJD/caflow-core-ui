@@ -586,3 +586,192 @@ describe("previous instalments follow the money, not the sequence number", () =>
     expect(computeForm141ScheduleB(sameDay, FILING_BUYER).statements.map((s) => s.instalmentSeq)).toEqual([1, 2]);
   });
 });
+
+describe("residency is a fact somebody asserts, never a default", () => {
+  /**
+   * The gap this closes was the most expensive one in the module. Extraction
+   * used to write "resident" onto every seller it read, because the column
+   * defaulted that way — and nothing in a sale deed states residency. An NRI
+   * sale therefore computed 1% where section 195 needs roughly 20% before
+   * surcharge and cess, produced a clean-looking statement, and left the
+   * BUYER carrying the whole shortfall under section 201 with interest.
+   */
+  const unknownSeller = (over: Partial<Form141Seller> = {}): Form141Seller => ({
+    ...RESIDENT_SELLER(over),
+    residentialStatus: "unknown",
+  });
+
+  it("refuses to compute while any seller's residency is unestablished", () => {
+    const deal: Form141Deal = {
+      ...SAMPLE_DEAL,
+      sellers: [unknownSeller({ pan: "ANRPP0000R", name: "Seller One" }), SAMPLE_DEAL.sellers[1]],
+    };
+    const out = computeForm141ScheduleB(deal, FILING_BUYER);
+    expect(out.blockers.map((b) => b.code)).toContain("seller_residency_unknown");
+    expect(out.statements).toEqual([]);
+  });
+
+  it("names the seller, so the preparer knows whose to check", () => {
+    const deal: Form141Deal = { ...SAMPLE_DEAL, sellers: [unknownSeller({ name: "Seller One" })] };
+    const hit = computeForm141ScheduleB(deal, FILING_BUYER).blockers
+      .find((b) => b.code === "seller_residency_unknown");
+    expect(hit?.message).toContain("Seller One");
+  });
+
+  it("computes normally once every seller's residency is settled", () => {
+    expect(computeForm141ScheduleB(SAMPLE_DEAL, FILING_BUYER).blockers).toEqual([]);
+  });
+
+  it("still sends a non-resident to section 195 rather than computing 1%", () => {
+    const deal: Form141Deal = {
+      ...SAMPLE_DEAL,
+      sellers: [RESIDENT_SELLER({ name: "NRI Seller", residentialStatus: "non_resident" }), SAMPLE_DEAL.sellers[1]],
+    };
+    const out = computeForm141ScheduleB(deal, FILING_BUYER);
+    expect(out.blockers.map((b) => b.code)).toContain("non_resident_seller");
+  });
+});
+
+describe("who paid whom — the allocation override", () => {
+  /**
+   * Two buyers, two sellers, and buyer A is buying seller X's half while buyer
+   * B buys seller Y's. Pro-rata turns that into four rows at 25% each. The
+   * TOTAL tax is identical, so nothing on screen looks wrong — but the
+   * deductee-wise split is exactly what reaches each seller's 26AS and AIS.
+   * Seller X gets credited with tax on money they never received, and their
+   * real credit is short by the same amount.
+   */
+  const TWO_BY_TWO: Form141Deal = {
+    ...SAMPLE_DEAL,
+    instalments: [{ ...SAMPLE_DEAL.instalments[0], amountPaidByBuyer: 12800000 }],
+  };
+
+  it("splits pro-rata when the deed says nothing — unchanged behaviour", () => {
+    const rows = computeForm141ScheduleB(TWO_BY_TWO, FILING_BUYER).statements[0].rows;
+    expect(rows.map((r) => r.presentInstalment)).toEqual([6400000, 6400000]);
+  });
+
+  it("follows the deed instead when it says who was paid", () => {
+    const deal: Form141Deal = {
+      ...TWO_BY_TWO,
+      instalments: [{
+        ...TWO_BY_TWO.instalments[0],
+        allocations: [{ sellerKey: "ANRPP0000R", amount: 12800000 }],
+      }],
+    };
+    const rows = computeForm141ScheduleB(deal, FILING_BUYER).statements[0].rows;
+    // The whole payment went to seller one; seller two received nothing from
+    // it, and must not be credited pro-rata as if they had.
+    expect(rows[0].presentInstalment).toBe(12800000);
+    expect(rows[1].presentInstalment).toBe(0);
+  });
+
+  it("treats an allocation list as complete — an unnamed seller got nothing", () => {
+    // The trap: falling back to pro-rata for a seller missing from the list
+    // would pay them twice, once here and once from their own allocation on
+    // another instalment.
+    const deal: Form141Deal = {
+      ...TWO_BY_TWO,
+      instalments: [{
+        ...TWO_BY_TWO.instalments[0],
+        allocations: [{ sellerKey: "CBNPM0000M", amount: 12800000 }],
+      }],
+    };
+    const rows = computeForm141ScheduleB(deal, FILING_BUYER).statements[0].rows;
+    expect(rows[0].presentInstalment).toBe(0);
+    expect(rows[1].presentInstalment).toBe(12800000);
+  });
+
+  it("adds up several slices to the same seller", () => {
+    const deal: Form141Deal = {
+      ...TWO_BY_TWO,
+      instalments: [{
+        ...TWO_BY_TWO.instalments[0],
+        allocations: [
+          { sellerKey: "ANRPP0000R", amount: 8000000 },
+          { sellerKey: "ANRPP0000R", amount: 4800000 },
+        ],
+      }],
+    };
+    expect(computeForm141ScheduleB(deal, FILING_BUYER).statements[0].rows[0].presentInstalment)
+      .toBe(12800000);
+  });
+
+  it("carries an allocated payment into the next statement's previous-instalments column", () => {
+    const deal: Form141Deal = {
+      ...TWO_BY_TWO,
+      paymentMode: "instalments",
+      instalments: [
+        {
+          seq: 1, amountPaidByBuyer: 6400000,
+          datePaidOrCredited: "2026-09-02", dateOfDeduction: "2026-09-02",
+          allocations: [{ sellerKey: "ANRPP0000R", amount: 6400000 }],
+        },
+        {
+          seq: 2, amountPaidByBuyer: 6400000,
+          datePaidOrCredited: "2026-10-02", dateOfDeduction: "2026-10-02",
+          allocations: [{ sellerKey: "ANRPP0000R", amount: 6400000 }],
+        },
+      ],
+    };
+    const out = computeForm141ScheduleB(deal, FILING_BUYER);
+    // Seller one has now received both payments; the second statement must
+    // say so, because that column is a statement of historical fact.
+    expect(out.statements[1].rows[0].previousInstalments).toBe(6400000);
+    expect(out.statements[1].rows[1].previousInstalments).toBe(0);
+  });
+});
+
+describe("a deal that straddles the 1961 and 2025 Acts", () => {
+  /**
+   * A deed signed in FY 2025-26 whose instalments run into 2026-27 is
+   * ordinary, not exotic. It used to block the ENTIRE transaction on the first
+   * pre-commencement payment, so every genuine transitional deal produced
+   * nothing at all — and a preparer who cannot get a draft out of the software
+   * prepares it somewhere else.
+   */
+  const STRADDLING: Form141Deal = {
+    ...SAMPLE_DEAL,
+    paymentMode: "instalments",
+    dateOfAgreement: "2026-01-15",
+    instalments: [
+      { seq: 1, amountPaidByBuyer: 6400000, datePaidOrCredited: "2026-01-20", dateOfDeduction: "2026-01-20" },
+      { seq: 2, amountPaidByBuyer: 6400000, datePaidOrCredited: "2026-09-02", dateOfDeduction: "2026-09-02" },
+    ],
+  };
+
+  it("still produces a Form 141 for the payments that belong to it", () => {
+    const out = computeForm141ScheduleB(STRADDLING, FILING_BUYER);
+    expect(out.blockers).toEqual([]);
+    expect(out.statements).toHaveLength(1);
+    expect(out.statements[0].instalmentSeq).toBe(2);
+  });
+
+  it("lists the pre-commencement payments rather than dropping them", () => {
+    // Setting them aside must never read as "handled" — each is a separate
+    // Form 26QB, due under the 1961 Act.
+    const out = computeForm141ScheduleB(STRADDLING, FILING_BUYER);
+    expect(out.form26qbPayments).toHaveLength(1);
+    expect(out.form26qbPayments?.[0].datePaidOrCredited).toBe("2026-01-20");
+    expect(out.form26qbPayments?.[0].amountPaidByBuyer).toBe(6400000);
+  });
+
+  it("does not let a pre-commencement payment inflate the later statement", () => {
+    const out = computeForm141ScheduleB(STRADDLING, FILING_BUYER);
+    // Only the September payment is on this form, apportioned across two
+    // sellers: 64,00,000 / 2.
+    expect(out.statements[0].rows.map((r) => r.presentInstalment)).toEqual([3200000, 3200000]);
+  });
+
+  it("blocks only when EVERY payment predates the Act", () => {
+    const deal: Form141Deal = {
+      ...STRADDLING,
+      instalments: [STRADDLING.instalments[0]],
+    };
+    const out = computeForm141ScheduleB(deal, FILING_BUYER);
+    expect(out.blockers.map((b) => b.code)).toContain("pre_regime");
+    expect(out.statements).toEqual([]);
+    // Still listed, so the preparer knows the 26QB is outstanding.
+    expect(out.form26qbPayments).toHaveLength(1);
+  });
+});

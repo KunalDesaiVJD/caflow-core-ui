@@ -23,6 +23,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Home, ArrowLeft, CalendarClock } from "lucide-react";
@@ -133,6 +134,16 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
   };
 
   const client = clients.find((c) => c.id === selClient) || null;
+
+  /** Name and PAN in one label so either finds the client. */
+  const clientOptions = useMemo(
+    () =>
+      clients.map((c) => ({
+        value: c.id,
+        label: `${c.name || "Unnamed"}${c.pan ? ` — ${c.pan}` : ""}`,
+      })),
+    [clients],
+  );
 
   // ── Load ─────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -321,6 +332,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
           pan: p.pan, name: p.name, contact: p.contact, email: p.email,
           share_pct: num(p.share_pct),
           residential_status: p.residential_status,
+          entity_type: p.entity_type,
           pan_status: p.pan_status || "unknown",
           section_395_certificate_no: p.section_395_certificate_no,
           section_395_rate: p.section_395_rate === null ? null : num(p.section_395_rate),
@@ -350,6 +362,7 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
           date_of_deduction: i.date_of_deduction,
           date_of_deposit: i.date_of_deposit,
           date_of_filing: i.date_of_filing,
+          allocations: i.allocations,
         };
         const { error } = isNew(i.id)
           ? await propertyTable("tds_property_instalments").insert(payload)
@@ -466,7 +479,9 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
       parties: [{
         id: "new-buyer-1", firm_id: firmId, transaction_id: "", party_role: "buyer", seq: 1,
         pan: client?.pan || null, name: client?.name || "", contact: null, email: null,
-        share_pct: 100, residential_status: "resident", pan_status: "unknown",
+        // Residency is never read for a buyer — only a seller's picks the
+        // statute — so this value is inert and left as the plain case.
+        share_pct: 100, residential_status: "resident", pan_status: "unknown", entity_type: null,
         section_395_certificate_no: null, section_395_rate: null,
         section_395_valid_from: null, section_395_valid_to: null,
         section_395_ceiling_amount: null,
@@ -560,16 +575,20 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
       <Card className="mb-4">
         <CardContent className="pt-5">
           <div className="flex flex-wrap gap-4 items-end">
-            <div className="space-y-1.5 min-w-[240px]">
+            <div className="space-y-1.5 min-w-[280px]">
               <Label>Client</Label>
-              <Select value={selClient} onValueChange={setSelClient}>
-                <SelectTrigger><SelectValue placeholder="Select a client" /></SelectTrigger>
-                <SelectContent>
-                  {clients.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.name || "Unnamed"}{c.pan ? ` — ${c.pan}` : ""}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Type-to-search rather than a bare dropdown: a firm with several
+                  hundred clients cannot scroll to one, and the PAN is in the
+                  label so a client can be found by either. */}
+              <SearchableSelect
+                className="w-full"
+                options={clientOptions}
+                value={selClient}
+                onValueChange={setSelClient}
+                placeholder="Select a client"
+                searchPlaceholder="Search by name or PAN…"
+                emptyText="No client matches that."
+              />
             </div>
             <div className="space-y-1.5 w-[140px]">
               <Label>Tax Year</Label>

@@ -51,6 +51,7 @@
  */
 
 import { isValidPan, PAN_4TH_CHAR_MAP } from "./rateEngine";
+import { checkPartyFields, checkAddressField } from "./partyFieldRules";
 import {
   THRESHOLD_TOTAL_CONSIDERATION,
   THRESHOLD_PROXIMITY_WARN,
@@ -355,6 +356,23 @@ export function validateDeal(
   // ── Sellers ──────────────────────────────────────────────────────────────
   for (const s of deal.sellers) {
     const ref = s.pan || s.name;
+    // Residency is the first question, not a field with a safe default.
+    // It decides WHICH STATUTE applies — s.393(1) at 1% on this form, or
+    // s.195 at ~20% plus surcharge and cess on Form 27Q under the buyer's own
+    // TAN. Nothing in a sale deed states it, so nobody can infer it from the
+    // document and the software must not pretend otherwise. Getting it wrong
+    // in the "resident" direction leaves the buyer carrying the whole
+    // shortfall under s.201 with interest.
+    if (s.residentialStatus === "unknown") {
+      findings.push({
+        code: "seller_residency_unknown",
+        severity: "blocking",
+        field: "residentialStatus",
+        ref: s.pan || s.name,
+        message: `${s.name || "This seller"}'s residential status has not been established. A resident seller is deducted at ${RATE_STANDARD}% on this form; a NON-resident takes the payment into section 195 — Form 27Q, the buyer's own TAN, and roughly 20% before surcharge and cess. The deed does not say which, so it has to be confirmed. Check the seller's address, whether the money goes to an NRO/NRE account, and whether the deed was signed under a power of attorney.`,
+      });
+    }
+
     if (s.residentialStatus === "non_resident") {
       findings.push({
         code: "non_resident_seller",
@@ -465,19 +483,25 @@ export function validateDeal(
     });
   }
   if (!deal.totalStampDutyValue) {
-    // Blocking, not a warning. Tax is charged on the HIGHER of the two
-    // measures, and with the stamp duty value absent the engine has no
-    // choice but to fall back to the consideration — which understates the
-    // deduction on every deal where the circle rate is the higher figure,
-    // silently, in the direction that produces a demand. There is no safe
-    // default to guess, so the figure has to be supplied before anything is
-    // filed. Drafts still save; this stops the deal being marked ready.
+    // A WARNING, not a blocker, and never a question.
+    //
+    // The figure is the government's own jantri/circle rate, revised on the
+    // government's schedule and printed on the Index-II page. Asking a
+    // preparer for it can only produce a look-up or a guess, so the module
+    // reads it off the document and otherwise leaves it empty.
+    //
+    // Blocking on it would have locked a user out of their own filing over a
+    // number nobody in the room is allowed to decide. The consequence is real
+    // and is stated instead of hidden: with no stamp duty value the engine
+    // charges tax on the consideration alone, which under-deducts wherever the
+    // circle rate is higher. That is a judgement for the preparer to make on
+    // the facts, with this said plainly on the transaction.
     findings.push({
       code: "stamp_duty_value_missing",
-      severity: "blocking",
+      severity: "warning",
       field: "totalStampDutyValue",
       message:
-        "No stamp duty value recorded. Tax is charged on the HIGHER of consideration and stamp duty value, so leaving this blank silently computes the tax on the consideration alone and under-deducts wherever the circle rate is higher. On a registered deed it is on the Index-II page. If it genuinely equals the consideration, enter the same figure.",
+        "No stamp duty value was found on the uploaded document, so tax is computed on the sale consideration alone. Tax is charged on the HIGHER of consideration and stamp duty value, so where the circle rate exceeds the price this under-deducts. Upload the Index-II page if it was not included.",
     });
   }
   if (deal.totalStampDutyValue > deal.totalSaleConsideration && deal.totalSaleConsideration > 0) {
@@ -512,32 +536,29 @@ export function validateDeal(
   }
 
   // ── Which stamp duty value governs ───────────────────────────────────────
-  // Where the deed is registered later than it is agreed, there are two
-  // circle rates in play. Where part of the consideration moved on or before
-  // the agreement date by banking channel, it is the AGREEMENT-date value
-  // that governs — and the figure sitting on the Index-II page is the
-  // registration-date one. This is a question of fact the software cannot
-  // settle, so it is raised rather than decided.
-  if (deal.dateOfRegistration && deal.dateOfAgreement && deal.dateOfRegistration !== deal.dateOfAgreement) {
-    const asOn = deal.stampDutyValueAsOn || null;
-    if (!asOn) {
-      findings.push({
-        code: "sdv_as_on_date_missing",
-        severity: "warning",
-        field: "totalStampDutyValue",
-        message: `The deed was agreed on ${deal.dateOfAgreement} and registered on ${deal.dateOfRegistration}, so two stamp duty values exist. Record which date the figure entered here is taken as at. Where any part of the consideration moved on or before the agreement date through a banking channel, the agreement-date value governs — and the Index-II page carries the registration-date one.`,
-      });
-    } else if (asOn !== deal.dateOfAgreement) {
-      const paidByAgreement = deal.instalments.some((i) => i.datePaidOrCredited <= deal.dateOfAgreement);
-      if (paidByAgreement) {
-        findings.push({
-          code: "sdv_should_be_agreement_date",
-          severity: "warning",
-          field: "totalStampDutyValue",
-          message: `Consideration moved on or before the agreement date (${deal.dateOfAgreement}), but the stamp duty value recorded is taken as at ${asOn}. Where part-consideration is paid by banking channel on or before the agreement date, the agreement-date stamp duty value is the one that governs. Confirm which figure this is.`,
-        });
-      }
-    }
+  //
+  // Where a deed is registered later than it is agreed there are two circle
+  // rates in play, and where part-consideration moved by banking channel on or
+  // before the agreement date it is the AGREEMENT-date value that governs,
+  // while Index-II carries the registration-date one.
+  //
+  // This module used to raise that as two questions to the user. It no longer
+  // asks anything about the stamp duty value — see stamp_duty_value_missing
+  // above — so the point is made once, as a note on the facts already present,
+  // and only where the two dates actually differ and money actually moved by
+  // the agreement date. Nothing here asks for a figure.
+  if (
+    deal.dateOfRegistration &&
+    deal.dateOfAgreement &&
+    deal.dateOfRegistration !== deal.dateOfAgreement &&
+    deal.instalments.some((i) => i.datePaidOrCredited <= deal.dateOfAgreement)
+  ) {
+    findings.push({
+      code: "sdv_agreement_date_governs",
+      severity: "warning",
+      field: "totalStampDutyValue",
+      message: `Consideration moved on or before the agreement date (${deal.dateOfAgreement}) and the deed was registered later, on ${deal.dateOfRegistration}. Where part-consideration is paid by banking channel on or before the agreement date, the AGREEMENT-date stamp duty value governs — and the Index-II page carries the registration-date one. Check which figure applies before filing.`,
+    });
   }
   if (deal.dateOfRegistration && deal.dateOfAgreement && deal.dateOfRegistration < deal.dateOfAgreement) {
     findings.push({
@@ -608,6 +629,92 @@ export function validateDeal(
     });
   }
 
+  // ── Payments that belong to Form 26QB ────────────────────────────────────
+  //
+  // The engine sets these aside so a transitional deal still produces a Form
+  // 141 draft for the payments that belong to it. Setting aside must never
+  // read as "handled": each one is a separate 26QB, due under the 1961 Act,
+  // with its own challan and its own due date.
+  const preRegime = deal.instalments.filter((i) => !isForm141Regime(i.datePaidOrCredited));
+  if (preRegime.length && preRegime.length < deal.instalments.length) {
+    findings.push({
+      code: "straddles_regimes",
+      severity: "warning",
+      field: "instalments",
+      message: `${preRegime.length} of ${deal.instalments.length} payments were made before the Income-tax Act, 2025 commenced, so this deal straddles both regimes. Form 141 below covers only the later payments. The earlier ones — ${preRegime.map((i) => `${i.datePaidOrCredited} (${inr(i.amountPaidByBuyer)})`).join(", ")} — each need a Form 26QB under the 1961 Act, which this module does not produce.`,
+    });
+  }
+
+  // ── Payment allocations ──────────────────────────────────────────────────
+  //
+  // An allocation says which seller each slice of a payment went to, and it
+  // overrides the pro-rata split entirely. That makes it a second way to lose
+  // money: a list that does not add up to the payment, or names a seller who
+  // is not on the deal, quietly changes the taxable base for everyone on that
+  // payment. Both block.
+  const sellerKeys = new Set(deal.sellers.map((s) => s.pan || s.name));
+  for (const inst of deal.instalments) {
+    const list = inst.allocations;
+    if (!list || !list.length) continue;
+
+    for (const a of list) {
+      if (!sellerKeys.has(a.sellerKey)) {
+        findings.push({
+          code: "allocation_unknown_seller",
+          severity: "blocking",
+          field: "instalments",
+          ref: String(inst.seq),
+          message: `Payment ${inst.seq} allocates ${inr(a.amount)} to "${a.sellerKey}", who is not a seller on this transaction. Add them as a seller, or correct the allocation.`,
+        });
+      }
+      if (a.amount < 0) {
+        findings.push({
+          code: "allocation_negative",
+          severity: "blocking",
+          field: "instalments",
+          ref: String(inst.seq),
+          message: `Payment ${inst.seq} allocates a negative amount to "${a.sellerKey}".`,
+        });
+      }
+    }
+
+    const allocated = list.reduce((t, a) => t + (a.amount || 0), 0);
+    const gap = (inst.amountPaidByBuyer || 0) - allocated;
+    if (Math.abs(gap) > RUPEE_TOLERANCE) {
+      findings.push({
+        code: "allocation_does_not_reconcile",
+        severity: "blocking",
+        field: "instalments",
+        ref: String(inst.seq),
+        message: `Payment ${inst.seq} is ${inr(inst.amountPaidByBuyer)} but its split across sellers totals ${inr(allocated)}, ${gap > 0 ? `leaving ${inr(gap)} unallocated` : `over-allocating by ${inr(-gap)}`}. Every rupee of a payment has to be attributed to a seller, because the split is what reaches each seller's 26AS.`,
+      });
+    }
+  }
+
+  // ── Field-level rules ────────────────────────────────────────────────────
+  //
+  // Length, character set, and text that is structurally wrong for the field
+  // it sits in — an address read into a name, a partner list on a firm, a PAN
+  // whose constitution contradicts the party's. These matter because every
+  // value here is eventually typed into the portal, where an over-long field
+  // is rejected outright and a name that does not match the PAN is ACCEPTED,
+  // and quietly files the deduction against the wrong record. See
+  // partyFieldRules.ts for why each rule is the severity it is.
+  for (const b of deal.buyers) {
+    findings.push(...checkPartyFields({
+      name: b.name, pan: b.pan, entityType: b.entityType ?? null,
+      role: "buyer", seq: deal.buyers.indexOf(b) + 1,
+    }));
+  }
+  for (const s of deal.sellers) {
+    findings.push(...checkPartyFields({
+      name: s.name, pan: s.pan, entityType: s.entityType ?? null,
+      contact: s.contact, email: s.email,
+      role: "seller", seq: deal.sellers.indexOf(s) + 1,
+    }));
+  }
+  findings.push(...checkAddressField(deal.propertyAddress));
+
   const buyer = deal.buyers.find((b) => b.pan === filingBuyerPan);
   if (buyer) {
     const obligation = (deal.totalSaleConsideration || 0) * (buyer.sharePct / 100);
@@ -618,6 +725,29 @@ export function validateDeal(
         severity: "blocking",
         field: "instalments",
         message: `The instalments total ${inr(paid)}, more than this buyer's ${buyer.sharePct}% share of the consideration (${inr(obligation)}). Check the amounts and the share.`,
+      });
+    }
+
+    // The mirror of the check above, and the one that actually loses money.
+    //
+    // Too MUCH recorded is conspicuous: the arithmetic stops making sense and
+    // somebody looks. Too LITTLE is invisible — tax is computed on whatever
+    // payments are present, every row reconciles, and the statement looks
+    // exactly like a correct one for a smaller deal. A part-read scanned deed
+    // where only the first of six instalments survived produces precisely
+    // that, and the shortfall is recovered from the buyer with interest.
+    //
+    // A warning rather than a blocker, because a genuinely part-paid schedule
+    // is ordinary: the deal may simply not have completed yet, and each
+    // payment is its own statement anyway. What must not happen is silence.
+    const shortfall = obligation - paid;
+    if (deal.totalSaleConsideration > 0 && shortfall > RUPEE_TOLERANCE) {
+      const pctRecorded = obligation > 0 ? Math.round((paid / obligation) * 100) : 0;
+      findings.push({
+        code: "instalments_below_obligation",
+        severity: "warning",
+        field: "instalments",
+        message: `The payments recorded total ${inr(paid)} — ${pctRecorded}% of this buyer's ${buyer.sharePct}% share of the consideration (${inr(obligation)}), leaving ${inr(shortfall)} unaccounted for. If the balance is still to be paid, that is expected and each future payment gets its own statement. If payments are MISSING from this schedule, the tax computed here is short by about ${inr(shortfall * (RATE_STANDARD / 100))} and the shortfall is recovered from the buyer with interest.`,
       });
     }
   }
@@ -636,13 +766,17 @@ export function validateDeal(
     }
     seen.add(inst.seq);
 
-    if (!isForm141Regime(inst.datePaidOrCredited)) {
+    // Blocking ONLY when there is nothing left for this form. A deal that
+    // straddles the two regimes is ordinary and still has a Form 141 to
+    // produce for its later payments — the earlier ones are reported once, by
+    // straddles_regimes above, rather than blocking the whole transaction.
+    if (!isForm141Regime(inst.datePaidOrCredited) && preRegime.length === deal.instalments.length) {
       findings.push({
         code: "pre_regime_payment",
         severity: "blocking",
         field: "instalments",
         ref,
-        message: `Instalment ${inst.seq} was paid on ${inst.datePaidOrCredited}, before the Income-tax Act, 2025 commenced on ${FORM_141_EFFECTIVE_FROM}. That deduction belongs in Form 26QB under the 1961 Act, which this module does not produce.`,
+        message: `Instalment ${inst.seq} was paid on ${inst.datePaidOrCredited}, before the Income-tax Act, 2025 commenced on ${FORM_141_EFFECTIVE_FROM}. Every payment on this transaction is pre-commencement, so all of them belong in Form 26QB under the 1961 Act and there is no Form 141 statement to produce.`,
       });
     }
     if (inst.dateOfDeduction < inst.datePaidOrCredited) {

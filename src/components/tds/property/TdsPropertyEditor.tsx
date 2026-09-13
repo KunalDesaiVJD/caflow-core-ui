@@ -31,6 +31,7 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Trash2, AlertTriangle, AlertCircle, CheckCircle2, Info, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ENTITY_LABEL, entityFromPan, type EntityType } from "@/lib/tds/partyFieldRules";
 
 import { validateForm141 } from "@/lib/tds/form141Validate";
 import {
@@ -47,6 +48,7 @@ import {
   num,
   resolveFilingBuyerPan,
   dbSaveBlockers,
+  readyBlockers,
   type PropertyDealBundle,
   type PropertyPartyRow,
   type PropertyInstalmentRow,
@@ -57,6 +59,7 @@ import { TdsPropertyChallan } from "./TdsPropertyChallan";
 import type { ChallanFields } from "@/lib/tds/form141Challan";
 import {
   blockingQueries,
+  skippedBlocking,
   FIELD_LABEL,
   type AppliedExtraction,
   type ResolvedQuery,
@@ -109,7 +112,11 @@ const blankParty = (
   contact: null,
   email: null,
   share_pct: 0,
-  residential_status: "resident",
+  // Unknown, for a seller, blocks filing until somebody establishes it —
+  // which is the point. Never read for a buyer; only the seller's residency
+  // picks the statute.
+  residential_status: "unknown",
+  entity_type: null,
   pan_status: "unknown",
   section_395_certificate_no: null,
   section_395_rate: null,
@@ -132,6 +139,7 @@ const blankInstalment = (seq: number, firmId: string, txnId: string): PropertyIn
     date_of_deduction: today,
     date_of_deposit: null,
     date_of_filing: null,
+    allocations: null,
   };
 };
 
@@ -202,6 +210,18 @@ export function TdsPropertyEditor({
   const extractionFindings = useMemo(() => {
     const out: { code: string; severity: "blocking" | "warning"; field: string; message: string; ref?: string }[] = [];
 
+    // A question the user skipped stops blocking, but the reason it was asked
+    // has not gone away — it reappears here so the file still shows it.
+    for (const q of skippedBlocking(queries)) {
+      out.push({
+        code: `query_skipped:${q.field}`,
+        severity: "warning",
+        field: q.field,
+        message: `Left unanswered: ${q.question}`,
+        ref: q.why,
+      });
+    }
+
     for (const q of blockingQueries(queries)) {
       out.push({
         code: "extraction_query_unresolved",
@@ -269,8 +289,12 @@ export function TdsPropertyEditor({
    * draft being saved — it stops the deal being marked ready to file.
    */
   const saveBlockers = useMemo(() => dbSaveBlockers(bundle), [bundle]);
+  // Completeness is a FILING requirement, not a saving one. A draft saves with
+  // whatever is known; marking it ready is where every field has to be there.
+  const readyGate = useMemo(() => readyBlockers(bundle), [bundle]);
   const canSave = saveBlockers.length === 0 && !saving;
-  const canMarkReady = canSave && blockingCount === 0 && t.status !== "filed";
+  const canMarkReady =
+    canSave && readyGate.length === 0 && blockingCount === 0 && t.status !== "filed";
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
@@ -283,6 +307,7 @@ export function TdsPropertyEditor({
           onExtracted={onExtracted}
           onProvenanceChange={onProvenanceChange}
           onQueriesChange={onQueriesChange}
+          onBundleChange={onChange}
         />
 
         {/* Property */}
@@ -336,25 +361,41 @@ export function TdsPropertyEditor({
                   onChange={(e) => patchTxn({ total_sale_consideration: Number(e.target.value) })}
                 />
               </div>
+              {/*
+                Stamp duty value is READ, never typed.
+
+                It is the government's own jantri/circle rate, revised on the
+                government's schedule, and it is printed on the Index-II page of
+                every registered deed. Asking a preparer to key it invites a
+                stale or mis-typed figure into the one number that can only ever
+                raise the tax — so the field is gone, and the reader takes it
+                off Index-II when Index-II is in the upload.
+
+                The engine still charges tax on the HIGHER of consideration and
+                stamp duty value, unchanged. What follows only SHOWS the figure
+                when the document supplied one.
+              */}
               <div className="space-y-1.5">
                 <Label>Total stamp duty value</Label>
-                <Input
-                  type="number" inputMode="numeric"
-                  value={t.total_stamp_duty_value === null ? "" : num(t.total_stamp_duty_value) || ""}
-                  placeholder="Usually on Index-II"
-                  onChange={(e) => patchTxn({ total_stamp_duty_value: e.target.value === "" ? null : Number(e.target.value) })}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Stamp duty value as at</Label>
-                <Input
-                  type="date"
-                  value={t.stamp_duty_value_as_on || ""}
-                  onChange={(e) => patchTxn({ stamp_duty_value_as_on: e.target.value || null })}
-                />
+                <div className="h-10 flex items-center rounded-md border border-dashed border-border bg-muted/40 px-3 text-sm">
+                  {t.total_stamp_duty_value === null || !num(t.total_stamp_duty_value) ? (
+                    <span className="text-muted-foreground text-xs">
+                      Not on the uploaded document
+                    </span>
+                  ) : (
+                    <span className="tabular-nums">
+                      {num(t.total_stamp_duty_value).toLocaleString("en-IN")}
+                      {t.stamp_duty_value_as_on && (
+                        <span className="text-muted-foreground text-xs ml-2">
+                          as at {t.stamp_duty_value_as_on}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
                 <p className="text-[11px] text-muted-foreground">
-                  Index-II carries the registration-date value. Where part-consideration moved by
-                  banking channel on or before the agreement date, the agreement-date value governs.
+                  Read from Index-II. Set by the government, so it is never
+                  entered by hand.
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -473,19 +514,63 @@ export function TdsPropertyEditor({
                   </Button>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-4">
+                  {/* The first question about a seller, and the one the deed
+                      cannot answer. It picks the STATUTE: resident is 1% here,
+                      non-resident is s.195 at ~20% plus surcharge and cess on
+                      Form 27Q under the buyer's own TAN. "Not established" is
+                      the default and it blocks filing, because the old default
+                      of "Resident" turned an unasked question into a silent
+                      1% on an NRI sale. */}
                   <div className="space-y-1.5">
                     <Label className="text-xs">Residential status</Label>
                     <Select
-                      value={s.residential_status}
-                      onValueChange={(v: "resident" | "non_resident") => patchParty(s.id, { residential_status: v })}
+                      value={s.residential_status || "unknown"}
+                      onValueChange={(v: PropertyPartyRow["residential_status"]) =>
+                        patchParty(s.id, { residential_status: v })}
                     >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectTrigger
+                        className={cn(
+                          (s.residential_status || "unknown") === "unknown" &&
+                            "border-red-400 text-red-700 dark:text-red-300",
+                        )}
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
                       <SelectContent>
+                        <SelectItem value="unknown">Not established</SelectItem>
                         <SelectItem value="resident">Resident</SelectItem>
                         <SelectItem value="non_resident">Non-resident</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
+                  {/* Constitution. Not cosmetic: it is what makes every name
+                      and PAN rule expressible. The department issues the 4th
+                      PAN character FROM the constitution, so the two can be
+                      cross-checked — an HUF recorded against the karta's own
+                      P-series PAN credits the tax to the karta and leaves the
+                      HUF with none, which nothing downstream would notice.
+                      Suggested from the PAN, never defaulted. */}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Constitution</Label>
+                    <Select
+                      value={s.entity_type ?? "unset"}
+                      onValueChange={(v) =>
+                        patchParty(s.id, { entity_type: v === "unset" ? null : (v as EntityType) })}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="unset">
+                          {entityFromPan(s.pan)
+                            ? `Not set — PAN suggests ${ENTITY_LABEL[entityFromPan(s.pan)!]}`
+                            : "Not set"}
+                        </SelectItem>
+                        {(Object.keys(ENTITY_LABEL) as EntityType[]).map((k) => (
+                          <SelectItem key={k} value={k}>{ENTITY_LABEL[k]}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   {/* An inoperative PAN carries 20%, not 1% — and nothing on
                       the deed reveals it. Sits beside the PAN it qualifies. */}
                   <div className="space-y-1.5">
@@ -623,6 +708,87 @@ export function TdsPropertyEditor({
                 <Button size="icon" variant="ghost" onClick={() => removeInstalment(i.id)} aria-label={`Remove payment ${i.seq}`}>
                   <Trash2 size={14} />
                 </Button>
+
+                {/*
+                  Who this payment actually went to.
+                  ==================================
+
+                  Offered only where it can matter — more than one seller.
+                  With one seller the whole payment goes to them and there is
+                  nothing to split.
+
+                  Left off, the engine splits pro-rata by share, which is right
+                  whenever the buyers are buying the whole property jointly.
+                  It is wrong on the deed this exists for: two buyers and two
+                  sellers where buyer A takes seller X's half and buyer B takes
+                  seller Y's. Pro-rata makes four rows at 25% each — the total
+                  tax is identical, so nothing looks wrong, but the split is
+                  what reaches each seller's 26AS, and seller X ends up
+                  credited with tax on money they never received.
+                */}
+                {sellers.length > 1 && (
+                  <div className="sm:col-span-5 rounded-md border border-dashed px-3 py-2 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[11px] text-muted-foreground">
+                        {i.allocations?.length
+                          ? "Split across sellers as recorded below."
+                          : "Split pro-rata by each seller's share. Set it out payment by payment only if the deed says who was paid what."}
+                      </p>
+                      <Button
+                        size="sm" variant="ghost" className="h-6 text-[11px] px-2 shrink-0"
+                        onClick={() => patchInstalment(i.id, {
+                          allocations: i.allocations?.length
+                            ? null
+                            : sellers.map((sl) => ({
+                                seller_key: sl.pan || sl.name,
+                                amount: Math.round(num(i.amount_paid_by_buyer) * (num(sl.share_pct) / 100)),
+                              })),
+                        })}
+                      >
+                        {i.allocations?.length ? "Back to pro-rata" : "Split by seller"}
+                      </Button>
+                    </div>
+                    {i.allocations?.length ? (
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        {sellers.map((sl) => {
+                          const key = sl.pan || sl.name;
+                          const alloc = i.allocations?.find((a) => a.seller_key === key);
+                          return (
+                            <div key={sl.id} className="flex items-center gap-2">
+                              <span className="text-[11px] text-muted-foreground truncate flex-1">
+                                {sl.name || `Seller ${sl.seq}`}
+                              </span>
+                              <Input
+                                className="h-7 w-36 text-xs" type="number" inputMode="numeric"
+                                value={alloc ? num(alloc.amount) || "" : ""}
+                                placeholder="0"
+                                onChange={(e) => {
+                                  const amount = Number(e.target.value) || 0;
+                                  const rest = (i.allocations || []).filter((a) => a.seller_key !== key);
+                                  patchInstalment(i.id, { allocations: [...rest, { seller_key: key, amount }] });
+                                }}
+                              />
+                            </div>
+                          );
+                        })}
+                        {(() => {
+                          const allocated = (i.allocations || []).reduce((t, a) => t + num(a.amount), 0);
+                          const gap = num(i.amount_paid_by_buyer) - allocated;
+                          if (Math.abs(gap) < 1) return null;
+                          // Blocked by the validator too; said here as well so
+                          // it is visible where it is being typed.
+                          return (
+                            <p className="sm:col-span-2 text-[11px] text-red-700 dark:text-red-300">
+                              {gap > 0
+                                ? `${formatInr(gap)} of this payment is not attributed to any seller.`
+                                : `Over-allocated by ${formatInr(-gap)}.`}
+                            </p>
+                          );
+                        })()}
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
             ))}
             {bundle.instalments.length === 0 && (
@@ -665,11 +831,21 @@ export function TdsPropertyEditor({
             </div>
           )}
 
-          {saveBlockers.length === 0 && blockingCount > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {blockingCount} blocking finding{blockingCount === 1 ? "" : "s"} — the draft saves, but the
-              transaction cannot be marked ready to file until they are cleared.
-            </p>
+          {saveBlockers.length === 0 && (readyGate.length > 0 || blockingCount > 0) && (
+            <div className="rounded-md border border-border bg-muted/40 px-3 py-2 space-y-1">
+              <p className="text-xs font-medium">
+                The draft saves. Before it can be marked ready to file:
+              </p>
+              <ul className="text-xs text-muted-foreground space-y-0.5 list-disc pl-4">
+                {readyGate.map((r) => <li key={r}>{r}</li>)}
+                {blockingCount > 0 && (
+                  <li>
+                    {blockingCount} blocking finding{blockingCount === 1 ? "" : "s"} in the panel
+                    alongside.
+                  </li>
+                )}
+              </ul>
+            </div>
           )}
 
           {canMarkReady && t.status === "draft" && (

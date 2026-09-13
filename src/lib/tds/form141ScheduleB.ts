@@ -56,14 +56,34 @@ import {
   daysLate,
   FORM_141_EFFECTIVE_FROM,
 } from "./form141";
+import type { EntityType } from "./partyFieldRules";
 
 // ─── Inputs ─────────────────────────────────────────────────────────────────
 
-export type ResidentialStatus = "resident" | "non_resident";
+/**
+ * A seller's residency, and whether anyone has actually established it.
+ *
+ * "unknown" is the DEFAULT and it is not a nicety. Residency decides which
+ * statute applies: a resident seller is s.393(1) Table Sl. No. 3(i) at 1% on
+ * this form, while a non-resident is s.195 — a different section, Form 27Q,
+ * the buyer's own TAN, and a rate around 20% before surcharge and cess.
+ *
+ * Nothing in a sale deed states it. The module used to record every extracted
+ * seller as "resident", which meant an NRI sale silently computed 1% where
+ * s.195 needed twenty-something, and the buyer carried the shortfall under
+ * s.201 with interest. On a ₹2.5 crore property that is roughly ₹50 lakh of
+ * exposure created by a default value.
+ *
+ * So residency is now a fact somebody has to assert, and "unknown" blocks.
+ */
+export type ResidentialStatus = "resident" | "non_resident" | "unknown";
 
 export interface Form141Buyer {
   pan: string | null;
   name: string;
+  /** Constitution, for the PAN cross-check in partyFieldRules. Null = not
+   *  established; nothing is inferred silently. */
+  entityType?: EntityType | null;
   /** Proportion of TOTAL sale consideration paid by this buyer, as a
    *  percentage (50 means 50%). */
   sharePct: number;
@@ -89,6 +109,9 @@ export const PAN_STATUSES_AT_HIGHER_RATE: PanStatus[] = ["inoperative", "invalid
 export interface Form141Seller {
   pan: string | null;
   name: string;
+  /** Constitution, for the PAN cross-check in partyFieldRules. Null = not
+   *  established; nothing is inferred silently. */
+  entityType?: EntityType | null;
   contact?: string | null;
   email?: string | null;
   /** Proportion of TOTAL sale consideration received by this seller (%). */
@@ -112,6 +135,19 @@ export interface Form141Seller {
   section395CeilingAmount?: number | null;
 }
 
+/**
+ * Who a slice of one payment actually went to.
+ *
+ * Optional, and absent on the ordinary deal. Where it IS given it overrides
+ * the pro-rata split — see `allocationFor` for why that matters.
+ */
+export interface Form141Allocation {
+  /** Seller who received this slice, by PAN where there is one, else by the
+   *  exact name — the same key the cumulative totals are carried under. */
+  sellerKey: string;
+  amount: number;
+}
+
 export interface Form141Instalment {
   seq: number;
   /** Total this buyer paid or credited in THIS instalment, across all
@@ -128,6 +164,24 @@ export interface Form141Instalment {
    *  the deposit date, since Form 141 is a challan-cum-statement and the two
    *  normally coincide. */
   dateOfFiling?: string | null;
+  /**
+   * How this payment was split between the sellers, where the deed says.
+   *
+   * Absent on almost every deal, and absence means pro-rata by share — which
+   * is right whenever the buyers are buying the whole property jointly.
+   *
+   * It is NOT right on the deed this exists for: two buyers, two sellers,
+   * where buyer A takes seller X's half and buyer B takes seller Y's half.
+   * Pro-rata turns that into four rows at 25% each. The total tax comes out
+   * the same, so nothing looks wrong — but the deductee-wise allocation is
+   * what reaches each seller's 26AS and AIS, and seller X ends up credited
+   * with tax on money they never received while their real credit is short.
+   * Neither seller can reconcile their own return.
+   *
+   * The software will not guess this. It is asked, and answered, or left
+   * absent and pro-rata.
+   */
+  allocations?: Form141Allocation[] | null;
 }
 
 export interface Form141Deal {
@@ -221,6 +275,7 @@ export interface Form141Blocker {
   code:
     | "pre_regime"
     | "non_resident_seller"
+    | "seller_residency_unknown"
     | "no_filing_buyer"
     | "no_sellers"
     | "no_instalments";
@@ -238,6 +293,16 @@ export interface Form141Computation {
   /** Across every statement produced. */
   grandTotalTds: number;
   grandTotalPayable: number;
+  /**
+   * Payments that belong to Form 26QB, not here.
+   *
+   * A deed signed in FY 2025-26 with instalments running into 2026-27 is
+   * ordinary, and its earlier payments fall under the 1961 Act. They are set
+   * aside rather than blocking the whole transaction — but they are DUE, and
+   * listing them is what stops "Form 141 computed cleanly" being read as
+   * "everything is filed".
+   */
+  form26qbPayments?: { seq: number; datePaidOrCredited: string; amountPaidByBuyer: number }[];
 }
 
 // ─── Money ──────────────────────────────────────────────────────────────────
@@ -260,6 +325,28 @@ const pct = (share: number): number => share / 100;
  * liable; testing each buyer's ₹30,00,000 share would wrongly exempt the whole
  * transaction, which is the classic implementation error in this provision.
  */
+/**
+ * What this seller got out of this payment.
+ *
+ * Falls back to the caller's pro-rata figure whenever the payment carries no
+ * allocation at all, which is the ordinary case. Once a payment DOES carry
+ * one, the list is taken as complete: a seller not named in it received
+ * nothing from that payment, and returning the pro-rata share instead would
+ * silently pay them twice — once from their own allocation on another
+ * instalment and once from this one.
+ */
+export function allocationFor(
+  inst: Form141Instalment,
+  sellerKey: string,
+  proRata: number,
+): number {
+  const list = inst.allocations;
+  if (!list || !list.length) return proRata;
+  return list
+    .filter((a) => a.sellerKey === sellerKey)
+    .reduce((t, a) => t + (Number(a.amount) || 0), 0);
+}
+
 export function evaluateThreshold(deal: Form141Deal): ThresholdResult {
   const consideration = deal.totalSaleConsideration || 0;
   const sdv = deal.totalStampDutyValue || 0;
@@ -523,6 +610,18 @@ export function computeForm141ScheduleB(
   // a TAN the buyer may not even hold. Producing a Schedule B draft anyway
   // would be worse than producing nothing.
   for (const s of deal.sellers) {
+    // Unknown is NOT resident. Computing at 1% on an unestablished residency
+    // is the failure this guards: it produces a statement that looks correct
+    // and under-deducts by a factor of twenty if the seller turns out to be
+    // an NRI, with the buyer carrying the shortfall under s.201.
+    if (s.residentialStatus === "unknown") {
+      blockers.push({
+        code: "seller_residency_unknown",
+        message: `${s.name || "A seller"}'s residential status has not been established, so no rate can be applied. A resident is deducted at ${RATE_STANDARD}% here; a non-resident falls under section 195 and Form 27Q entirely.`,
+        ref: s.pan || s.name,
+      });
+      continue;
+    }
     if (s.residentialStatus === "non_resident") {
       blockers.push({
         code: "non_resident_seller",
@@ -532,18 +631,40 @@ export function computeForm141ScheduleB(
     }
   }
 
-  for (const inst of deal.instalments) {
-    if (!isForm141Regime(inst.datePaidOrCredited)) {
-      blockers.push({
-        code: "pre_regime",
-        message: `Instalment ${inst.seq} was paid on ${inst.datePaidOrCredited}, before the Income-tax Act, 2025 commenced on ${FORM_141_EFFECTIVE_FROM}. That deduction belongs in Form 26QB under the 1961 Act.`,
-        ref: String(inst.seq),
-      });
-    }
+  // ── Payments from before the Act commenced ───────────────────────────────
+  //
+  // A deed signed in FY 2025-26 whose instalments run on into 2026-27 is
+  // ordinary, not exotic: the earlier payments belong in Form 26QB under the
+  // 1961 Act, the later ones in Form 141 here. They are different statements
+  // under different statutes, and BOTH are due.
+  //
+  // This used to block the whole transaction on the first pre-commencement
+  // payment, which meant every genuine transitional deal produced nothing at
+  // all — and a preparer who cannot get a draft out of the software prepares
+  // it somewhere else, or not at all. So the pre-commencement payments are
+  // SET ASIDE rather than fatal: Form 141 is computed on the payments that
+  // belong to it, and the ones that do not are reported as needing a 26QB
+  // each, by date and amount, so nothing is quietly dropped.
+  //
+  // Only when NOTHING is left for this form does it become a blocker, because
+  // then there is genuinely no Form 141 statement to produce.
+  const outOfRegime = deal.instalments.filter((i) => !isForm141Regime(i.datePaidOrCredited));
+  const inRegime = deal.instalments.filter((i) => isForm141Regime(i.datePaidOrCredited));
+
+  if (outOfRegime.length && !inRegime.length) {
+    blockers.push({
+      code: "pre_regime",
+      message: `Every payment on this transaction was made before the Income-tax Act, 2025 commenced on ${FORM_141_EFFECTIVE_FROM}. All of them belong in Form 26QB under the 1961 Act, so there is no Form 141 statement to produce.`,
+    });
   }
 
   if (blockers.length || !buyer || !threshold.liable) {
-    return { threshold, statements: [], blockers, grandTotalTds: 0, grandTotalPayable: 0 };
+    return {
+      threshold, statements: [], blockers, grandTotalTds: 0, grandTotalPayable: 0,
+      form26qbPayments: outOfRegime.map((i) => ({
+        seq: i.seq, datePaidOrCredited: i.datePaidOrCredited, amountPaidByBuyer: i.amountPaidByBuyer,
+      })),
+    };
   }
 
   const buyerShare = pct(buyer.sharePct);
@@ -556,7 +677,7 @@ export function computeForm141ScheduleB(
   // last, overstating the earlier statements' carry-forward and understating
   // its own. The seq is the tie-breaker, so same-day payments keep the order
   // the user gave them.
-  const ordered = [...deal.instalments].sort(
+  const ordered = [...inRegime].sort(
     (a, b) => a.datePaidOrCredited.localeCompare(b.datePaidOrCredited) || a.seq - b.seq,
   );
 
@@ -575,7 +696,11 @@ export function computeForm141ScheduleB(
       const key = sellerKey(seller);
       const sellerShare = pct(seller.sharePct);
 
-      const presentInstalment = inst.amountPaidByBuyer * sellerShare;
+      // Pro-rata unless the deed says otherwise. An allocation list names the
+      // seller each slice of this payment actually went to; where one exists
+      // for this seller it IS the present instalment, and a seller absent
+      // from the list received nothing from this payment.
+      const presentInstalment = allocationFor(inst, key, inst.amountPaidByBuyer * sellerShare);
       const previousInstalments = paidSoFar.get(key) || 0;
       paidSoFar.set(key, previousInstalments + presentInstalment);
 
@@ -659,6 +784,9 @@ export function computeForm141ScheduleB(
 
   return {
     threshold,
+    form26qbPayments: outOfRegime.map((i) => ({
+      seq: i.seq, datePaidOrCredited: i.datePaidOrCredited, amountPaidByBuyer: i.amountPaidByBuyer,
+    })),
     statements,
     blockers,
     grandTotalTds: statements.reduce((sum, s) => sum + s.totalTds, 0),

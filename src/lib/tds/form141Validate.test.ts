@@ -294,15 +294,18 @@ describe("warnings — proceed, but look", () => {
     expect(validateDeal(deal, FILING_BUYER).map((f) => f.code)).toContain("sdv_above_consideration");
   });
 
-  it("BLOCKS when the stamp duty value is missing entirely", () => {
-    // Blocking rather than a warning: with no stamp duty value the engine
-    // falls back to the consideration, which under-deducts on every deal
-    // where the circle rate is higher — silently, and in the direction that
-    // produces a demand against the buyer. There is no safe figure to guess.
+  it("WARNS, and does not block, when the stamp duty value is missing", () => {
+    // It used to block. It cannot: the figure is the government's jantri rate,
+    // printed on Index-II, and a preparer asked for it can only look it up or
+    // guess. Blocking locked a user out of their own filing over a number
+    // nobody in the room decides, so the module never asks for it and states
+    // the consequence instead — the engine falls back to the consideration,
+    // which under-deducts wherever the circle rate is higher.
     const deal = { ...DEAL, totalStampDutyValue: 0 };
     const hit = validateDeal(deal, FILING_BUYER).find((f) => f.code === "stamp_duty_value_missing");
-    expect(hit?.severity).toBe("blocking");
+    expect(hit?.severity).toBe("warning");
     expect(hit?.message).toContain("Index-II");
+    expect(hit?.message).toContain("under-deducts");
   });
 
   it("warns on a deal sitting within 5% of the threshold", () => {
@@ -401,8 +404,14 @@ describe("validateForm141 — the single gate", () => {
     expect(warnOnly.ok).toBe(true);
 
     expect(validateForm141({ ...DEAL, totalSaleConsideration: 0 }, FILING_BUYER).ok).toBe(false);
-    // Absent, as opposed to merely surprising, does block.
-    expect(validateForm141({ ...DEAL, totalStampDutyValue: 0 }, FILING_BUYER).ok).toBe(false);
+
+    // An ABSENT stamp duty value no longer blocks either. It is the
+    // government's jantri rate, read off Index-II or not at all, so blocking
+    // on it stopped a filing over a number the preparer cannot supply. The
+    // warning still stands and still says what the consequence is.
+    const noSdv = validateForm141({ ...DEAL, totalStampDutyValue: 0 }, FILING_BUYER);
+    expect(noSdv.warnings.map((f) => f.code)).toContain("stamp_duty_value_missing");
+    expect(noSdv.ok).toBe(true);
   });
 
   it("does not report the same blocker twice from the engine and the deal checks", () => {
@@ -500,28 +509,40 @@ describe("which stamp duty value governs", () => {
     instalments: [{ ...DEAL.instalments[0], datePaidOrCredited: "2026-06-05", dateOfDeduction: "2026-06-05" }],
   };
 
-  it("asks which date the figure is taken as at when the two differ", () => {
-    const codes = validateDeal(REGISTERED, FILING_BUYER).map((f) => f.code);
-    expect(codes).toContain("sdv_as_on_date_missing");
-  });
-
-  it("flags a registration-date value where consideration moved by the agreement date", () => {
-    const deal = { ...REGISTERED, stampDutyValueAsOn: "2026-09-02" };
-    const hit = validateDeal(deal, FILING_BUYER).find((f) => f.code === "sdv_should_be_agreement_date");
+  /**
+   * This used to be two questions to the user — which date the recorded figure
+   * was taken as at, and whether a registration-date figure should really be
+   * the agreement-date one. Both asked about the stamp duty value, which this
+   * module no longer asks anything about, so they collapsed into one note on
+   * the facts already present.
+   */
+  it("notes that the agreement-date value governs when money moved by then", () => {
+    const hit = validateDeal(REGISTERED, FILING_BUYER).find((f) => f.code === "sdv_agreement_date_governs");
     expect(hit?.severity).toBe("warning");
+    expect(hit?.message).toContain("AGREEMENT-date");
   });
 
-  it("says nothing once the agreement-date value is recorded", () => {
-    const deal = { ...REGISTERED, stampDutyValueAsOn: "2026-06-10" };
+  it("says nothing when no consideration moved by the agreement date", () => {
+    const deal = {
+      ...REGISTERED,
+      instalments: [{ ...DEAL.instalments[0], datePaidOrCredited: "2026-08-01", dateOfDeduction: "2026-08-01" }],
+    };
     const codes = validateDeal(deal, FILING_BUYER).map((f) => f.code);
-    expect(codes).not.toContain("sdv_should_be_agreement_date");
-    expect(codes).not.toContain("sdv_as_on_date_missing");
+    expect(codes).not.toContain("sdv_agreement_date_governs");
   });
 
   it("says nothing at all when agreement and registration are the same day", () => {
     const deal = { ...DEAL, dateOfRegistration: DEAL.dateOfAgreement };
     const codes = validateDeal(deal, FILING_BUYER).map((f) => f.code);
+    expect(codes).not.toContain("sdv_agreement_date_governs");
+  });
+
+  it("never asks the user for a stamp duty value or its date", () => {
+    // The retired codes. Their return would mean a question is being put to
+    // someone who cannot answer it.
+    const codes = validateDeal(REGISTERED, FILING_BUYER).map((f) => f.code);
     expect(codes).not.toContain("sdv_as_on_date_missing");
+    expect(codes).not.toContain("sdv_should_be_agreement_date");
   });
 
   it("blocks a deed registered before it was agreed", () => {

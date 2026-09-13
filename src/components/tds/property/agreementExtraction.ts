@@ -71,6 +71,22 @@ export interface AgreementExtraction {
 export interface ResolvedQuery extends ExtractionQuery {
   answer: string | null;
   resolvedAt: string | null;
+  /**
+   * The user declined to answer. Only a NON-CRITICAL question can carry this.
+   *
+   * The distinction is the whole point. A critical question (blocking: true)
+   * is one the statement cannot be correct without — consideration that
+   * disagrees with itself, shares that do not total 100%, a seller whose
+   * residency nobody has established. Letting those be waved away would put a
+   * wrong filing in front of the department under the buyer's own PAN, so
+   * skipQuery refuses them and the UI does not offer the button.
+   *
+   * A non-critical question is worth confirming but a draft can proceed
+   * without it, and being unable to answer one today must not lock anybody out
+   * of their own file. Skipping one is recorded, never forgotten, and shown on
+   * the transaction so the file states plainly what went unanswered.
+   */
+  skipped?: boolean;
 }
 
 export type FieldSource = "extracted" | "user_resolved" | "manual";
@@ -277,7 +293,7 @@ export function applyExtraction(
       withheld: [],
       unreadable: [],
       dropped: [],
-      queries: (extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null })),
+      queries: askableQueries(extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null, skipped: false })),
     };
   }
 
@@ -338,7 +354,15 @@ export function applyExtraction(
       // If the deed's shares don't add up, that surfaces as a blocking
       // finding rather than being quietly smoothed over.
       share_pct: Number(leaf(p.share_pct)) || 0,
-      residential_status: "resident",
+      // NOT "resident". Nothing in a sale deed establishes residency, and
+      // defaulting to resident is how an NRI sale computes 1% where s.195
+      // needs twenty-something — silently, with the buyer carrying the
+      // shortfall under s.201. Unknown blocks until somebody settles it.
+      residential_status: "unknown",
+      // Constitution is never read off a deed either. Left null so the UI can
+      // SUGGEST one from the PAN's 4th character and ask, rather than record
+      // an answer nobody gave.
+      entity_type: null,
       // Nothing in a sale deed says whether a PAN is operative, and nothing
       // in it mentions a lower-deduction certificate either. Both start
       // unknown/absent and are filled in from the firm's own records or by
@@ -386,6 +410,7 @@ export function applyExtraction(
             date_of_deduction: date,
             date_of_deposit: null,
             date_of_filing: null,
+            allocations: null,
           } as PropertyInstalmentRow;
         })
         .filter((x): x is PropertyInstalmentRow => x !== null);
@@ -411,19 +436,305 @@ export function applyExtraction(
     withheld,
     unreadable,
     dropped,
-    queries: (extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null })),
+    queries: askableQueries(extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null, skipped: false })),
   };
+}
+
+/**
+ * Questions never put to the user.
+ *
+ * The stamp duty value is the government's own jantri/circle rate: it is
+ * revised on the government's schedule and printed on the Index-II page of a
+ * registered deed. A preparer asked for it can only look it up or guess, and
+ * both routes put a stale figure into the one number that can only raise the
+ * tax. So the reader takes it off the document when the document carries it,
+ * and says nothing when it does not — rather than asking a question whose
+ * honest answer is "the government decides that".
+ *
+ * The engine is untouched: tax is still charged on the HIGHER of consideration
+ * and stamp duty value. The consequence of the figure being absent is stated
+ * as a warning on the transaction, not as a question.
+ */
+const NEVER_ASKED = new Set([
+  "total_stamp_duty_value",
+  "stamp_duty_value_as_on",
+]);
+
+/** Drop the questions this module refuses to put to a user. */
+export const askableQueries = <T extends { field: string }>(queries: T[]): T[] =>
+  queries.filter((q) => !NEVER_ASKED.has(q.field));
+
+/**
+ * Re-run every answer against the form, together, and report what moved.
+ *
+ * ── Why one answer at a time is not enough ────────────────────────────────
+ *
+ * applyAnswer writes a single answer into a single field, which is right as
+ * far as it goes. What it cannot do is notice that answers INTERACT.
+ *
+ * The consideration is answered as ₹2,56,00,000 instead of the ₹2,65,00,000
+ * the reader took off the deed. That one answer:
+ *
+ *   • changes whether the ₹50,00,000 threshold is crossed at all, on a
+ *     smaller deal;
+ *   • changes whether the recorded payments still reconcile to the
+ *     consideration, which is a separate finding with its own severity;
+ *   • may contradict an answer given earlier to a different question.
+ *
+ * None of that follows from writing one number into one box. And answers are
+ * given in whatever order the user works through the panel, so the LAST one
+ * applied is not necessarily the one that should win.
+ *
+ * ── What this does ────────────────────────────────────────────────────────
+ *
+ * Replays every answered question, in the order they were answered, onto the
+ * bundle as it stood BEFORE any of them — so the result does not depend on
+ * the order the panel happened to apply them in, and re-answering a question
+ * genuinely replaces the earlier answer rather than layering on top of it.
+ * Then it reports every field that ended up different from where the reader
+ * left it, so the change is stated rather than discovered.
+ *
+ * Contradictions are not resolved cleverly: where two answers touch the same
+ * field, the later one wins and both are named in `conflicts`, because a user
+ * who has answered the same field twice with different values needs to see
+ * that rather than have one silently chosen for them.
+ */
+export interface Reassessment {
+  bundle: PropertyDealBundle;
+  provenance: Record<string, FieldProvenance>;
+  /** Every field an answer moved, against the reader's original. */
+  amended: Amendment[];
+  /** Fields answered more than once with different values. Later wins. */
+  conflicts: { field: string; values: string[] }[];
+  /** Answers understood but not applicable to a field — list questions. */
+  recordedOnly: string[];
+}
+
+export function reassess(
+  queries: ResolvedQuery[],
+  original: PropertyDealBundle,
+  originalProvenance: Record<string, FieldProvenance> = {},
+): Reassessment {
+  const answered = queries
+    .map((q, i) => ({ q, i }))
+    .filter(({ q }) => q.resolvedAt && q.answer !== null)
+    .sort((a, b) => (a.q.resolvedAt! < b.q.resolvedAt! ? -1 : a.q.resolvedAt! > b.q.resolvedAt! ? 1 : a.i - b.i));
+
+  let bundle = original;
+  let provenance = originalProvenance;
+  const recordedOnly: string[] = [];
+  const byField = new Map<string, string[]>();
+
+  for (const { q, i } of answered) {
+    const step = applyAnswer(queries, i, q.answer!, bundle, provenance, q.resolvedAt!);
+    if (step.applied) {
+      bundle = step.bundle;
+      provenance = step.provenance;
+      const seen = byField.get(q.field) ?? [];
+      seen.push(q.answer!);
+      byField.set(q.field, seen);
+    } else {
+      recordedOnly.push(q.field);
+    }
+  }
+
+  // Diffed against the ORIGINAL, not against each intermediate step, so the
+  // user is told where the form ended up versus where the reader left it —
+  // which is the only comparison that means anything to them.
+  const amended: Amendment[] = [];
+  const before = original.transaction as unknown as Record<string, unknown>;
+  const after = bundle.transaction as unknown as Record<string, unknown>;
+  for (const key of Object.keys(after)) {
+    if (String(before[key] ?? "") !== String(after[key] ?? "")) {
+      amended.push({ field: key, from: describe(key, before[key]), to: describe(key, after[key]) });
+    }
+  }
+
+  const conflicts = [...byField.entries()]
+    .filter(([, vals]) => new Set(vals).size > 1)
+    .map(([field, values]) => ({ field, values }));
+
+  return { bundle, provenance, amended, conflicts, recordedOnly: [...new Set(recordedOnly)] };
 }
 
 // ─── The resolution queue ───────────────────────────────────────────────────
 
-/** Queries still standing in the way of a filing. */
+/**
+ * Queries still standing in the way of a filing.
+ *
+ * A critical question blocks until it is ANSWERED. The skip flag is ignored
+ * here on purpose: skipping is a non-critical affordance, and a critical
+ * question carrying the flag — from a document saved while skipping was
+ * unrestricted, or from anything writing it directly — must still block.
+ */
 export const blockingQueries = (queries: ResolvedQuery[]): ResolvedQuery[] =>
   queries.filter((q) => q.blocking && !q.resolvedAt);
 
-/** Everything still open, blocking or not. */
+/** Everything still awaiting the user. A skipped non-critical question is no
+ *  longer awaiting anyone; a skipped critical one still is. */
 export const openQueries = (queries: ResolvedQuery[]): ResolvedQuery[] =>
-  queries.filter((q) => !q.resolvedAt);
+  queries.filter((q) => !q.resolvedAt && (q.blocking || !q.skipped));
+
+/**
+ * Critical questions marked skipped.
+ *
+ * skipQuery can no longer produce one. This exists for documents saved while
+ * it briefly could, and for anything that writes the flag directly: such a
+ * question is put back in the blocking set by blockingQueries above rather
+ * than honoured, so an old record cannot smuggle a waved-away critical
+ * question past the filing gate. Reported separately so the UI can say why it
+ * reappeared instead of looking like it forgot the skip.
+ */
+export const skippedBlocking = (queries: ResolvedQuery[]): ResolvedQuery[] =>
+  queries.filter((q) => q.blocking && q.skipped && !q.resolvedAt);
+
+/**
+ * Mark a NON-CRITICAL question as declined.
+ *
+ * A critical question is returned untouched. That is deliberate and is not a
+ * silent failure — `canSkip` below is what the UI asks before offering the
+ * button, so a critical question never shows one. This refusal is the second
+ * line: it holds even if some future caller forgets to check, because the
+ * cost of getting it wrong is a wrong statement filed under the buyer's PAN.
+ */
+export function skipQuery(
+  queries: ResolvedQuery[],
+  index: number,
+): ResolvedQuery[] {
+  return queries.map((q, i) => (i === index && canSkip(q) ? { ...q, skipped: true } : q));
+}
+
+/** Whether this question may be waved away. Critical questions may not. */
+export const canSkip = (q: Pick<ResolvedQuery, "blocking">): boolean => !q.blocking;
+
+// ─── Answers that change the form ───────────────────────────────────────────
+
+/** One field an answer moved, for telling the user what it did. */
+export interface Amendment {
+  field: string;
+  from: string;
+  to: string;
+}
+
+export interface AnsweredQuery {
+  queries: ResolvedQuery[];
+  bundle: PropertyDealBundle;
+  provenance: Record<string, FieldProvenance>;
+  /** Fields the answer CHANGED from a value that was already there. Empty when
+   *  the answer merely filled a blank, which needs no announcement. */
+  amended: Amendment[];
+  /** True when the answer was understood well enough to write somewhere. */
+  applied: boolean;
+}
+
+/** Fields whose answer is a rupee figure. */
+const AMOUNT_FIELDS = new Set(["total_sale_consideration", "total_stamp_duty_value"]);
+/** Fields whose answer is a date. */
+const DATE_FIELDS = new Set(["date_of_agreement", "date_of_registration", "stamp_duty_value_as_on"]);
+
+const inr = (n: number): string =>
+  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
+
+const describe = (field: string, v: unknown): string => {
+  if (v === null || v === undefined || v === "") return "(blank)";
+  if (AMOUNT_FIELDS.has(field)) return inr(Number(v));
+  return String(v);
+};
+
+/**
+ * Answer a question AND act on the answer.
+ *
+ * Recording the answer was never the point. The panel used to store the text
+ * and tell the user "update the fields below to match", which put the work of
+ * applying their own answer back on them and — far worse — left the form
+ * showing a figure the user had just contradicted in writing. A transaction
+ * could be filed carrying an answer that said one thing and a field that said
+ * another.
+ *
+ * So the answer is parsed against the field the question was ASKED about and
+ * written into the transaction, through the same parsers the extractor uses
+ * (parseIndianAmount, normaliseDate) — including their Gujarati and Devanagari
+ * digit handling, so "૨,૫૬,૦૦,૦૦૦" typed off the deed lands as 25600000.
+ *
+ * Where the answer contradicts a value already on the form, the answer wins:
+ * it is the more recent and more deliberate of the two, and the field it
+ * displaced is returned in `amended` so the change is announced rather than
+ * slipped in. Provenance moves to "user_resolved", which is what stops the
+ * field still being counted as needing confirmation of a reading nobody is
+ * relying on any more.
+ *
+ * Questions about lists — buyers, sellers, payments — are recorded but not
+ * applied: a sentence of prose cannot be turned into party rows with shares
+ * without guessing, and guessing a seller's share silently mis-splits the tax.
+ * `applied: false` says so, and the caller tells the user to edit those rows.
+ */
+export function applyAnswer(
+  queries: ResolvedQuery[],
+  index: number,
+  answer: string,
+  bundle: PropertyDealBundle,
+  provenance: Record<string, FieldProvenance> = {},
+  now: string = new Date().toISOString(),
+): AnsweredQuery {
+  const q = queries[index];
+  const recorded = resolveQuery(queries, index, answer, now);
+  const unchanged: AnsweredQuery = {
+    queries: recorded, bundle, provenance, amended: [], applied: false,
+  };
+  if (!q) return unchanged;
+
+  const txn = { ...bundle.transaction } as Record<string, unknown>;
+  const before = txn[q.field];
+  let next: unknown;
+
+  if (AMOUNT_FIELDS.has(q.field)) {
+    const parsed = parseIndianAmount(answer);
+    if (parsed === null) return unchanged;
+    next = parsed;
+  } else if (DATE_FIELDS.has(q.field)) {
+    const parsed = normaliseDate(answer);
+    if (parsed === null) return unchanged;
+    next = parsed;
+  } else if (q.field === "payment_mode") {
+    const t = answer.trim().toLowerCase();
+    if (/instal/.test(t)) next = "instalments";
+    else if (/lump|one|single|full/.test(t)) next = "lumpsum";
+    else return unchanged;
+  } else if (q.field === "property_type") {
+    next = answer.trim().toUpperCase();
+  } else if (q.field === "property_address") {
+    next = answer.trim();
+  } else {
+    // buyers / sellers / instalments / document_integrity — recorded only.
+    return unchanged;
+  }
+
+  txn[q.field] = next;
+
+  const amended: Amendment[] =
+    before !== null && before !== undefined && before !== "" && String(before) !== String(next)
+      ? [{ field: q.field, from: describe(q.field, before), to: describe(q.field, next) }]
+      : [];
+
+  return {
+    queries: recorded,
+    bundle: { ...bundle, transaction: txn as unknown as PropertyDealBundle["transaction"] },
+    provenance: {
+      ...provenance,
+      [q.field]: {
+        source: "user_resolved",
+        confidence: "high",
+        page: q.evidence?.page ?? null,
+        snippet: q.evidence?.snippet ?? null,
+        // A figure the user typed in answer to a direct question needs no
+        // further confirmation of a reading — they ARE the confirmation.
+        needsConfirmation: false,
+      },
+    },
+    amended,
+    applied: true,
+  };
+}
 
 /**
  * Record an answer. The question stays — an answered query is a decision the
