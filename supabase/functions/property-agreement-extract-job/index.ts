@@ -79,8 +79,15 @@ const CONCURRENCY = 3;
 /** A running job whose heartbeat is older than this has lost its worker. */
 const STALE_MS = 120_000;
 
-/** Guards against a chain that never terminates. 202 pages at 12 per chunk is
- *  17 chunks; at 3 concurrent inside a 95s budget that is 2-3 invocations. */
+/**
+ * Guards against a chain that never terminates.
+ *
+ * The ceiling the uploader enforces is 500 pages, which at 12 per chunk is 42
+ * chunks. Worst case a 95s budget fits one batch of 3, so 42 chunks is 14
+ * invocations; the 202-page deed measured for this module is 17 chunks, or
+ * 2-6. Forty leaves room for a run of chunks that each time out at 70s
+ * without letting a genuinely stuck job chain forever.
+ */
 const MAX_ATTEMPTS = 40;
 
 interface JobRow {
