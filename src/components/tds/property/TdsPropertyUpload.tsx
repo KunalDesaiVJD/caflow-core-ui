@@ -60,38 +60,111 @@ export interface StoredDocument {
   extractionJson: unknown;
 }
 
+/** Where the file landed, once it has. */
+interface StoredAgreement {
+  path: string;
+  publicUrl: string | null;
+}
+
 /**
- * Keep the original file, best-effort.
+ * Turn a storage rejection into something a preparer can act on.
  *
- * Non-blocking by design, exactly like uploadTdsImportFile: a storage hiccup
- * must never lose an extraction the user already waited for. The reading is
- * the primary value; being able to open the deed again later is the
- * secondary one.
+ * Supabase reports these as an opaque object and this module used to discard
+ * it entirely, so a size rejection, a permission denial and a dropped
+ * connection all reached the user as one sentence with no way to tell them
+ * apart. The 19.7 MB registered deed that failed on the first real upload was
+ * a size rejection, and nothing on screen said so.
+ */
+function describeStorageError(err: unknown, file: File): string {
+  const raw =
+    (err as { message?: string } | null)?.message ?? (typeof err === "string" ? err : "");
+  const mb = (file.size / 1024 / 1024).toFixed(1);
+
+  if (/exceeded the maximum allowed size|payload too large|entity too large|\b413\b/i.test(raw)) {
+    return `${file.name} is ${mb} MB, which storage refused as too large. Upload just the pages carrying the parties, the consideration and the stamp duty value.`;
+  }
+  if (/row-level security|not authorized|unauthorized|\b403\b/i.test(raw)) {
+    return "You do not have permission to upload documents for this client. Ask an administrator to check your access.";
+  }
+  if (/bucket not found/i.test(raw)) {
+    return "The documents storage bucket is missing on this project. An administrator needs to create it before agreements can be read.";
+  }
+  if (/already exists|duplicate/i.test(raw)) {
+    return "A file of that name was just uploaded. Try again.";
+  }
+  return raw
+    ? `${file.name} could not be uploaded for reading. Storage said: ${raw}`
+    : `${file.name} could not be uploaded for reading. Check the connection and try again.`;
+}
+
+/**
+ * Put the original file in storage.
+ *
+ * Two callers with opposite needs, so the bound is a parameter and the reason
+ * always comes back:
+ *
+ *   • the short path stores the deed AFTER a successful read, purely so it can
+ *     be opened again later. A failure there must not lose a reading the user
+ *     has already waited for, so that caller ignores the reason.
+ *   • the background path stores the deed BEFORE anything is read, because the
+ *     worker reads it FROM storage. A failure there is fatal to the job, and
+ *     the reason is the only thing that tells the user what to do about it.
+ *
+ * A 20 MB scan on an ordinary office upstream link takes well over the 30
+ * seconds the short path allows, which is why the background path passes its
+ * own, far longer, bound.
  */
 async function storeAgreement(
   file: File,
   clientId: string,
-): Promise<{ path: string; publicUrl: string | null } | null> {
+  timeoutMs: number,
+): Promise<{ stored: StoredAgreement | null; reason: string | null }> {
+  const path = `tds-property/${clientId}/${Date.now()}_${sanitizeStorageName(file.name)}`;
   try {
-    const path = `tds-property/${clientId}/${Date.now()}_${sanitizeStorageName(file.name)}`;
-    // Bounded, for the same reason the invoke is: this runs AFTER a successful
-    // extraction the user has already waited for, so a stalled upload here
-    // would hold the spinner open on work that is actually finished.
     const upload = supabase.storage.from("documents").upload(path, file);
-    const timeout = new Promise<null>((resolve) => setTimeout(() => resolve(null), 30_000));
+    const timeout = new Promise<"timeout">((resolve) =>
+      setTimeout(() => resolve("timeout"), timeoutMs),
+    );
     const result = await Promise.race([upload, timeout]);
-    if (result === null || (result as { error?: unknown }).error) return null;
+
+    if (result === "timeout") {
+      return {
+        stored: null,
+        reason: `Uploading ${file.name} took longer than ${Math.round(timeoutMs / 1000)} seconds and was stopped. Check the connection and try again.`,
+      };
+    }
+    const { error } = result as { error?: unknown };
+    if (error) return { stored: null, reason: describeStorageError(error, file) };
+
     return {
-      path,
-      publicUrl: supabase.storage.from("documents").getPublicUrl(path).data.publicUrl || null,
+      stored: {
+        path,
+        publicUrl: supabase.storage.from("documents").getPublicUrl(path).data.publicUrl || null,
+      },
+      reason: null,
     };
-  } catch {
-    return null;
+  } catch (e: unknown) {
+    return { stored: null, reason: describeStorageError(e, file) };
   }
 }
 
-/** Base64 inflates a file by a third, and the API caps a request at 32 MB.
- *  Refusing early with a clear reason beats a 413 the user cannot interpret. */
+/** How long each path waits for the upload. The short path is keeping a copy
+ *  of a deed it has already read; the background path is storing the ONLY
+ *  copy the worker will ever see. */
+const STORE_TIMEOUT_KEEPSAKE_MS = 30_000;
+const STORE_TIMEOUT_REQUIRED_MS = 180_000;
+
+/**
+ * The binding size limit, and deliberately the LOWEST one in the chain.
+ *
+ * Base64 inflates a file by a third and the model API caps a request at
+ * 32 MB, but the tighter ceiling is the documents storage bucket, raised to
+ * 25 MB by migration 20260913120000 precisely so this guard sits below it.
+ * That ordering is the point: a file that passes here can always be stored,
+ * so the only size message the user ever sees is this one, which says what
+ * to do about it. When it was the other way round — guard 20 MB, bucket
+ * 10 MB — a 19.7 MB deed was accepted here and silently refused by storage.
+ */
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
 /**
@@ -284,7 +357,13 @@ export function TdsPropertyUpload({
       }
 
       const applied = applyExtraction(extraction, bundle);
-      const stored = await storeAgreement(file, bundle.transaction.client_id);
+      // Reason ignored on purpose: the reading is already done and on screen,
+      // and losing the keepsake copy must not turn that into an error.
+      const { stored } = await storeAgreement(
+        file,
+        bundle.transaction.client_id,
+        STORE_TIMEOUT_KEEPSAKE_MS,
+      );
       onExtracted(
         applied,
         stored
@@ -390,8 +469,19 @@ export function TdsPropertyUpload({
     setReading(true);
     setFileName(file.name);
     try {
-      const stored = await storeAgreement(file, bundle.transaction.client_id);
-      if (!stored) throw new Error("The file could not be uploaded for reading.");
+      // The worker reads the deed FROM storage, so this upload is the job:
+      // no file in the bucket, no job at all. Reported directly rather than
+      // thrown, because describeInvokeError reads a thrown message as an
+      // edge-function failure and would blame the wrong thing.
+      const { stored, reason } = await storeAgreement(
+        file,
+        bundle.transaction.client_id,
+        STORE_TIMEOUT_REQUIRED_MS,
+      );
+      if (!stored) {
+        toast.error(reason || "The file could not be uploaded for reading.");
+        return;
+      }
 
       const chunksTotal = planChunks(pages, JOB_CHUNK_PAGES).length;
       const { data, error } = await jobsTable()
