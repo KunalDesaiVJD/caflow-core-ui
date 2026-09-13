@@ -12,6 +12,7 @@ on:
     paths:
       - 'supabase/functions/**'
       - 'supabase/migrations/**'
+      - '.github/workflows/deploy-supabase.yml'
   workflow_dispatch:   # manual trigger from GitHub Actions tab
 
 jobs:
@@ -49,6 +50,28 @@ jobs:
         continue-on-error: true      # never fail the build (see header)
         run: |
           npx supabase functions deploy run-scrutiny-v2 \
+            --project-ref hubyywmodekfdzhwiumb
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      # ── TDS on Property ──────────────────────────────────────────────────
+      # Both read sale deeds and both import _shared/propertyExtract.ts, so
+      # they are deployed together: changing the shared prompt without
+      # redeploying BOTH leaves the two readers disagreeing about the same
+      # page. property-agreement-extract-job additionally reads
+      # _shared/aiProvider.ts and pdf-lib from esm.sh.
+      - name: Deploy property-agreement-extract function
+        continue-on-error: true      # never fail the build (see header)
+        run: |
+          npx supabase functions deploy property-agreement-extract \
+            --project-ref hubyywmodekfdzhwiumb
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+      - name: Deploy property-agreement-extract-job function
+        continue-on-error: true      # never fail the build (see header)
+        run: |
+          npx supabase functions deploy property-agreement-extract-job \
             --project-ref hubyywmodekfdzhwiumb
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
