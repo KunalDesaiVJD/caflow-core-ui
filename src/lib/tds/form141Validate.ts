@@ -465,19 +465,25 @@ export function validateDeal(
     });
   }
   if (!deal.totalStampDutyValue) {
-    // Blocking, not a warning. Tax is charged on the HIGHER of the two
-    // measures, and with the stamp duty value absent the engine has no
-    // choice but to fall back to the consideration — which understates the
-    // deduction on every deal where the circle rate is the higher figure,
-    // silently, in the direction that produces a demand. There is no safe
-    // default to guess, so the figure has to be supplied before anything is
-    // filed. Drafts still save; this stops the deal being marked ready.
+    // A WARNING, not a blocker, and never a question.
+    //
+    // The figure is the government's own jantri/circle rate, revised on the
+    // government's schedule and printed on the Index-II page. Asking a
+    // preparer for it can only produce a look-up or a guess, so the module
+    // reads it off the document and otherwise leaves it empty.
+    //
+    // Blocking on it would have locked a user out of their own filing over a
+    // number nobody in the room is allowed to decide. The consequence is real
+    // and is stated instead of hidden: with no stamp duty value the engine
+    // charges tax on the consideration alone, which under-deducts wherever the
+    // circle rate is higher. That is a judgement for the preparer to make on
+    // the facts, with this said plainly on the transaction.
     findings.push({
       code: "stamp_duty_value_missing",
-      severity: "blocking",
+      severity: "warning",
       field: "totalStampDutyValue",
       message:
-        "No stamp duty value recorded. Tax is charged on the HIGHER of consideration and stamp duty value, so leaving this blank silently computes the tax on the consideration alone and under-deducts wherever the circle rate is higher. On a registered deed it is on the Index-II page. If it genuinely equals the consideration, enter the same figure.",
+        "No stamp duty value was found on the uploaded document, so tax is computed on the sale consideration alone. Tax is charged on the HIGHER of consideration and stamp duty value, so where the circle rate exceeds the price this under-deducts. Upload the Index-II page if it was not included.",
     });
   }
   if (deal.totalStampDutyValue > deal.totalSaleConsideration && deal.totalSaleConsideration > 0) {
@@ -512,32 +518,29 @@ export function validateDeal(
   }
 
   // ── Which stamp duty value governs ───────────────────────────────────────
-  // Where the deed is registered later than it is agreed, there are two
-  // circle rates in play. Where part of the consideration moved on or before
-  // the agreement date by banking channel, it is the AGREEMENT-date value
-  // that governs — and the figure sitting on the Index-II page is the
-  // registration-date one. This is a question of fact the software cannot
-  // settle, so it is raised rather than decided.
-  if (deal.dateOfRegistration && deal.dateOfAgreement && deal.dateOfRegistration !== deal.dateOfAgreement) {
-    const asOn = deal.stampDutyValueAsOn || null;
-    if (!asOn) {
-      findings.push({
-        code: "sdv_as_on_date_missing",
-        severity: "warning",
-        field: "totalStampDutyValue",
-        message: `The deed was agreed on ${deal.dateOfAgreement} and registered on ${deal.dateOfRegistration}, so two stamp duty values exist. Record which date the figure entered here is taken as at. Where any part of the consideration moved on or before the agreement date through a banking channel, the agreement-date value governs — and the Index-II page carries the registration-date one.`,
-      });
-    } else if (asOn !== deal.dateOfAgreement) {
-      const paidByAgreement = deal.instalments.some((i) => i.datePaidOrCredited <= deal.dateOfAgreement);
-      if (paidByAgreement) {
-        findings.push({
-          code: "sdv_should_be_agreement_date",
-          severity: "warning",
-          field: "totalStampDutyValue",
-          message: `Consideration moved on or before the agreement date (${deal.dateOfAgreement}), but the stamp duty value recorded is taken as at ${asOn}. Where part-consideration is paid by banking channel on or before the agreement date, the agreement-date stamp duty value is the one that governs. Confirm which figure this is.`,
-        });
-      }
-    }
+  //
+  // Where a deed is registered later than it is agreed there are two circle
+  // rates in play, and where part-consideration moved by banking channel on or
+  // before the agreement date it is the AGREEMENT-date value that governs,
+  // while Index-II carries the registration-date one.
+  //
+  // This module used to raise that as two questions to the user. It no longer
+  // asks anything about the stamp duty value — see stamp_duty_value_missing
+  // above — so the point is made once, as a note on the facts already present,
+  // and only where the two dates actually differ and money actually moved by
+  // the agreement date. Nothing here asks for a figure.
+  if (
+    deal.dateOfRegistration &&
+    deal.dateOfAgreement &&
+    deal.dateOfRegistration !== deal.dateOfAgreement &&
+    deal.instalments.some((i) => i.datePaidOrCredited <= deal.dateOfAgreement)
+  ) {
+    findings.push({
+      code: "sdv_agreement_date_governs",
+      severity: "warning",
+      field: "totalStampDutyValue",
+      message: `Consideration moved on or before the agreement date (${deal.dateOfAgreement}) and the deed was registered later, on ${deal.dateOfRegistration}. Where part-consideration is paid by banking channel on or before the agreement date, the AGREEMENT-date stamp duty value governs — and the Index-II page carries the registration-date one. Check which figure applies before filing.`,
+    });
   }
   if (deal.dateOfRegistration && deal.dateOfAgreement && deal.dateOfRegistration < deal.dateOfAgreement) {
     findings.push({

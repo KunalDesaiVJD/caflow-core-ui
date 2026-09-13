@@ -23,6 +23,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Home, ArrowLeft, CalendarClock } from "lucide-react";
@@ -133,6 +134,16 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
   };
 
   const client = clients.find((c) => c.id === selClient) || null;
+
+  /** Name and PAN in one label so either finds the client. */
+  const clientOptions = useMemo(
+    () =>
+      clients.map((c) => ({
+        value: c.id,
+        label: `${c.name || "Unnamed"}${c.pan ? ` — ${c.pan}` : ""}`,
+      })),
+    [clients],
+  );
 
   // ── Load ─────────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
@@ -560,16 +571,20 @@ export function TdsPropertyModule({ clients, isSuperadmin, resolveFirmId }: Prop
       <Card className="mb-4">
         <CardContent className="pt-5">
           <div className="flex flex-wrap gap-4 items-end">
-            <div className="space-y-1.5 min-w-[240px]">
+            <div className="space-y-1.5 min-w-[280px]">
               <Label>Client</Label>
-              <Select value={selClient} onValueChange={setSelClient}>
-                <SelectTrigger><SelectValue placeholder="Select a client" /></SelectTrigger>
-                <SelectContent>
-                  {clients.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.name || "Unnamed"}{c.pan ? ` — ${c.pan}` : ""}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Type-to-search rather than a bare dropdown: a firm with several
+                  hundred clients cannot scroll to one, and the PAN is in the
+                  label so a client can be found by either. */}
+              <SearchableSelect
+                className="w-full"
+                options={clientOptions}
+                value={selClient}
+                onValueChange={setSelClient}
+                placeholder="Select a client"
+                searchPlaceholder="Search by name or PAN…"
+                emptyText="No client matches that."
+              />
             </div>
             <div className="space-y-1.5 w-[140px]">
               <Label>Tax Year</Label>

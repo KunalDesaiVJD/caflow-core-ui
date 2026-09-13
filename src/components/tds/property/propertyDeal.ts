@@ -232,23 +232,50 @@ export function resolveFilingBuyerPan(bundle: PropertyDealBundle): string {
 // ─── Save preconditions ─────────────────────────────────────────────────────
 
 /**
- * What the DATABASE will refuse, in the user's words rather than Postgres's.
+ * What the DATABASE still refuses to store, even as a draft.
  *
- * Three CHECK constraints in migration 20260907090000 require positive
- * numbers — `total_sale_consideration > 0`, `share_pct > 0 AND <= 100`,
- * `amount_paid_by_buyer > 0` — while the blank rows this editor creates start
- * at zero, which is the right default for a field nobody has typed into yet.
- * Between the two sat a Save button that checked only the address, so adding
- * a party row and saving before filling it in produced a raw
- * `new row violates check constraint "tds_property_share_range"` in a toast.
+ * Deliberately almost empty. It used to demand a complete transaction —
+ * address, type, a consideration above zero, a share for every party and an
+ * amount for every payment — because three CHECK constraints demanded exactly
+ * that of every row whatever its status. The effect was that a user who
+ * uploaded a deed the reader could only partly read had the Save button
+ * greyed out with no way to make it go, and lost the lot on navigating away.
+ * Migration 20260913140000 moved those demands to the point of FILING, where
+ * they belong, and this list shrank to what Postgres will still reject.
  *
- * This is deliberately NOT the validation layer. form141Validate.ts answers
- * "is this deal correct enough to file"; this answers the much narrower "will
- * the insert succeed", and only ever grows a line when a constraint does.
- * A part-built draft must stay saveable — that is the whole point of a draft
- * — so nothing here has an opinion about missing sellers or unrecorded dates.
+ * A draft is incomplete by definition. Saving one has to be possible from the
+ * moment there is anything worth keeping.
  */
 export function dbSaveBlockers(bundle: PropertyDealBundle): string[] {
+  const out: string[] = [];
+
+  for (const p of bundle.parties) {
+    const who = p.name.trim() || `${p.party_role === "buyer" ? "Buyer" : "Seller"} ${p.seq}`;
+    const share = num(p.share_pct);
+    // Still impossible in the database, draft or not: a share is a percentage.
+    if (share < 0) out.push(`${who}'s share cannot be negative.`);
+    else if (share > 100) out.push(`${who}'s share of ${share}% is more than 100%.`);
+  }
+
+  for (const i of bundle.instalments) {
+    if (num(i.amount_paid_by_buyer) < 0) {
+      out.push(`Payment ${i.seq} cannot be a negative amount.`);
+    }
+  }
+
+  return out;
+}
+
+/**
+ * What a transaction needs before it can be marked ready to file.
+ *
+ * The old dbSaveBlockers list, moved here — nothing has been given up, it has
+ * been put at the right gate. Everything below is something the Form 141
+ * statement genuinely cannot be produced without: a zero share apportions no
+ * tax to that seller, a zero payment computes no tax at all, and both look on
+ * screen exactly like a correctly-computed nil.
+ */
+export function readyBlockers(bundle: PropertyDealBundle): string[] {
   const out: string[] = [];
   const t = bundle.transaction;
 
@@ -260,6 +287,7 @@ export function dbSaveBlockers(bundle: PropertyDealBundle): string[] {
 
   for (const p of bundle.parties) {
     const who = p.name.trim() || `${p.party_role === "buyer" ? "Buyer" : "Seller"} ${p.seq}`;
+    if (!p.name.trim()) out.push(`Enter a name for ${who}.`);
     const share = num(p.share_pct);
     if (share <= 0) out.push(`Enter a share percentage for ${who} — it must be more than 0.`);
     else if (share > 100) out.push(`${who}'s share of ${share}% is more than 100%.`);

@@ -7,13 +7,17 @@ import {
   blockingQueries,
   openQueries,
   resolveQuery,
+  skipQuery,
+  skippedBlocking,
+  applyAnswer,
   confirmField,
   unconfirmedFields,
   CRITICAL_FIELDS,
   type AgreementExtraction,
   type ExtractedField,
+  type ResolvedQuery,
 } from "./agreementExtraction";
-import { emptyTransaction, toForm141Deal, type PropertyDealBundle } from "./propertyDeal";
+import { emptyTransaction, toForm141Deal, type PropertyDealBundle, type PropertyTransactionRow } from "./propertyDeal";
 import { normaliseIndianDigits } from "@/lib/tds/indianAmount";
 import { computeForm141ScheduleB } from "@/lib/tds/form141ScheduleB";
 
@@ -374,6 +378,8 @@ describe("the resolution queue", () => {
     fields: { ...GOOD_EXTRACTION.fields, total_stamp_duty_value: f(null, "low") },
     queries: [
       {
+        // NEVER reaches the user — see askableQueries. Kept in the fixture
+        // precisely so its suppression is what the first test proves.
         field: "total_stamp_duty_value",
         question: "The stamp duty value is not stated in this document. What is it?",
         why: "Tax is charged on the higher of consideration and stamp duty value, so an absent figure can understate the deduction.",
@@ -400,32 +406,165 @@ describe("the resolution queue", () => {
 
   const r = applyExtraction(WITH_QUERIES, BASE);
 
+  it("never puts a stamp duty value question to the user", () => {
+    // The figure is the government's jantri rate, printed on Index-II. A
+    // preparer asked for it can only look it up or guess, and a guess lands in
+    // the one number that can only raise the tax. Three queries went in; the
+    // stamp duty one is not among the two that came out.
+    expect(r.queries).toHaveLength(2);
+    expect(r.queries.map((q) => q.field)).not.toContain("total_stamp_duty_value");
+  });
+
   it("separates blocking questions from the rest", () => {
-    expect(r.queries).toHaveLength(3);
-    expect(blockingQueries(r.queries)).toHaveLength(2);
-    expect(openQueries(r.queries)).toHaveLength(3);
+    expect(blockingQueries(r.queries)).toHaveLength(1);
+    expect(openQueries(r.queries)).toHaveLength(2);
   });
 
   it("records an answer without deleting the question", () => {
-    const after = resolveQuery(r.queries, 0, "₹2,56,00,000 per Index-II", "2026-09-07T10:00:00Z");
-    expect(after).toHaveLength(3);
-    expect(after[0].answer).toBe("₹2,56,00,000 per Index-II");
+    const after = resolveQuery(r.queries, 0, "the words are right", "2026-09-07T10:00:00Z");
+    expect(after).toHaveLength(2);
+    expect(after[0].answer).toBe("the words are right");
     expect(after[0].resolvedAt).toBe("2026-09-07T10:00:00Z");
     // The question survives alongside its answer — both halves stay on the
     // record for whoever reads the file later.
-    expect(after[0].question).toContain("stamp duty value");
+    expect(after[0].question).toContain("Which is right?");
   });
 
   it("clears a resolved query out of the open and blocking sets", () => {
     const after = resolveQuery(r.queries, 0, "₹2,56,00,000");
-    expect(blockingQueries(after)).toHaveLength(1);
-    expect(openQueries(after)).toHaveLength(2);
+    expect(blockingQueries(after)).toHaveLength(0);
+    expect(openQueries(after)).toHaveLength(1);
   });
 
   it("leaves other queries untouched when one is answered", () => {
-    const after = resolveQuery(r.queries, 1, "the words are right");
-    expect(after[0].resolvedAt).toBeNull();
-    expect(after[2].resolvedAt).toBeNull();
+    const after = resolveQuery(r.queries, 0, "the words are right");
+    expect(after[1].resolvedAt).toBeNull();
+  });
+});
+
+describe("skipping a question", () => {
+  const QUERIES: ResolvedQuery[] = [
+    {
+      field: "total_sale_consideration",
+      question: "Words and figures disagree. Which is right?",
+      why: "The two differ by ₹9,00,000.",
+      blocking: true,
+      answer: null,
+      resolvedAt: null,
+      skipped: false,
+    },
+    {
+      field: "property_type",
+      question: "Is this agricultural land?",
+      why: "Rural agricultural land is outside the charge.",
+      blocking: false,
+      answer: null,
+      resolvedAt: null,
+      skipped: false,
+    },
+  ];
+
+  it("stops a skipped question blocking the filing", () => {
+    // Nobody should be locked out of their own file by a question they cannot
+    // answer today.
+    const after = skipQuery(QUERIES, 0);
+    expect(blockingQueries(after)).toHaveLength(0);
+    expect(openQueries(after)).toHaveLength(1);
+  });
+
+  it("keeps a skipped blocking question visible as a warning", () => {
+    // Skipping unblocks. It does not make the reason for the question untrue,
+    // and the file has to carry the fact that nobody answered it.
+    const after = skipQuery(QUERIES, 0);
+    expect(skippedBlocking(after)).toHaveLength(1);
+    expect(skippedBlocking(after)[0].question).toContain("Which is right?");
+  });
+
+  it("does not treat a skipped non-blocking question as a warning", () => {
+    const after = skipQuery(QUERIES, 1);
+    expect(skippedBlocking(after)).toHaveLength(0);
+  });
+
+  it("keeps the question itself, and every other one, intact", () => {
+    const after = skipQuery(QUERIES, 0);
+    expect(after).toHaveLength(2);
+    expect(after[0].answer).toBeNull();
+    expect(after[1].skipped).toBe(false);
+  });
+});
+
+describe("applyAnswer — an answer that changes the form", () => {
+  const bundle = (over: Partial<PropertyTransactionRow> = {}) => ({
+    ...BASE,
+    transaction: { ...BASE.transaction, ...over },
+  });
+
+  const q = (field: string, blocking = true): ResolvedQuery[] => [
+    { field, question: `What is the ${field}?`, why: "because", blocking, answer: null, resolvedAt: null, skipped: false },
+  ];
+
+  it("writes a rupee answer into the field the question was about", () => {
+    // The panel used to store the text and tell the user to update the field
+    // themselves, so a transaction could be filed carrying an answer that said
+    // one thing and a field that said another.
+    const out = applyAnswer(q("total_sale_consideration"), 0, "2,56,00,000", bundle({ total_sale_consideration: 0 }));
+    expect(out.applied).toBe(true);
+    expect(out.bundle.transaction.total_sale_consideration).toBe(25600000);
+    expect(out.queries[0].answer).toBe("2,56,00,000");
+  });
+
+  it("reads an answer typed in Gujarati digits off the deed", () => {
+    const out = applyAnswer(q("total_sale_consideration"), 0, "૨૫૬૦૦૦૦૦", bundle({ total_sale_consideration: 0 }));
+    expect(out.bundle.transaction.total_sale_consideration).toBe(25600000);
+  });
+
+  it("overrides a value the reader had already filled, and says so", () => {
+    // The answer is the later and more deliberate of the two. Replacing the
+    // figure in silence is what would be wrong.
+    const out = applyAnswer(
+      q("total_sale_consideration"), 0, "2,56,00,000",
+      bundle({ total_sale_consideration: 26500000 }),
+    );
+    expect(out.bundle.transaction.total_sale_consideration).toBe(25600000);
+    expect(out.amended).toHaveLength(1);
+    expect(out.amended[0].field).toBe("total_sale_consideration");
+  });
+
+  it("says nothing when the answer merely fills a blank", () => {
+    const out = applyAnswer(q("property_address"), 0, "Survey 389, Hathijan", bundle({ property_address: "" }));
+    expect(out.bundle.transaction.property_address).toBe("Survey 389, Hathijan");
+    expect(out.amended).toEqual([]);
+  });
+
+  it("parses a date answer", () => {
+    const out = applyAnswer(q("date_of_agreement"), 0, "02/09/2026", bundle());
+    expect(out.bundle.transaction.date_of_agreement).toBe("2026-09-02");
+  });
+
+  it("records but does not apply an answer it cannot parse", () => {
+    // A figure that will not parse must not become NaN in the taxable base.
+    const before = bundle({ total_sale_consideration: 25600000 });
+    const out = applyAnswer(q("total_sale_consideration"), 0, "ask the client", before);
+    expect(out.applied).toBe(false);
+    expect(out.bundle.transaction.total_sale_consideration).toBe(25600000);
+    expect(out.queries[0].answer).toBe("ask the client");
+  });
+
+  it("records but does not apply an answer about a list of rows", () => {
+    // A sentence of prose cannot become party rows with shares without
+    // guessing, and a guessed share silently mis-splits the tax.
+    const out = applyAnswer(q("sellers"), 0, "there are three sellers, equally", bundle());
+    expect(out.applied).toBe(false);
+    expect(out.queries[0].resolvedAt).not.toBeNull();
+  });
+
+  it("moves provenance to the user, so the field stops awaiting confirmation", () => {
+    const out = applyAnswer(
+      q("total_sale_consideration"), 0, "2,56,00,000", bundle(),
+      { total_sale_consideration: { source: "extracted", confidence: "medium", page: 3, snippet: "x", needsConfirmation: true } },
+    );
+    expect(out.provenance.total_sale_consideration.source).toBe("user_resolved");
+    expect(out.provenance.total_sale_consideration.needsConfirmation).toBe(false);
   });
 });
 

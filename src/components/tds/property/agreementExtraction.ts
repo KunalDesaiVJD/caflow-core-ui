@@ -71,6 +71,16 @@ export interface AgreementExtraction {
 export interface ResolvedQuery extends ExtractionQuery {
   answer: string | null;
   resolvedAt: string | null;
+  /**
+   * The user declined to answer.
+   *
+   * A skipped question stops standing in the way — nobody should be locked out
+   * of their own file by a question they cannot answer today. It is NOT
+   * forgotten: a skipped question that was blocking comes back as a warning on
+   * the transaction, so the file still shows what was left unanswered and an
+   * officer reading it in three years can see the same thing.
+   */
+  skipped?: boolean;
 }
 
 export type FieldSource = "extracted" | "user_resolved" | "manual";
@@ -277,7 +287,7 @@ export function applyExtraction(
       withheld: [],
       unreadable: [],
       dropped: [],
-      queries: (extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null })),
+      queries: askableQueries(extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null, skipped: false })),
     };
   }
 
@@ -411,19 +421,192 @@ export function applyExtraction(
     withheld,
     unreadable,
     dropped,
-    queries: (extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null })),
+    queries: askableQueries(extraction.queries || []).map((q) => ({ ...q, answer: null, resolvedAt: null, skipped: false })),
   };
 }
 
+/**
+ * Questions never put to the user.
+ *
+ * The stamp duty value is the government's own jantri/circle rate: it is
+ * revised on the government's schedule and printed on the Index-II page of a
+ * registered deed. A preparer asked for it can only look it up or guess, and
+ * both routes put a stale figure into the one number that can only raise the
+ * tax. So the reader takes it off the document when the document carries it,
+ * and says nothing when it does not — rather than asking a question whose
+ * honest answer is "the government decides that".
+ *
+ * The engine is untouched: tax is still charged on the HIGHER of consideration
+ * and stamp duty value. The consequence of the figure being absent is stated
+ * as a warning on the transaction, not as a question.
+ */
+const NEVER_ASKED = new Set([
+  "total_stamp_duty_value",
+  "stamp_duty_value_as_on",
+]);
+
+/** Drop the questions this module refuses to put to a user. */
+export const askableQueries = <T extends { field: string }>(queries: T[]): T[] =>
+  queries.filter((q) => !NEVER_ASKED.has(q.field));
+
 // ─── The resolution queue ───────────────────────────────────────────────────
 
-/** Queries still standing in the way of a filing. */
+/** Queries still standing in the way of a filing. A skipped one does not:
+ *  the user has been asked and has declined, which is an answer of a kind. */
 export const blockingQueries = (queries: ResolvedQuery[]): ResolvedQuery[] =>
-  queries.filter((q) => q.blocking && !q.resolvedAt);
+  queries.filter((q) => q.blocking && !q.resolvedAt && !q.skipped);
 
-/** Everything still open, blocking or not. */
+/** Everything still awaiting the user, blocking or not. */
 export const openQueries = (queries: ResolvedQuery[]): ResolvedQuery[] =>
-  queries.filter((q) => !q.resolvedAt);
+  queries.filter((q) => !q.resolvedAt && !q.skipped);
+
+/**
+ * Blocking questions the user skipped.
+ *
+ * Surfaced as warnings rather than dropped. Skipping is allowed to unblock a
+ * filing, but the reason the question was asked does not stop being true, and
+ * the file has to carry the fact that nobody answered it.
+ */
+export const skippedBlocking = (queries: ResolvedQuery[]): ResolvedQuery[] =>
+  queries.filter((q) => q.blocking && q.skipped && !q.resolvedAt);
+
+/** Mark a question as declined. The question and the fact of the refusal both
+ *  stay on the record; see ResolvedQuery.skipped. */
+export function skipQuery(
+  queries: ResolvedQuery[],
+  index: number,
+): ResolvedQuery[] {
+  return queries.map((q, i) => (i === index ? { ...q, skipped: true } : q));
+}
+
+// ─── Answers that change the form ───────────────────────────────────────────
+
+/** One field an answer moved, for telling the user what it did. */
+export interface Amendment {
+  field: string;
+  from: string;
+  to: string;
+}
+
+export interface AnsweredQuery {
+  queries: ResolvedQuery[];
+  bundle: PropertyDealBundle;
+  provenance: Record<string, FieldProvenance>;
+  /** Fields the answer CHANGED from a value that was already there. Empty when
+   *  the answer merely filled a blank, which needs no announcement. */
+  amended: Amendment[];
+  /** True when the answer was understood well enough to write somewhere. */
+  applied: boolean;
+}
+
+/** Fields whose answer is a rupee figure. */
+const AMOUNT_FIELDS = new Set(["total_sale_consideration", "total_stamp_duty_value"]);
+/** Fields whose answer is a date. */
+const DATE_FIELDS = new Set(["date_of_agreement", "date_of_registration", "stamp_duty_value_as_on"]);
+
+const inr = (n: number): string =>
+  new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
+
+const describe = (field: string, v: unknown): string => {
+  if (v === null || v === undefined || v === "") return "(blank)";
+  if (AMOUNT_FIELDS.has(field)) return inr(Number(v));
+  return String(v);
+};
+
+/**
+ * Answer a question AND act on the answer.
+ *
+ * Recording the answer was never the point. The panel used to store the text
+ * and tell the user "update the fields below to match", which put the work of
+ * applying their own answer back on them and — far worse — left the form
+ * showing a figure the user had just contradicted in writing. A transaction
+ * could be filed carrying an answer that said one thing and a field that said
+ * another.
+ *
+ * So the answer is parsed against the field the question was ASKED about and
+ * written into the transaction, through the same parsers the extractor uses
+ * (parseIndianAmount, normaliseDate) — including their Gujarati and Devanagari
+ * digit handling, so "૨,૫૬,૦૦,૦૦૦" typed off the deed lands as 25600000.
+ *
+ * Where the answer contradicts a value already on the form, the answer wins:
+ * it is the more recent and more deliberate of the two, and the field it
+ * displaced is returned in `amended` so the change is announced rather than
+ * slipped in. Provenance moves to "user_resolved", which is what stops the
+ * field still being counted as needing confirmation of a reading nobody is
+ * relying on any more.
+ *
+ * Questions about lists — buyers, sellers, payments — are recorded but not
+ * applied: a sentence of prose cannot be turned into party rows with shares
+ * without guessing, and guessing a seller's share silently mis-splits the tax.
+ * `applied: false` says so, and the caller tells the user to edit those rows.
+ */
+export function applyAnswer(
+  queries: ResolvedQuery[],
+  index: number,
+  answer: string,
+  bundle: PropertyDealBundle,
+  provenance: Record<string, FieldProvenance> = {},
+  now: string = new Date().toISOString(),
+): AnsweredQuery {
+  const q = queries[index];
+  const recorded = resolveQuery(queries, index, answer, now);
+  const unchanged: AnsweredQuery = {
+    queries: recorded, bundle, provenance, amended: [], applied: false,
+  };
+  if (!q) return unchanged;
+
+  const txn = { ...bundle.transaction } as Record<string, unknown>;
+  const before = txn[q.field];
+  let next: unknown;
+
+  if (AMOUNT_FIELDS.has(q.field)) {
+    const parsed = parseIndianAmount(answer);
+    if (parsed === null) return unchanged;
+    next = parsed;
+  } else if (DATE_FIELDS.has(q.field)) {
+    const parsed = normaliseDate(answer);
+    if (parsed === null) return unchanged;
+    next = parsed;
+  } else if (q.field === "payment_mode") {
+    const t = answer.trim().toLowerCase();
+    if (/instal/.test(t)) next = "instalments";
+    else if (/lump|one|single|full/.test(t)) next = "lumpsum";
+    else return unchanged;
+  } else if (q.field === "property_type") {
+    next = answer.trim().toUpperCase();
+  } else if (q.field === "property_address") {
+    next = answer.trim();
+  } else {
+    // buyers / sellers / instalments / document_integrity — recorded only.
+    return unchanged;
+  }
+
+  txn[q.field] = next;
+
+  const amended: Amendment[] =
+    before !== null && before !== undefined && before !== "" && String(before) !== String(next)
+      ? [{ field: q.field, from: describe(q.field, before), to: describe(q.field, next) }]
+      : [];
+
+  return {
+    queries: recorded,
+    bundle: { ...bundle, transaction: txn as unknown as PropertyDealBundle["transaction"] },
+    provenance: {
+      ...provenance,
+      [q.field]: {
+        source: "user_resolved",
+        confidence: "high",
+        page: q.evidence?.page ?? null,
+        snippet: q.evidence?.snippet ?? null,
+        // A figure the user typed in answer to a direct question needs no
+        // further confirmation of a reading — they ARE the confirmation.
+        needsConfirmation: false,
+      },
+    },
+    amended,
+    applied: true,
+  };
+}
 
 /**
  * Record an answer. The question stays — an answered query is a decision the

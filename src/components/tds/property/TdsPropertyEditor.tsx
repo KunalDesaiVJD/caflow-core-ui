@@ -47,6 +47,7 @@ import {
   num,
   resolveFilingBuyerPan,
   dbSaveBlockers,
+  readyBlockers,
   type PropertyDealBundle,
   type PropertyPartyRow,
   type PropertyInstalmentRow,
@@ -57,6 +58,7 @@ import { TdsPropertyChallan } from "./TdsPropertyChallan";
 import type { ChallanFields } from "@/lib/tds/form141Challan";
 import {
   blockingQueries,
+  skippedBlocking,
   FIELD_LABEL,
   type AppliedExtraction,
   type ResolvedQuery,
@@ -202,6 +204,18 @@ export function TdsPropertyEditor({
   const extractionFindings = useMemo(() => {
     const out: { code: string; severity: "blocking" | "warning"; field: string; message: string; ref?: string }[] = [];
 
+    // A question the user skipped stops blocking, but the reason it was asked
+    // has not gone away — it reappears here so the file still shows it.
+    for (const q of skippedBlocking(queries)) {
+      out.push({
+        code: `query_skipped:${q.field}`,
+        severity: "warning",
+        field: q.field,
+        message: `Left unanswered: ${q.question}`,
+        ref: q.why,
+      });
+    }
+
     for (const q of blockingQueries(queries)) {
       out.push({
         code: "extraction_query_unresolved",
@@ -269,8 +283,12 @@ export function TdsPropertyEditor({
    * draft being saved — it stops the deal being marked ready to file.
    */
   const saveBlockers = useMemo(() => dbSaveBlockers(bundle), [bundle]);
+  // Completeness is a FILING requirement, not a saving one. A draft saves with
+  // whatever is known; marking it ready is where every field has to be there.
+  const readyGate = useMemo(() => readyBlockers(bundle), [bundle]);
   const canSave = saveBlockers.length === 0 && !saving;
-  const canMarkReady = canSave && blockingCount === 0 && t.status !== "filed";
+  const canMarkReady =
+    canSave && readyGate.length === 0 && blockingCount === 0 && t.status !== "filed";
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px] items-start">
@@ -283,6 +301,7 @@ export function TdsPropertyEditor({
           onExtracted={onExtracted}
           onProvenanceChange={onProvenanceChange}
           onQueriesChange={onQueriesChange}
+          onBundleChange={onChange}
         />
 
         {/* Property */}
@@ -336,25 +355,41 @@ export function TdsPropertyEditor({
                   onChange={(e) => patchTxn({ total_sale_consideration: Number(e.target.value) })}
                 />
               </div>
+              {/*
+                Stamp duty value is READ, never typed.
+
+                It is the government's own jantri/circle rate, revised on the
+                government's schedule, and it is printed on the Index-II page of
+                every registered deed. Asking a preparer to key it invites a
+                stale or mis-typed figure into the one number that can only ever
+                raise the tax — so the field is gone, and the reader takes it
+                off Index-II when Index-II is in the upload.
+
+                The engine still charges tax on the HIGHER of consideration and
+                stamp duty value, unchanged. What follows only SHOWS the figure
+                when the document supplied one.
+              */}
               <div className="space-y-1.5">
                 <Label>Total stamp duty value</Label>
-                <Input
-                  type="number" inputMode="numeric"
-                  value={t.total_stamp_duty_value === null ? "" : num(t.total_stamp_duty_value) || ""}
-                  placeholder="Usually on Index-II"
-                  onChange={(e) => patchTxn({ total_stamp_duty_value: e.target.value === "" ? null : Number(e.target.value) })}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Stamp duty value as at</Label>
-                <Input
-                  type="date"
-                  value={t.stamp_duty_value_as_on || ""}
-                  onChange={(e) => patchTxn({ stamp_duty_value_as_on: e.target.value || null })}
-                />
+                <div className="h-10 flex items-center rounded-md border border-dashed border-border bg-muted/40 px-3 text-sm">
+                  {t.total_stamp_duty_value === null || !num(t.total_stamp_duty_value) ? (
+                    <span className="text-muted-foreground text-xs">
+                      Not on the uploaded document
+                    </span>
+                  ) : (
+                    <span className="tabular-nums">
+                      {num(t.total_stamp_duty_value).toLocaleString("en-IN")}
+                      {t.stamp_duty_value_as_on && (
+                        <span className="text-muted-foreground text-xs ml-2">
+                          as at {t.stamp_duty_value_as_on}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
                 <p className="text-[11px] text-muted-foreground">
-                  Index-II carries the registration-date value. Where part-consideration moved by
-                  banking channel on or before the agreement date, the agreement-date value governs.
+                  Read from Index-II. Set by the government, so it is never
+                  entered by hand.
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -665,11 +700,21 @@ export function TdsPropertyEditor({
             </div>
           )}
 
-          {saveBlockers.length === 0 && blockingCount > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {blockingCount} blocking finding{blockingCount === 1 ? "" : "s"} — the draft saves, but the
-              transaction cannot be marked ready to file until they are cleared.
-            </p>
+          {saveBlockers.length === 0 && (readyGate.length > 0 || blockingCount > 0) && (
+            <div className="rounded-md border border-border bg-muted/40 px-3 py-2 space-y-1">
+              <p className="text-xs font-medium">
+                The draft saves. Before it can be marked ready to file:
+              </p>
+              <ul className="text-xs text-muted-foreground space-y-0.5 list-disc pl-4">
+                {readyGate.map((r) => <li key={r}>{r}</li>)}
+                {blockingCount > 0 && (
+                  <li>
+                    {blockingCount} blocking finding{blockingCount === 1 ? "" : "s"} in the panel
+                    alongside.
+                  </li>
+                )}
+              </ul>
+            </div>
           )}
 
           {canMarkReady && t.status === "draft" && (
