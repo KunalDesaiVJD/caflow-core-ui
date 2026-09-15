@@ -34,6 +34,7 @@
  */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { callClaudeCli, isProviderError } from "../_shared/aiProvider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -137,6 +138,28 @@ serve(async (req) => {
     const docType: DocType = doc_type === "itr_form" ? "itr_form" : "3ca_3cd";
     if (!pdf_base64 && !image_base64) {
       return json({ error: "Provide `pdf_base64` or `image_base64`." }, 400);
+    }
+
+    if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+      const parts = [
+        { kind: "text" as const, text: `File name: ${file_name || "unknown"}` },
+        ...(pdf_base64
+          ? [{ kind: "pdf" as const, filename: file_name || "tax-document.pdf", base64: pdf_base64 }]
+          : [{ kind: "image" as const, mediaType: image_media_type || "image/png", base64: image_base64 }]),
+      ];
+      const reply = await callClaudeCli(SYSTEM_PROMPTS[docType], parts, {
+        defaultModel: { openrouter: "sonnet", anthropic: "sonnet" },
+        appTitle: "CAFlow tax document extraction",
+        maxTokens: 400,
+        effort: "low",
+      });
+      if (isProviderError(reply)) {
+        console.error("tax-document-extract: Claude CLI error", reply.status, reply.error);
+        return json(emptyResult);
+      }
+      const parsed = extractJson(reply.text, docType);
+      console.log("tax-document-extract result:", docType, JSON.stringify(parsed));
+      return json(parsed);
     }
 
     const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");

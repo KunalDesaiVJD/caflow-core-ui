@@ -20,6 +20,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { callClaudeCli } from "../_shared/aiProvider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -290,7 +291,7 @@ function json(body: unknown, status = 200): Response {
 // A withdrawn model now produces a message naming the secret to change, rather
 // than a generic failure.
 
-type Provider = "openrouter" | "anthropic";
+type Provider = "openrouter" | "anthropic" | "claude-cli";
 
 /**
  * Provider-neutral message content: text, a PDF read as a document, or a page
@@ -302,7 +303,7 @@ type Part =
   | { kind: "pdf"; filename: string; base64: string }
   | { kind: "image"; base64: string };
 
-const DEFAULT_MODEL: Record<Provider, string> = {
+const DEFAULT_MODEL: Record<Exclude<Provider, "claude-cli">, string> = {
   // Haiku 4.5, and this is an EVIDENCE-BASED choice, not a default left alone.
   //
   // DeepSeek v3.2 was tried here and failed the firm's own ledger on two
@@ -338,7 +339,7 @@ const DEFAULT_MODEL: Record<Provider, string> = {
  *
  * Override with MSME_VISION_MODEL. It only ever has to handle a scan.
  */
-const DEFAULT_VISION_MODEL: Record<Provider, string> = {
+const DEFAULT_VISION_MODEL: Record<Exclude<Provider, "claude-cli">, string> = {
   // Haiku, not a cheaper vision model. A scan is the LEAST reliable input this
   // tool takes, so it is the last place to trade accuracy for cost — and Haiku is
   // the one model verified correct on this firm's actual ledger.
@@ -354,12 +355,12 @@ interface ModelReply {
   provider: Provider;
 }
 
-function resolveProvider(needsVision = false): { provider: Provider; apiKey: string; model: string } | null {
+function resolveProvider(needsVision = false): { provider: Exclude<Provider, "claude-cli">; apiKey: string; model: string } | null {
   const forced = (Deno.env.get("MSME_AI_PROVIDER") ?? "").trim().toLowerCase();
   const orKey = Deno.env.get("OPENROUTER_API_KEY");
   const anthKey = Deno.env.get("ANTHROPIC_API_KEY");
 
-  let provider: Provider | null = null;
+  let provider: Exclude<Provider, "claude-cli"> | null = null;
   if (forced === "anthropic" && anthKey) provider = "anthropic";
   else if (forced === "openrouter" && orKey) provider = "openrouter";
   else if (orKey) provider = "openrouter";
@@ -384,6 +385,17 @@ async function callModel(
   parts: Part[],
   maxTokens: number,
 ): Promise<ModelReply | { error: string; status: number }> {
+  if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+    return callClaudeCli(system, parts.map((part) => part.kind === "image"
+      ? { ...part, mediaType: "image/jpeg" as const }
+      : part), {
+        modelEnv: "MSME_CLAUDE_MODEL",
+        defaultModel: DEFAULT_MODEL,
+        appTitle: "CAFlow MSME 43B(h)",
+        maxTokens,
+        effort: "low",
+      });
+  }
   // Route on what is actually being sent: a picture or a PDF needs a model that
   // can see one, whatever the text model happens to be.
   const needsVision = parts.some((p) => p.kind === "image" || p.kind === "pdf");

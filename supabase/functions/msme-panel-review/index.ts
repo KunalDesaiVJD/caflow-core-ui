@@ -37,6 +37,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { callClaudeCli, callClaudeCliText, isProviderError } from "../_shared/aiProvider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -181,6 +182,11 @@ async function callClaude(system: string, userText: string): Promise<unknown> {
 }
 
 async function callGpt(apiKey: string, model: string, system: string, userText: string): Promise<unknown> {
+  if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+    const reply = await callClaudeCliText(system, userText, 120_000, "sonnet");
+    if (isProviderError(reply)) throw new Error(reply.error);
+    return parseJson(reply.text);
+  }
   const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -258,11 +264,13 @@ serve(async (req) => {
 
     const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
     const gptModel = Deno.env.get("OPENROUTER_MODEL") || DEFAULT_GPT_MODEL;
-    const claudeModel = resolveProvider()?.model ?? "unavailable";
+    const usingCli = (Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api";
+    const claudeModel = usingCli ? "claude-cli" : resolveProvider()?.model ?? "unavailable";
     const pack = JSON.stringify(evidence).slice(0, 100_000);
     const p = prior ?? {};
 
     const needGpt = () => {
+      if (usingCli) return "claude-cli";
       if (!OPENROUTER_API_KEY) {
         throw new Error("The challenging reviewer is not configured. Set it with: npx supabase secrets set OPENROUTER_API_KEY=sk-or-v1-...");
       }
@@ -335,7 +343,7 @@ function json(body: unknown, status = 200): Response {
 // A withdrawn model now produces a message naming the secret to change, rather
 // than a generic failure.
 
-type Provider = "openrouter" | "anthropic";
+type Provider = "openrouter" | "anthropic" | "claude-cli";
 
 /**
  * Provider-neutral message content: text, a PDF read as a document, or a page
@@ -347,7 +355,7 @@ type Part =
   | { kind: "pdf"; filename: string; base64: string }
   | { kind: "image"; base64: string };
 
-const DEFAULT_MODEL: Record<Provider, string> = {
+const DEFAULT_MODEL: Record<Exclude<Provider, "claude-cli">, string> = {
   // Haiku 4.5 on both transports, per the standing OpenRouter instruction.
   // This side opens and answers the panel — judgement rather than
   // transcription, arguing about interpretation and never touching a figure.
@@ -371,7 +379,7 @@ const DEFAULT_MODEL: Record<Provider, string> = {
  *
  * Override with MSME_VISION_MODEL. It only ever has to handle a scan.
  */
-const DEFAULT_VISION_MODEL: Record<Provider, string> = {
+const DEFAULT_VISION_MODEL: Record<Exclude<Provider, "claude-cli">, string> = {
   // Haiku, not a cheaper vision model. A scan is the LEAST reliable input this
   // tool takes, so it is the last place to trade accuracy for cost — and Haiku is
   // the one model verified correct on this firm's actual ledger.
@@ -387,12 +395,12 @@ interface ModelReply {
   provider: Provider;
 }
 
-function resolveProvider(needsVision = false): { provider: Provider; apiKey: string; model: string } | null {
+function resolveProvider(needsVision = false): { provider: Exclude<Provider, "claude-cli">; apiKey: string; model: string } | null {
   const forced = (Deno.env.get("MSME_AI_PROVIDER") ?? "").trim().toLowerCase();
   const orKey = Deno.env.get("OPENROUTER_API_KEY");
   const anthKey = Deno.env.get("ANTHROPIC_API_KEY");
 
-  let provider: Provider | null = null;
+  let provider: Exclude<Provider, "claude-cli"> | null = null;
   if (forced === "anthropic" && anthKey) provider = "anthropic";
   else if (forced === "openrouter" && orKey) provider = "openrouter";
   else if (orKey) provider = "openrouter";
@@ -417,6 +425,17 @@ async function callModel(
   parts: Part[],
   maxTokens: number,
 ): Promise<ModelReply | { error: string; status: number }> {
+  if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+    return callClaudeCli(system, parts.map((part) => part.kind === "image"
+      ? { ...part, mediaType: "image/jpeg" as const }
+      : part), {
+        modelEnv: "MSME_CLAUDE_MODEL",
+        defaultModel: DEFAULT_MODEL,
+        appTitle: "CAFlow MSME panel review",
+        maxTokens,
+        effort: "low",
+      });
+  }
   // Route on what is actually being sent: a picture or a PDF needs a model that
   // can see one, whatever the text model happens to be.
   const needsVision = parts.some((p) => p.kind === "image" || p.kind === "pdf");

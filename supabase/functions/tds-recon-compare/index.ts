@@ -28,6 +28,7 @@
  */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { callClaudeCliText, isProviderError } from "../_shared/aiProvider.ts";
 
 // ── THE ONE SHARED ENGINE ─────────────────────────────────────────────────────
 // Every TDS stage compares with the SAME primitives and pairs with the SAME
@@ -485,6 +486,14 @@ function pairRecords(oRecs: Rec[], iRecs: Rec[], aliases: Alias[]): {
 // amount) to be the SAME transaction. Graceful: a provider failure leaves the
 // deterministic result untouched.
 async function callAI(system: string, userText: string, maxTokens: number): Promise<string | null> {
+  if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+    const reply = await callClaudeCliText(system, userText, 120_000, "sonnet");
+    if (isProviderError(reply)) {
+      console.error("section Claude CLI failed", reply.status, reply.error);
+      return null;
+    }
+    return reply.text;
+  }
   const openAICompat = async (url: string, key: string, model: string, extra: Record<string, string>) => {
     try {
       const res = await fetch(url, {
