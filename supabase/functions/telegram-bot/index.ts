@@ -23,6 +23,7 @@
 
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
+import { callClaudeCliText, isProviderError } from "../_shared/aiProvider.ts";
 
 // ─── Environment ──────────────────────────────────────────────────────────────
 const BOT_TOKEN           = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
@@ -419,7 +420,8 @@ async function claudeFetch(url: string, init: RequestInit, maxRetries = 3): Prom
 
 // ─── handleWithClaude — full Claude tool-use loop ──────────────────────────────
 async function handleWithClaude(chatId: number, userId: number, userText: string): Promise<void> {
-  if (!ANTHROPIC_API_KEY) {
+  const usingCli = (Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api";
+  if (!usingCli && !ANTHROPIC_API_KEY) {
     await sendMsg(chatId, "⚠️ AI service unavailable\\. Please try again later\\.");
     return;
   }
@@ -445,6 +447,28 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
   } catch { /* table may not exist yet — degrade gracefully */ }
 
   history.push({ role: "user", content: userText });
+
+  if (usingCli) {
+    try {
+      const conversation = history.map((message) => `${message.role.toUpperCase()}: ${
+        typeof message.content === "string"
+          ? message.content
+          : (message.content as any[]).map((block) => block?.text ?? "").join("\n")
+      }`).join("\n\n");
+      const reply = await callClaudeCliText(SYSTEM_PROMPT, conversation, 180_000, "sonnet");
+      if (isProviderError(reply)) throw new Error(reply.error);
+      await sendTelegram(chatId, reply.text, "Markdown");
+      history.push({ role: "assistant", content: reply.text });
+      await (supabase as any).from("telegram_context").upsert(
+        { user_id: userId, history: history.slice(-20), updated_at: new Date().toISOString() },
+        { onConflict: "user_id" },
+      );
+    } catch (error) {
+      console.error("[Bot] Claude CLI error:", error);
+      await sendMsg(chatId, "âŒ The AI service could not complete that request\. Please try again\.");
+    }
+    return;
+  }
 
   const CLAUDE_HEADERS = {
     "Content-Type":      "application/json",
@@ -1944,6 +1968,17 @@ function normaliseIntent(parsed: any): Intent {
 }
 
 async function callClaude(systemPrompt: string, userText: string, maxTokens = 300): Promise<any | null> {
+  if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+    const reply = await callClaudeCliText(
+      systemPrompt,
+      `Parse this message:\n"${userText.replace(/"/g, "'")}"\n\nReturn only JSON:`,
+      120_000,
+      "haiku",
+    );
+    if (isProviderError(reply)) return null;
+    const clean = reply.text.replace(/^```json?\n?/, "").replace(/\n?```$/, "").trim();
+    return JSON.parse(clean);
+  }
   if (!ANTHROPIC_API_KEY) return null;
   const res = await claudeFetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -1973,6 +2008,10 @@ async function callClaude(systemPrompt: string, userText: string, maxTokens = 30
 }
 
 async function callClaudeRaw(systemPrompt: string, userText: string, maxTokens = 200): Promise<string | null> {
+  if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+    const reply = await callClaudeCliText(systemPrompt, userText, 120_000, "haiku");
+    return isProviderError(reply) ? null : reply.text.trim() || null;
+  }
   if (!ANTHROPIC_API_KEY) return null;
   const res = await claudeFetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -1994,7 +2033,7 @@ async function callClaudeRaw(systemPrompt: string, userText: string, maxTokens =
 }
 
 async function parseIntent(text: string, ctxHint?: string): Promise<Intent> {
-  if (!ANTHROPIC_API_KEY) {
+  if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") === "legacy-api" && !ANTHROPIC_API_KEY) {
     console.warn("[Bot] ANTHROPIC_API_KEY not set — using keyword fallback");
     return intentFallback(text);
   }

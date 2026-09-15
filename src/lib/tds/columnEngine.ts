@@ -468,7 +468,7 @@ export function rescueMirroredAmountFromNarration(allRows: Record<string, unknow
       return allRows.map((r) => {
         const tv = toNum(r?.[mirrorTds as string]);
         const amt = tv != null && tv > 0 ? extractNarrationAmount(r?.[h]) : null;
-        if (amt == null || amt <= 0) return r;
+        if (tv == null || amt == null || amt <= 0) return r;
         // Carry the RATE the narration states, and the narration text itself,
         // alongside the recovered amount: the row's own words are the evidence
         // for the figure the engine just reconstructed, so a reviewer can see

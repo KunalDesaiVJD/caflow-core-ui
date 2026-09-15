@@ -38,7 +38,8 @@
  * it the next time it is touched for another reason.
  */
 
-export type Provider = "openrouter" | "anthropic";
+export type LegacyProvider = "openrouter" | "anthropic";
+export type Provider = LegacyProvider | "claude-cli";
 
 export type Part =
   | { kind: "text"; text: string }
@@ -65,7 +66,7 @@ export interface CallOptions {
   /** Env var carrying a model override. Set per calling function. */
   modelEnv?: string;
   /** Model to use when nothing overrides it, per provider. */
-  defaultModel: Record<Provider, string>;
+  defaultModel: Record<LegacyProvider, string>;
   /** Shown to OpenRouter in X-Title, so spend is attributable per feature. */
   appTitle: string;
   maxTokens: number;
@@ -90,12 +91,12 @@ export interface CallOptions {
 
 export function resolveProvider(
   opts: Pick<CallOptions, "modelEnv" | "defaultModel">,
-): { provider: Provider; apiKey: string; model: string } | null {
+): { provider: LegacyProvider; apiKey: string; model: string } | null {
   const forced = (Deno.env.get("MSME_AI_PROVIDER") ?? "").trim().toLowerCase();
   const orKey = Deno.env.get("OPENROUTER_API_KEY");
   const anthKey = Deno.env.get("ANTHROPIC_API_KEY");
 
-  let provider: Provider | null = null;
+  let provider: LegacyProvider | null = null;
   if (forced === "anthropic" && anthKey) provider = "anthropic";
   else if (forced === "openrouter" && orKey) provider = "openrouter";
   else if (orKey) provider = "openrouter";
@@ -121,6 +122,12 @@ export async function callModel(
   opts: CallOptions,
   timeoutMs = 120_000,
 ): Promise<ModelReply | ProviderError> {
+  // Claude CLI is the application-wide default. The old API transports remain
+  // available only as an explicit rollback switch.
+  if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli").trim().toLowerCase() !== "legacy-api") {
+    return callClaudeCli(system, parts, opts, timeoutMs);
+  }
+
   const resolved = resolveProvider(opts);
   if (!resolved) {
     return {
@@ -258,7 +265,7 @@ export function describeProviderError(
   status: number,
   body: string,
   model: string,
-  provider: Provider,
+  provider: LegacyProvider,
   modelEnv?: string,
 ): ProviderError {
   let providerMsg = "";
@@ -300,5 +307,149 @@ export function describeProviderError(
   return {
     error: `${provider} returned ${status}${providerMsg ? `: ${providerMsg}` : ""}.`,
     status: 502,
+  };
+}
+
+export async function callClaudeCli(
+  system: string,
+  parts: Part[],
+  opts: CallOptions,
+  timeoutMs = 120_000,
+): Promise<ModelReply | ProviderError> {
+  const gatewayUrl = (Deno.env.get("CLAUDE_CLI_GATEWAY_URL") ?? "").trim();
+  const gatewaySecret = Deno.env.get("CLAUDE_CLI_GATEWAY_SECRET") ?? "";
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  if (!gatewayUrl || !gatewaySecret || !supabaseUrl || !serviceKey) {
+    return {
+      error: "Claude CLI is not configured. Set CLAUDE_CLI_GATEWAY_URL and CLAUDE_CLI_GATEWAY_SECRET.",
+      status: 503,
+    };
+  }
+
+  const staged: string[] = [];
+  const gatewayParts: Array<Record<string, unknown>> = [];
+  const storage = createStorageClient(supabaseUrl, serviceKey);
+
+  try {
+    for (const part of parts) {
+      if (part.kind === "text") {
+        gatewayParts.push(part);
+        continue;
+      }
+      const extension = part.kind === "pdf"
+        ? ".pdf"
+        : imageExtension(part.mediaType);
+      const path = `ai-cli-temp/${crypto.randomUUID()}${extension}`;
+      const bytes = Uint8Array.from(atob(part.base64), (char) => char.charCodeAt(0));
+      const contentType = part.kind === "pdf" ? "application/pdf" : part.mediaType;
+      const upload = await storage.upload(path, bytes, contentType);
+      if (upload) return { error: `Could not stage the AI input: ${upload}`, status: 502 };
+      staged.push(path);
+      gatewayParts.push({
+        kind: "storage",
+        bucket: "documents",
+        path,
+        filename: part.kind === "pdf" ? part.filename : `page${extension}`,
+        mediaType: contentType,
+      });
+    }
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs + 15_000);
+    try {
+      const response = await fetch(gatewayUrl, {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: {
+          "Authorization": `Bearer ${gatewaySecret}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          system,
+          parts: gatewayParts,
+          model: cliModel(opts),
+          effort: opts.effort || "low",
+          timeoutMs,
+        }),
+      });
+      const body = await response.json().catch(() => ({})) as {
+        text?: string;
+        error?: string;
+        truncated?: boolean;
+        model?: string;
+      };
+      if (!response.ok || typeof body.text !== "string") {
+        return { error: body.error || `Claude CLI gateway returned ${response.status}.`, status: response.status || 502 };
+      }
+      return {
+        text: body.text,
+        truncated: body.truncated === true,
+        model: body.model || cliModel(opts),
+        provider: "claude-cli",
+      };
+    } catch (error) {
+      return {
+        error: (error as Error)?.name === "AbortError"
+          ? "Claude CLI timed out while processing the request."
+          : "Claude CLI gateway could not be reached.",
+        status: 504,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+  } finally {
+    if (staged.length) await storage.remove(staged);
+  }
+}
+
+/** Convenience entry point for functions whose AI request is text-only. */
+export function callClaudeCliText(
+  system: string,
+  userText: string,
+  timeoutMs = 120_000,
+  model: "haiku" | "sonnet" | "opus" = "sonnet",
+): Promise<ModelReply | ProviderError> {
+  return callClaudeCli(system, [{ kind: "text", text: userText }], {
+    defaultModel: { openrouter: model, anthropic: model },
+    appTitle: "CAFlow",
+    maxTokens: 16_000,
+    effort: "low",
+  }, timeoutMs);
+}
+
+function cliModel(opts: CallOptions): "haiku" | "sonnet" | "opus" {
+  const override = opts.modelEnv ? (Deno.env.get(opts.modelEnv) ?? "").toLowerCase() : "";
+  const configured = (Deno.env.get("CAFLOW_CLAUDE_CLI_MODEL") ?? override).toLowerCase();
+  if (configured.includes("opus")) return "opus";
+  if (configured.includes("haiku")) return "haiku";
+  return "sonnet";
+}
+
+function imageExtension(mediaType: string): string {
+  if (mediaType.includes("png")) return ".png";
+  if (mediaType.includes("webp")) return ".webp";
+  if (mediaType.includes("gif")) return ".gif";
+  return ".jpg";
+}
+
+function createStorageClient(url: string, key: string) {
+  const headers = { Authorization: `Bearer ${key}`, apikey: key };
+  return {
+    async upload(path: string, bytes: Uint8Array, contentType: string): Promise<string | null> {
+      const response = await fetch(`${url}/storage/v1/object/documents/${path}`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": contentType, "x-upsert": "false" },
+        body: bytes,
+      });
+      return response.ok ? null : (await response.text()).slice(0, 300);
+    },
+    async remove(paths: string[]): Promise<void> {
+      await fetch(`${url}/storage/v1/object/documents`, {
+        method: "DELETE",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ prefixes: paths }),
+      }).catch(() => undefined);
+    },
   };
 }

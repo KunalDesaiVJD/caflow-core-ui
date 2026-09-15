@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { callClaudeCliText, isProviderError } from "../_shared/aiProvider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -199,6 +200,34 @@ serve(async (req) => {
     const anthropicModel = isLightRequest ? "claude-haiku-4-5-20251001" : isScrutinyHeavy ? "claude-sonnet-4-20250514" : "claude-sonnet-4-20250514";
     const lovableModel = isLightRequest ? "google/gemini-2.5-flash-lite" : "google/gemini-3-flash-preview";
     const useStream = wantStream === true;
+
+    if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+      const reply = await callClaudeCliText(
+        systemPrompt,
+        user_message,
+        180_000,
+        isLightRequest ? "haiku" : "sonnet",
+      );
+      if (isProviderError(reply)) {
+        return new Response(JSON.stringify({ error: reply.error }), {
+          status: reply.status,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (useStream) {
+        const event = JSON.stringify({
+          choices: [{ delta: { content: reply.text } }],
+          delta: { text: reply.text },
+          content_block: { text: reply.text },
+        });
+        return new Response(`data: ${event}\n\ndata: [DONE]\n\n`, {
+          headers: { ...corsHeaders, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+        });
+      }
+      return new Response(JSON.stringify(parseAiJson(reply.text)), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     const ANTHROPIC_API_KEY = Deno.env.get("ANTHROPIC_API_KEY");
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");

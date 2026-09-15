@@ -13,6 +13,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.27.3";
+import { callClaudeCliText, isProviderError } from "../_shared/aiProvider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -103,9 +104,6 @@ serve(async (req) => {
       : null;
 
     // ── Call Claude to analyse the override ──────────────────────────────────
-    const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY")!;
-    const anthropic = new Anthropic({ apiKey: anthropicKey });
-
     const overrideContext = aiLabel
       ? `AI suggested: ${aiLabel}\nHuman corrected to: ${humanLabel}`
       : `Human confirmed mapping to: ${humanLabel} (no prior AI suggestion)`;
@@ -138,13 +136,26 @@ Return ONLY valid JSON, no markdown:
 If the ledger name itself looks like a party/business/person name, return:
 { "reason_type": "PARTY_NAME", "explanation": "This is a party name", "aliases": [], "is_generic_accounting_term": false }`;
 
-    const message = await anthropic.messages.create({
-      model: "claude-haiku-4-5",
-      max_tokens: 512,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const raw = message.content[0].type === "text" ? message.content[0].text : "{}";
+    let raw = "{}";
+    if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+      const reply = await callClaudeCliText(
+        "You analyse CA-verified Chart of Accounts mapping corrections. Return JSON only.",
+        prompt,
+        120_000,
+        "haiku",
+      );
+      if (isProviderError(reply)) throw new Error(reply.error);
+      raw = reply.text;
+    } else {
+      const anthropicKey = Deno.env.get("ANTHROPIC_API_KEY")!;
+      const anthropic = new Anthropic({ apiKey: anthropicKey });
+      const message = await anthropic.messages.create({
+        model: "claude-haiku-4-5",
+        max_tokens: 512,
+        messages: [{ role: "user", content: prompt }],
+      });
+      raw = message.content[0].type === "text" ? message.content[0].text : "{}";
+    }
     let analysis: {
       reason_type: string;
       explanation: string;

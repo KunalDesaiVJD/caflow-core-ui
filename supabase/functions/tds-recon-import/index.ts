@@ -21,6 +21,7 @@
  */
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { callClaudeCli, isProviderError } from "../_shared/aiProvider.ts";
 // The tabular mapping engine is SHARED with the app — ../_shared/tdsColumnEngine.ts is a
 // byte-identical copy of src/lib/tds/columnEngine.ts, enforced by src/lib/tds/sharedSync.test.ts.
 // It used to be duplicated inline in this file, and the two copies silently DRIFTED: a stray
@@ -174,6 +175,23 @@ async function callAI(opts: {
   pdf?: { base64: string; filename: string };
   image?: { base64: string; mediaType: string };   // scanned docs / photos (jpg, png, webp, …)
 }): Promise<AIResult> {
+  if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") !== "legacy-api") {
+    const parts = [
+      { kind: "text" as const, text: opts.userText },
+      ...(opts.pdf ? [{ kind: "pdf" as const, filename: opts.pdf.filename, base64: opts.pdf.base64 }] : []),
+      ...(opts.image ? [{ kind: "image" as const, mediaType: opts.image.mediaType, base64: opts.image.base64 }] : []),
+    ];
+    const reply = await callClaudeCli(opts.system, parts, {
+      modelEnv: "CAFLOW_CLAUDE_CLI_MODEL",
+      defaultModel: { openrouter: "sonnet", anthropic: "sonnet" },
+      appTitle: "CAFlow TDS reconciliation import",
+      maxTokens: opts.maxTokens,
+      effort: "low",
+    });
+    return isProviderError(reply)
+      ? { ok: false, status: reply.status, errText: reply.error, content: "", truncated: false }
+      : { ok: true, status: 200, errText: "", content: reply.text, truncated: reply.truncated };
+  }
   const dataUrl = opts.pdf ? `data:application/pdf;base64,${opts.pdf.base64}`
     : opts.image ? `data:${opts.image.mediaType};base64,${opts.image.base64}` : "";
 
@@ -294,7 +312,7 @@ serve(async (req) => {
     const { data: { user }, error: authErr } = await supabase.auth.getUser(token);
     if (authErr || !user) return json({ error: "Unauthorized" }, 401);
 
-    if (!Deno.env.get("OPENROUTER_API_KEY") && !Deno.env.get("LOVABLE_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) {
+    if ((Deno.env.get("CAFLOW_AI_BACKEND") ?? "claude-cli") === "legacy-api" && !Deno.env.get("OPENROUTER_API_KEY") && !Deno.env.get("LOVABLE_API_KEY") && !Deno.env.get("ANTHROPIC_API_KEY")) {
       return json({ error: "No AI provider configured. Set OPENROUTER_API_KEY, LOVABLE_API_KEY or ANTHROPIC_API_KEY in Supabase secrets." }, 503);
     }
 
