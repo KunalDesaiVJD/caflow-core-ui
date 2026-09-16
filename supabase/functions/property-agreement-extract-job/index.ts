@@ -72,23 +72,32 @@ const BUDGET_MS = 95_000;
  *  it is not coming back inside this invocation's budget. */
 const CHUNK_TIMEOUT_MS = 70_000;
 
-/** Chunks read at once. Three keeps a 202-page deed moving without risking a
- *  provider rate limit that would fail the whole invocation. */
-const CONCURRENCY = 3;
+/**
+ * Persist one chunk at a time. Vercel Sandbox capacity can queue a third
+ * concurrent Claude process; Promise.all then withholds the two completed
+ * chunks until that queued process finishes, and Supabase may kill the worker
+ * first. Sequential reads are slower per invocation but every successful
+ * result reaches the job row immediately and can never be lost to a sibling.
+ */
+const CONCURRENCY = 1;
 
-/** A running job whose heartbeat is older than this has lost its worker. */
-const STALE_MS = 120_000;
+/**
+ * The browser re-kicks after 90 seconds without progress. Keep this below that
+ * threshold so its first retry resumes the job instead of returning
+ * "already running" and waiting another 90 seconds.
+ */
+const STALE_MS = 75_000;
 
 /**
  * Guards against a chain that never terminates.
  *
  * The ceiling the uploader enforces is 500 pages, which at 12 per chunk is 42
- * chunks. Worst case a 95s budget fits one batch of 3, so 42 chunks is 14
- * invocations; the 202-page deed measured for this module is 17 chunks, or
- * 2-6. Forty leaves room for a run of chunks that each time out at 70s
- * without letting a genuinely stuck job chain forever.
+ * chunks. Sequential persistence may complete only one slow chunk per
+ * invocation; forty leaves room for ordinary long deeds and a run of chunks
+ * that each time out at 70s without rejecting the uploader's 500-page ceiling.
+ * Sixty still prevents a genuinely stuck job from chaining forever.
  */
-const MAX_ATTEMPTS = 40;
+const MAX_ATTEMPTS = 60;
 
 interface JobRow {
   id: string;
