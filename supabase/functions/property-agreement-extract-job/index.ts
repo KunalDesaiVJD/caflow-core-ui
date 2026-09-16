@@ -225,6 +225,10 @@ serve(async (req) => {
     if (!jobId) return json({ error: "Provide `job_id`." }, 400);
 
     const admin = createClient(supabaseUrl, serviceKey);
+    const updateJob = async (values: Record<string, unknown>): Promise<void> => {
+      const { error } = await admin.from("tds_property_extraction_jobs").update(values).eq("id", jobId);
+      if (error) throw new Error(`Could not save extraction progress: ${error.message}`);
+    };
 
     // A chained call carries the service-role key: it is this function calling
     // itself to continue a job it already authorised. Anything else must be a
@@ -262,22 +266,16 @@ serve(async (req) => {
     }
 
     if (job.attempts >= MAX_ATTEMPTS) {
-      await admin.from("tds_property_extraction_jobs")
-        .update({ status: "failed", error: "The document needed more passes than allowed. Upload the pages carrying the parties, consideration and stamp duty value.", updated_at: new Date().toISOString() })
-        .eq("id", jobId);
+      await updateJob({ status: "failed", error: "The document needed more passes than allowed. Upload the pages carrying the parties, consideration and stamp duty value.", updated_at: new Date().toISOString() });
       return json({ status: "failed" });
     }
 
-    await admin.from("tds_property_extraction_jobs")
-      .update({ status: "running", attempts: job.attempts + 1, heartbeat_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-      .eq("id", jobId);
+    await updateJob({ status: "running", attempts: job.attempts + 1, heartbeat_at: new Date().toISOString(), updated_at: new Date().toISOString() });
 
     // ── The document ───────────────────────────────────────────────────────
     const { data: blob, error: dlErr } = await admin.storage.from("documents").download(job.file_path);
     if (dlErr || !blob) {
-      await admin.from("tds_property_extraction_jobs")
-        .update({ status: "failed", error: "The uploaded file could not be read back from storage.", updated_at: new Date().toISOString() })
-        .eq("id", jobId);
+      await updateJob({ status: "failed", error: "The uploaded file could not be read back from storage.", updated_at: new Date().toISOString() });
       return json({ status: "failed" });
     }
     const srcDoc = await PDFDocument.load(await blob.arrayBuffer());
@@ -306,14 +304,12 @@ serve(async (req) => {
 
       // Written after EVERY batch, not at the end: an invocation killed at the
       // wall clock must not lose the pages it already paid to read.
-      await admin.from("tds_property_extraction_jobs")
-        .update({
-          chunk_results: results,
-          chunks_done: results.length,
-          heartbeat_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", jobId);
+      await updateJob({
+        chunk_results: results,
+        chunks_done: results.length,
+        heartbeat_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
     }
 
     const finished = results.length >= job.chunks_total;
@@ -323,14 +319,12 @@ serve(async (req) => {
       // with no parties and no consideration looks exactly like a
       // below-threshold deal on screen.
       const anyRead = results.some((r) => r.extraction?.extraction_status === "extracted");
-      await admin.from("tds_property_extraction_jobs")
-        .update({
-          status: anyRead ? "done" : "failed",
-          error: anyRead ? null : "None of the pages could be read. Try a clearer scan, or enter the details manually.",
-          heartbeat_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", jobId);
+      await updateJob({
+        status: anyRead ? "done" : "failed",
+        error: anyRead ? null : "None of the pages could be read. Try a clearer scan, or enter the details manually.",
+        heartbeat_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
       return json({ status: anyRead ? "done" : "failed", chunks_done: results.length, chunks_total: job.chunks_total });
     }
 

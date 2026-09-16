@@ -667,19 +667,37 @@ export function TdsPropertyUpload({
     let stopped = false;
     let lastDone = -1;
     let stalledSince = Date.now();
+    let consecutivePollFailures = 0;
 
     const tick = async () => {
       if (stopped) return;
-      const { data } = await jobsTable()
-        .select("id, status, chunks_done, chunks_total, chunk_results, error, file_path, file_name, mime_type")
+      // Poll only the small status fields. Fetching every accumulated Claude
+      // result every three seconds made the response grow throughout a long
+      // deed; when that request failed, the old code silently returned and
+      // left the spinner alive forever even though the job was already done.
+      const { data, error: pollError } = await jobsTable()
+        .select("id, status, chunks_done, chunks_total, error")
         .eq("id", jobId)
         .maybeSingle();
-      if (stopped || !data) return;
+      if (stopped) return;
+      if (pollError || !data) {
+        consecutivePollFailures += 1;
+        if (consecutivePollFailures >= 3) {
+          stopped = true;
+          setJob(null);
+          toast.error(
+            pollError?.message
+              ? `The document finished on the server, but its status could not be loaded: ${pollError.message}`
+              : "The document job could not be found. Refresh and upload it again.",
+          );
+        }
+        return;
+      }
+      consecutivePollFailures = 0;
 
       const row = data as {
         id: string; status: string; chunks_done: number; chunks_total: number;
-        chunk_results: ChunkReading[] | null; error: string | null;
-        file_path: string; file_name: string; mime_type: string | null;
+        error: string | null;
       };
 
       setJob((j) => (j && j.id === jobId ? { ...j, chunksDone: row.chunks_done, chunksTotal: row.chunks_total } : j));
@@ -695,7 +713,22 @@ export function TdsPropertyUpload({
       if (row.status === "done") {
         stopped = true;
         setJob(null);
-        await applyJobRef.current(row);
+        const { data: completed, error: completedError } = await jobsTable()
+          .select("id, chunk_results, file_path, file_name, mime_type")
+          .eq("id", jobId)
+          .single();
+        if (completedError || !completed) {
+          toast.error(
+            completedError?.message
+              ? `The document was read, but its result could not be loaded: ${completedError.message}`
+              : "The document was read, but its result is unavailable. Refresh and try again.",
+          );
+          return;
+        }
+        await applyJobRef.current(completed as {
+          id: string; chunk_results: ChunkReading[] | null; file_path: string;
+          file_name: string; mime_type: string | null;
+        });
       } else if (row.status === "failed" || row.status === "cancelled") {
         stopped = true;
         setJob(null);
