@@ -51,7 +51,10 @@ export default async function handler(req: any, res: any) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const gatewaySecret = process.env.CLAUDE_CLI_GATEWAY_SECRET ?? "";
-  const oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
+  // Vercel's dashboard can preserve line wrapping when a setup token is
+  // pasted from a terminal. OAuth tokens contain no whitespace, so remove it
+  // before Claude turns the value into an Authorization header.
+  const oauthToken = (process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "").replace(/\s+/g, "");
   const supabaseUrl = process.env.SUPABASE_URL ?? "";
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 
@@ -152,7 +155,11 @@ child.on("exit", code => process.exit(code ?? 1));
         .replaceAll(oauthToken, "[redacted]")
         .replace(/[\r\n]+/g, " ")
         .slice(0, 1200);
-      console.error(`[claude-cli] CLI failed ${command.exitCode}: ${safeStderr || "no stderr"}`);
+      const safeStdout = stdout
+        .replaceAll(oauthToken, "[redacted]")
+        .replace(/[\r\n]+/g, " ")
+        .slice(0, 1200);
+      console.error(`[claude-cli] CLI failed ${command.exitCode}: stderr=${safeStderr || "empty"}; stdout=${safeStdout || "empty"}`);
       return res.status(502).json({ error: "Claude CLI could not complete this request" });
     }
 
