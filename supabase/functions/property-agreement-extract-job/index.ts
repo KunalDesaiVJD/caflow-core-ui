@@ -204,6 +204,7 @@ serve(async (req) => {
   const started = Date.now();
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  let requestJobId = "";
 
   try {
     const token = (req.headers.get("Authorization") ?? "").replace("Bearer ", "").trim();
@@ -211,6 +212,7 @@ serve(async (req) => {
 
     const body = await req.json().catch(() => ({}));
     const jobId = String(body?.job_id ?? "");
+    requestJobId = jobId;
     if (!jobId) return json({ error: "Provide `job_id`." }, 400);
 
     const admin = createClient(supabaseUrl, serviceKey);
@@ -339,6 +341,27 @@ serve(async (req) => {
     return json({ status: "running", chunks_done: results.length, chunks_total: job.chunks_total });
   } catch (e) {
     console.error("property-agreement-extract-job:", (e as Error)?.message);
+    // A thrown error used to leave the row in `running` forever. The browser
+    // then kept polling and re-kicking the same broken job, so the upload UI
+    // never reached a terminal state. Persist the failure whenever the request
+    // got far enough to identify a job.
+    try {
+      if (requestJobId) {
+        const admin = createClient(
+          Deno.env.get("SUPABASE_URL")!,
+          Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+        );
+        await admin.from("tds_property_extraction_jobs")
+          .update({
+            status: "failed",
+            error: "The document reader stopped unexpectedly. Please try again or enter the details manually.",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", requestJobId);
+      }
+    } catch {
+      // The original error remains the useful server-side diagnostic.
+    }
     return json({ error: "Something went wrong reading the document." }, 500);
   }
 });

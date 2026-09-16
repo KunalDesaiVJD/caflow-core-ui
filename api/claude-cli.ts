@@ -115,6 +115,10 @@ const child = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"], env: proc
 child.stdin.end(prompt);
 child.stdout.pipe(process.stdout);
 child.stderr.pipe(process.stderr);
+child.on("error", error => {
+  console.error("Unable to start Claude CLI:", error.message);
+  process.exit(1);
+});
 child.on("exit", code => process.exit(code ?? 1));
 `,
     });
@@ -130,12 +134,25 @@ child.on("exit", code => process.exit(code ?? 1));
         CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
         CAFLOW_CLAUDE_MODEL: body.model || "sonnet",
         CAFLOW_CLAUDE_EFFORT: body.effort || "low",
+        // Supplying `env` to Sandbox creates the command environment. Keep
+        // the universal image's standard binary locations available so the
+        // runner can resolve the preinstalled `claude` executable.
+        PATH: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        HOME: "/root",
       },
     });
     const stdout = await command.stdout();
     const stderr = await command.stderr();
     if (command.exitCode !== 0) {
-      console.error("[claude-cli] CLI failed", command.exitCode, stderr.slice(0, 1200));
+      // Vercel's structured logger only preserved the first console argument,
+      // which hid the actual Claude CLI error and made production failures
+      // impossible to diagnose. Keep this one string and strip the OAuth token
+      // defensively in case a future CLI version includes it in diagnostics.
+      const safeStderr = stderr
+        .replaceAll(oauthToken, "[redacted]")
+        .replace(/[\r\n]+/g, " ")
+        .slice(0, 1200);
+      console.error(`[claude-cli] CLI failed ${command.exitCode}: ${safeStderr || "no stderr"}`);
       return res.status(502).json({ error: "Claude CLI could not complete this request" });
     }
 
