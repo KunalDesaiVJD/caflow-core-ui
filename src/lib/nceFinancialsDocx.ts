@@ -959,6 +959,36 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
   });
 }
 
+/**
+ * Continuation-page variant of noteTitleRow() used only by buildNoteSection()'s
+ * page split — same navy BG_SECT band, but reads just "Note {noteNumber}
+ * Contd..." instead of repeating the full title, per the auditor's explicit
+ * wording request (not "Note {num}:  {title} (Contd...)"). tableHeader:true
+ * for the same reason as noteTitleRow(): if this remainder itself runs past
+ * a further page, Word keeps repeating this same "Contd..." row there too.
+ */
+function noteContdTitleRow(colWidths: number[], noteNumber: string): TableRow {
+  const totalW = colWidths.reduce((s, w) => s + w, 0);
+  return new TableRow({
+    cantSplit: true,
+    tableHeader: true,
+    children: [
+      new TableCell({
+        columnSpan: colWidths.length,
+        width:   { size: totalW, type: WidthType.DXA },
+        shading: { fill: BG_SECT, type: ShadingType.CLEAR },
+        borders: BDR_SECT,
+        margins: { top: 56, bottom: 56, left: 100, right: 100 },
+        children: [new Paragraph({
+          spacing: { before: 0, after: 0 },
+          keepNext: true, keepLines: true,
+          children: [new TextRun({ text: `Note ${noteNumber} Contd...`, font: FONT, size: SZ_HDR, bold: true, color: NAVY })],
+        })],
+      }),
+    ],
+  });
+}
+
 /** Full-width category/group header within a note table.
  *  Issue 4 — rendered with NO fill (just bold black text + bottom hairline) so
  *  group headers like "Interest income" stay consistent with the no-color
@@ -1858,17 +1888,21 @@ type CySourceEntry = { ledger: string; amountCy: number; amountPy?: number; colu
  * notes-page before Word would naturally wrap to the next. Word only
  * generates real page breaks when it renders the .docx, which happens after
  * this code has already finished running, so there is no way to read the
- * true value back at generation time — this is a deliberately conservative
- * estimate (usable page height ≈ A4_H − MARG_T_NOTES − MARG_B_NOTES − the
- * repeating banner/title/column-header stack, divided by a single-line data
- * row's height at SZ_BODY with its vertPad), left with headroom for the
- * occasional two-line wrap (a long party name at a narrow column width).
- * Used only to decide where buildNoteSection() forces its own page break for
- * a genuine "(Contd...)" title — see there. If a real export still shows a
- * note running noticeably short/long of a full page before "(Contd...)"
- * kicks in, retune this constant rather than the logic around it.
+ * true value back at generation time — this is an estimate (usable page
+ * height ≈ A4_H − MARG_T_NOTES − MARG_B_NOTES − the repeating banner/title/
+ * column-header stack, divided by a single-line data row's height at
+ * SZ_BODY with its vertPad).
+ * Used only to decide where buildNoteSection() forces the ONE page break
+ * that lets it show a genuine "Note {num} Contd..." title — see there; a
+ * note is only ever split once; how it breaks after that is Word's own
+ * natural flow (which packs rows as efficiently as any normal table).
+ * First shipped as 40 — real exports showed that was noticeably under the
+ * true per-page capacity, forcing an unnecessary split (and a mostly-blank
+ * remainder page) on notes that would have fit on one page. Raised to 48.
+ * If a real export still shows a note splitting noticeably short/long of a
+ * full first page, retune this constant rather than the logic around it.
  */
-const CHUNK_ROWS_PER_PAGE = 40;
+const CHUNK_ROWS_PER_PAGE = 48;
 
 function buildNoteSection(
   cfg: NoteConfig,
@@ -2367,49 +2401,45 @@ function buildNoteSection(
     flatRows.forEach(f => f.emit());
   }
 
-  // Split into page-sized chunks so a note longer than CHUNK_ROWS_PER_PAGE
-  // gets a genuine "(Contd...)" title on every page after the first, instead
-  // of only the identical repeated title the tableHeader flag on
-  // noteTitleRow() already gives every note (short or long) for free. Word
-  // can't show different text for a single repeating row's later clones —
-  // this is the only way to get wording that actually differs on
-  // continuation pages, at the cost of estimating the row count a page can
-  // hold rather than reading it back from Word's own layout (which isn't
-  // available at generation time). See CHUNK_ROWS_PER_PAGE for the estimate
-  // and its accuracy caveat; short notes (the overwhelming majority) never
-  // reach this branch and are emitted exactly as before.
-  const headerStack = (contd: boolean): TableRow[] => [
-    noteTitleRow(colWidths, displayNoteNumber, contd ? `${cleanTitle} (Contd...)` : cleanTitle),
-    noteUnitsRow(colWidths),
-    ...(isA ? noteHdrA(cyColHdr, pyColHdr) : [noteHdrB(cyColHdr, pyColHdr)]),
-  ];
-  const oneTable = (chunkRows: TableRow[], contd: boolean): Table => new Table({
-    width:        { size: TW, type: WidthType.DXA },
-    columnWidths: colWidths,
-    rows:         [...headerStack(contd), ...chunkRows],
-  });
-
+  // A note longer than CHUNK_ROWS_PER_PAGE gets ONE forced split — first part
+  // (normal title) / rest (noteContdTitleRow's "Note {num} Contd..." title,
+  // itself tableHeader:true) — instead of the identical repeated title
+  // noteTitleRow()'s tableHeader flag already gives every note for free.
+  // Word can't show different text for a single repeating row's later
+  // clones, so this is the only way to get wording that actually changes on
+  // a continuation page. Only ONE split is made, not one per page the note
+  // might span: the "rest" table's own title row already repeats itself via
+  // tableHeader if IT also runs past a further page, so guessing additional
+  // split points would only add more chances to misjudge the row count and
+  // strand a small remainder on an otherwise-empty page (see below and
+  // CHUNK_ROWS_PER_PAGE — an under-filled first part is at worst one page of
+  // slack, not one page of slack per artificial chunk).
   if (rows.length <= CHUNK_ROWS_PER_PAGE) {
-    return [oneTable(rows, false)];
+    return [new Table({
+      width: { size: TW, type: WidthType.DXA }, columnWidths: colWidths,
+      rows: [noteTitleRow(colWidths, displayNoteNumber, cleanTitle), noteUnitsRow(colWidths),
+             ...(isA ? noteHdrA(cyColHdr, pyColHdr) : [noteHdrB(cyColHdr, pyColHdr)]), ...rows],
+    })];
   }
-  const chunks: TableRow[][] = [];
-  for (let i = 0; i < rows.length; i += CHUNK_ROWS_PER_PAGE) chunks.push(rows.slice(i, i + CHUNK_ROWS_PER_PAGE));
-  // Fold a lonely 1-3 row tail into the previous chunk rather than forcing a
-  // whole extra page for almost nothing — CHUNK_ROWS_PER_PAGE already has
-  // enough safety margin to absorb a few extra rows without overflowing.
-  if (chunks.length > 1 && chunks[chunks.length - 1].length < 4) {
-    chunks[chunks.length - 2].push(...chunks.pop()!);
-  }
-  const out: (Table | Paragraph)[] = [];
-  chunks.forEach((chunk, i) => {
+  const firstPart = rows.slice(0, CHUNK_ROWS_PER_PAGE);
+  const rest      = rows.slice(CHUNK_ROWS_PER_PAGE);
+  return [
+    new Table({
+      width: { size: TW, type: WidthType.DXA }, columnWidths: colWidths,
+      rows: [noteTitleRow(colWidths, displayNoteNumber, cleanTitle), noteUnitsRow(colWidths),
+             ...(isA ? noteHdrA(cyColHdr, pyColHdr) : [noteHdrB(cyColHdr, pyColHdr)]), ...firstPart],
+    }),
     // The page break lives on a standalone paragraph BEFORE the new table
     // (the same mechanism makeNotesBanner() already uses elsewhere in this
     // file), not inside the table's own first cell, so it can't interact
     // with the table's own cantSplit / keepNext row-splitting rules.
-    if (i > 0) out.push(new Paragraph({ pageBreakBefore: true, children: [] }));
-    out.push(oneTable(chunk, i > 0));
-  });
-  return out;
+    new Paragraph({ pageBreakBefore: true, children: [] }),
+    new Table({
+      width: { size: TW, type: WidthType.DXA }, columnWidths: colWidths,
+      rows: [noteContdTitleRow(colWidths, displayNoteNumber), noteUnitsRow(colWidths),
+             ...(isA ? noteHdrA(cyColHdr, pyColHdr) : [noteHdrB(cyColHdr, pyColHdr)]), ...rest],
+    }),
+  ];
 }
 
 /** PPE Schedule — landscape table, grouped by asset_category (Task 3) */
