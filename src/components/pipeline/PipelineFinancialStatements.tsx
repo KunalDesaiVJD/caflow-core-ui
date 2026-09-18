@@ -8102,10 +8102,19 @@ export default function PipelineFinancialStatements({
   //   • Right column (with extra left indent, mirroring the docx's 1440 dxa
   //                   left margin): Place → Date → blank → For, Client →
   //                   __________ → Signatory name input → Designation
-  //   • "As per our Audit Report of even date" header removed (the Word
-  //                   export does not include it; the preview must not either).
-  //   • Place/Date are NO LONGER duplicated on both sides — only on the right,
+  //   • Place/Date are NOT duplicated on both sides — only on the right,
   //                   matching the export.
+  //
+  // 2026-09-18 — REVERSED the 2026-05-30 removal of the "As per our Audit
+  //   Report of even date" caption. That removal made the preview match the
+  //   Word export's (missing) state instead of the other way around, so the
+  //   export never got the caption corporateFinancialsDocx.ts / the on-screen
+  //   CorporateSignatureBlock have always shown. Both nceFinancialsDocx.ts
+  //   (buildSignatureTable + the Note 1 signature block, via the new shared
+  //   auditReportPrefaceRow()) and this preview now render the caption again.
+  //   If you ever need to remove it from one side, remove it from BOTH and
+  //   update this comment — that drift is exactly what caused the bug this
+  //   fixes.
   const designation = (() => {
     const c = (entityType || "").toLowerCase().trim();
     // LLP must be checked BEFORE "partnership" because
@@ -8123,6 +8132,7 @@ export default function PipelineFinancialStatements({
   })();
   const nceSignatureBlock = isNonCorporate ? (
     <div className="mt-4 rounded-lg border bg-card px-6 py-6 text-[11px]">
+      <div className="italic text-muted-foreground mb-3">As per our Audit Report of even date</div>
       <div className="grid grid-cols-2 gap-x-8">
         {/* ── Left — CA Firm block ─────────────────────────────────────── */}
         <div className="space-y-0.5">

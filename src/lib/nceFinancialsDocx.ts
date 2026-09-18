@@ -816,6 +816,32 @@ function resolveSignatoryDesignation(constitution?: string): string {
 }
 
 /**
+ * "As per our Audit Report of even date" caption shown directly above every
+ * NCE signature block (BS, P&L, Note 1). Defined ONCE here — rather than as
+ * a hardcoded string inside each signature-block builder — because that
+ * exact duplication (three near-identical hand-rolled signature blocks) is
+ * what let the BS/P&L pages and the Note 1 page drift out of sync with each
+ * other, and with the on-screen preview, in the first place. Every caller
+ * below re-uses this same row so the three pages (and PipelineFinancialStatements'
+ * nceSignatureBlock preview, which mirrors this text) can't diverge again.
+ */
+function auditReportPrefaceRow(colSpan: number, width: number): TableRow {
+  return new TableRow({
+    children: [new TableCell({
+      columnSpan: colSpan,
+      width:   { size: width, type: WidthType.DXA },
+      borders: { top: { style: BorderStyle.SINGLE, size: 8, color: NAVY }, bottom: bNone, left: bNone, right: bNone },
+      margins: { top: 120, bottom: 80, left: 80, right: 80 },
+      children: [new Paragraph({
+        spacing: { before: 0, after: 0 },
+        keepNext: true, keepLines: true,
+        children: [new TextRun({ text: "As per our Audit Report of even date", font: FONT, size: SZ_BODY, italics: true, color: DK_GREY })],
+      })],
+    })],
+  });
+}
+
+/**
  * Mirrors the on-screen NCE signature block:
  *   Left  — CA firm (auto-linked from firm settings)
  *   Right — Place/Date (once only, above client block) + client + signatory
@@ -858,6 +884,7 @@ function buildSignatureTable(sig: SigData): Table {
     width:        { size: TW, type: WidthType.DXA },
     columnWidths: [half, TW - half],
     rows: [
+      auditReportPrefaceRow(2, TW),
       new TableRow({
         children: [
           // Left — CA firm (Task 11: no colon after FRN / Membership No.)
@@ -906,6 +933,12 @@ function noteTitleRow(colWidths: number[], noteNumber: string, title: string): T
   const totalW = colWidths.reduce((s, w) => s + w, 0);
   return new TableRow({
     cantSplit: true,
+    // Repeats on every page a note's table spans (Word clones tableHeader
+    // rows onto continuation pages) so a note that runs past one page still
+    // identifies itself — e.g. "Note 3: Long-Term Borrowings" — instead of
+    // showing only the anonymous column-header row that used to repeat alone.
+    // Shared by every caller (regular notes, Capital Account, PPE schedule).
+    tableHeader: true,
     children: [
       new TableCell({
         columnSpan: colWidths.length,
@@ -962,6 +995,10 @@ function noteUnitsRow(colWidths: number[]): TableRow {
   // _exportUnit always begins with "₹"; force just that glyph to Arial.
   const after = _exportUnit.startsWith("₹") ? _exportUnit.slice(1) : ` ${_exportUnit}`;
   return new TableRow({
+    // Repeats alongside noteTitleRow (see there) so the "In ₹…" line stays
+    // attached to the note title on continuation pages instead of only the
+    // title repeating on its own.
+    tableHeader: true,
     children: [
       new TableCell({
         columnSpan: colWidths.length,
@@ -1058,6 +1095,10 @@ function noteHdrA(cyLabel: string, pyLabel: string): TableRow[] {
     });
 
   const r1 = new TableRow({
+    // Pattern B's noteHdrB() already repeats (tableHeader) on continuation
+    // pages; Pattern A's header was missing the same flag — the same bug the
+    // 2026-09 non-corporate formatting fixes address for the note title row.
+    tableHeader: true,
     children: [
       cell({ text: "Particulars", w: NW_A_DESC, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, padL: 100, vertPad: 22, keepNext: true }),
       spanCell("Long Term", ltw, 2),
@@ -1065,6 +1106,7 @@ function noteHdrA(cyLabel: string, pyLabel: string): TableRow[] {
     ],
   });
   const r2 = new TableRow({
+    tableHeader: true,
     children: [
       cell({ text: "", w: NW_A_DESC, sz: SZ_HDR, color: BLACK, borders: BDR_SUB, vertPad: 22, keepNext: true }),
       cell({ text: hdr(cyLabel), w: NW_A_LTCY, sz: SZ_HDR, bold: true, color: BLACK, borders: BDR_SUB, align: AlignmentType.RIGHT, padR: 80, vertPad: 22, keepNext: true }),
@@ -1465,6 +1507,13 @@ function buildNote1Section(
   const sigBlankR = sigLineR("");
 
   const half = Math.floor(TW / 2);
+  // Issue 2 (non-corporate Word-format fixes): this block used only a 100 DXA
+  // left margin on the right column — far tighter than the 1440 DXA (1") gap
+  // buildSignatureTable() uses for the identical BS / P&L layout — and neither
+  // column left blank room above its signature line for an actual pen
+  // signature. Both are fixed here so Note 1 matches BS / P&L instead of
+  // drifting from it again; the auditor column also gains the same
+  // "__________________" signing line the assessee column already had.
   const signatureTable = new Table({
     width:        { size: TW, type: WidthType.DXA },
     columnWidths: [half, TW - half],
@@ -1473,6 +1522,7 @@ function buildNote1Section(
       insideHorizontal: bNone, insideVertical:   bNone,
     } as any,
     rows: [
+      auditReportPrefaceRow(2, TW),
       new TableRow({
         cantSplit: true,
         children: [
@@ -1491,23 +1541,28 @@ function buildNote1Section(
               sigLineL(`For ${firmName}`, true),
               sigLineL("Chartered Accountants", true),
               sigLineL(`FRN: ${firmFRN}`, true),
-              sigBlankL,
+              sigLineL(""),
+              sigLineL(""),
+              sigLineL("__________________", true),
               sigLineL(partnerName, true),
               sigLineL("Partner", true),
               sigLineL(`Membership No.: ${partnerMembNo}`, true),
             ],
           }),
           // Right col — Assessee block, LEFT-aligned (auditor's
-          // attached screenshot, 2026-06-20). Right cell starts at the
-          // half-width centre of the page; with sigLineL the content
-          // begins at that midpoint instead of hugging the right edge.
+          // attached screenshot, 2026-06-20). Right cell now starts 1440 DXA
+          // (1") in from the column boundary — same gap buildSignatureTable()
+          // uses on BS / P&L — instead of the old 100 DXA that read as
+          // cramped against the auditor block.
           new TableCell({
             width:   { size: TW - half, type: WidthType.DXA },
             borders: noBorderAll,
-            margins: { top: 80, bottom: 80, left: 100, right: 100 },
+            margins: { top: 80, bottom: 80, left: 1440, right: 100 },
             verticalAlign: VerticalAlign.TOP,
             children: [
               sigLineL(`For, ${assesseeName}`, true),
+              sigLineL(""),
+              sigLineL(""),
               sigLineL("x__________________", true),
               sigLineL("Signature of assessee", true),
               sigBlankL,
