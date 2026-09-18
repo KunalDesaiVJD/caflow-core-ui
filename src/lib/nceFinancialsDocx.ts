@@ -830,12 +830,12 @@ function auditReportPrefaceRow(colSpan: number, width: number): TableRow {
     children: [new TableCell({
       columnSpan: colSpan,
       width:   { size: width, type: WidthType.DXA },
-      borders: { top: { style: BorderStyle.SINGLE, size: 8, color: NAVY }, bottom: bNone, left: bNone, right: bNone },
+      borders: BDR_NONE,
       margins: { top: 120, bottom: 80, left: 80, right: 80 },
       children: [new Paragraph({
         spacing: { before: 0, after: 0 },
         keepNext: true, keepLines: true,
-        children: [new TextRun({ text: "As per our Audit Report of even date", font: FONT, size: SZ_BODY, italics: true, color: DK_GREY })],
+        children: [new TextRun({ text: "As per our Audit Report of even date", font: FONT, size: SZ_HDR, italics: true, color: DK_GREY })],
       })],
     })],
   });
@@ -1852,6 +1852,24 @@ interface NoteCustomRow { id: string; label?: string; section?: string; attached
 /** Source-ledger entry stored in cy_sources[staticRowId] */
 type CySourceEntry = { ledger: string; amountCy: number; amountPy?: number; column?: "lt" | "st" };
 
+/**
+ * Estimated number of a note's own content rows (data / subtotal / grand
+ * total — not the title / units / column-header stack) that fit on one
+ * notes-page before Word would naturally wrap to the next. Word only
+ * generates real page breaks when it renders the .docx, which happens after
+ * this code has already finished running, so there is no way to read the
+ * true value back at generation time — this is a deliberately conservative
+ * estimate (usable page height ≈ A4_H − MARG_T_NOTES − MARG_B_NOTES − the
+ * repeating banner/title/column-header stack, divided by a single-line data
+ * row's height at SZ_BODY with its vertPad), left with headroom for the
+ * occasional two-line wrap (a long party name at a narrow column width).
+ * Used only to decide where buildNoteSection() forces its own page break for
+ * a genuine "(Contd...)" title — see there. If a real export still shows a
+ * note running noticeably short/long of a full page before "(Contd...)"
+ * kicks in, retune this constant rather than the logic around it.
+ */
+const CHUNK_ROWS_PER_PAGE = 40;
+
 function buildNoteSection(
   cfg: NoteConfig,
   rawCy: Record<string, number>,
@@ -1871,7 +1889,7 @@ function buildNoteSection(
    *  particular prints its saved name instead of the static config / original
    *  custom-row label. See BUG 1 fix note below. */
   labelOverrides?: Record<string, string>,
-): Table {
+): (Table | Paragraph)[] {
   // BUG 1 FIX (2026-08-11) — the DOCX export previously read `row.label` /
   // `cr.label` straight from the static NOTES_CONFIG template / the original
   // (un-mutated) custom-row label, so a renamed particular showed correctly
@@ -2009,11 +2027,12 @@ function buildNoteSection(
   // BS/P&L face headers and the Capital Account / PPE schedules are unaffected.
   const cyColHdr = `31.03.${cyYear}`;
   const pyColHdr = `31.03.${pyYear}`;
-  const rows: TableRow[] = [
-    noteTitleRow(colWidths, displayNoteNumber, cleanTitle),
-    noteUnitsRow(colWidths),
-    ...(isA ? noteHdrA(cyColHdr, pyColHdr) : [noteHdrB(cyColHdr, pyColHdr)]),
-  ];
+  // Header rows are no longer seeded here — they're prepended per page-chunk
+  // at the end of this function (see CHUNK_ROWS_PER_PAGE below) so a
+  // continuation chunk's title can read "(Contd...)" while the first
+  // chunk's can't. Every push below still just appends a content row,
+  // unaware of (and unaffected by) that chunking.
+  const rows: TableRow[] = [];
 
   // Unattached custom rows (no attachedTo) render as their own lines: section-
   // tagged ones just before their section total, the rest before the grand total.
@@ -2348,11 +2367,49 @@ function buildNoteSection(
     flatRows.forEach(f => f.emit());
   }
 
-  return new Table({
+  // Split into page-sized chunks so a note longer than CHUNK_ROWS_PER_PAGE
+  // gets a genuine "(Contd...)" title on every page after the first, instead
+  // of only the identical repeated title the tableHeader flag on
+  // noteTitleRow() already gives every note (short or long) for free. Word
+  // can't show different text for a single repeating row's later clones —
+  // this is the only way to get wording that actually differs on
+  // continuation pages, at the cost of estimating the row count a page can
+  // hold rather than reading it back from Word's own layout (which isn't
+  // available at generation time). See CHUNK_ROWS_PER_PAGE for the estimate
+  // and its accuracy caveat; short notes (the overwhelming majority) never
+  // reach this branch and are emitted exactly as before.
+  const headerStack = (contd: boolean): TableRow[] => [
+    noteTitleRow(colWidths, displayNoteNumber, contd ? `${cleanTitle} (Contd...)` : cleanTitle),
+    noteUnitsRow(colWidths),
+    ...(isA ? noteHdrA(cyColHdr, pyColHdr) : [noteHdrB(cyColHdr, pyColHdr)]),
+  ];
+  const oneTable = (chunkRows: TableRow[], contd: boolean): Table => new Table({
     width:        { size: TW, type: WidthType.DXA },
     columnWidths: colWidths,
-    rows,
+    rows:         [...headerStack(contd), ...chunkRows],
   });
+
+  if (rows.length <= CHUNK_ROWS_PER_PAGE) {
+    return [oneTable(rows, false)];
+  }
+  const chunks: TableRow[][] = [];
+  for (let i = 0; i < rows.length; i += CHUNK_ROWS_PER_PAGE) chunks.push(rows.slice(i, i + CHUNK_ROWS_PER_PAGE));
+  // Fold a lonely 1-3 row tail into the previous chunk rather than forcing a
+  // whole extra page for almost nothing — CHUNK_ROWS_PER_PAGE already has
+  // enough safety margin to absorb a few extra rows without overflowing.
+  if (chunks.length > 1 && chunks[chunks.length - 1].length < 4) {
+    chunks[chunks.length - 2].push(...chunks.pop()!);
+  }
+  const out: (Table | Paragraph)[] = [];
+  chunks.forEach((chunk, i) => {
+    // The page break lives on a standalone paragraph BEFORE the new table
+    // (the same mechanism makeNotesBanner() already uses elsewhere in this
+    // file), not inside the table's own first cell, so it can't interact
+    // with the table's own cantSplit / keepNext row-splitting rules.
+    if (i > 0) out.push(new Paragraph({ pageBreakBefore: true, children: [] }));
+    out.push(oneTable(chunk, i > 0));
+  });
+  return out;
 }
 
 /** PPE Schedule — landscape table, grouped by asset_category (Task 3) */
@@ -2630,7 +2687,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   // NCE Task 6: collect [numericNoteNumber, Table, sectionTag] triples then sort by note number
   // so export always follows chronological sequence (Note 3, 4, 5 … never random).
   // NCE Task 9 (doc8): sectionTag ("BS" | "PL") used to inject section transition headers.
-  const noteTablePairs: Array<[number, Table, string]> = [];
+  const noteTablePairs: Array<[number, (Table | Paragraph)[], string]> = [];
   for (const cfg of NOTES_CONFIG) {
     const dynNum = getDynamicNoteDisplay(cfg.noteType, dynamicNoteMap);
     if (dynNum === null) continue;                        // inactive (no data) → skip
@@ -2683,11 +2740,10 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     }
     const noteSourceOverrides = savedSourceLabelOverrides[sourceKey];
     const noteLabelOverrides = savedLabelOverrides[sourceKey];
-    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows, noteCySources, noteSourceOverrides, noteLabelOverrides), noteSectionTag] as [number, Table, string]);
+    noteTablePairs.push([parseInt(dynNum, 10), buildNoteSection(cfg, data.cy, data.py, dynNum, cyYear, pyYear, expandedRows, hideBlankNoteRows, noteCySources, noteSourceOverrides, noteLabelOverrides), noteSectionTag] as [number, (Table | Paragraph)[], string]);
   }
   // Sort ascending by note number for correct sequential order in export
   noteTablePairs.sort((a, b) => a[0] - b[0]);
-  const noteTables: Table[] = noteTablePairs.map(([, t]) => t);
 
   // Task 6 (revision 2): section headings ("Notes to Balance Sheet…" /
   // "Notes to Profit & Loss A/c…") belong in the running page HEADER so Word
@@ -2917,7 +2973,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
   const bsNotesSectionChildren: (Paragraph | Table)[] = [
     notesSectionTopSpacer(),
     ...capitalTables.flatMap((t, i) => i === 0 ? [t] : [noteGap(), t]),
-    ...bsNoteTablePairs.flatMap(([, table]) => [noteGap(), table]),
+    ...bsNoteTablePairs.flatMap(([, pieces]) => [noteGap(), ...pieces]),
   ];
 
   // Section C children — PL notes. The inline heading appears on the transition
@@ -2928,7 +2984,7 @@ export async function generateNCEFinancialsDocx(params: NCEDocxParams): Promise<
     ? [
         notesSectionTopSpacer(),
         mkSectionHeading(`Notes to Profit & Loss A/c for the accounting year ${Number(cyYear) - 1}-${cyYear}`),
-        ...plNoteTablePairs.flatMap(([, table], i) => (i === 0 ? [table] : [noteGap(), table])),
+        ...plNoteTablePairs.flatMap(([, pieces], i) => (i === 0 ? pieces : [noteGap(), ...pieces])),
       ]
     : [];
 
