@@ -116,6 +116,13 @@ function downloadTemplateFile(href: string, filename: string): void {
   a.remove();
 }
 
+/** Bump this string every time public/templates/TDS_Data_Entry_Simple_Template.xlsx
+ * is regenerated. Without a query param the browser (and any intermediate cache)
+ * has no signal that the file at this exact URL ever changed, and can keep
+ * serving a stale copy indefinitely even after a fresh deploy — this is why
+ * template fixes kept appearing to "not work" despite the source being correct. */
+const TDS_TEMPLATE_VERSION = "2026-09-24-1";
+
 /** Invoke an edge function and surface the function's own JSON error message.
  * When the platform kills the worker (wall-clock timeout / OOM), there is NO
  * JSON body and supabase-js throws a bare "Edge Function returned a non-2xx
@@ -1666,7 +1673,7 @@ export function TdsValidateFinalise({
                   )}
                   <div className="flex-1" />
                   <Button size="sm" variant="outline" className="gap-1 h-6 px-2 text-[11px] shrink-0"
-                    onClick={() => downloadTemplateFile("/templates/TDS_Data_Entry_Simple_Template.xlsx", "TDS_Data_Entry_Simple_Template.xlsx")}>
+                    onClick={() => downloadTemplateFile(`/templates/TDS_Data_Entry_Simple_Template.xlsx?v=${TDS_TEMPLATE_VERSION}`, "TDS_Data_Entry_Simple_Template.xlsx")}>
                     <Download size={12} /> Download Template
                   </Button>
                   <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
