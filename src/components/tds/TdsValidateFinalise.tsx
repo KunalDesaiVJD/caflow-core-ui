@@ -121,7 +121,7 @@ function downloadTemplateFile(href: string, filename: string): void {
  * has no signal that the file at this exact URL ever changed, and can keep
  * serving a stale copy indefinitely even after a fresh deploy — this is why
  * template fixes kept appearing to "not work" despite the source being correct. */
-const TDS_TEMPLATE_VERSION = "2026-09-24-1";
+const TDS_TEMPLATE_VERSION = "2026-09-24-2";
 
 /** Invoke an edge function and surface the function's own JSON error message.
  * When the platform kills the worker (wall-clock timeout / OOM), there is NO
