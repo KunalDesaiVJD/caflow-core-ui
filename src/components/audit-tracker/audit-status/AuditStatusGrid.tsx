@@ -30,7 +30,7 @@ import type { ClientOption }             from "../hooks/useClients";
 import type { UserOption }               from "../hooks/useUsers";
 import type { AuditFirmOption }          from "../hooks/useFirms";
 import type { PlanEntry }                from "../hooks/useAuditPlanning";
-import { AUDIT_STATUS_OPTIONS }          from "./AuditStatusFilters";
+import { AUDIT_STATUS_OPTIONS, REMARKS_OPTIONS } from "./AuditStatusFilters";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -43,7 +43,7 @@ const YES_NO_OPTIONS = ["Yes", "No"];
 
 // ─── Separate columns — Audit Employees / Firm / Partner moved to
 // Party Name hover tooltip per user request.
-const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"|"select"|"date"|"yesno"|"status"|"none" }[] = [
+const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"|"select"|"date"|"yesno"|"status"|"person"|"none" }[] = [
   { label: "Sr No",                 id: "_srno",                          filterType: "none"   },
   { label: "Party Name",            id: "party_name",       sortable: true, filterType: "text" },
   { label: "Physical Audit",        id: "physical_audit_conducted",       filterType: "yesno"  },
@@ -57,10 +57,10 @@ const COLS: { label: string; id: string; sortable?: boolean; filterType?: "text"
   { label: "UDIN Statutory",        id: "udin_statutory_audit",           filterType: "text"   },
   { label: "UDIN Date",             id: "udin_date",                      filterType: "date"   },
   { label: "Scanned",               id: "scanned",                        filterType: "yesno"  },
-  { label: "3CA/3CB+3CD Prepared By", id: "prepared_by",                   filterType: "text"   },
-  { label: "3CA/3CB+3CD Checked By",  id: "checked_by",                   filterType: "text"   },
+  { label: "3CA/3CB+3CD Prepared By", id: "prepared_by",                   filterType: "person" },
+  { label: "3CA/3CB+3CD Checked By",  id: "checked_by",                   filterType: "person" },
   { label: "3CA/3CB+3CD Uploaded By", id: "uploaded_by",                  filterType: "text"   },
-  { label: "Remarks",               id: "remarks",                        filterType: "text"   },
+  { label: "Remarks",               id: "remarks",                        filterType: "status" },
   { label: "",                      id: "_actions",                       filterType: "none"   },
 ];
 
@@ -75,7 +75,7 @@ const makeBlankRow = (fy?: string): StatusEntry => ({
   udin_tax_audit: null, udin_statutory_audit: null, udin_date: null,
   physical_report_received_date: null, scanned: "No",
   prepared_by: null, checked_by: null, uploaded_by: null, upload_date: null,
-  remarks: null, engagement_id: null, financial_year: fy ?? null, created_at: "",
+  remarks: null, remarks_other: null, engagement_id: null, financial_year: fy ?? null, created_at: "",
 });
 
 // ─── Props ────────────────────────────────────────────────────────────────────
@@ -243,6 +243,17 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
         if (colDef?.filterType === "yesno") {
           return rv === val;
         }
+        if (colDef?.filterType === "person") {
+          // Compound filter — a name substring AND/OR a completion state
+          // ("Done" = field non-blank, "Not Done" = blank). Encoded as a
+          // small JSON object since colFilters only stores one string per
+          // column; see PersonFilterPanel below.
+          let parsed: { name?: string; done?: "yes" | "no" | "" } = {};
+          try { parsed = JSON.parse(val); } catch { /* ignore malformed filter value */ }
+          const nameOk = !parsed.name || rv.toLowerCase().includes(parsed.name.toLowerCase());
+          const doneOk = !parsed.done || (parsed.done === "yes" ? rv.trim() !== "" : rv.trim() === "");
+          return nameOk && doneOk;
+        }
         // Substring match for text / date columns
         return rv.toLowerCase().includes(val.toLowerCase());
       });
@@ -316,6 +327,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
       uploaded_by:                   patch.uploaded_by                   ?? null,
       upload_date:                   patch.upload_date                   ?? null,
       remarks:                       patch.remarks                       ?? null,
+      remarks_other:                 patch.remarks_other                 ?? null,
       engagement_id:                 patch.engagement_id                 ?? null,
       financial_year:                patch.financial_year                ?? selectedFY ?? null,
     });
@@ -373,6 +385,18 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
               <tr className="bg-indigo-700 text-white text-[10px] uppercase tracking-wide">
                 {COLS.map(col => {
                   const activeFilter = colFilters[col.id];
+                  // "person" stores a small JSON blob (name + done state) —
+                  // show a readable summary in the tooltip instead of raw JSON.
+                  let activeFilterLabel = activeFilter;
+                  if (activeFilter && col.filterType === "person") {
+                    try {
+                      const p = JSON.parse(activeFilter);
+                      const parts: string[] = [];
+                      if (p.name) parts.push(`name~"${p.name}"`);
+                      if (p.done) parts.push(p.done === "yes" ? "Done" : "Not Done");
+                      activeFilterLabel = parts.join(", ") || activeFilter;
+                    } catch { /* keep raw string */ }
+                  }
                   return (
                     <th
                       key={col.id}
@@ -402,7 +426,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                             <PopoverTrigger asChild>
                               <button
                                 onClick={e => e.stopPropagation()}
-                                title={activeFilter ? `Filtered: ${activeFilter}` : `Filter ${col.label}`}
+                                title={activeFilter ? `Filtered: ${activeFilterLabel}` : `Filter ${col.label}`}
                                 className={cn(
                                   "flex-shrink-0 p-0.5 rounded hover:bg-indigo-500 transition-colors",
                                   activeFilter
@@ -416,7 +440,7 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
 
                             <PopoverContent
                               className="p-2 z-50"
-                              style={{ width: col.filterType === "status" ? 220 : 176 }}
+                              style={{ width: col.filterType === "status" || col.filterType === "person" ? 220 : 176 }}
                               align="start"
                               side="bottom"
                             >
@@ -444,8 +468,11 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                                 // and "Select All", matching the accountants
                                 // reference. Selection stored as pipe-joined
                                 // string in colFilters[col.id]; the filter
-                                // pass splits on "|" for OR-match.
+                                // pass splits on "|" for OR-match. Reused
+                                // (2026-09-27) for the Remarks column too —
+                                // same OR-match mechanism, different option list.
                                 <StatusMultiFilter
+                                  options={col.id === "remarks" ? REMARKS_OPTIONS : AUDIT_STATUS_OPTIONS}
                                   selection={
                                     activeFilter
                                       ? new Set(activeFilter.split("|").filter(Boolean))
@@ -455,6 +482,15 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
                                     const arr = Array.from(next);
                                     setColFilter(col.id, arr.length === 0 ? "" : arr.join("|"));
                                   }}
+                                />
+                              ) : col.filterType === "person" ? (
+                                // 2026-09-27 — Prepared By / Checked By: a name
+                                // search plus a completion (Done/Not Done) state,
+                                // encoded together as one JSON string.
+                                <PersonFilterPanel
+                                  value={activeFilter || ""}
+                                  onChange={v => setColFilter(col.id, v)}
+                                  doneLabel={col.id === "prepared_by" ? "Prepared" : "Checked"}
                                 />
                               ) : (
                                 /* Free-text input for text / date columns */
@@ -632,17 +668,22 @@ export default function AuditStatusGrid({ firmId, clients, users, auditFirms, pl
 // so the auditor can filter by two or more statuses at once
 // (e.g. "REPORT PRINTED" + "REPORT SIGNED" for the closing sweep).
 function StatusMultiFilter({
+  options,
   selection,
   onChange,
 }: {
+  /** 2026-09-27 — generalized to take the option list explicitly (was
+   *  hardcoded to AUDIT_STATUS_OPTIONS) so the Remarks column can reuse the
+   *  exact same multi-select + OR-match mechanism with its own vocabulary. */
+  options: string[];
   selection: Set<string>;
   onChange: (next: Set<string>) => void;
 }) {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const visible = q
-    ? AUDIT_STATUS_OPTIONS.filter(s => s.toLowerCase().includes(q))
-    : AUDIT_STATUS_OPTIONS;
+    ? options.filter(s => s.toLowerCase().includes(q))
+    : options;
 
   const allVisibleChecked =
     visible.length > 0 && visible.every(s => selection.has(s));
@@ -671,7 +712,7 @@ function StatusMultiFilter({
           autoFocus
           value={query}
           onChange={e => setQuery(e.target.value)}
-          placeholder="Search status…"
+          placeholder="Search…"
           className="h-7 text-xs pr-6"
         />
         {query && (
@@ -729,7 +770,7 @@ function StatusMultiFilter({
         })}
         {visible.length === 0 && (
           <div className="px-1.5 py-2 text-[11px] text-muted-foreground italic">
-            No status matches “{query}”.
+            No match for “{query}”.
           </div>
         )}
       </div>
@@ -741,6 +782,88 @@ function StatusMultiFilter({
           className="flex items-center justify-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted border-t border-border pt-1.5 mt-0.5"
         >
           <X size={11} /> Clear ({selection.size})
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Prepared By / Checked By compound filter ─────────────────────────────────
+// 2026-09-27 — name search PLUS a Done/Not-Done completion toggle, for the
+// two 3CA/3CB+3CD columns. Both halves are stored together as one JSON
+// string in colFilters[col.id] (`{"name":"...", "done":"yes"|"no"|""}`) so
+// the existing "one string per column" filter store doesn't need reshaping;
+// see the "person" branch in the filter-application useMemo above.
+function PersonFilterPanel({
+  value, onChange, doneLabel,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  /** e.g. "Prepared" / "Checked" — used in the toggle's labels. */
+  doneLabel: string;
+}) {
+  let parsed: { name?: string; done?: "yes" | "no" | "" } = {};
+  try { parsed = value ? JSON.parse(value) : {}; } catch { parsed = {}; }
+  const name = parsed.name || "";
+  const done = parsed.done || "";
+
+  function commit(next: { name?: string; done?: "yes" | "no" | "" }) {
+    const merged = { name: next.name ?? name, done: next.done ?? done };
+    onChange(!merged.name && !merged.done ? "" : JSON.stringify(merged));
+  }
+
+  return (
+    <div className="flex flex-col gap-2" onClick={e => e.stopPropagation()}>
+      <div className="relative">
+        <Input
+          autoFocus
+          value={name}
+          onChange={e => commit({ name: e.target.value })}
+          placeholder="Filter by name…"
+          className="h-7 text-xs pr-6"
+        />
+        {name && (
+          <button
+            type="button"
+            onClick={() => commit({ name: "" })}
+            className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          >
+            <X size={11} />
+          </button>
+        )}
+      </div>
+
+      <div>
+        <p className="text-[10px] font-medium text-muted-foreground mb-1">{doneLabel}?</p>
+        <div className="inline-flex rounded-md border border-border overflow-hidden h-6 w-full">
+          {([
+            { v: "" as const,    label: "All" },
+            { v: "yes" as const, label: "Yes" },
+            { v: "no" as const,  label: "No" },
+          ]).map((opt, i) => (
+            <button
+              key={opt.v || "all"}
+              type="button"
+              onClick={() => commit({ done: opt.v })}
+              className={cn(
+                "flex-1 text-[11px] font-medium transition-colors",
+                i > 0 && "border-l border-border",
+                done === opt.v ? "bg-indigo-600 text-white" : "bg-background text-muted-foreground hover:bg-muted",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {(name || done) && (
+        <button
+          type="button"
+          onClick={() => onChange("")}
+          className="flex items-center justify-center gap-1 px-2 py-1 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted border-t border-border pt-1.5 mt-0.5"
+        >
+          <X size={11} /> Clear
         </button>
       )}
     </div>

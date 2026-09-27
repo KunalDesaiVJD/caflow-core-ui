@@ -39,6 +39,7 @@ const FIELD_LABELS: Record<string, string> = {
   uploaded_by:                  "3CA Uploaded By",
   upload_date:                  "3CA Upload Date",
   remarks:                      "Remarks",
+  remarks_other:                "Remarks (Other)",
 };
 
 function SnapshotDiff({

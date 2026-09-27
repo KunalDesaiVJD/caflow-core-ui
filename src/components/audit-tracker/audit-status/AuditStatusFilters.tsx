@@ -33,6 +33,11 @@ export const AUDIT_STATUS_OPTIONS = [
   "OTHERS (SPECIFY)",
 ];
 
+// Remarks column — fixed vocabulary + free-text "Others" (see
+// audit_status.remarks_other). Shared between the Remarks cell editor
+// (AuditStatusRow) and its column filter (AuditStatusGrid).
+export const REMARKS_OPTIONS = ["Prepared", "Checked", "Uploaded", "Upload but Pending for approval", "Others"];
+
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface Props {

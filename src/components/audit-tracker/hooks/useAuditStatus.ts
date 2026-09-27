@@ -6,7 +6,7 @@
  * - Auto-populates virtual rows for audit_engagements that have no status row yet
  * - Falls back to localStorage when Supabase table doesn't exist yet.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { useAuth } from "@/hooks/useAuth";
@@ -39,6 +39,8 @@ export interface StatusEntry {
   uploaded_by:                  string | null;
   upload_date:                  string | null;
   remarks:                      string | null;
+  /** Free-text detail when remarks === "Others" — mirrors audit_status_other. */
+  remarks_other:                string | null;
   engagement_id:                string | null;
   financial_year:               string | null;
   created_at:                   string;
@@ -104,10 +106,21 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
   const [rows,    setRows]    = useState<StatusEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [useLs,   setUseLs]   = useState(false);
+  // 2026-09-27 — every autosave ends by calling load() to refetch. Showing
+  // the full Skeleton-row loading state on THAT refetch (not just the very
+  // first paint) collapsed the table to 6 short placeholder rows and back,
+  // which snapped the scroll container to the top on every single edit —
+  // "sent back to the start" on autosave. Only the true first load (or a
+  // load after an error/empty state) should show the skeleton; every
+  // subsequent refetch keeps rendering the existing rows in place while
+  // fresh data loads in the background, so scroll position never moves.
+  // The autosave mechanism itself (debounce/PATCH/retry) is untouched —
+  // this flag only controls whether the loading skeleton renders.
+  const hasLoadedRef = useRef(false);
 
   const load = useCallback(async () => {
     if (!firmId && !isSuperadmin) { setLoading(false); return; }
-    setLoading(true);
+    if (!hasLoadedRef.current) setLoading(true);
 
     // ── 1. Fetch actual audit_status rows ──────────────────────────────────
     let q = (supabase as any)
@@ -122,6 +135,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
       setUseLs(true);
       setRows(lsLoad(firmId));
       setLoading(false);
+      hasLoadedRef.current = true;
       return;
     }
 
@@ -347,6 +361,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
             uploaded_by:                  null,
             upload_date:                  null,
             remarks:                      null,
+            remarks_other:                null,
             engagement_id:                eng.id,
             financial_year:               selectedFY,
             created_at:                   "",
@@ -493,6 +508,7 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
           uploaded_by:                  null,
           upload_date:                  null,
           remarks:                      null,
+          remarks_other:                null,
           engagement_id:                null,
           financial_year:               selectedFY,
           created_at:                   "",
@@ -537,7 +553,13 @@ export function useAuditStatus(firmId: string, isSuperadmin?: boolean, selectedF
 
     setRows(statusRows);
     setLoading(false);
+    hasLoadedRef.current = true;
   }, [firmId, selectedFY]);
+
+  // A genuine context switch (different firm or FY) is a real "start over" —
+  // that should still show the initial-load skeleton, same as today. Only
+  // an autosave-triggered reload WITHIN the same firm+FY should skip it.
+  useEffect(() => { hasLoadedRef.current = false; }, [firmId, selectedFY]);
 
   useEffect(() => { load(); }, [load]);
 
