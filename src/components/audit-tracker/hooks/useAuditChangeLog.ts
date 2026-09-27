@@ -78,6 +78,7 @@ export const FIELD_LABELS: Record<string, string> = {
   uploaded_by:                   "3CA Uploaded By",
   upload_date:                   "3CA Upload Date",
   remarks:                       "Remarks",
+  remarks_other:                 "Remarks (Other)",
   client_id:                     "Client",
   engagement_id:                 "Engagement",
   // ── audit_communication fields ───────────────────────────────────────────────

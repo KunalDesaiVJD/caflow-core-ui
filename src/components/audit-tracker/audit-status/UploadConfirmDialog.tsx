@@ -3,21 +3,26 @@
  *
  * Gates the "3CA/3CB+3CD Uploaded By" column. Nothing is saved to the row
  * until all four are present together:
- *  1. Scanned Audit Report file — AI-checked against the client's name
+ *  1. Scanned Audit Report file — plain upload, no AI check
  *  2. Filed Form 3CA/3CB + 3CD file — AI-checked against the client's name
  *  3. Upload Date — AI-read off the filed form, always editable
  *  4. Uploaded By — defaults to the logged-in user, always editable
  *
- * Either file is REJECTED (Confirm stays disabled) if the AI reads a
+ * The Filed Form is REJECTED (Confirm stays disabled) if the AI reads a
  * different assessee name off it than this row's client — using the same
  * hardened name-comparison engine the TDS module uses (src/lib/tds/match.ts),
  * not a fresh ad-hoc string compare. A name the AI can't read at all never
  * blocks the upload — only a name it CAN read and that clearly disagrees.
+ * The Scanned Audit Report has no such check (removed per request — it was
+ * producing unwanted blocks on genuinely-correct files).
  *
  * Re-openable after completion (existing files/date/name prefill) so a
  * mistake can be corrected later — each confirm still goes through the
  * row's normal autosave path (useAuditStatus.updateRow), which already
- * writes audit_status_history on every change.
+ * writes audit_status_history on every change. A "Clear" action is also
+ * offered when the row already has an Uploaded By name, so a legacy/
+ * erroneous name (set before this dialog existed, with no files behind it)
+ * can be reset without needing to attach anything.
  */
 import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -45,6 +50,9 @@ interface Props {
   currentUserName: string | null;
   /** Persist { uploaded_by, upload_date } via the row's normal autosave path. */
   onConfirm: (patch: { uploaded_by: string; upload_date: string }) => Promise<void>;
+  /** Reset uploaded_by/upload_date to null. Only passed (defined) when the row
+   *  already has an Uploaded By name — undefined hides the Clear button. */
+  onClear?: () => Promise<void>;
 }
 
 function FilePickerRow({
@@ -105,19 +113,18 @@ function FilePickerRow({
 }
 
 export default function UploadConfirmDialog({
-  open, onClose, row, users, currentUserId, currentUserName, onConfirm,
+  open, onClose, row, users, currentUserId, currentUserName, onConfirm, onClear,
 }: Props) {
   const [existing, setExisting]           = useState<Record<UploadKind, StoredUpload | null>>({ scanned_report: null, filed_form: null });
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [scannedFile, setScannedFile]     = useState<File | null>(null);
   const [filedFormFile, setFiledFormFile] = useState<File | null>(null);
-  const [scannedChecking, setScannedChecking] = useState(false);
   const [filedChecking, setFiledChecking]     = useState(false);
-  const [scannedNameIssue, setScannedNameIssue] = useState<string | null>(null);
   const [filedNameIssue, setFiledNameIssue]     = useState<string | null>(null);
   const [uploadDate, setUploadDate]       = useState("");
   const [uploaderName, setUploaderName]   = useState("");
   const [submitting, setSubmitting]       = useState(false);
+  const [clearing, setClearing]           = useState(false);
   const [error, setError]                 = useState<string | null>(null);
 
   // Reset + prefill every time the dialog is opened for a (possibly different) row.
@@ -125,7 +132,6 @@ export default function UploadConfirmDialog({
     if (!open) return;
     setScannedFile(null);
     setFiledFormFile(null);
-    setScannedNameIssue(null);
     setFiledNameIssue(null);
     setError(null);
     setUploadDate(row.upload_date || "");
@@ -141,20 +147,8 @@ export default function UploadConfirmDialog({
     return `This file appears to be for "${extractedName}", not "${row.party_name || "this client"}". Upload blocked — please attach the correct file.`;
   }
 
-  async function handleScannedPick(file: File | null) {
+  function handleScannedPick(file: File | null) {
     setScannedFile(file);
-    setScannedNameIssue(null);
-    if (!file) return;
-    setScannedChecking(true);
-    try {
-      const info = await extractDocumentInfo(file);
-      if (info.assesseeName) {
-        const cmp = nameCompare(info.assesseeName, row.party_name);
-        if (cmp === "different" || cmp === "mismatch") setScannedNameIssue(mismatchMessage(info.assesseeName));
-      }
-    } finally {
-      setScannedChecking(false);
-    }
   }
 
   async function handleFiledFormPick(file: File | null) {
@@ -182,16 +176,31 @@ export default function UploadConfirmDialog({
   const canConfirm  =
     hasScanned && hasFiled &&
     uploadDate.trim() !== "" && uploaderName.trim() !== "" &&
-    !scannedNameIssue && !filedNameIssue &&
-    !scannedChecking && !filedChecking &&
+    !filedNameIssue &&
+    !filedChecking &&
     !submitting;
+
+  async function handleClear() {
+    if (!onClear) return;
+    setClearing(true);
+    setError(null);
+    try {
+      await onClear();
+      toast.success("Upload cleared");
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to clear");
+    } finally {
+      setClearing(false);
+    }
+  }
 
   async function handleConfirm() {
     if (!row.firm_id) {
       setError("This row has no firm assigned — cannot attach files.");
       return;
     }
-    if (scannedNameIssue || filedNameIssue) {
+    if (filedNameIssue) {
       setError("Resolve the name mismatch before confirming.");
       return;
     }
@@ -242,8 +251,6 @@ export default function UploadConfirmDialog({
               existing={existing.scanned_report}
               picked={scannedFile}
               onPick={handleScannedPick}
-              checking={scannedChecking}
-              nameIssue={scannedNameIssue}
             />
             <FilePickerRow
               label="Filed Form 3CA/3CB + 3CD"
@@ -278,17 +285,31 @@ export default function UploadConfirmDialog({
           </div>
         )}
 
-        <DialogFooter>
-          <Button variant="outline" size="sm" onClick={onClose} disabled={submitting}>Cancel</Button>
-          <Button
-            size="sm"
-            className={cn("bg-emerald-600 hover:bg-emerald-700", !canConfirm && "opacity-50")}
-            onClick={handleConfirm}
-            disabled={!canConfirm}
-          >
-            {submitting ? <Loader2 size={13} className="animate-spin mr-1.5" /> : <CheckCircle2 size={13} className="mr-1.5" />}
-            Confirm Upload
-          </Button>
+        <DialogFooter className="sm:justify-between">
+          {onClear ? (
+            <Button
+              variant="outline" size="sm"
+              className="text-red-600 border-red-200 hover:bg-red-50 hover:text-red-700"
+              onClick={handleClear}
+              disabled={submitting || clearing}
+              title="Reset Uploaded By / Upload Date on this row without attaching any files"
+            >
+              {clearing ? <Loader2 size={13} className="animate-spin mr-1.5" /> : null}
+              Clear
+            </Button>
+          ) : <span />}
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={onClose} disabled={submitting || clearing}>Cancel</Button>
+            <Button
+              size="sm"
+              className={cn("bg-emerald-600 hover:bg-emerald-700", !canConfirm && "opacity-50")}
+              onClick={handleConfirm}
+              disabled={!canConfirm}
+            >
+              {submitting ? <Loader2 size={13} className="animate-spin mr-1.5" /> : <CheckCircle2 size={13} className="mr-1.5" />}
+              Confirm Upload
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

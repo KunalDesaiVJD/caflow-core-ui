@@ -29,7 +29,7 @@ import type { ClientOption }             from "../hooks/useClients";
 import type { UserOption }               from "../hooks/useUsers";
 import type { AuditFirmOption }          from "../hooks/useFirms";
 import type { PlanEntry }                from "../hooks/useAuditPlanning";
-import { AUDIT_STATUS_OPTIONS }          from "./AuditStatusFilters";
+import { AUDIT_STATUS_OPTIONS, REMARKS_OPTIONS } from "./AuditStatusFilters";
 import UploadConfirmDialog               from "./UploadConfirmDialog";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -112,6 +112,7 @@ interface RowDraft {
   uploaded_by:                  string;
   upload_date:                  string;
   remarks:                      string;
+  remarks_other:                string;
 }
 
 // ─── Mini shared cell wrapper ─────────────────────────────────────────────────
@@ -401,14 +402,17 @@ export default function AuditStatusRow({
   //     the red icon on the Actions column exposes the failure. Retry survives
   //     via re-queueing the failed fields into pendingPatch.
 
+  // "uploaded_by" deliberately excluded — that cell is now a button that
+  // opens UploadConfirmDialog (see cell 17 below); it never calls set()
+  // directly, so listing it here would be dead/misleading.
   const TEXT_FIELDS: Set<keyof RowDraft> = new Set([
     "party_name", "audit_employees",
     "audit_report_prepared_by", "audit_report_checked_by",
     "audit_status_other",
     "firm", "partner",
     "udin_tax_audit", "udin_statutory_audit",
-    "prepared_by", "checked_by", "uploaded_by",
-    "remarks",
+    "prepared_by", "checked_by",
+    "remarks", "remarks_other",
   ]);
   // Draft-side field name → DB column name. Only fields that differ are
   // listed; everything else is 1:1.
@@ -428,6 +432,9 @@ export default function AuditStatusRow({
     }
     if (field === "audit_status_other") {
       return currentDraft.audit_status === "OTHERS" ? (val || null) : null;
+    }
+    if (field === "remarks_other") {
+      return currentDraft.remarks === "Others" ? (val || null) : null;
     }
     return val || null;
   }
@@ -886,17 +893,32 @@ export default function AuditStatusRow({
                 currentUserId={authUser?.id ?? null}
                 currentUserName={authUser?.name ?? authUser?.email ?? null}
                 onConfirm={async patch => { await onSave(row.id, patch); }}
+                onClear={row.uploaded_by ? async () => { await onSave(row.id, { uploaded_by: null, upload_date: null }); } : undefined}
               />
             )}
           </>
         )}
       </TCell>
 
-      {/* 18 · Remarks */}
-      <TCell className="min-w-[130px]">
-        {editing
-          ? <EInput value={draft.remarks} onChange={v => set("remarks", v)} placeholder="Remarks…" />
-          : <span className="text-muted-foreground line-clamp-2 text-[11px]">{row.remarks || "—"}</span>}
+      {/* 18 · Remarks — fixed vocabulary + "Others" free text, mirroring the
+          Audit Status / audit_status_other pattern above. */}
+      <TCell className="min-w-[150px]">
+        {editing ? (
+          <div className="space-y-1">
+            <ESelect value={draft.remarks} onChange={v => set("remarks", v)} options={REMARKS_OPTIONS} placeholder="Remarks…" />
+            {draft.remarks === "Others" && (
+              <EInput
+                value={draft.remarks_other}
+                onChange={v => set("remarks_other", v)}
+                placeholder="Specify please…"
+              />
+            )}
+          </div>
+        ) : (
+          <span className="text-muted-foreground line-clamp-2 text-[11px]">
+            {row.remarks === "Others" ? (row.remarks_other || "Others") : (row.remarks || "—")}
+          </span>
+        )}
       </TCell>
 
       {/* 20 · Actions */}
@@ -996,6 +1018,7 @@ function buildDraft(row: StatusEntry, clients: ClientOption[]): RowDraft {
     uploaded_by:                  row.uploaded_by                  || "",
     upload_date:                  row.upload_date                  || "",
     remarks:                      row.remarks                      || "",
+    remarks_other:                row.remarks_other                || "",
   };
 }
 
@@ -1023,5 +1046,6 @@ function draftToPatch(d: RowDraft): StatusPatch {
     uploaded_by:                  d.uploaded_by || null,
     upload_date:                  d.upload_date || null,
     remarks:                      d.remarks || null,
+    remarks_other:                d.remarks === "Others" ? (d.remarks_other || null) : null,
   };
 }
