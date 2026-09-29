@@ -4,17 +4,14 @@
  * Gates the "3CA/3CB+3CD Uploaded By" column. Nothing is saved to the row
  * until all four are present together:
  *  1. Scanned Audit Report file — plain upload, no AI check
- *  2. Filed Form 3CA/3CB + 3CD file — AI-checked against the client's name
+ *  2. Filed Form 3CA/3CB + 3CD file — plain upload, no AI check (still
+ *     AI-reads the filing date off it to pre-fill Upload Date, editable)
  *  3. Upload Date — AI-read off the filed form, always editable
  *  4. Uploaded By — defaults to the logged-in user, always editable
  *
- * The Filed Form is REJECTED (Confirm stays disabled) if the AI reads a
- * different assessee name off it than this row's client — using the same
- * hardened name-comparison engine the TDS module uses (src/lib/tds/match.ts),
- * not a fresh ad-hoc string compare. A name the AI can't read at all never
- * blocks the upload — only a name it CAN read and that clearly disagrees.
- * The Scanned Audit Report has no such check (removed per request — it was
- * producing unwanted blocks on genuinely-correct files).
+ * Neither file is name-matched against the client anymore (removed per
+ * request — the AI name-compare was producing unwanted blocks on
+ * genuinely-correct files, e.g. "ACCU-PANELS" vs "ACCUPANELS").
  *
  * Re-openable after completion (existing files/date/name prefill) so a
  * mistake can be corrected later — each confirm still goes through the
@@ -33,7 +30,6 @@ import { FileText, ScanLine, Loader2, CheckCircle2, AlertCircle, ExternalLink } 
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { UserCombobox } from "@/components/shared/UserCombobox";
-import { nameCompare } from "@/lib/tds/match";
 import type { UserOption } from "../hooks/useUsers";
 import type { StatusEntry } from "../hooks/useAuditStatus";
 import {
@@ -56,7 +52,7 @@ interface Props {
 }
 
 function FilePickerRow({
-  label, icon, existing, picked, onPick, checking, nameIssue,
+  label, icon, existing, picked, onPick, checking,
 }: {
   label: string;
   icon: React.ReactNode;
@@ -64,7 +60,6 @@ function FilePickerRow({
   picked: File | null;
   onPick: (f: File | null) => void;
   checking?: boolean;
-  nameIssue?: string | null;
 }) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
 
@@ -90,9 +85,7 @@ function FilePickerRow({
         />
         {checking && <Loader2 size={14} className="animate-spin text-indigo-500 shrink-0" />}
       </div>
-      {nameIssue ? (
-        <p className="text-[10px] text-red-600 flex items-center gap-1"><AlertCircle size={11} className="shrink-0" /> {nameIssue}</p>
-      ) : picked ? (
+      {picked ? (
         <p className="text-[10px] text-emerald-600 flex items-center gap-1">
           <CheckCircle2 size={11} /> {picked.name} — will replace{existing ? " existing file" : ""}
         </p>
@@ -120,7 +113,6 @@ export default function UploadConfirmDialog({
   const [scannedFile, setScannedFile]     = useState<File | null>(null);
   const [filedFormFile, setFiledFormFile] = useState<File | null>(null);
   const [filedChecking, setFiledChecking]     = useState(false);
-  const [filedNameIssue, setFiledNameIssue]     = useState<string | null>(null);
   const [uploadDate, setUploadDate]       = useState("");
   const [uploaderName, setUploaderName]   = useState("");
   const [submitting, setSubmitting]       = useState(false);
@@ -132,7 +124,6 @@ export default function UploadConfirmDialog({
     if (!open) return;
     setScannedFile(null);
     setFiledFormFile(null);
-    setFiledNameIssue(null);
     setError(null);
     setUploadDate(row.upload_date || "");
     setUploaderName(row.uploaded_by || currentUserName || "");
@@ -143,17 +134,12 @@ export default function UploadConfirmDialog({
     });
   }, [open, row.id]); // eslint-disable-line
 
-  function mismatchMessage(extractedName: string) {
-    return `This file appears to be for "${extractedName}", not "${row.party_name || "this client"}". Upload blocked — please attach the correct file.`;
-  }
-
   function handleScannedPick(file: File | null) {
     setScannedFile(file);
   }
 
   async function handleFiledFormPick(file: File | null) {
     setFiledFormFile(file);
-    setFiledNameIssue(null);
     if (!file) return;
     setFiledChecking(true);
     try {
@@ -161,10 +147,6 @@ export default function UploadConfirmDialog({
       if (info.date) setUploadDate(info.date);
       else if (info.confidence === "unavailable") {
         toast.info("Couldn't auto-read the filing date — please enter it manually.");
-      }
-      if (info.assesseeName) {
-        const cmp = nameCompare(info.assesseeName, row.party_name);
-        if (cmp === "different" || cmp === "mismatch") setFiledNameIssue(mismatchMessage(info.assesseeName));
       }
     } finally {
       setFiledChecking(false);
@@ -176,7 +158,6 @@ export default function UploadConfirmDialog({
   const canConfirm  =
     hasScanned && hasFiled &&
     uploadDate.trim() !== "" && uploaderName.trim() !== "" &&
-    !filedNameIssue &&
     !filedChecking &&
     !submitting;
 
@@ -198,10 +179,6 @@ export default function UploadConfirmDialog({
   async function handleConfirm() {
     if (!row.firm_id) {
       setError("This row has no firm assigned — cannot attach files.");
-      return;
-    }
-    if (filedNameIssue) {
-      setError("Resolve the name mismatch before confirming.");
       return;
     }
     setSubmitting(true);
@@ -259,7 +236,6 @@ export default function UploadConfirmDialog({
               picked={filedFormFile}
               onPick={handleFiledFormPick}
               checking={filedChecking}
-              nameIssue={filedNameIssue}
             />
 
             <div className="space-y-1.5">
