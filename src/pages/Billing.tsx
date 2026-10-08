@@ -490,15 +490,19 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     })();
   }, [responsibleFilter]);
 
+  // One definition of a document's total, shared by rows, subtotals, footer and Excel export.
+  const docTotal = (i: any) => i.total_amount || (i.amount || 0) + (i.gst_amount || 0);
+
   const enriched = useMemo(() => {
     return invoices.map(inv => ({ ...inv, effectiveStatus: inv.status || "draft" }));
   }, [invoices]);
 
   const stats = useMemo(() => {
-    const outstanding = enriched.filter(i => !["paid", "voided", "converted"].includes(i.effectiveStatus))
-      .reduce((s, i) => s + (i.total_amount || i.amount || 0), 0);
+    // Drafts are not receivable; amount_due reflects part-payments (same basis as the dashboard).
+    const outstanding = enriched.filter(i => !["paid", "voided", "converted", "draft", "cancelled"].includes(i.effectiveStatus))
+      .reduce((s, i) => s + Math.max(0, (i as any).amount_due ?? docTotal(i)), 0);
     const collected = enriched.filter(i => i.effectiveStatus === "paid")
-      .reduce((s, i) => s + (i.total_amount || i.amount || 0), 0);
+      .reduce((s, i) => s + docTotal(i), 0);
     const overdue = enriched.filter(i => i.effectiveStatus === "overdue").length;
     const drafts = enriched.filter(i => i.effectiveStatus === "draft").length;
     return { outstanding, collected, overdue, drafts };
@@ -550,7 +554,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
       } else if (viewBy === "firm" || viewBy === "multifirm") {
         label = firmMap[key] || "Unknown Firm";
       }
-      const subtotal = invs.reduce((s, i) => s + (i.total_amount || i.amount || 0), 0);
+      const subtotal = invs.reduce((s, i) => s + docTotal(i), 0);
       result.push({ key, label, invoices: invs, subtotal });
     }
     result.sort((a, b) => a.label.localeCompare(b.label));
@@ -1085,7 +1089,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
       .in("document_type", docTypeFilter)
       .gte("invoice_date", startDate)
       .lte("invoice_date", endDate)
-      .neq("status", "draft"); // Only finalized/sent/paid — never download drafts
+      .not("status", "in", "(draft,voided)"); // Only finalized/sent/paid — never drafts or voided
     if (dlFirm !== "all") q = q.eq("firm_id", dlFirm);
     else if (!isSuperadmin && firmId) q = q.eq("firm_id", firmId);
 
@@ -1128,10 +1132,45 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
 
   const colCount = documentType === "quotation_proforma" ? 10 : 9;
 
+  // Excel export of exactly what the register shows: same filters, grouping and totals.
+  const handleExportRegisterXlsx = () => {
+    const isQP = documentType === "quotation_proforma";
+    const head = ["Doc No", ...(isQP ? ["Type"] : []), "Client", "Firm", "Date", "Amount (₹)", "Status", "Due Date"];
+    const toRow = (inv: any) => [
+      inv.invoice_no || "",
+      ...(isQP ? [inv.document_type || ""] : []),
+      clientMap[inv.client_id || ""]?.name || inv.to_name || "",
+      firmMap[inv.firm_id || ""] || "",
+      inv.invoice_date ? format(new Date(inv.invoice_date), "dd/MM/yyyy") : "",
+      docTotal(inv),
+      inv.effectiveStatus,
+      inv.due_date ? format(new Date(inv.due_date), "dd/MM/yyyy") : "",
+    ];
+    const amtIdx = head.indexOf("Amount (₹)");
+    const totalRow = (label: string, amt: number) => { const r: any[] = head.map(() => ""); r[0] = label; r[amtIdx] = amt; return r; };
+    const aoa: any[][] = [[`${tabLabel} Register`], [`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`], [], head];
+    if (viewBy !== "all" && groupedInvoices) {
+      groupedInvoices.forEach(g => {
+        aoa.push([g.label]);
+        g.invoices.forEach(inv => aoa.push(toRow(inv)));
+        aoa.push(totalRow(`Subtotal — ${g.label}`, g.subtotal));
+        aoa.push([]);
+      });
+    } else {
+      filtered.forEach(inv => aoa.push(toRow(inv)));
+    }
+    aoa.push(totalRow(`Total (${filtered.length} documents)`, filtered.reduce((s, i) => s + docTotal(i), 0)));
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = head.map(h => ({ wch: h === "Client" ? 32 : 14 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Register");
+    XLSX.writeFile(wb, `${tabLabel.replace(/[^A-Za-z]+/g, "_")}_Register_${format(new Date(), "yyyyMMdd")}.xlsx`);
+  };
+
   const renderInvoiceRow = (inv: Invoice & { effectiveStatus: string }) => {
     const clientName = clientMap[inv.client_id || ""]?.name || (inv as any).to_name || "—";
     const firmName = firmMap[inv.firm_id || ""] || "—";
-    const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
+    const total = docTotal(inv);
     return (
       <TableRow key={inv.id} className={cn(selectedIds.has(inv.id) && "bg-accent/30")}>
         <TableCell>
@@ -1309,7 +1348,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={async () => {
-              const finalizedList = filtered.filter(inv => inv.effectiveStatus !== "draft");
+              const finalizedList = filtered.filter(inv => !["draft", "voided"].includes(inv.effectiveStatus));
               if (finalizedList.length === 0) {
                 toast({ title: "No finalized invoices", description: "Please finalize invoice(s) before downloading.", variant: "destructive" });
                 return;
@@ -1318,10 +1357,13 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
               if (draftSkipped > 0) toast({ title: `Skipping ${draftSkipped} draft(s)`, description: "Only finalized invoices will be downloaded." });
               await generateZipFromInvoices(finalizedList.map(inv => inv.id), `Invoices_${format(new Date(), "yyyyMMdd")}.zip`);
             }}>
-              <Download size={14} className="mr-2" /> Download All ({filtered.filter(i => i.effectiveStatus !== "draft").length} finalized)
+              <Download size={14} className="mr-2" /> Download All ({filtered.filter(i => !["draft", "voided"].includes(i.effectiveStatus)).length} finalized)
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => setMonthDownloadOpen(true)}>
               <Archive size={14} className="mr-2" /> Download by Month
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={handleExportRegisterXlsx} disabled={filtered.length === 0}>
+              <FileSpreadsheet size={14} className="mr-2" /> Export Register (Excel)
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -1434,7 +1476,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
                       : `Total (${filtered.length} document${filtered.length !== 1 ? "s" : ""})`}
                   </TableCell>
                   <TableCell className="text-right font-bold tabular-nums text-foreground">
-                    ₹{filtered.reduce((s, i) => s + (i.total_amount || i.amount || 0), 0).toLocaleString("en-IN")}
+                    ₹{filtered.reduce((s, i) => s + docTotal(i), 0).toLocaleString("en-IN")}
                   </TableCell>
                   <TableCell colSpan={3} />
                 </TableRow>

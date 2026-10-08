@@ -31,6 +31,9 @@ import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
 } from "@/lib/jspdfUnicodeFont";
 
+/** Invoice statuses that count as receivable (matches v_billing_reconciliation). */
+const BILLABLE_STATUSES = ["finalized", "sent", "overdue", "paid"];
+
 // Fetch ALL rows for a query, paging past PostgREST's 1000-row default cap.
 // Used wherever a result set feeds a SUM, so totals never silently truncate.
 async function fetchAllRows<T = any>(makeQuery: () => any): Promise<T[]> {
@@ -191,7 +194,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
             .eq("firm_id", selectedFirmId)
             // Q3: only confirmed invoices + credit notes belong in receivables.
             .in("document_type", ["invoice", "credit_note"])
-            .neq("status", "voided")),
+            // Same status rule as v_billing_reconciliation / LedgerTab: drafts,
+            // cancelled and voided documents are not receivable.
+            .in("status", BILLABLE_STATUSES)),
         fetchAllRows<any>(() =>
           supabase.from("billing_receipts")
             .select("client_id, receipt_date, amount_received, tds_amount, gst_tds_amount")
@@ -243,8 +248,10 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           if (!amt) continue;
           // Credit notes reduce the debtor (Cr), same as the ledger sheet below.
           const isCN = inv.document_type === "credit_note";
+          // An undated document is treated as in-period (the ledger sheet does the same)
+          // rather than silently dropped from both opening and period figures.
           if (inv.invoice_date && inv.invoice_date < fromDate) { if (isCN) openingCr += amt; else openingDr += amt; }
-          else if (inv.invoice_date && inv.invoice_date >= fromDate && inv.invoice_date <= toDate) { if (isCN) credit += amt; else debit += amt; }
+          else if (!inv.invoice_date || inv.invoice_date <= toDate) { if (isCN) credit += amt; else debit += amt; }
         }
 
         for (const rec of receipts || []) {
@@ -315,9 +322,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           .eq("firm_id", selectedFirmId)
           // Q3: exclude quotations / proformas from the ledger sheet.
           .in("document_type", ["invoice", "credit_note"])
-          .neq("status", "voided")
-          .gte("invoice_date", fromDate)
-          .lte("invoice_date", toDate)
+          .in("status", BILLABLE_STATUSES)
+          .or(`invoice_date.is.null,and(invoice_date.gte.${fromDate},invoice_date.lte.${toDate})`)
           .order("invoice_date"),
         supabase.from("billing_receipts")
           .select("id, receipt_date, amount_received, tds_amount, gst_tds_amount, payment_mode, remarks")

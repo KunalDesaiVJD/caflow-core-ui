@@ -14,8 +14,9 @@ import {
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
-  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
+  Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import * as XLSX from "xlsx";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -25,9 +26,23 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
-import { Plus, CalendarIcon, Receipt, Trash2, Pencil, Scissors } from "lucide-react";
+import { Plus, CalendarIcon, Receipt, Trash2, Pencil, Scissors, Download } from "lucide-react";
 import { buildClientGstins } from "@/lib/gstinUtils";
 import { BILLING_RPC_RECEIPT_POSTING } from "@/lib/billingFlags";
+
+/**
+ * Flip the legacy invoices.status to 'paid' once the invoice is fully settled.
+ * The amount_paid trigger keeps amount_due net of cash + TDS + GST-TDS across ALL
+ * receipts, so this mirrors post_receipt (the RPC path) instead of comparing a
+ * single receipt's cash amount to the invoice total.
+ */
+async function markInvoicePaidIfSettled(invoiceId: string, paidOn: string) {
+  await supabase.from("invoices")
+    .update({ status: "paid", paid_at: paidOn })
+    .eq("id", invoiceId)
+    .lte("amount_due", 0.005)
+    .not("status", "in", "(voided,draft)");
+}
 
 const PAYMENT_MODES = ["Cash", "Cheque", "NEFT", "UPI", "RTGS", "Other"];
 
@@ -137,9 +152,16 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
     setLoading(true);
     const effectiveFirmId = firmFilter !== "all" ? firmFilter : (isSuperadmin ? null : firmId);
 
-    let rQuery = supabase.from("billing_receipts").select("*").order("receipt_date", { ascending: false });
-    if (effectiveFirmId) rQuery = rQuery.eq("firm_id", effectiveFirmId);
-    const { data: rData } = await rQuery;
+    // Page past PostgREST's 1000-row cap so the register (and its totals) are complete.
+    const rData: any[] = [];
+    for (let from = 0; ; from += 1000) {
+      let rQuery = supabase.from("billing_receipts").select("*").order("receipt_date", { ascending: false }).order("id")
+        .range(from, from + 999);
+      if (effectiveFirmId) rQuery = rQuery.eq("firm_id", effectiveFirmId);
+      const { data } = await rQuery;
+      rData.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
 
     const { data: cData } = await supabase.from("clients").select("id, name").eq("is_draft", false).is("deleted_at", null);
     const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
@@ -251,6 +273,40 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
     if (responsibleFilter !== "all" && !responsibleClientIds.includes(r.client_id)) return false;
     return true;
   }), [receipts, clientFilter, modeFilter, fyFilter, groupFilter, groupClientIds, responsibleFilter, responsibleClientIds]);
+
+  const totals = useMemo(() => ({
+    amount: filtered.reduce((s, r) => s + (Number(r.amount_received) || 0), 0),
+    tds: filtered.reduce((s, r) => s + (Number(r.tds_amount) || 0), 0),
+    gstTds: filtered.reduce((s, r) => s + (Number((r as any).gst_tds_amount) || 0), 0),
+  }), [filtered]);
+
+  // Excel export of the register exactly as filtered on screen, with totals.
+  const handleExportXlsx = () => {
+    const aoa: any[][] = [
+      ["RECEIPTS REGISTER"],
+      [`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`],
+      [],
+      ["Date", "Client", "Type", "Amount (₹)", "Mode", "Reference", "Against Invoice", "TDS (₹)", "GST TDS (₹)", "Remarks"],
+      ...filtered.map(r => [
+        r.receipt_date ? format(new Date(r.receipt_date), "dd/MM/yyyy") : "",
+        clientMap[r.client_id] || "",
+        r.receipt_type === "against_invoice" ? "Against Invoice" : "On Account",
+        Number(r.amount_received) || 0,
+        r.payment_mode || "",
+        (r as any).payment_reference || "",
+        r.invoice_id ? (invoiceMap[r.invoice_id] || "") : "",
+        Number(r.tds_amount) || 0,
+        Number((r as any).gst_tds_amount) || 0,
+        (r as any).remarks || "",
+      ]),
+      [`Total (${filtered.length} receipts)`, "", "", totals.amount, "", "", "", totals.tds, totals.gstTds, ""],
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    ws["!cols"] = [{ wch: 12 }, { wch: 32 }, { wch: 16 }, { wch: 14 }, { wch: 10 }, { wch: 16 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 30 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Receipts");
+    XLSX.writeFile(wb, `Receipts_${format(new Date(), "yyyyMMdd")}.xlsx`);
+  };
 
   const filteredKasars = useMemo(() => kasars.filter(k => {
     if (clientFilter !== "all" && k.client_id !== clientFilter) return false;
@@ -412,13 +468,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
         }).eq("id", editingId);
         if (uErr) throw uErr;
 
-        // Update invoice status if amount covers the invoice total
-        if (receiptType === "against_invoice" && invoiceId) {
-          const { data: inv } = await supabase.from("invoices").select("total_amount").eq("id", invoiceId).maybeSingle();
-          if (inv && amt >= Number(inv.total_amount || 0)) {
-            await supabase.from("invoices").update({ status: "paid", paid_at: dateStr }).eq("id", invoiceId);
-          }
-        }
+        if (receiptType === "against_invoice" && invoiceId) await markInvoicePaidIfSettled(invoiceId, dateStr);
 
         // Delete old ledger entries and re-create them fresh
         await supabase.from("client_ledger_entries").delete().eq("document_id", editingId);
@@ -508,12 +558,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
         if (rErr) throw rErr;
         const receiptId = newReceipt.id;
 
-        if (receiptType === "against_invoice" && invoiceId) {
-          const inv = clientInvoices.find(i => i.id === invoiceId);
-          if (inv && amt >= (inv.total_amount || 0)) {
-            await supabase.from("invoices").update({ status: "paid", paid_at: dateStr }).eq("id", invoiceId);
-          }
-        }
+        if (receiptType === "against_invoice" && invoiceId) await markInvoicePaidIfSettled(invoiceId, dateStr);
 
         await supabase.from("client_ledger_entries").insert({
           firm_id: resolvedFirmId,
@@ -727,6 +772,9 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
           </SelectContent>
         </Select>
         <div className="flex-1" />
+        <Button variant="outline" className="gap-1" onClick={handleExportXlsx} disabled={filtered.length === 0}>
+          <Download size={14} /> Export Excel
+        </Button>
         <Button className="gap-1" onClick={() => { resetForm(); setDialogOpen(true); }}>
           <Plus size={14} /> New Receipt
         </Button>
@@ -781,6 +829,17 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
                 </TableRow>
               ))}
             </TableBody>
+            {filtered.length > 0 && (
+              <TableFooter>
+                <TableRow className="font-semibold">
+                  <TableCell colSpan={3}>Total ({filtered.length} receipt{filtered.length !== 1 ? "s" : ""})</TableCell>
+                  <TableCell className="text-right tabular-nums">₹{totals.amount.toLocaleString("en-IN")}</TableCell>
+                  <TableCell colSpan={2} />
+                  <TableCell className="text-right tabular-nums">₹{totals.tds.toLocaleString("en-IN")}</TableCell>
+                  <TableCell />
+                </TableRow>
+              </TableFooter>
+            )}
           </Table>
         )}
       </CardContent></Card>
