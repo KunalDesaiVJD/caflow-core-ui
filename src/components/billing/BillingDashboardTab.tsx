@@ -141,11 +141,12 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
     invoices.filter(i => i.status === "paid").forEach(i => {
       const d = i.paid_at || i.invoice_date;
       if (!d) return;
-      const key = format(new Date(d), "MMM yy");
+      // Key by yyyy-MM so months sort chronologically; label only at the end.
+      const key = format(new Date(d), "yyyy-MM");
       map[key] = (map[key] || 0) + (i.total_amount || i.amount || 0);
     });
-    const sorted = Object.entries(map);
-    return sorted.slice(-12).map(([name, revenue]) => ({ name, revenue }));
+    const sorted = Object.entries(map).sort(([a], [b]) => a.localeCompare(b));
+    return sorted.slice(-12).map(([key, revenue]) => ({ name: format(new Date(`${key}-01T00:00:00`), "MMM yy"), revenue }));
   }, [invoices]);
 
   const aging = useMemo(() => {
@@ -235,7 +236,7 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
             <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">Outstanding</p>
             <p className="text-2xl font-bold mt-1 text-amber-600">{fmtMoney(outstanding)}</p>
             <p className="text-xs text-muted-foreground mt-1">
-              {invoices.filter(i => !["paid","voided","draft"].includes(i.status||"")).length} pending
+              {invoices.filter(i => isOpenInvoice(i) && dueOf(i) > 0).length} pending
             </p>
           </CardContent>
         </Card>

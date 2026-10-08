@@ -493,111 +493,15 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
     XLSX.writeFile(wb, `Ledger_${cName}_${fromDate}_${toDate}.xlsx`);
   };
 
+  // Download and Email share one builder so the two can never drift apart.
   const handleDownloadPdf = async () => {
-    const jsPDF = (await import("jspdf")).default;
-    const autoTable = (await import("jspdf-autotable")).default;
-    const DARK_BLUE = [26, 58, 92] as [number, number, number];
-    const cName = clients.find(c => c.id === clientId)?.name || "Client";
-    const isAllFirms = firmId === "all";
-    const fName = isAllFirms ? "All Firms" : (firms.find(f => f.id === firmId)?.name || "");
-    const selectedFirm = !isAllFirms ? firms.find(f => f.id === firmId) : null;
-    const logoBase64 = selectedFirm?.logo_url ? await loadLogoBase64(selectedFirm.logo_url) : null;
-
-    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    await ensurePdfUnicodeFont(doc);
-    doc.setFillColor(...DARK_BLUE);
-    doc.rect(0, 0, 210, 22, "F");
-
-    let textStartX = 14;
-    if (logoBase64) {
-      try {
-        const imgFmt = logoBase64.includes("image/png") ? "PNG" : "JPEG";
-        doc.addImage(logoBase64, imgFmt, 14, 2, 30, 18);
-        textStartX = 48;
-      } catch { /* ignore logo error */ }
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(13);
-    setPdfUnicodeFont(doc, "bold");
-    doc.text("CLIENT LEDGER STATEMENT", textStartX, 9);
-    doc.setFontSize(8);
-    setPdfUnicodeFont(doc, "normal");
-    doc.text(`Firm: ${fName}   |   Client: ${cName}`, textStartX, 15);
-    doc.text(`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}   |   Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, textStartX, 20);
-
-    const head = isAllFirms
-      ? [["Firm", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]]
-      : [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]];
-
-    const tableRows: any[][] = [];
-    if (obDate) {
-      const obBaseRow = [
-        format(new Date(obDate), "dd/MM/yyyy"),
-        "—",
-        `Opening Balance${obNarration ? ` — ${obNarration}` : ""}`,
-        obAmount > 0 ? formatPdfCurrency(obAmount) : "—",
-        obAmount < 0 ? formatPdfCurrency(Math.abs(obAmount)) : "—",
-        formatPdfCurrency(obAmount),
-      ];
-      tableRows.push(isAllFirms ? ["—", ...obBaseRow] : obBaseRow);
-    }
-    rows.forEach(r => {
-      const baseRow = [
-        r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
-        r.docNo, r.narration,
-        r.debit > 0 ? formatPdfCurrency(r.debit) : "—",
-        r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
-        formatPdfCurrency(r.balance),
-      ];
-      tableRows.push(isAllFirms ? [r.firmName, ...baseRow] : baseRow);
-    });
-
-    const closingColSpan = isAllFirms ? 4 : 3;
-    tableRows.push([
-      { content: "CLOSING BALANCE", colSpan: closingColSpan, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
-      { content: formatPdfCurrency(totalDebit), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: formatPdfCurrency(totalCredit), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: formatPdfCurrency(closingBalance), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-    ]);
-
-    const colStylesNormal = {
-      0: { cellWidth: 22, halign: "center" as const },
-      1: { cellWidth: 22, halign: "center" as const },
-      2: { cellWidth: 80 },
-      3: { cellWidth: 24, halign: "right" as const },
-      4: { cellWidth: 24, halign: "right" as const },
-      5: { cellWidth: 24, halign: "right" as const },
-    };
-    const colStylesAllFirms = {
-      0: { cellWidth: 28 },
-      1: { cellWidth: 20, halign: "center" as const },
-      2: { cellWidth: 18, halign: "center" as const },
-      3: { cellWidth: 58 },
-      4: { cellWidth: 22, halign: "right" as const },
-      5: { cellWidth: 22, halign: "right" as const },
-      6: { cellWidth: 22, halign: "right" as const },
-    };
-
-    autoTable(doc, {
-      startY: 26,
-      head,
-      body: tableRows,
-      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
-      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
-      alternateRowStyles: { fillColor: [248, 251, 255] },
-      columnStyles: isAllFirms ? colStylesAllFirms : colStylesNormal,
-      margin: { left: 10, right: 10 },
-      didDrawPage: (hookData) => {
-        const pageCount = (doc as any).internal.getNumberOfPages();
-        setPdfUnicodeFont(doc, "normal");
-        doc.setFontSize(7); doc.setTextColor(120, 130, 145);
-        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 105, 290, { align: "center" });
-        doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.5);
-        doc.line(10, 287, 200, 287);
-      },
-    });
-    doc.save(`Ledger_${cName}_${fromDate}_${toDate}.pdf`);
+    const { blob, filename } = await buildClientLedgerPdfBlob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   // ── Build PDF as Blob (shared by email send) ──────────────────────────
@@ -911,7 +815,7 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
                   </TableRow>
                 ))}
               </TableBody>
-              {rows.length > 0 && (
+              {(rows.length > 0 || !!obDate) && (
                 <TableFooter>
                   <TableRow className="font-bold">
                     <TableCell colSpan={3}>Closing Balance</TableCell>
@@ -923,7 +827,7 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
               )}
             </Table>
           </div>
-          {rows.length > 0 && (
+          {(rows.length > 0 || !!obDate) && (
             <div className="flex gap-2 flex-wrap">
               <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
               <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
@@ -1219,14 +1123,26 @@ function GroupLedgerView() {
       grouped[cid].push(e);
     });
 
-    // Fetch per-client opening balances
-    const { data: obRows } = await (supabase as any)
+    // Fetch per-client opening balances. OBs are stored per (firm, client, GSTIN),
+    // so restrict to the selected firm(s) and sum every matching row per client —
+    // same rule as the single-client ledger.
+    let obQ = (supabase as any)
       .from("client_billing_opening_balances")
       .select("client_id, amount, balance_date, narration")
       .in("client_id", clientIds);
+    if (resolvedFirmIds.length > 0) obQ = obQ.in("firm_id", resolvedFirmIds);
+    const { data: obRows } = await obQ;
     const newObMap: Record<string, { amount: number; date: string; narration: string }> = {};
+    const obCount: Record<string, number> = {};
     (obRows || []).forEach((ob: any) => {
-      newObMap[ob.client_id] = { amount: Number(ob.amount) || 0, date: ob.balance_date || "", narration: ob.narration || "" };
+      const prev = newObMap[ob.client_id];
+      const date = ob.balance_date || "";
+      obCount[ob.client_id] = (obCount[ob.client_id] || 0) + 1;
+      newObMap[ob.client_id] = {
+        amount: (prev?.amount || 0) + (Number(ob.amount) || 0),
+        date: prev && prev.date > date ? prev.date : date,
+        narration: obCount[ob.client_id] > 1 ? `${obCount[ob.client_id]} balances combined` : (ob.narration || ""),
+      };
     });
     setGroupObMap(newObMap);
 
@@ -1339,17 +1255,18 @@ function GroupLedgerView() {
         { content: `Subtotal — ${clientName}`, colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE } },
         { content: formatPdfCurrency(subtotalD), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
         { content: formatPdfCurrency(subtotalC), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
-        { content: formatPdfCurrency(subtotalD - subtotalC), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
+        { content: formatPdfCurrency((ob?.amount || 0) + subtotalD - subtotalC), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
       ]);
     });
 
     const grandD = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0), 0), 0);
     const grandC = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0);
+    const grandOb = data.reduce((s, d) => s + (groupObMap[d.clientId]?.amount || 0), 0);
     tableRows.push([
       { content: "GRAND TOTAL", colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
       { content: formatPdfCurrency(grandD), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
       { content: formatPdfCurrency(grandC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: formatPdfCurrency(grandD - grandC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
+      { content: formatPdfCurrency(grandOb + grandD - grandC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
     ]);
 
     const colStylesNormal = {
@@ -1528,14 +1445,15 @@ function GroupLedgerView() {
       // Subtotal row
       const subtotalD = entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0), 0);
       const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
-      aoa.push(["", `Subtotal — ${clientName}`, "", "", "", subtotalD, subtotalC, subtotalD - subtotalC]);
+      aoa.push(["", `Subtotal — ${clientName}`, "", "", "", subtotalD, subtotalC, (ob?.amount || 0) + subtotalD - subtotalC]);
       aoa.push([]); // blank row between clients
     });
 
     // Grand total
     const grandD = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0), 0), 0);
     const grandC = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0);
-    aoa.push(["", "GRAND TOTAL", "", "", "", grandD, grandC, grandD - grandC]);
+    const grandOb = data.reduce((s, d) => s + (groupObMap[d.clientId]?.amount || 0), 0);
+    aoa.push(["", "GRAND TOTAL", "", "", "", grandD, grandC, grandOb + grandD - grandC]);
 
     const ws = XLSX.utils.aoa_to_sheet(aoa);
 
@@ -1556,138 +1474,17 @@ function GroupLedgerView() {
     XLSX.writeFile(wb, `GroupLedger_${groupName}_${fromDate}_${toDate}.xlsx`);
   };
 
+  // Download uses the same builder as Email so both always match the screen
+  // (the old standalone copy here had drifted and dropped opening balances).
   const handleDownloadPdf = async () => {
-    const jsPDF = (await import("jspdf")).default;
-    const autoTable = (await import("jspdf-autotable")).default;
     const groupName = groups.find(g => g.id === groupId)?.name || "Group";
-    const isAllFirms = firmIds[0] === "all" || firmIds.length === 0;
-    const selectedFirmNames = isAllFirms
-      ? "All Firms"
-      : firms.filter(f => firmIds.includes(f.id)).map(f => f.name).join(", ");
-
-    // Load logo for single-firm selection
-    const singleFirm = !isAllFirms && firmIds.length === 1 ? firms.find(f => f.id === firmIds[0]) : null;
-    const logoBase64 = singleFirm?.logo_url ? await loadLogoBase64(singleFirm.logo_url) : null;
-
-    // Build firm name lookup map
-    const firmNameMap: Record<string, string> = {};
-    firms.forEach(f => { firmNameMap[f.id] = f.name; });
-
-    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-    await ensurePdfUnicodeFont(doc);
-    const DARK_BLUE = [26, 58, 92] as [number, number, number];
-    const LIGHT_BLUE = [232, 240, 250] as [number, number, number];
-    doc.setFillColor(...DARK_BLUE);
-    doc.rect(0, 0, 297, 22, "F");
-
-    let textStartX = 14;
-    if (logoBase64) {
-      try {
-        const imgFmt = logoBase64.includes("image/png") ? "PNG" : "JPEG";
-        doc.addImage(logoBase64, imgFmt, 14, 2, 30, 18);
-        textStartX = 48;
-      } catch { /* ignore logo error */ }
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(14);
-    setPdfUnicodeFont(doc, "bold");
-    doc.text("GROUP LEDGER STATEMENT", textStartX, 10);
-    doc.setFontSize(9);
-    setPdfUnicodeFont(doc, "normal");
-    doc.text(`Group: ${groupName}   |   Firm(s): ${selectedFirmNames}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} – ${format(new Date(toDate), "dd/MM/yyyy")}`, textStartX, 17);
-    doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
-
-    // Table header — add Firm column when all firms
-    const tableHead = isAllFirms
-      ? [["Firm", "Client", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]]
-      : [["Client", "Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]];
-
-    const subtotalColSpan = isAllFirms ? 5 : 4;
-
-    const tableRows: any[][] = [];
-    data.forEach(({ clientName, entries }) => {
-      let bal = 0;
-      entries.forEach((e: any) => {
-        const d = Number(e.debit_amount) || 0;
-        const c = Number(e.credit_amount) || 0;
-        bal += d - c;
-        const rowBase = [
-          clientName,
-          e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : "",
-          getDocNo(e),
-          e.narration || "",
-          d > 0 ? formatPdfCurrency(d) : "—",
-          c > 0 ? formatPdfCurrency(c) : "—",
-          formatPdfCurrency(bal),
-        ];
-        if (isAllFirms) {
-          tableRows.push([firmNameMap[e.firm_id || ""] || "", ...rowBase]);
-        } else {
-          tableRows.push(rowBase);
-        }
-      });
-      const subtotalD = entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0), 0);
-      const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
-      tableRows.push([
-        { content: `Subtotal — ${clientName}`, colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE } },
-        { content: formatPdfCurrency(subtotalD), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
-        { content: formatPdfCurrency(subtotalC), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
-        { content: formatPdfCurrency(subtotalD - subtotalC), styles: { fontStyle: "bold", fillColor: LIGHT_BLUE, textColor: DARK_BLUE, halign: "right" } },
-      ]);
-    });
-
-    const grandD = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0), 0), 0);
-    const grandC = data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0);
-    tableRows.push([
-      { content: "GRAND TOTAL", colSpan: subtotalColSpan, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
-      { content: formatPdfCurrency(grandD), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: formatPdfCurrency(grandC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: formatPdfCurrency(grandD - grandC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-    ]);
-
-    const colStylesNormal = {
-      0: { cellWidth: 40 },
-      1: { cellWidth: 22, halign: "center" as const },
-      2: { cellWidth: 22, halign: "center" as const },
-      3: { cellWidth: 70 },
-      4: { cellWidth: 28, halign: "right" as const },
-      5: { cellWidth: 28, halign: "right" as const },
-      6: { cellWidth: 30, halign: "right" as const },
-    };
-    const colStylesAllFirms = {
-      0: { cellWidth: 30 },
-      1: { cellWidth: 35 },
-      2: { cellWidth: 20, halign: "center" as const },
-      3: { cellWidth: 20, halign: "center" as const },
-      4: { cellWidth: 60 },
-      5: { cellWidth: 27, halign: "right" as const },
-      6: { cellWidth: 27, halign: "right" as const },
-      7: { cellWidth: 28, halign: "right" as const },
-    };
-
-    autoTable(doc, {
-      startY: 26,
-      head: tableHead,
-      body: tableRows,
-      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
-      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 },
-      alternateRowStyles: { fillColor: [248, 251, 255] },
-      columnStyles: isAllFirms ? colStylesAllFirms : colStylesNormal,
-      margin: { left: 10, right: 10 },
-      didDrawPage: (hookData) => {
-        const pageCount = (doc as any).internal.getNumberOfPages();
-        setPdfUnicodeFont(doc, "normal");
-        doc.setFontSize(7);
-        doc.setTextColor(120, 130, 145);
-        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 148.5, 205, { align: "center" });
-        doc.setDrawColor(...DARK_BLUE);
-        doc.setLineWidth(0.5);
-        doc.line(10, 202, 287, 202);
-      },
-    });
-
-    doc.save(`GroupLedger_${groupName}_${fromDate}_${toDate}.pdf`);
+    const blob = await buildGroupLedgerPdfBlob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `GroupLedger_${groupName}_${fromDate}_${toDate}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleDownloadZip = async () => {
@@ -1789,14 +1586,19 @@ function GroupLedgerView() {
             <TableBody>
               {data.map(({ clientId, clientName, entries }, gi) => {
                 const ob = groupObMap[clientId];
+                const hasOb = !!ob?.date;
                 let bal = ob?.amount || 0;
+                // Client cell spans OB row + entries + subtotal; it sits on whichever row renders first.
+                const clientCell = (
+                  <TableCell rowSpan={entries.length + (hasOb ? 1 : 0) + 1} className="font-medium align-top border-r">{clientName}</TableCell>
+                );
                 const clientRows = entries.map((e: any, ei: number) => {
                   const d = Number(e.debit_amount) || 0;
                   const c = Number(e.credit_amount) || 0;
                   bal += d - c;
                   return (
                     <TableRow key={`${gi}-${ei}`}>
-                      {ei === 0 && <TableCell rowSpan={entries.length + (ob?.date ? 2 : 1)} className="font-medium align-top border-r">{clientName}</TableCell>}
+                      {ei === 0 && !hasOb && clientCell}
                       <TableCell>{e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : ""}</TableCell>
                       <TableCell className="font-mono text-xs">{getDocNo(e)}</TableCell>
                       <TableCell>{e.narration || ""}</TableCell>
@@ -1808,8 +1610,9 @@ function GroupLedgerView() {
                 });
                 const subtotalD = entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0), 0);
                 const subtotalC = entries.reduce((s: number, e: any) => s + (Number(e.credit_amount) || 0), 0);
-                const obRow = ob?.date ? (
+                const obRow = hasOb ? (
                   <TableRow key={`ob-${gi}`} className="bg-blue-50/50 italic text-muted-foreground">
+                    {clientCell}
                     <TableCell>{format(new Date(ob.date), "dd/MM/yyyy")}</TableCell>
                     <TableCell>—</TableCell>
                     <TableCell>{`Opening Balance${ob.narration ? ` — ${ob.narration}` : ""}`}</TableCell>
@@ -1822,10 +1625,11 @@ function GroupLedgerView() {
                   ...(obRow ? [obRow] : []),
                   ...clientRows,
                   <TableRow key={`sub-${gi}`} className="bg-muted/30 font-semibold">
-                    <TableCell colSpan={4} className="text-right">Subtotal — {clientName}</TableCell>
+                    {!hasOb && entries.length === 0 && clientCell}
+                    <TableCell colSpan={3} className="text-right">Subtotal — {clientName}</TableCell>
                     <TableCell className="text-right">{fmtINR(subtotalD)}</TableCell>
                     <TableCell className="text-right">{fmtINR(subtotalC)}</TableCell>
-                    <TableCell className="text-right">{fmtINR(subtotalD - subtotalC)}</TableCell>
+                    <TableCell className="text-right">{fmtINR((ob?.amount || 0) + subtotalD - subtotalC)}</TableCell>
                   </TableRow>,
                 ];
               })}
@@ -1836,7 +1640,7 @@ function GroupLedgerView() {
                 <TableCell className="text-right">{fmtINR(data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0), 0), 0))}</TableCell>
                 <TableCell className="text-right">{fmtINR(data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.credit_amount) || 0), 0), 0))}</TableCell>
                 <TableCell className="text-right">{fmtINR(
-                  data.reduce((s, d) => s + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0) - (Number(e.credit_amount) || 0), 0), 0)
+                  data.reduce((s, d) => s + (groupObMap[d.clientId]?.amount || 0) + d.entries.reduce((ss: number, e: any) => ss + (Number(e.debit_amount) || 0) - (Number(e.credit_amount) || 0), 0), 0)
                 )}</TableCell>
               </TableRow>
             </TableFooter>
@@ -2237,80 +2041,14 @@ function FirmRevenueLedgerView() {
   };
 
   const handleDownloadPdf = async () => {
-    const jsPDF = (await import("jspdf")).default;
-    const autoTable = (await import("jspdf-autotable")).default;
-    const DARK_BLUE = [26, 58, 92] as [number, number, number];
     const fName = firms.find(f => f.id === firmId)?.name || "Firm";
-    const selectedFirm = firms.find(f => f.id === firmId);
-    const logoBase64 = selectedFirm?.logo_url ? await loadLogoBase64(selectedFirm.logo_url) : null;
-
-    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-    await ensurePdfUnicodeFont(doc);
-    doc.setFillColor(...DARK_BLUE);
-    doc.rect(0, 0, 297, 22, "F");
-
-    let textStartX = 14;
-    if (logoBase64) {
-      try {
-        const imgFmt = logoBase64.includes("image/png") ? "PNG" : "JPEG";
-        doc.addImage(logoBase64, imgFmt, 14, 2, 30, 18);
-        textStartX = 48;
-      } catch { /* ignore logo error */ }
-    }
-
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(13);
-    setPdfUnicodeFont(doc, "bold");
-    doc.text("FIRM REVENUE LEDGER", textStartX, 10);
-    doc.setFontSize(8);
-    setPdfUnicodeFont(doc, "normal");
-    doc.text(`Firm: ${fName}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`, textStartX, 17);
-    doc.text(`Generated: ${format(new Date(), "dd/MM/yyyy HH:mm")}`, 297 - 14, 17, { align: "right" });
-    const totalD = rows.reduce((s, r) => s + r.debit, 0);
-    const totalC = rows.reduce((s, r) => s + r.credit, 0);
-    const tableRows: any[][] = [
-      [format(new Date(fromDate), "dd/MM/yyyy"), "—", "—", "Opening Balance (Balance B/F)", "—", "—", formatPdfCurrency(0)],
-      ...rows.map(r => [
-        r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : "",
-        r.docNo, r.clientName, r.docType,
-        r.debit > 0 ? formatPdfCurrency(r.debit) : "—",
-        r.credit > 0 ? formatPdfCurrency(r.credit) : "—",
-        formatPdfCurrency(r.running),
-      ]),
-    ];
-    tableRows.push([
-      { content: "GRAND TOTAL", colSpan: 4, styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255] } },
-      { content: formatPdfCurrency(totalD), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: formatPdfCurrency(totalC), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-      { content: formatPdfCurrency(rows[rows.length - 1]?.running || 0), styles: { fontStyle: "bold", fillColor: DARK_BLUE, textColor: [255, 255, 255], halign: "right" } },
-    ]);
-    autoTable(doc, {
-      startY: 26,
-      head: [["Date", "Doc No", "Client", "Type", "Debit (₹)", "Credit (₹)", "Running Total (₹)"]],
-      body: tableRows,
-      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
-      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold" },
-      alternateRowStyles: { fillColor: [248, 251, 255] },
-      columnStyles: {
-        0: { cellWidth: 22, halign: "center" as const },
-        1: { cellWidth: 22, halign: "center" as const },
-        2: { cellWidth: 55 },
-        3: { cellWidth: 25 },
-        4: { cellWidth: 30, halign: "right" as const },
-        5: { cellWidth: 30, halign: "right" as const },
-        6: { cellWidth: 32, halign: "right" as const },
-      },
-      margin: { left: 10, right: 10 },
-      didDrawPage: (hookData) => {
-        const pageCount = (doc as any).internal.getNumberOfPages();
-        setPdfUnicodeFont(doc, "normal");
-        doc.setFontSize(7); doc.setTextColor(120, 130, 145);
-        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 148.5, 205, { align: "center" });
-        doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.5);
-        doc.line(10, 202, 287, 202);
-      },
-    });
-    doc.save(`FirmRevenue_${fName}_${fromDate}_${toDate}.pdf`);
+    const blob = await buildFirmLedgerPdfBlob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `FirmRevenue_${fName}_${fromDate}_${toDate}.pdf`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   return (

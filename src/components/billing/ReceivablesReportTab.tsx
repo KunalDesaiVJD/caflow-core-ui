@@ -31,6 +31,9 @@ import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
 } from "@/lib/jspdfUnicodeFont";
 
+/** Invoice statuses that count as receivable (matches v_billing_reconciliation). */
+const BILLABLE_STATUSES = ["finalized", "sent", "overdue", "paid"];
+
 // Fetch ALL rows for a query, paging past PostgREST's 1000-row default cap.
 // Used wherever a result set feeds a SUM, so totals never silently truncate.
 async function fetchAllRows<T = any>(makeQuery: () => any): Promise<T[]> {
@@ -185,13 +188,15 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       // complete for established firms (these feed SUMs — a truncated fetch
       // silently under-reports receivables).
       const [invoices, receipts, obRows, kasars] = await Promise.all([
-        fetchAllRows<{ client_id: string; invoice_date: string | null; total_amount: number | null }>(() =>
+        fetchAllRows<{ client_id: string; invoice_date: string | null; total_amount: number | null; document_type: string | null }>(() =>
           supabase.from("invoices")
-            .select("client_id, invoice_date, total_amount")
+            .select("client_id, invoice_date, total_amount, document_type")
             .eq("firm_id", selectedFirmId)
             // Q3: only confirmed invoices + credit notes belong in receivables.
             .in("document_type", ["invoice", "credit_note"])
-            .neq("status", "voided")),
+            // Same status rule as v_billing_reconciliation / LedgerTab: drafts,
+            // cancelled and voided documents are not receivable.
+            .in("status", BILLABLE_STATUSES)),
         fetchAllRows<any>(() =>
           supabase.from("billing_receipts")
             .select("client_id, receipt_date, amount_received, tds_amount, gst_tds_amount")
@@ -241,8 +246,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           if (inv.client_id !== c.id) continue;
           const amt = Number(inv.total_amount || 0);
           if (!amt) continue;
-          if (inv.invoice_date && inv.invoice_date < fromDate) openingDr += amt;
-          else if (inv.invoice_date && inv.invoice_date >= fromDate && inv.invoice_date <= toDate) debit += amt;
+          // Credit notes reduce the debtor (Cr), same as the ledger sheet below.
+          const isCN = inv.document_type === "credit_note";
+          // An undated document is treated as in-period (the ledger sheet does the same)
+          // rather than silently dropped from both opening and period figures.
+          if (inv.invoice_date && inv.invoice_date < fromDate) { if (isCN) openingCr += amt; else openingDr += amt; }
+          else if (!inv.invoice_date || inv.invoice_date <= toDate) { if (isCN) credit += amt; else debit += amt; }
         }
 
         for (const rec of receipts || []) {
@@ -296,7 +305,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   // ── Fetch ledger for sheet ────────────────────────────────────────────────
 
-  async function openLedger(client: ClientRow) {
+  async function openLedger(client: ClientRow): Promise<LedgerEntry[]> {
     setSheetClient(client);
     setSheetEntries([]);
     setSheetLoading(true);
@@ -313,9 +322,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           .eq("firm_id", selectedFirmId)
           // Q3: exclude quotations / proformas from the ledger sheet.
           .in("document_type", ["invoice", "credit_note"])
-          .neq("status", "voided")
-          .gte("invoice_date", fromDate)
-          .lte("invoice_date", toDate)
+          .in("status", BILLABLE_STATUSES)
+          .or(`invoice_date.is.null,and(invoice_date.gte.${fromDate},invoice_date.lte.${toDate})`)
           .order("invoice_date"),
         supabase.from("billing_receipts")
           .select("id, receipt_date, amount_received, tds_amount, gst_tds_amount, payment_mode, remarks")
@@ -404,8 +412,10 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       }
 
       setSheetEntries(entries);
+      return entries;
     } catch (e: any) {
       toast.error("Could not load ledger: " + e.message);
+      return [];
     } finally {
       setSheetLoading(false);
     }
@@ -560,7 +570,10 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     doc.text(`${selectedFirmName}   |   Client: ${client.name}`, textX, 16);
     doc.text(`Period: ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}   |   Generated: ${format(new Date(), "d MMM yyyy HH:mm")}`, textX, 21);
 
-    const close = netClosing(client);
+    // Footer totals the rows actually printed, so Dr − Cr = closing balance.
+    const totDr = entries.reduce((s, e) => s + e.debit, 0);
+    const totCr = entries.reduce((s, e) => s + e.credit, 0);
+    const close = entries.length ? entries[entries.length - 1].balance : netClosing(client);
     const tableRows = entries.map(e => [
       e.entry_date ? format(parseISO(e.entry_date), "dd/MM/yyyy") : "",
       e.doc_no, e.narration,
@@ -572,8 +585,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     const { abs: ca, label: cl } = drCr(close);
     tableRows.push([
       { content: "CLOSING BALANCE", colSpan: 3, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number] } },
-      { content: formatPdfCurrency(client.debit),  styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
-      { content: formatPdfCurrency(client.credit), styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
+      { content: formatPdfCurrency(totDr),  styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
+      { content: formatPdfCurrency(totCr), styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
       { content: `${formatPdfCurrency(ca)} ${cl}`, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
     ]);
 
@@ -623,9 +636,10 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     setEmailSending(true);
     try {
       // ensure ledger is loaded for the email client
-      if (!sheetClient || sheetClient.id !== emailClient.id) await openLedger(emailClient);
-      await new Promise(r => setTimeout(r, 400));
-      const entries = sheetEntries;
+      // Use the freshly loaded rows — `sheetEntries` state is stale inside this closure.
+      const entries = (!sheetClient || sheetClient.id !== emailClient.id)
+        ? await openLedger(emailClient)
+        : sheetEntries;
       const { base64 } = await generateClientLedgerPdf(emailClient, entries);
       const { error } = await supabase.functions.invoke("send-notification", {
         body: {

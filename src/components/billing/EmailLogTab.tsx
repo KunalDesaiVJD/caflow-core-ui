@@ -87,13 +87,12 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
     "audit_report_ready", "new_user_welcome",
   ];
 
-  const fetchLogs = useCallback(async () => {
-    setLoading(true);
-
+  // Same filters for the on-screen page and the CSV export. Search runs server-side
+  // so the count / pagination reflect it; dates are local-day bounds converted to UTC.
+  const buildQuery = useCallback(() => {
     let q = (supabase.from("notification_log") as any)
       .select("*", { count: "exact" })
-      .order("sent_at", { ascending: false })
-      .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+      .order("sent_at", { ascending: false });
 
     // Filter by firm when available; super-admins without a firm_id see all logs
     if (resolvedFirmId) q = q.eq("firm_id", resolvedFirmId);
@@ -101,38 +100,48 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
     if (statusFilter !== "all") q = q.eq("status", statusFilter);
     if (channelFilter !== "all") q = q.eq("channel", channelFilter);
     if (typeFilter !== "all") q = q.eq("type", typeFilter);
-    if (dateFrom) q = q.gte("sent_at", dateFrom + "T00:00:00");
-    if (dateTo) q = q.lte("sent_at", dateTo + "T23:59:59");
+    if (dateFrom) q = q.gte("sent_at", new Date(`${dateFrom}T00:00:00`).toISOString());
+    if (dateTo) {
+      const end = new Date(`${dateTo}T00:00:00`);
+      end.setDate(end.getDate() + 1);
+      q = q.lt("sent_at", end.toISOString());
+    }
+    // Strip PostgREST filter syntax characters from the user's term.
+    const term = search.trim().replace(/[,()*%\\]/g, " ").trim();
+    if (term) q = q.or(`content->>to.ilike.*${term}*,content->>subject.ilike.*${term}*`);
+    return q;
+  }, [resolvedFirmId, statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search]);
 
-    const { data, count, error } = await q;
+  const fetchLogs = useCallback(async () => {
+    setLoading(true);
+    const { data, count, error } = await buildQuery().range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
     if (error) {
       toast({ title: "Error loading email log", description: error.message, variant: "destructive" });
     } else {
-      let rows = (data as NotificationLog[]) || [];
-      // Client-side search by email/subject from content
-      if (search.trim()) {
-        const s = search.trim().toLowerCase();
-        rows = rows.filter(r => {
-          const to = (r.content?.to ?? "").toLowerCase();
-          const subject = (r.content?.subject ?? "").toLowerCase();
-          return to.includes(s) || subject.includes(s);
-        });
-      }
-      setLogs(rows);
+      setLogs((data as NotificationLog[]) || []);
       setTotal(count ?? 0);
     }
     setLoading(false);
-  }, [resolvedFirmId, page, statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search, toast]);
+  }, [buildQuery, page, toast]);
 
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
   // Reset page when filters change
   useEffect(() => { setPage(0); }, [statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search]);
 
-  const exportCSV = () => {
-    if (logs.length === 0) return;
+  // Exports every row matching the filters, not just the visible page.
+  const exportCSV = async () => {
+    const all: NotificationLog[] = [];
+    const CHUNK = 1000;
+    for (let from = 0; ; from += CHUNK) {
+      const { data, error } = await buildQuery().range(from, from + CHUNK - 1);
+      if (error) { toast({ title: "Export failed", description: error.message, variant: "destructive" }); return; }
+      all.push(...((data as NotificationLog[]) || []));
+      if (!data || data.length < CHUNK) break;
+    }
+    if (all.length === 0) return;
     const headers = ["Date/Time", "To", "Type", "Subject", "Status", "Channel"];
-    const rows = logs.map(r => [
+    const rows = all.map(r => [
       formatDateTime(r.sent_at),
       r.content?.to ?? "—",
       r.type ?? "—",
