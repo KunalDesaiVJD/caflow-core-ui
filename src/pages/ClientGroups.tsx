@@ -131,6 +131,9 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
             name: name.trim(),
             description: description.trim() || null,
             color: finalColor,
+            // RLS (firm_scope_insert) requires firm_id = the user's firm; omitting it
+            // inserted NULL and every non-superadmin got "violates row-level security".
+            firm_id: defaultFirmId,
             created_by: userId || null,
           } as any);
         if (error) throw error;
