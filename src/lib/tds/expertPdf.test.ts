@@ -415,3 +415,44 @@ describe("parseExpertPdfPages — M J SURGICAL Provision Ledger (real, multi-sec
     expect(parsed.skipped.balances).toBeGreaterThan(0);
   });
 });
+
+// Real POINT PACKERS Q2 FY2026-27 prints (same Expert layout as Q1 above).
+// Two narration/balance lines were misread as MID-BODY section markers, and
+// every row after them was stamped with that bogus section — so Stage 3
+// reported "Ledger Entry Not Found" for entries printed in the very ledger:
+//  - 194Q: "BEING THE TDS 967912.92@0.100%" — the paise ".92" read as the
+//    bare FVU salary code 92 → "192" (11 of 14 rows lost, IKON MULTIPACK etc.)
+//  - 194C: a running Balance "202.00C" on a narration line read as "202".
+describe("parseExpertPdfPages — narration/balance never read as a section marker (POINT PACKERS Q2 FY2026-27)", () => {
+  it("a paise figure in rate narration ('…967912.92@0.100%') does not switch the 194Q section", () => {
+    const page: ExpertPdfTextItem[] = [
+      ...HEADER_194Q,
+      { x: 50, y: 706, w: 222, str: "07/07/2026 SHREE BALAJI POLY FILMS PRIVA" }, { x: 410, y: 706, w: 36, str: "968.00" },
+      { x: 116, y: 694, w: 186, str: "BEING THE TDS 967912.92@0.100%" },
+      { x: 116, y: 682, w: 150, str: "BILL NO. SB/NSK/2026/302" },
+      { x: 50, y: 670, w: 150, str: "31/07/2026 IKON MULTIPACK" }, { x: 404, y: 670, w: 42, str: "1910.00" },
+      { x: 116, y: 658, w: 180, str: "BEING THE TOTAL PUCH. OF JULY" },
+      { x: 116, y: 646, w: 90, str: "1910381@0.100%" },
+    ];
+    const res = parseExpertPdfPages([page]);
+    expect(res.rows.map((r) => [r.party, r.credit, r.section])).toEqual([
+      ["SHREE BALAJI POLY FILMS PRIVA", 968, "194Q"],
+      ["IKON MULTIPACK", 1910, "194Q"],
+    ]);
+  });
+
+  it("a running Balance with its C suffix ('202.00C') on a narration line does not switch the 194C section", () => {
+    const page: ExpertPdfTextItem[] = [
+      ...HEADER_194C,
+      { x: 50, y: 706, w: 186, str: "09/09/2026 SHILPI GRAPHICS" }, { x: 416, y: 706, w: 30, str: "79.00" },
+      { x: 116, y: 694, w: 126, str: "BEING THE TDS 3950@2%" }, { x: 488, y: 694, w: 42, str: "202.00C" },
+      { x: 50, y: 682, w: 114, str: "11/09/2026 MELT SEAL" }, { x: 410, y: 682, w: 36, str: "178.00" },
+      { x: 116, y: 670, w: 132, str: "BEING THE TDS 17799@1%" },
+    ];
+    const res = parseExpertPdfPages([page]);
+    expect(res.rows.map((r) => [r.party, r.credit, r.section])).toEqual([
+      ["SHILPI GRAPHICS", 79, "194C"],
+      ["MELT SEAL", 178, "194C"],
+    ]);
+  });
+});

@@ -186,7 +186,7 @@ function findAnchors(items: ExpertPdfTextItem[]): Anchors | null {
  *  (wrongly) re-resolved to a bare base. */
 function findSection(items: ExpertPdfTextItem[], headerY: number): string | null {
   for (const band of toBands(items.filter((i) => i.y > headerY))) {
-    const sec = bandSectionMarker(band);
+    const sec = bandSectionMarker(band, false);
     if (sec) return sec;
   }
   return null;
@@ -213,11 +213,30 @@ function findSection(items: ExpertPdfTextItem[], headerY: number): string | null
  * principle, but never AS A PREFIX of a longer digit run (word boundaries
  * don't fall between digits), so a real amount can't false-positive here
  * regardless.
+ *
+ * Two narration/balance shapes that DID slip through (real Point Packers
+ * prints, 194C + 194Q, Q2 FY26-27) and silently moved every following row out
+ * of its own section ledger — "Ledger Entry Not Found" for entries plainly
+ * printed in it:
+ *  - a running Balance glued to a narration line, "202.00C": the trailing
+ *    credit/debit suffix failed the plain-numeric guard, so the BALANCE was
+ *    read as section 202. Balance-shaped tokens now count as numeric too.
+ *  - a narration with a rupee/paise figure or rate, "BEING THE TDS
+ *    967912.92@0.100%": ".92" satisfied canonicalSection's bare FVU salary
+ *    code (92 → 192). A real marker never carries a decimal figure, "@" or
+ *    "%", so such a band is never one.
+ * (Both narration checks apply MID-BODY only — the title line above the
+ * column header is never narration, and may legitimately read "TDS 2% 194C".)
+ * A MID-BODY marker (`midBody`) must also spell its section NUMBER
+ * ("…-194 A"): a keyword alone ("…ON CONTRACT…") is ordinary narration text
+ * there, never a section transition. The title line keeps keyword fallback.
  */
-function bandSectionMarker(band: ExpertPdfTextItem[]): string | null {
+function bandSectionMarker(band: ExpertPdfTextItem[], midBody = true): string | null {
   const raw = band.map((i) => i.str.trim()).filter(Boolean).join(" ");
   if (!raw || DATE_LEAD_RE.test(raw)) return null;
-  if (band.some((i) => { const t = i.str.trim(); return /\d/.test(t) && /^[\d,.\s()-]+$/.test(t); })) return null;
+  if (band.some((i) => { const t = i.str.trim(); return /\d/.test(t) && /^[\d,.\s()-]+[cd]?$/i.test(t); })) return null;
+  if (midBody && /\d[.,]\d|@|%/.test(raw)) return null;
+  if (midBody && !/(?:^|[^0-9])(?:19[2-9]|20[0-9])(?![0-9])/.test(raw)) return null;
   return canonicalSection(raw);
 }
 
