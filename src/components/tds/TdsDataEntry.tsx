@@ -5,7 +5,7 @@ import { isProcessedWorkStatus } from "./TdsFilingsManager";
 import {
   PAN_4TH_CHAR_MAP, isValidPan, isIndividualRateType, getRateForSection as getRateForSectionPure,
   calcAutoInterest, isChallanOverApplied, isChallanFullyUtilised, computeApplied, balanceColorClass,
-  sectionDropdownLabel, withKasarVatav, computeChallanPooled,
+  sectionDropdownLabel, withKasarVatav, computeChallanPooled, withChallanInterest,
   isSupersededSectionCode, is194CaDisabledFor, is194CbDisabledFor,
   type RateEntry,
 } from "@/lib/tds/rateEngine";
@@ -242,6 +242,9 @@ const calcTaxWithRebate = (totalIncome: number, regime: "new" | "old"): number =
 // #3 FIX: Parse date strings as LOCAL midnight to avoid UTC-vs-local timezone shift.
 // new Date("2025-02-07") → UTC 00:00 → IST 05:30 the same day, which compares AFTER
 // new Date(y, m-1, d) → local 00:00 IST.  Both must use the same reference.
+/** The TDS figure this screen works interest out on (Data Entry order). */
+const tdsOfEntry = (d: { tds_amount?: number | null; total_tax_deducted?: number | null }) => d.tds_amount || d.total_tax_deducted || 0;
+
 const parseLocalDate = (dateStr: string): Date => {
   const parts = dateStr.split("-");
   return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
@@ -790,16 +793,20 @@ export function TdsDataEntry({
       // deductees' stored interest_amount was 0) computed a large fake
       // "unconsumed" balance and kept re-qualifying for the Carry-Forward
       // list quarter after quarter even though nothing was actually left.
-      const depDate = challanById.get(d.challan_id)?.deposit_date || null;
-      const liveInterest = calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, depDate).interest;
-      const applied = (d.total_tax_deducted || d.tds_amount || 0) + liveInterest + (d.surcharge_amount || 0);
-      appliedMap.set(d.challan_id, (appliedMap.get(d.challan_id) || 0) + applied);
       if (!cfGrouped[d.challan_id]) cfGrouped[d.challan_id] = [];
       cfGrouped[d.challan_id].push(d as Deductee);
       if (d.quarter === quarter && d.financial_year === fy) {
         currentQUsage.add(d.challan_id);
       }
     });
+    // Interest is rounded once per CHALLAN (withChallanInterest), so it is
+    // worked out over each challan's whole row set, not row by row.
+    for (const [challanId, rows] of Object.entries(cfGrouped)) {
+      const depDate = challanById.get(challanId)?.deposit_date || null;
+      const applied = withChallanInterest(rows, depDate, tdsOfEntry)
+        .reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0) + d.interest_amount + (d.surcharge_amount || 0), 0);
+      appliedMap.set(challanId, applied);
+    }
 
     const carried: { challan: Challan; fromQuarter: string; fromFy: string; appliedAmount: number }[] = [];
     priorChallans.forEach((c: any) => {
@@ -1831,10 +1838,7 @@ export function TdsDataEntry({
     // stored interest_amount was 0, so this challan reported "Unconsumed
     // Amount: ₹34" on money that was already fully accounted for.
     const depDate = (challanObj as Challan | null)?.deposit_date || null;
-    const liveInterestRows = allForChallan.map((d: any) => ({
-      ...d,
-      interest_amount: calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, depDate).interest,
-    }));
+    const liveInterestRows = withChallanInterest(allForChallan as any[], depDate, tdsOfEntry);
     // Per-FORM bifurcation of a combined-payment (cross-form) challan — see
     // fetchCarryForwardChallans' own comment on why a challan is never
     // scoped to one form_type. Groups the SAME liveInterestRows by form_type
@@ -1871,6 +1875,30 @@ export function TdsDataEntry({
   // Keep getChallanBreakdown as alias for backward compat
   const getChallanBreakdown = getChallanBreakdownAll;
 
+  // Each row's interest exactly as its challan card counts it: the challan's
+  // interest rounded ONCE on its total and spread over its rows
+  // (withChallanInterest), from the same row sets getChallanBreakdownAll uses.
+  // The grid cells, summary bar and Auto-match read it here so a row can never
+  // show a figure the card doesn't add up to.
+  const interestByRowId = useMemo(() => {
+    const m = new Map<string, number>();
+    const depOf = new Map<string, string | null>();
+    for (const c of [...archivedChallans, ...carryForwardChallans.map(cf => cf.challan), ...challans]) depOf.set(c.id, c.deposit_date || null);
+    if (selectedChallan) depOf.set(selectedChallan.id, selectedChallan.deposit_date || null);
+    const groups = new Map<string, Deductee[]>(Object.entries(allChallanDeductees));
+    if (selectedChallan) groups.set(selectedChallan.id, [...prevEntries, ...deductees]);
+    for (const [challanId, raw] of groups) {
+      const rows = isCorrectionMode ? raw.filter(d => (d as any).action !== "delete") : raw;
+      for (const r of withChallanInterest(rows, depOf.get(challanId) ?? null, tdsOfEntry)) {
+        if (r.id) m.set(r.id, r.interest_amount);
+      }
+    }
+    return m;
+  }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, archivedChallans, isCorrectionMode]);
+  const rowInterest = useCallback((d: Deductee, depDate: string | null) =>
+    interestByRowId.get(d.id) ?? calcAutoInterest(tdsOfEntry(d), d.date_of_payment ?? null, depDate).interest,
+  [interestByRowId]);
+
   const challanDeducteeTds = useMemo(() => {
     if (!selectedChallan) return 0;
     // effectiveApplied (TDS+interest+surcharge, PLUS any Kasar-Vatav
@@ -1893,10 +1921,10 @@ export function TdsDataEntry({
     // already shows the real figure for that same row.
     const depDateByChallan = new Map(challans.map(c => [c.id, c.deposit_date]));
     const totalInterest = allCurrentDeds.reduce((s, d) =>
-      s + calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, depDateByChallan.get(d.challan_id) ?? null).interest, 0);
+      s + rowInterest(d, depDateByChallan.get(d.challan_id) ?? null), 0);
     const totalLateFees = allCurrentDeds.reduce((s, d) => s + (d.late_fees_amount || 0), 0);
     return { totalChallans, totalDeductees, totalPayment, totalTds, totalInterest, totalLateFees };
-  }, [challans, deductees]);
+  }, [challans, deductees, rowInterest]);
 
   // Excel-style AutoFit for the Name/PAN columns — width follows the widest
   // value currently on screen instead of a fixed guess, so short names don't
@@ -1978,7 +2006,7 @@ export function TdsDataEntry({
       // cell already shows. Trusting the stale value here reported a
       // correctly-matched challan as "unmatched" in the Auto-match toast.
       const depDate = challanForMatch.get(d.challan_id)?.deposit_date || null;
-      const liveInterest = calcAutoInterest(d.tds_amount || d.total_tax_deducted || 0, d.date_of_payment ?? null, depDate).interest;
+      const liveInterest = rowInterest(d, depDate);
       const rowTotal = Math.round(d.total_tax_deducted || d.tds_amount || 0) + liveInterest + (d.late_fees_amount || 0) + (d.surcharge_amount || 0);
       challanTotMap.set(d.challan_id, (challanTotMap.get(d.challan_id) || 0) + rowTotal);
     });
@@ -3318,11 +3346,7 @@ export function TdsDataEntry({
                                           // which this form never writes to (see this column's own
                                           // header comment for why that made utilisation status look
                                           // unexplained rather than wrong).
-                                          const liveInterest = calcAutoInterest(
-                                            d.total_tax_deducted || d.tds_amount || 0,
-                                            d.date_of_payment ?? null,
-                                            selectedChallan?.deposit_date ?? null,
-                                          ).interest;
+                                          const liveInterest = rowInterest(d, selectedChallan?.deposit_date ?? null);
                                           return liveInterest > 0 ? liveInterest.toLocaleString("en-IN") : "—";
                                         })()}
                                       </TableCell>
@@ -3430,7 +3454,12 @@ export function TdsDataEntry({
                                           const hasDates = !!payDate && !!depDate;
 
                                           // Compute once — stored in IIFE locals, never re-computed on hover
-                                          const { interest, lateMonths } = calcAutoInterest(tdsAmt, payDate, depDate);
+                                          const { lateMonths, exact } = calcAutoInterest(tdsAmt, payDate, depDate);
+                                          // This row's share of the challan's interest, rounded once
+                                          // on the challan total (see interestByRowId) — can differ
+                                          // from rounding this row alone by ₹1.
+                                          const interest = rowInterest(d, depDate);
+                                          const exactTxt = exact.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
                                           // Date context for tooltip display
                                           const entryDt  = payDate ? parseLocalDate(payDate) : null;
@@ -3442,7 +3471,7 @@ export function TdsDataEntry({
                                           // Determine tooltip content variant
                                           const tooltipBody = !hasDates ? (
                                             <p className="text-muted-foreground italic">Insufficient data — dates not available</p>
-                                          ) : interest > 0 ? (
+                                          ) : lateMonths > 0 ? (
                                             <div className="space-y-1">
                                               <p className="font-bold text-sm">Interest Calculation</p>
                                               <p>TDS Amount: <span className="font-medium">₹{tdsAmt.toLocaleString("en-IN")}</span></p>
@@ -3453,9 +3482,12 @@ export function TdsDataEntry({
                                               </p>
                                               <hr className="border-border" />
                                               <p className="font-mono text-[11px]">
-                                                {tdsAmt.toLocaleString("en-IN")} × 1.5% × {lateMonths} = ₹{interest.toLocaleString("en-IN")}
+                                                {tdsAmt.toLocaleString("en-IN")} × 1.5% × {lateMonths} = ₹{exactTxt}
                                               </p>
                                               <p className="font-bold">Interest = ₹{interest.toLocaleString("en-IN")}</p>
+                                              <p className="text-muted-foreground text-[10px]">
+                                                Rounded once on the challan's total interest, as Genius does — the rows add up to the challan's interest.
+                                              </p>
                                             </div>
                                           ) : (
                                             <div className="space-y-1">

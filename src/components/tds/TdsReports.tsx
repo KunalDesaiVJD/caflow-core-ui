@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { calcAutoInterest, withKasarVatav, computeApplied, computeAllocatable, challanStatus, computeChallanPooled } from "@/lib/tds/rateEngine";
+import { withChallanInterest, withKasarVatav, computeApplied, computeAllocatable, challanStatus, computeChallanPooled } from "@/lib/tds/rateEngine";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -449,10 +449,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
 
     const computed = scoped.map((c: any) => {
       const cDeductees = deductees.filter((d: any) => d.challan_id === c.id);
-      const liveInterestRows = cDeductees.map((d: any) => ({
-        ...d,
-        interest_amount: calcAutoInterest(d.total_tax_deducted || d.tds_amount || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest,
-      }));
+      const liveInterestRows = withChallanInterest(cDeductees, c.deposit_date ?? null);
       const { interest: appliedInterest, applied } = computeApplied(liveInterestRows);
       const effectiveApplied = withKasarVatav(applied, c.kasar_vatav_amount);
       const allocatable = computeAllocatable(c.total_challan_amount || 0, c.late_fees_234e || 0);
@@ -565,10 +562,7 @@ export function TdsReports({ clients, isSuperadmin, resolveFirmId }: Props) {
 
     const computed = inQuarter.map((c: any) => {
       const cDeductees = deductees.filter((d: any) => d.challan_id === c.id);
-      const liveInterestRows = cDeductees.map((d: any) => ({
-        ...d,
-        interest_amount: calcAutoInterest(d.total_tax_deducted || d.tds_amount || 0, d.date_of_payment ?? null, c.deposit_date ?? null).interest,
-      }));
+      const liveInterestRows = withChallanInterest(cDeductees, c.deposit_date ?? null);
       const { applied } = computeApplied(liveInterestRows);
       const effectiveApplied = withKasarVatav(applied, c.kasar_vatav_amount);
       const allocatable = computeAllocatable(c.total_challan_amount || 0, c.late_fees_234e || 0);

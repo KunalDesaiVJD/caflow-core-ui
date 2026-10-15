@@ -174,16 +174,67 @@ function parseLocalDate(d: string): Date {
  */
 export function calcAutoInterest(
   tdsAmount: number, paymentDate: string | null, depositDate: string | null,
-): { interest: number; lateMonths: number } {
-  if (!paymentDate || !depositDate || !tdsAmount) return { interest: 0, lateMonths: 0 };
+): { interest: number; lateMonths: number; exact: number } {
+  const lateMonths = lateMonthsFor(tdsAmount, paymentDate, depositDate);
+  if (!lateMonths) return { interest: 0, lateMonths: 0, exact: 0 };
+  const exact = interestMilli(tdsAmount, lateMonths) / 1000;
+  return { interest: Math.round(exact), lateMonths, exact };
+}
+
+function lateMonthsFor(tdsAmount: number, paymentDate: string | null, depositDate: string | null): number {
+  if (!paymentDate || !depositDate || !tdsAmount) return 0;
   const entry = parseLocalDate(paymentDate);
   const challan = parseLocalDate(depositDate);
   const dueDate = new Date(entry.getFullYear(), entry.getMonth() + 1, 7);
-  if (challan <= dueDate) return { interest: 0, lateMonths: 0 };
-  const monthsDiff = (challan.getFullYear() - entry.getFullYear()) * 12 + (challan.getMonth() - entry.getMonth());
-  const lateMonths = monthsDiff + 1;
-  const interest = Math.round(tdsAmount * 0.015 * lateMonths);
-  return { interest, lateMonths };
+  if (challan <= dueDate) return 0;
+  return (challan.getFullYear() - entry.getFullYear()) * 12 + (challan.getMonth() - entry.getMonth()) + 1;
+}
+
+/** Interest in 1/1000 rupee (1.5% = 15/1000) — integer maths, so a real
+ *  half-rupee like ₹586.50 is never misread as 586.4999… by float error. */
+const interestMilli = (tdsAmount: number, lateMonths: number) => Math.round(tdsAmount * 15 * lateMonths);
+
+/**
+ * Interest for ALL of one challan's rows, ROUNDED ONCE ON THE TOTAL — the way
+ * Genius works it out and the way the challan itself is paid — then spread
+ * back over the rows in whole rupees that add up to exactly that total.
+ *
+ * Rounding each row on its own over-charged: Shree Hari Infra challan 17768
+ * (31/08/2026, TDS ₹30,506, 2 months late) is ₹915.18 → ₹915 paid, but its
+ * rows ₹174.18 + ₹150 + ₹586.50 + ₹4.50 rounded one by one came to ₹916, so the
+ * challan read "Over-applied" by ₹1 that was never owed.
+ *
+ * Spreading: every row gets its rupees with the paise dropped, and the rupees
+ * left over go to the rows with the largest paise (ties: larger interest, then
+ * row order). A challan with a single row gives exactly calcAutoInterest's
+ * own figure.
+ */
+export function allocateChallanInterest(
+  rows: Array<{ tds: number; paymentDate: string | null }>, depositDate: string | null,
+): number[] {
+  const milli = rows.map((r) => {
+    const m = lateMonthsFor(r.tds, r.paymentDate, depositDate);
+    return m ? interestMilli(r.tds, m) : 0;
+  });
+  const total = Math.round(milli.reduce((s, x) => s + x, 0) / 1000);
+  const out = milli.map((x) => Math.floor(x / 1000));
+  let left = total - out.reduce((s, x) => s + x, 0);
+  const order = milli.map((x, i) => i)
+    .filter((i) => milli[i] % 1000 > 0)
+    .sort((a, b) => (milli[b] % 1000) - (milli[a] % 1000) || milli[b] - milli[a] || a - b);
+  for (const i of order) { if (left <= 0) break; out[i]++; left--; }
+  return out;
+}
+
+/** `rows` (all of ONE challan's deductees) with interest_amount set from
+ *  allocateChallanInterest — the stored interest_amount is never trusted (see
+ *  computeChallanPooled's callers on why it can be stale). */
+export function withChallanInterest<T extends ApplicableRow & { date_of_payment?: string | null }>(
+  rows: T[], depositDate: string | null,
+  tdsOf: (d: ApplicableRow) => number = (d) => d.total_tax_deducted || d.tds_amount || 0,
+): Array<T & { interest_amount: number }> {
+  const alloc = allocateChallanInterest(rows.map((d) => ({ tds: tdsOf(d), paymentDate: d.date_of_payment ?? null })), depositDate);
+  return rows.map((d, i) => ({ ...d, interest_amount: alloc[i] }));
 }
 
 // Paise-precision comparison — avoids float-equality false negatives/positives
@@ -268,10 +319,7 @@ export function computeChallanPooled(
   tds: number; interest: number; surcharge: number; lateFees: number; kasarVatav: number;
   effectiveApplied: number; allocatable: number; overApplied: boolean; unconsumed: number;
 } {
-  const liveInterestRows = deductees.map((d) => ({
-    ...d,
-    interest_amount: calcAutoInterest(d.total_tax_deducted || d.tds_amount || 0, d.date_of_payment ?? null, challan.deposit_date ?? null).interest,
-  }));
+  const liveInterestRows = withChallanInterest(deductees, challan.deposit_date ?? null);
   const { tds, interest, surcharge, applied } = computeApplied(liveInterestRows);
   const lateFees = challan.late_fees_234e || 0;
   const kasarVatav = challan.kasar_vatav_amount || 0;
