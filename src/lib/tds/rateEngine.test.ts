@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { calcAutoInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, computeChallanOverApplied, computeChallanPooled, getRateForSection, isSupersededSectionCode, is194CaDisabledFor, is194CbDisabledFor, PAN_4TH_CHAR_MAP, type RateEntry } from "./rateEngine";
+import { calcAutoInterest, allocateChallanInterest, withChallanInterest, computeApplied, isChallanFullyUtilised, isChallanOverApplied, computeAllocatable, withKasarVatav, computeChallanOverApplied, computeChallanPooled, getRateForSection, isSupersededSectionCode, is194CaDisabledFor, is194CbDisabledFor, PAN_4TH_CHAR_MAP, type RateEntry } from "./rateEngine";
 
 /**
  * Regression: TdsDataEntry.tsx's "Unconsumed Amount" (and the underlying
@@ -244,7 +244,7 @@ describe("computeChallanOverApplied — the ONE definition, so TdsValidateFinali
 
   it("IS over-applied once one more deductee row is added beyond the challan's own total", () => {
     const { overApplied, effectiveApplied, allocatable } = computeChallanOverApplied(challan, [TDS_ROW, TDS_ROW, TDS_ROW]);
-    expect(effectiveApplied).toBe(1731); // 3 × (560 + 17)
+    expect(effectiveApplied).toBe(1730); // 1,680 TDS + 50 interest (3 × 16.80 = 50.40, rounded once on the challan)
     expect(allocatable).toBe(1154);
     expect(overApplied).toBe(true);
   });
@@ -260,7 +260,7 @@ describe("computeChallanOverApplied — the ONE definition, so TdsValidateFinali
     // total (not just the boolean) proves the live recompute actually ran.
     const staleRows = [TDS_ROW, TDS_ROW, TDS_ROW].map((d) => ({ ...d, interest_amount: 0 }));
     const { effectiveApplied } = computeChallanOverApplied(challan, staleRows);
-    expect(effectiveApplied).toBe(1731); // NOT 1,680 — proves interest was recomputed, not trusted
+    expect(effectiveApplied).toBe(1730); // NOT 1,680 — proves interest was recomputed, not trusted
   });
 
   it("Kasar-Vatav write-off folds into effectiveApplied, matching withKasarVatav's own rule", () => {
@@ -422,5 +422,53 @@ describe("PAN_4TH_CHAR_MAP — all 10 CBDT PAN constitution codes", () => {
   it("'J' (Artificial Juridical Person) and 'G' (Government) resolve instead of being missing", () => {
     expect(PAN_4TH_CHAR_MAP.J).toBe("AJP");
     expect(PAN_4TH_CHAR_MAP.G).toBe("Government");
+  });
+});
+
+// Real challan: Shree Hari Infra, BSR 6390009 / 17768, deposited 31/08/2026,
+// TDS ₹30,506, interest paid ₹915 (Genius). Every row is 2 months late.
+// Rounding each row on its own gave ₹916 and a false "Over-applied ₹1".
+describe("allocateChallanInterest — interest rounded once on the challan total (Genius)", () => {
+  const DEP = "2026-08-31";
+  const ROWS = [
+    { tds: 5806, paymentDate: "2026-07-01" },   // 174.18
+    { tds: 5000, paymentDate: "2026-07-07" },   // 150.00
+    { tds: 19550, paymentDate: "2026-07-30" },  // 586.50
+    { tds: 150, paymentDate: "2026-07-16" },    // 4.50
+  ];
+
+  it("totals ₹915 (30,506 × 1.5% × 2 = 915.18), not the ₹916 of per-row rounding", () => {
+    const alloc = allocateChallanInterest(ROWS, DEP);
+    expect(alloc.reduce((s, x) => s + x, 0)).toBe(915);
+    const perRow = ROWS.reduce((s, r) => s + calcAutoInterest(r.tds, r.paymentDate, DEP).interest, 0);
+    expect(perRow).toBe(916);
+  });
+
+  it("spreads the leftover rupee to the larger of the two half-rupee rows", () => {
+    expect(allocateChallanInterest(ROWS, DEP)).toEqual([174, 150, 587, 4]);
+  });
+
+  it("makes the challan Fully Utilised at ₹31,421 (TDS 30,506 + interest 915)", () => {
+    const deductees = ROWS.map((r) => ({ tds_amount: r.tds, total_tax_deducted: r.tds, date_of_payment: r.paymentDate }));
+    const pooled = computeChallanPooled({ total_challan_amount: 31421, deposit_date: DEP }, deductees);
+    expect(pooled.interest).toBe(915);
+    expect(pooled.overApplied).toBe(false);
+    expect(pooled.unconsumed).toBe(0);
+  });
+
+  it("a single-row challan gives exactly calcAutoInterest's own figure", () => {
+    for (const r of ROWS) {
+      expect(allocateChallanInterest([r], DEP)).toEqual([calcAutoInterest(r.tds, r.paymentDate, DEP).interest]);
+    }
+  });
+
+  it("rows paid on time stay at ₹0 and never receive a leftover rupee", () => {
+    const alloc = allocateChallanInterest([...ROWS, { tds: 9999, paymentDate: "2026-08-20" }], DEP);
+    expect(alloc).toEqual([174, 150, 587, 4, 0]);
+  });
+
+  it("withChallanInterest sets interest_amount on each row", () => {
+    const rows = withChallanInterest(ROWS.map((r) => ({ tds_amount: r.tds, date_of_payment: r.paymentDate })), DEP);
+    expect(rows.map((r) => r.interest_amount)).toEqual([174, 150, 587, 4]);
   });
 });
