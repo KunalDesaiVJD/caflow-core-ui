@@ -162,6 +162,17 @@ async function parseLedgerFile(file: File) {
 
 const isTallyIssue = (r: string) => r !== "Matched";
 
+/** The same party on both sides — identical once normalised, or one name cut
+ *  short by the ledger print (Expert truncates "SHREE BALAJI POLY FILMS
+ *  PRIVATE LIMITED" to "…PRIVA"). Used only to word the "not found" hint. */
+const sameLedgerParty = (a: string | null | undefined, b: string | null | undefined): boolean => {
+  const x = normalizeName(a), y = normalizeName(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const [short, long] = x.length <= y.length ? [x, y] : [y, x];
+  return short.length >= 12 && long.startsWith(short);
+};
+
 /**
  * A row anchored to an actual Office Data (Data Entry) record — as opposed to
  * a pure ledger-surplus row (office_deductee_id/office_name both null, see
@@ -1506,7 +1517,20 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
           && !r.overridden && !r.mapped && r.office_name && (
           <div className="flex items-center gap-2 flex-wrap p-2 rounded-md border border-amber-200 dark:border-amber-900 bg-amber-50/50 dark:bg-amber-950/20 text-xs">
             <Link2 size={13} className="text-amber-600 shrink-0" />
-            <span className="text-foreground min-w-0">No automatic ledger match for <b>{r.office_name}</b> — it may be booked under a different name.</span>
+            {/* Only blame the NAME when the ledger really has no entry under it.
+                Point Packers Q2: IKON MULTIPACK, HI-TECH INKS etc. sit in the
+                194Q ledger under the identical name — they failed on section,
+                yet this line told the user to look for a different name. */}
+            {(() => {
+              const sameName = tallyRows.filter((t) => t.credit && sameLedgerParty(t.party, r.office_name));
+              return sameName.length ? (
+                <span className="text-foreground min-w-0">
+                  The ledger has {sameName.length} entr{sameName.length === 1 ? "y" : "ies"} under the same name <b>{r.office_name}</b>, but none matches this record's date, TDS amount and section — compare them before mapping.
+                </span>
+              ) : (
+                <span className="text-foreground min-w-0">No automatic ledger match for <b>{r.office_name}</b> — it may be booked under a different name.</span>
+              );
+            })()}
             <div className="flex-1" />
             <Button size="sm" variant="outline" className="h-6 text-xs px-2 gap-1 shrink-0" disabled={disabled || validating} onClick={() => openPicker(r)}>
               <Search size={11} /> Map to ledger record
