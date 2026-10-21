@@ -54,7 +54,7 @@ npx supabase functions deploy <function-name>
 After adding a migration file to `supabase/migrations/`, apply it to remote:
 
 ```bash
-npx supabase db query --linked "$(cat supabase/migrations/<file>.sql)"
+npx supabase db query --linked -f supabase/migrations/<file>.sql
 npx supabase migration repair --status applied <version>
 ```
 
