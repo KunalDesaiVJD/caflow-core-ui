@@ -649,7 +649,8 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
       const { data, error } = await supabase.functions.invoke("send-notification", {
         body: {
           type: "ledger_statement",
-          firm_id: firmId !== "all" ? firmId : undefined,
+          // "All firms" view: send as the user's home firm (firm_id is required).
+          firm_id: firmId && firmId !== "all" ? firmId : user?.firm_id,
           direct_email: emailTo.trim(),
           custom_cc: allCC,
           payload: {
@@ -1347,19 +1348,20 @@ function GroupLedgerView() {
       // both `error` and the per-recipient delivery status.
       const sent: string[] = [];
       const failed: { addr: string; reason: string }[] = [];
-      for (const addr of toAddresses) {
+      for (const [idx, addr] of toAddresses.entries()) {
         const { data, error } = await supabase.functions.invoke("send-notification", {
           body: {
             type: "ledger_statement",
             firm_id: firmId,
             direct_email: addr,
+            // CC once (with the first recipient), not once per To address.
+            ...(idx === 0 && ccAddresses.length > 0 ? { custom_cc: ccAddresses } : {}),
             payload: {
               client_name: groupName,
               custom_subject: emailSubject || `Group Ledger Statement — ${groupName}`,
               custom_message: emailMsg,
               pdf_base64: pdfBase64,
               pdf_filename: `GroupLedger_${safeGroup}_${fromDate}_${toDate}.pdf`,
-              ...(ccAddresses.length > 0 ? { cc_note: `CC: ${ccAddresses.join(", ")}` } : {}),
             },
           },
         });
@@ -1964,19 +1966,20 @@ function FirmRevenueLedgerView() {
       const ccAddresses = emailCC.split(",").map(e => e.trim()).filter(Boolean);
       const sent: string[] = [];
       const failed: { addr: string; reason: string }[] = [];
-      for (const addr of toAddresses) {
+      for (const [idx, addr] of toAddresses.entries()) {
         const { data, error } = await supabase.functions.invoke("send-notification", {
           body: {
             type: "ledger_statement",
             firm_id: firmId,
             direct_email: addr,
+            // CC once (with the first recipient), not once per To address.
+            ...(idx === 0 && ccAddresses.length > 0 ? { custom_cc: ccAddresses } : {}),
             payload: {
               client_name: fName,
               custom_subject: emailSubject || `Firm Revenue Ledger — ${fName}`,
               custom_message: emailMsg,
               pdf_base64: pdfBase64,
               pdf_filename: `FirmRevenue_${safeName}_${fromDate}_${toDate}.pdf`,
-              ...(ccAddresses.length > 0 ? { cc_note: `CC: ${ccAddresses.join(", ")}` } : {}),
             },
           },
         });

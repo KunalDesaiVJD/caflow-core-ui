@@ -12,6 +12,9 @@ verify_jwt = false
 [functions.send-notification]
 verify_jwt = true
 
+[functions.billing-reminders]
+verify_jwt = true
+
 [functions.claude-gateway]
 verify_jwt = false
 
