@@ -27,6 +27,7 @@ import {
   ArrowUpDown, ChevronUp, ChevronDown, Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import DocLink from "@/components/billing/DocLink";
 import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
 } from "@/lib/jspdfUnicodeFont";
@@ -94,6 +95,8 @@ function addBalances(into: Balances, b: Balances) {
 interface LedgerEntry {
   entry_date: string;
   doc_no: string;
+  doc_id?: string;        // invoice / credit note id — makes the doc no a link
+  doc_type?: string;
   narration: string;
   debit: number;
   credit: number;
@@ -418,7 +421,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         });
       }
 
-      type Tmp = { date: string; doc_no: string; narration: string; debit: number; credit: number };
+      type Tmp = { date: string; doc_no: string; doc_id?: string; doc_type?: string; narration: string; debit: number; credit: number };
       const tmp: Tmp[] = [];
 
       for (const inv of invData || []) {
@@ -427,6 +430,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         tmp.push({
           date:      inv.invoice_date || fromDate,
           doc_no:    inv.invoice_no || inv.id.slice(0, 8).toUpperCase(),
+          doc_id:    inv.id,
+          doc_type:  inv.document_type,
           narration: firmTag(inv.firm_id) + (isCredit ? `Credit Note — ${inv.invoice_no || ""}` : `Invoice — ${inv.invoice_no || ""}`),
           debit:     isCredit ? 0 : amt,
           credit:    isCredit ? amt : 0,
@@ -459,7 +464,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       let balance = opening;
       for (const t of tmp) {
         balance += t.debit - t.credit;
-        entries.push({ entry_date: t.date, doc_no: t.doc_no, narration: t.narration, debit: t.debit, credit: t.credit, balance });
+        entries.push({ entry_date: t.date, doc_no: t.doc_no, doc_id: t.doc_id, doc_type: t.doc_type, narration: t.narration, debit: t.debit, credit: t.credit, balance });
       }
 
       setSheetEntries(entries);
@@ -1058,7 +1063,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                       return (
                         <tr key={i} className={cn(i % 2 === 0 ? "bg-white" : "bg-slate-50/50", "hover:bg-blue-50/30")}>
                           <td className="px-4 py-2 tabular-nums text-muted-foreground">{e.entry_date ? format(parseISO(e.entry_date), "dd/MM/yy") : ""}</td>
-                          <td className="px-2 py-2 font-mono text-muted-foreground">{e.doc_no}</td>
+                          <td className="px-2 py-2 font-mono text-muted-foreground"><DocLink docNo={e.doc_no} documentId={e.doc_id} entryType={e.doc_type} /></td>
                           <td className="px-2 py-2 text-foreground">{e.narration}</td>
                           <td className="px-4 py-2 text-right tabular-nums">{e.debit  > 0 ? fmtINR(e.debit)  : <span className="text-muted-foreground">—</span>}</td>
                           <td className="px-4 py-2 text-right tabular-nums">{e.credit > 0 ? fmtINR(e.credit) : <span className="text-muted-foreground">—</span>}</td>
