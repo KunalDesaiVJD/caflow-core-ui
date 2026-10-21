@@ -82,7 +82,7 @@ values
   -- definition of the match, so the finding needs the opening figure instead.
 , ('LOAN-303', 'Loan/Deposit Ledger Fully Squared Up During the Year', 'LOAN', 'account',
    '{"check":"expr","grain":"account","scope":{"parent_group_keywords":["loan"]},"where":[{"field":"opening","op":">","value":0},{"field":"closing","op":"==","value":0}],"amount_field":"opening","message":"Loan/deposit ledger \"{account}\" (opening balance ₹{amount}) was accepted and fully repaid within the year — nil closing balance. Confirm the mode of both the original acceptance and the repayment for Section 269SS/269T compliance; a loan squared up within the year is not exempt from either section."}'::jsonb,
-   NULL, NULL,
+   'absolute', NULL,
    'Loan/deposit ledger "{account}" (opening balance ₹{amount}) was accepted and fully repaid within the year — nil closing balance. Confirm the mode of both the original acceptance and the repayment for Section 269SS/269T compliance; a loan squared up within the year is not exempt from either section.',
    'medium', 'Section 269SS / 269T', true, '["corporate","non_corporate"]'::jsonb,
    'TDL logic inventory Phase 1 — Loans 3CD Part A "Squared Up" flag')
@@ -101,14 +101,14 @@ values
   -- neither debited nor credited all year.
 , ('CRED-008', 'Creditor Balance Carried Forward With Zero Activity', 'CRED', 'account',
    '{"check":"expr","grain":"account","scope":{"parent_group_keywords":["creditor"],"nonzero":true},"where":[{"field":"opening","op":"!=","value":0},{"field":"debit_amount","op":"==","value":0},{"field":"credit_amount","op":"==","value":0}]}'::jsonb,
-   NULL, NULL,
+   'absolute', NULL,
    'Creditor "{account}" carried forward an opening balance of ₹{amount} with zero debit or credit activity all year — why was there no transaction on this account? Confirm the balance is still valid and outstanding.',
    'medium', NULL, true, '["corporate","non_corporate"]'::jsonb,
    'TDL logic inventory Phase 1 — Creditor Query #1')
 
 , ('DEBT-008', 'Debtor Balance Carried Forward With Zero Activity', 'DEBT', 'account',
    '{"check":"expr","grain":"account","scope":{"parent_group_keywords":["debtor"],"nonzero":true},"where":[{"field":"opening","op":"!=","value":0},{"field":"debit_amount","op":"==","value":0},{"field":"credit_amount","op":"==","value":0}]}'::jsonb,
-   NULL, NULL,
+   'absolute', NULL,
    'Debtor "{account}" carried forward an opening balance of ₹{amount} with zero debit or credit activity all year — why was there no transaction on this account?',
    'medium', NULL, true, '["corporate","non_corporate"]'::jsonb,
    'TDL logic inventory Phase 1 — Debtor Query #1')
@@ -117,7 +117,7 @@ values
   -- GST 180-day ITC reversal risk on the underlying purchases.
 , ('CRED-009', 'Creditor Outstanding All Year, No Payments — Possible ITC Reversal Risk', 'CRED', 'account',
    '{"check":"expr","grain":"account","scope":{"parent_group_keywords":["creditor"]},"where":[{"field":"opening_type","op":"==","value":"Cr"},{"field":"opening","op":">","value":0},{"field":"debit_amount","op":"==","value":0},{"field":"credit_amount","op":">","value":0}]}'::jsonb,
-   NULL, NULL,
+   'absolute', NULL,
    'Creditor "{account}" (₹{amount} closing) has had zero debit/payment activity all year while credits kept accruing on an already-outstanding balance. If GST input tax credit was claimed on the underlying purchases, confirm it has not been reversed under the 180-day non-payment rule.',
    'medium', 'CGST Rule 37 (180-day ITC reversal)', true, '["corporate","non_corporate"]'::jsonb,
    'TDL logic inventory Phase 1 — Creditor Query #4')
@@ -126,7 +126,7 @@ values
   -- question.
 , ('DEBT-009', 'Debtor With No Receipts All Year Despite Continuing Sales', 'DEBT', 'account',
    '{"check":"expr","grain":"account","scope":{"parent_group_keywords":["debtor"]},"where":[{"field":"opening_type","op":"==","value":"Dr"},{"field":"opening","op":">","value":0},{"field":"debit_amount","op":">","value":0},{"field":"credit_amount","op":"==","value":0}]}'::jsonb,
-   NULL, NULL,
+   'absolute', NULL,
    'Debtor "{account}" (₹{amount} closing) kept accruing debit/sales entries all year with zero receipts posted against it. Confirm collectability and whether this balance needs a provision for doubtful debts.',
    'medium', NULL, true, '["corporate","non_corporate"]'::jsonb,
    'TDL logic inventory Phase 1 — Debtor Query #3')
