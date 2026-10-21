@@ -53,15 +53,42 @@ async function fetchAllRows<T = any>(makeQuery: () => any): Promise<T[]> {
 
 interface Firm { id: string; name: string; logo_url?: string | null; }
 
-interface ClientRow {
-  id: string;
-  name: string;
-  email: string | null;
+interface Balances {
   ob: number;          // manual opening balance from client_billing_opening_balances
   openingDr: number;   // invoices before period
   openingCr: number;   // receipts before period
   debit: number;       // invoices in period
   credit: number;      // receipts in period
+}
+
+/** One client's balances in ONE firm — the atom every view aggregates. */
+interface ClientRow extends Balances {
+  id: string;          // client id
+  firmId: string;
+  name: string;
+  email: string | null;
+}
+
+type ViewBy = "client" | "group" | "firm";
+
+/** A row as displayed: a client, a client group or a firm (summed atoms). */
+interface DisplayRow extends Balances {
+  key: string;
+  kind: ViewBy;
+  id: string;          // client / group / firm id
+  name: string;
+  email: string | null;
+  firmIds: string[];   // firms the underlying atoms belong to
+  atomKeys: string[];  // `${clientId}|${firmId}` — lets totals count each atom once
+  clientCount: number;
+}
+
+const ALL_FIRMS = "__all__";
+const NO_GROUP = "__none__";
+const emptyBalances = (): Balances => ({ ob: 0, openingDr: 0, openingCr: 0, debit: 0, credit: 0 });
+function addBalances(into: Balances, b: Balances) {
+  into.ob += b.ob; into.openingDr += b.openingDr; into.openingCr += b.openingCr;
+  into.debit += b.debit; into.credit += b.credit;
 }
 
 interface LedgerEntry {
@@ -118,6 +145,10 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   const [toDate,      setToDate]      = useState(todayStr());
   const [loading,     setLoading]     = useState(false);
   const [rows,        setRows]        = useState<ClientRow[]>([]);
+  const [viewBy,      setViewBy]      = useState<ViewBy>("client");
+  const [groupFilter, setGroupFilter] = useState<{ id: string; name: string } | null>(null);
+  const [groupNames,  setGroupNames]  = useState<Record<string, string>>({});
+  const [groupsOfClient, setGroupsOfClient] = useState<Record<string, string[]>>({});
   const [firmLogoUrl, setFirmLogoUrl] = useState<string | null>(null);
   const [search,      setSearch]      = useState("");
   const [hideZero,    setHideZero]    = useState(true);
@@ -125,12 +156,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   const [sortDir,     setSortDir]     = useState<SortDir>("asc");
 
   // Sheet (ledger)
-  const [sheetClient,  setSheetClient]  = useState<ClientRow | null>(null);
+  const [sheetClient,  setSheetClient]  = useState<DisplayRow | null>(null);
   const [sheetEntries, setSheetEntries] = useState<LedgerEntry[]>([]);
   const [sheetLoading, setSheetLoading] = useState(false);
 
   // Email dialog
-  const [emailClient,  setEmailClient]  = useState<ClientRow | null>(null);
+  const [emailClient,  setEmailClient]  = useState<DisplayRow | null>(null);
   const [emailSending, setEmailSending] = useState(false);
 
   // Telegram / PDF
@@ -162,7 +193,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       setFirms(list);
 
       // Default: respect defaultFirmId prop, else user's home firm, else first in list
-      if (!selectedFirmId || !list.find(f => f.id === selectedFirmId)) {
+      if (!selectedFirmId || (selectedFirmId !== ALL_FIRMS && !list.find(f => f.id === selectedFirmId))) {
         const target = defaultFirmId ?? user?.firm_id;
         const own = list.find(f => f.id === target);
         if (own) setSelectedFirmId(own.id);
@@ -172,6 +203,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     loadFirms();
   }, [user?.firm_id, isSuperAdmin, allAccessibleFirms.length, defaultFirmId]);
 
+  // A group drill-down belongs to the firm selection it was made in.
+  useEffect(() => { setGroupFilter(null); }, [selectedFirmId]);
+
   // Keep logo URL in sync with selected firm
   useEffect(() => {
     const f = firms.find(f => f.id === selectedFirmId);
@@ -180,18 +214,25 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   // ── Fetch report data ─────────────────────────────────────────────────────
 
+  // Firms covered by the current selection ("All firms" = every firm in the dropdown).
+  const firmIds = useMemo(
+    () => (selectedFirmId === ALL_FIRMS ? firms.map(f => f.id) : selectedFirmId ? [selectedFirmId] : []),
+    [selectedFirmId, firms],
+  );
+  const firmIdsKey = firmIds.join(",");
+
   const fetchReport = useCallback(async () => {
-    if (!selectedFirmId) return;
+    if (firmIds.length === 0) return;
     setLoading(true);
     try {
       // C9: page past PostgREST's 1000-row cap so the debtors totals are
       // complete for established firms (these feed SUMs — a truncated fetch
       // silently under-reports receivables).
       const [invoices, receipts, obRows, kasars] = await Promise.all([
-        fetchAllRows<{ client_id: string; invoice_date: string | null; total_amount: number | null; document_type: string | null }>(() =>
+        fetchAllRows<{ client_id: string; firm_id: string; invoice_date: string | null; total_amount: number | null; document_type: string | null }>(() =>
           supabase.from("invoices")
-            .select("client_id, invoice_date, total_amount, document_type")
-            .eq("firm_id", selectedFirmId)
+            .select("client_id, firm_id, invoice_date, total_amount, document_type")
+            .in("firm_id", firmIds)
             // Q3: only confirmed invoices + credit notes belong in receivables.
             .in("document_type", ["invoice", "credit_note"])
             // Same status rule as v_billing_reconciliation / LedgerTab: drafts,
@@ -199,90 +240,96 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
             .in("status", BILLABLE_STATUSES)),
         fetchAllRows<any>(() =>
           supabase.from("billing_receipts")
-            .select("client_id, receipt_date, amount_received, tds_amount, gst_tds_amount")
-            .eq("firm_id", selectedFirmId)),
+            .select("client_id, firm_id, receipt_date, amount_received, tds_amount, gst_tds_amount")
+            .in("firm_id", firmIds)),
         fetchAllRows<any>(() =>
           (supabase as any).from("client_billing_opening_balances")
-            .select("client_id, amount")
-            .eq("firm_id", selectedFirmId)),
+            .select("client_id, firm_id, amount")
+            .in("firm_id", firmIds)),
         fetchAllRows<any>(() =>
           (supabase as any).from("billing_kasars")
-            .select("client_id, kasar_date, amount")
-            .eq("firm_id", selectedFirmId)),
+            .select("client_id, firm_id, kasar_date, amount")
+            .in("firm_id", firmIds)),
       ]);
 
-      // Collect distinct client IDs that have ANY activity for this firm
-      // This avoids the 1000-row Supabase default limit on a full clients fetch
-      const activeClientIds = new Set<string>([
-        ...(obRows   || []).map((r: any) => r.client_id),
-        ...(invoices || []).map((r: any) => r.client_id),
-        ...(receipts || []).map((r: any) => r.client_id),
-        ...(kasars   || []).map((r: any) => r.client_id),
-      ]);
+      // One atom per (client, firm) with any activity.
+      const atoms = new Map<string, Balances & { clientId: string; firmId: string }>();
+      const atom = (clientId: string, firmId: string) => {
+        const k = `${clientId}|${firmId}`;
+        let a = atoms.get(k);
+        if (!a) { a = { clientId, firmId, ...emptyBalances() }; atoms.set(k, a); }
+        return a;
+      };
 
-      // Fetch only those clients (at most a few hundred — safe from pagination)
-      const ids = Array.from(activeClientIds);
-      let clients: { id: string; name: string; email: string | null }[] = [];
-      if (ids.length > 0) {
-        const { data: cData, error: cErr } = await supabase
-          .from("clients")
-          .select("id, name, email")
-          .in("id", ids)
-          .order("name");
-        if (cErr) throw cErr;
-        clients = cData || [];
-      }
-
-      // Build OB map: client_id → amount
-      const obMap: Record<string, number> = {};
       for (const ob of obRows || []) {
-        obMap[ob.client_id] = (obMap[ob.client_id] ?? 0) + Number(ob.amount || 0);
+        if (!ob.client_id) continue;
+        atom(ob.client_id, ob.firm_id).ob += Number(ob.amount || 0);
+      }
+      for (const inv of invoices || []) {
+        if (!inv.client_id) continue;
+        const a = atom(inv.client_id, inv.firm_id);
+        const amt = Number(inv.total_amount || 0);
+        if (!amt) continue;
+        // Credit notes reduce the debtor (Cr), same as the ledger sheet below.
+        const isCN = inv.document_type === "credit_note";
+        // An undated document is treated as in-period (the ledger sheet does the same)
+        // rather than silently dropped from both opening and period figures.
+        if (inv.invoice_date && inv.invoice_date < fromDate) { if (isCN) a.openingCr += amt; else a.openingDr += amt; }
+        else if (!inv.invoice_date || inv.invoice_date <= toDate) { if (isCN) a.credit += amt; else a.debit += amt; }
+      }
+      for (const rec of receipts || []) {
+        if (!rec.client_id) continue;
+        const a = atom(rec.client_id, rec.firm_id);
+        // Q2: GST-TDS deducted by the client also settles the invoice.
+        const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0) + Number(rec.gst_tds_amount || 0);
+        if (!amt) continue;
+        if (rec.receipt_date && rec.receipt_date < fromDate) a.openingCr += amt;
+        else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) a.credit += amt;
+      }
+      // Kasar (write-off / discount) — treated as credit reducing outstanding balance
+      for (const k of kasars || []) {
+        if (!k.client_id) continue;
+        const a = atom(k.client_id, k.firm_id);
+        const amt = Number(k.amount || 0);
+        if (!amt) continue;
+        if (k.kasar_date && k.kasar_date < fromDate) a.openingCr += amt;
+        else if (k.kasar_date && k.kasar_date >= fromDate && k.kasar_date <= toDate) a.credit += amt;
       }
 
-      const built: ClientRow[] = clients.map(c => {
-        let openingDr = 0, openingCr = 0, debit = 0, credit = 0;
+      // Fetch only the clients with activity, in chunks (URL length).
+      const ids = Array.from(new Set(Array.from(atoms.values()).map(a => a.clientId)));
+      const clientMap = new Map<string, { name: string; email: string | null }>();
+      for (let i = 0; i < ids.length; i += 150) {
+        const { data: cData, error: cErr } = await supabase
+          .from("clients").select("id, name, email").in("id", ids.slice(i, i + 150));
+        if (cErr) throw cErr;
+        for (const c of cData || []) clientMap.set(c.id, { name: c.name || "—", email: c.email ?? null });
+      }
 
-        for (const inv of invoices || []) {
-          if (inv.client_id !== c.id) continue;
-          const amt = Number(inv.total_amount || 0);
-          if (!amt) continue;
-          // Credit notes reduce the debtor (Cr), same as the ledger sheet below.
-          const isCN = inv.document_type === "credit_note";
-          // An undated document is treated as in-period (the ledger sheet does the same)
-          // rather than silently dropped from both opening and period figures.
-          if (inv.invoice_date && inv.invoice_date < fromDate) { if (isCN) openingCr += amt; else openingDr += amt; }
-          else if (!inv.invoice_date || inv.invoice_date <= toDate) { if (isCN) credit += amt; else debit += amt; }
-        }
+      // Client groups (for the group-wise view).
+      const { data: gData } = await (supabase as any).from("client_groups")
+        .select("id, name, firm_id")
+        .or(`firm_id.in.(${firmIds.join(",")}),firm_id.is.null`)
+        .order("name");
+      const gNames: Record<string, string> = {};
+      for (const g of gData || []) gNames[g.id] = g.name;
+      const gIds = Object.keys(gNames);
+      const members = gIds.length
+        ? await fetchAllRows<any>(() => (supabase as any).from("client_group_memberships")
+            .select("client_id, group_id").in("group_id", gIds))
+        : [];
+      const gOf: Record<string, string[]> = {};
+      for (const m of members) (gOf[m.client_id] ||= []).push(m.group_id);
+      setGroupNames(gNames);
+      setGroupsOfClient(gOf);
 
-        for (const rec of receipts || []) {
-          if (rec.client_id !== c.id) continue;
-          // Q2: GST-TDS deducted by the client also settles the invoice.
-          const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0) + Number(rec.gst_tds_amount || 0);
-          if (!amt) continue;
-          if (rec.receipt_date && rec.receipt_date < fromDate) openingCr += amt;
-          else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) credit += amt;
-        }
-
-        // Kasar (write-off / discount) — treated as credit reducing outstanding balance
-        for (const k of kasars || []) {
-          if (k.client_id !== c.id) continue;
-          const amt = Number(k.amount || 0);
-          if (!amt) continue;
-          if (k.kasar_date && k.kasar_date < fromDate) openingCr += amt;
-          else if (k.kasar_date && k.kasar_date >= fromDate && k.kasar_date <= toDate) credit += amt;
-        }
-
-        return {
-          id: c.id,
-          name: c.name || "—",
-          email: c.email ?? null,
-          ob: obMap[c.id] ?? 0,   // manual opening balance
-          openingDr,
-          openingCr,
-          debit,
-          credit,
-        };
-      });
+      const built: ClientRow[] = Array.from(atoms.values())
+        .filter(a => clientMap.has(a.clientId))
+        .map(a => ({
+          id: a.clientId, firmId: a.firmId,
+          name: clientMap.get(a.clientId)!.name, email: clientMap.get(a.clientId)!.email,
+          ob: a.ob, openingDr: a.openingDr, openingCr: a.openingCr, debit: a.debit, credit: a.credit,
+        }));
 
       setRows(built);
     } catch (e: any) {
@@ -290,22 +337,26 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     } finally {
       setLoading(false);
     }
-  }, [selectedFirmId, fromDate, toDate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firmIdsKey, fromDate, toDate]);
 
   useEffect(() => { fetchReport(); }, [fetchReport]);
 
   // ── Net opening = manual OB + pre-period invoices − pre-period receipts ──
 
-  function netOpening(r: ClientRow) {
+  function netOpening(r: Balances) {
     return r.ob + r.openingDr - r.openingCr;
   }
-  function netClosing(r: ClientRow) {
+  function netClosing(r: Balances) {
     return netOpening(r) + r.debit - r.credit;
   }
 
   // ── Fetch ledger for sheet ────────────────────────────────────────────────
 
-  async function openLedger(client: ClientRow): Promise<LedgerEntry[]> {
+  async function openLedger(client: DisplayRow): Promise<LedgerEntry[]> {
+    const ledgerFirms = client.firmIds;
+    const multiFirm = ledgerFirms.length > 1;
+    const firmTag = (fid: string) => multiFirm ? `[${firms.find(f => f.id === fid)?.name ?? "Firm"}] ` : "";
     setSheetClient(client);
     setSheetEntries([]);
     setSheetLoading(true);
@@ -317,39 +368,39 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         { data: kasarData },
       ] = await Promise.all([
         supabase.from("invoices")
-          .select("id, invoice_no, invoice_date, total_amount, document_type")
+          .select("id, firm_id, invoice_no, invoice_date, total_amount, document_type")
           .eq("client_id", client.id)
-          .eq("firm_id", selectedFirmId)
+          .in("firm_id", ledgerFirms)
           // Q3: exclude quotations / proformas from the ledger sheet.
           .in("document_type", ["invoice", "credit_note"])
           .in("status", BILLABLE_STATUSES)
           .or(`invoice_date.is.null,and(invoice_date.gte.${fromDate},invoice_date.lte.${toDate})`)
           .order("invoice_date"),
         supabase.from("billing_receipts")
-          .select("id, receipt_date, amount_received, tds_amount, gst_tds_amount, payment_mode, remarks")
+          .select("id, firm_id, receipt_date, amount_received, tds_amount, gst_tds_amount, payment_mode, remarks")
           .eq("client_id", client.id)
-          .eq("firm_id", selectedFirmId)
+          .in("firm_id", ledgerFirms)
           .gte("receipt_date", fromDate)
           .lte("receipt_date", toDate)
           .order("receipt_date"),
         (supabase as any).from("client_billing_opening_balances")
           .select("amount, balance_date, narration")
           .eq("client_id", client.id)
-          .eq("firm_id", selectedFirmId)
-          .is("gstin", null)
-          .maybeSingle(),
+          .in("firm_id", ledgerFirms)
+          .is("gstin", null),
         (supabase as any).from("billing_kasars")
-          .select("id, kasar_date, amount, narration")
+          .select("id, firm_id, kasar_date, amount, narration")
           .eq("client_id", client.id)
-          .eq("firm_id", selectedFirmId)
+          .in("firm_id", ledgerFirms)
           .gte("kasar_date", fromDate)
           .lte("kasar_date", toDate)
           .order("kasar_date"),
       ]);
 
-      const obAmount: number = obResult?.data?.amount ? Number(obResult.data.amount) : 0;
-      const obDate: string   = obResult?.data?.balance_date || fromDate;
-      const obNarration      = obResult?.data?.narration || "Opening Balance";
+      // One opening-balance row per firm; several when the view spans firms.
+      const obRows: any[] = obResult?.data || [];
+      const obDate: string   = obRows.map(r => r.balance_date).filter(Boolean).sort()[0] || fromDate;
+      const obNarration      = obRows.length === 1 && obRows[0].narration ? obRows[0].narration : "Opening Balance";
 
       // opening = manual OB + pre-period invoices − pre-period receipts
       const opening = netOpening(client);
@@ -376,7 +427,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         tmp.push({
           date:      inv.invoice_date || fromDate,
           doc_no:    inv.invoice_no || inv.id.slice(0, 8).toUpperCase(),
-          narration: isCredit ? `Credit Note — ${inv.invoice_no || ""}` : `Invoice — ${inv.invoice_no || ""}`,
+          narration: firmTag(inv.firm_id) + (isCredit ? `Credit Note — ${inv.invoice_no || ""}` : `Invoice — ${inv.invoice_no || ""}`),
           debit:     isCredit ? 0 : amt,
           credit:    isCredit ? amt : 0,
         });
@@ -387,7 +438,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         tmp.push({
           date:      rec.receipt_date,
           doc_no:    rec.id.slice(0, 8).toUpperCase(),
-          narration: `Receipt — ${rec.payment_mode || ""}${rec.remarks ? ` (${rec.remarks})` : ""}`.replace(/—\s*$/, "").trim(),
+          narration: firmTag(rec.firm_id) + `Receipt — ${rec.payment_mode || ""}${rec.remarks ? ` (${rec.remarks})` : ""}`.replace(/—\s*$/, "").trim(),
           debit:     0,
           credit:    amt,
         });
@@ -397,7 +448,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         tmp.push({
           date:      k.kasar_date,
           doc_no:    `KSR-${k.id.slice(0, 6).toUpperCase()}`,
-          narration: k.narration ? `Kasar — ${k.narration}` : "Kasar settlement",
+          narration: firmTag(k.firm_id) + (k.narration ? `Kasar — ${k.narration}` : "Kasar settlement"),
           debit:     0,
           credit:    Number(k.amount || 0),
         });
@@ -423,8 +474,40 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   // ── Derived / sorted list ─────────────────────────────────────────────────
 
+  // Atoms → displayed rows for the chosen view.
+  const displayRows = useMemo<DisplayRow[]>(() => {
+    const out = new Map<string, DisplayRow & { _clients: Set<string>; _firms: Set<string> }>();
+    const add = (kind: ViewBy, id: string, name: string, email: string | null, a: ClientRow) => {
+      const key = `${kind}:${id}`;
+      let d = out.get(key);
+      if (!d) {
+        d = { key, kind, id, name, email, firmIds: [], atomKeys: [], clientCount: 0,
+              ...emptyBalances(), _clients: new Set(), _firms: new Set() };
+        out.set(key, d);
+      }
+      addBalances(d, a);
+      d.atomKeys.push(`${a.id}|${a.firmId}`);
+      d._clients.add(a.id);
+      d._firms.add(a.firmId);
+    };
+    for (const a of rows) {
+      const groups = groupsOfClient[a.id]?.length ? groupsOfClient[a.id] : [NO_GROUP];
+      if (viewBy === "client") {
+        if (groupFilter && !groups.includes(groupFilter.id)) continue;
+        add("client", a.id, a.name, a.email, a);
+      } else if (viewBy === "firm") {
+        add("firm", a.firmId, firms.find(f => f.id === a.firmId)?.name ?? "—", null, a);
+      } else {
+        // A client in several groups shows under each; totals still count it once.
+        for (const g of groups) add("group", g, g === NO_GROUP ? "Not in any group" : (groupNames[g] ?? "—"), null, a);
+      }
+    }
+    return Array.from(out.values()).map(({ _clients, _firms, ...d }) =>
+      ({ ...d, clientCount: _clients.size, firmIds: Array.from(_firms) }));
+  }, [rows, viewBy, groupFilter, groupsOfClient, groupNames, firms]);
+
   const filtered = useMemo(() => {
-    let r = rows;
+    let r = displayRows;
     if (search) r = r.filter(c => c.name.toLowerCase().includes(search.toLowerCase()));
     if (hideZero) r = r.filter(c => {
       const open  = netOpening(c);
@@ -440,20 +523,36 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       const cmp = typeof va === "string" ? va.localeCompare(vb as string) : (va as number) - (vb as number);
       return sortDir === "asc" ? cmp : -cmp;
     });
-  }, [rows, search, hideZero, sortKey, sortDir]);
+  }, [displayRows, search, hideZero, sortKey, sortDir]);
 
   function toggleSort(key: SortKey) {
     if (sortKey === key) setSortDir(d => d === "asc" ? "desc" : "asc");
     else { setSortKey(key); setSortDir("asc"); }
   }
 
+  // Sum each underlying (client, firm) atom once — in the group view a client
+  // in two groups appears twice, but must not be counted twice.
   const grandTotal = useMemo(() => {
+    const keys = new Set(filtered.flatMap(r => r.atomKeys));
     let openNet = 0, debit = 0, credit = 0;
-    for (const r of filtered) { openNet += netOpening(r); debit += r.debit; credit += r.credit; }
-    return { openNet, debit, credit, closeNet: openNet + debit - credit };
-  }, [filtered]);
+    for (const a of rows) {
+      if (!keys.has(`${a.id}|${a.firmId}`)) continue;
+      openNet += netOpening(a); debit += a.debit; credit += a.credit;
+    }
+    return { openNet, debit, credit, closeNet: openNet + debit - credit, clients: new Set(Array.from(keys).map(k => k.split("|")[0])).size };
+  }, [filtered, rows]);
 
-  const selectedFirmName = firms.find(f => f.id === selectedFirmId)?.name ?? "";
+  const isAllFirms = selectedFirmId === ALL_FIRMS;
+  const selectedFirmName = isAllFirms ? "All firms (combined)" : firms.find(f => f.id === selectedFirmId)?.name ?? "";
+  const viewLabel = viewBy === "firm" ? "Firm-wise" : viewBy === "group" ? "Client group-wise" : groupFilter ? `Group: ${groupFilter.name}` : "Client-wise";
+  // Firm to send email/Telegram as: the selected firm, or the user's home firm for "All firms".
+  const sendFirmId = isAllFirms ? (user?.firm_id ?? firms[0]?.id ?? "") : selectedFirmId;
+
+  function handleRowClick(r: DisplayRow) {
+    if (r.kind === "client") { openLedger(r); return; }
+    if (r.kind === "firm") { setSelectedFirmId(r.id); setViewBy("client"); setGroupFilter(null); return; }
+    setGroupFilter({ id: r.id, name: r.name }); setViewBy("client");
+  }
 
   // ── Big4 PDF ──────────────────────────────────────────────────────────────
 
@@ -477,14 +576,14 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
     doc.setTextColor(255, 255, 255);
     setPdfUnicodeFont(doc, "bold"); doc.setFontSize(14);
-    doc.text("SUNDRY DEBTORS — STATEMENT OF ACCOUNTS", textX, 10);
+    doc.text(`SUNDRY DEBTORS — ${viewLabel.toUpperCase()}`, textX, 10);
     setPdfUnicodeFont(doc, "normal"); doc.setFontSize(8);
     doc.text(selectedFirmName, textX, 16);
     doc.text(`Period: ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}   |   Generated: ${format(new Date(), "d MMM yyyy, HH:mm")}`, textX, 21);
 
     const { abs: gtCA, label: gtCL } = drCr(grandTotal.closeNet);
     doc.setFontSize(7);
-    doc.text(`Clients: ${filtered.length}   |   Net Receivable: ₹${fmtINR(gtCA)} ${gtCL}`, 283, 21, { align: "right" });
+    doc.text(`Clients: ${grandTotal.clients}   |   Net Receivable: ₹${fmtINR(gtCA)} ${gtCL}`, 283, 21, { align: "right" });
 
     const tableRows: any[][] = filtered.map(r => {
       const open  = netOpening(r);
@@ -492,7 +591,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       const { abs: oa, label: ol } = drCr(open);
       const { abs: ca, label: cl } = drCr(close);
       return [
-        r.name,
+        r.kind === "client" ? r.name : `${r.name} (${r.clientCount} client${r.clientCount !== 1 ? "s" : ""})`,
         open === 0 ? "—" : `${fmtINR(oa)} ${ol}`,
         r.debit  > 0 ? fmtINR(r.debit)  : "—",
         r.credit > 0 ? fmtINR(r.credit) : "—",
@@ -511,7 +610,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
     autoTable(doc, {
       startY: 28,
-      head: [["Particulars", "Opening Balance", "Debit (₹)", "Credit (₹)", "Closing Balance"]],
+      head: [[viewBy === "firm" ? "Firm" : viewBy === "group" ? "Client group" : "Particulars", "Opening Balance", "Debit (₹)", "Credit (₹)", "Closing Balance"]],
       body: tableRows,
       styles: { font: "NotoSans", fontSize: 8.5, cellPadding: 3, lineColor: [200,210,225], lineWidth: 0.3 },
       headStyles: { font: "NotoSans", fillColor: [40,80,130], textColor: [255,255,255], fontStyle: "bold", halign: "center" },
@@ -542,7 +641,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     try {
       const { blob } = await generateReportPdf();
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `Sundry_Debtors_${fromDate}_to_${toDate}.pdf`; a.click();
+      const a = document.createElement("a"); a.href = url; a.download = `Sundry_Debtors_${viewBy}_${fromDate}_to_${toDate}.pdf`; a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) { toast.error("PDF failed: " + e.message); }
     finally { setExportingPdf(false); }
@@ -550,7 +649,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   // ── Client ledger PDF ─────────────────────────────────────────────────────
 
-  async function generateClientLedgerPdf(client: ClientRow, entries: LedgerEntry[]): Promise<{ base64: string; blob: Blob }> {
+  async function generateClientLedgerPdf(client: DisplayRow, entries: LedgerEntry[]): Promise<{ base64: string; blob: Blob }> {
     const jsPDF   = (await import("jspdf")).default;
     const autoTable = (await import("jspdf-autotable")).default;
     const DARK_BLUE: [number, number, number] = [26, 58, 92];
@@ -644,7 +743,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       const { data, error } = await supabase.functions.invoke("send-notification", {
         body: {
           type:         "ledger_statement",
-          firm_id:      selectedFirmId,
+          // A client seen across several firms is sent as the user's home firm.
+          firm_id:      emailClient.firmIds.length === 1 ? emailClient.firmIds[0] : sendFirmId,
           direct_email: emailClient.email,
           payload: {
             client_name:    emailClient.name,
@@ -673,10 +773,10 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       const { base64 } = await generateReportPdf();
       const { error } = await supabase.functions.invoke("send-telegram-report", {
         body: {
-          firm_id:    selectedFirmId,
+          firm_id:    sendFirmId,
           pdf_base64: base64,
-          filename:   `Sundry_Debtors_${fromDate}_to_${toDate}.pdf`,
-          caption:    `📊 *Sundry Debtors Report*\n_${selectedFirmName}_\nPeriod: ${format(parseISO(fromDate), "d MMM yyyy")} → ${format(parseISO(toDate), "d MMM yyyy")}\nClients: ${filtered.length}`,
+          filename:   `Sundry_Debtors_${viewBy}_${fromDate}_to_${toDate}.pdf`,
+          caption:    `📊 *Sundry Debtors Report — ${viewLabel}*\n_${selectedFirmName}_\nPeriod: ${format(parseISO(fromDate), "d MMM yyyy")} → ${format(parseISO(toDate), "d MMM yyyy")}\nClients: ${grandTotal.clients}`,
         },
       });
       if (error) throw new Error(error.message);
@@ -710,7 +810,20 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               <SelectValue placeholder="Select firm…" />
             </SelectTrigger>
             <SelectContent>
+              {firms.length > 1 && <SelectItem value={ALL_FIRMS}>All firms (combined)</SelectItem>}
               {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="space-y-1">
+          <Label className="text-xs text-muted-foreground">View by</Label>
+          <Select value={viewBy} onValueChange={v => { setViewBy(v as ViewBy); setGroupFilter(null); }}>
+            <SelectTrigger className="h-8 text-xs w-40"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="client">Client</SelectItem>
+              <SelectItem value="group">Client group</SelectItem>
+              <SelectItem value="firm">Firm</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -731,7 +844,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
         <div className="relative w-48">
           <Search size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
-          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search client…" className="h-8 pl-8 pr-7 text-xs" />
+          <Input value={search} onChange={e => setSearch(e.target.value)} placeholder={viewBy === "firm" ? "Search firm…" : viewBy === "group" ? "Search group…" : "Search client…"} className="h-8 pl-8 pr-7 text-xs" />
           {search && <button onClick={() => setSearch("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground"><X size={11} /></button>}
         </div>
 
@@ -751,13 +864,21 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       {/* ── Report frame ── */}
       <div className="rounded-lg border border-[#1A2744]/20 overflow-hidden shadow-sm">
         <div className="bg-[#1A2744] text-white px-5 py-2.5">
-          <div className="font-semibold text-sm">Sundry Debtors</div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-semibold text-sm">Sundry Debtors — {viewLabel}</div>
+            {groupFilter && (
+              <button className="text-[11px] bg-white/15 hover:bg-white/25 rounded px-2 py-0.5 flex items-center gap-1"
+                onClick={() => { setGroupFilter(null); setViewBy("group"); }}>
+                <X size={10} /> Back to all groups
+              </button>
+            )}
+          </div>
           <div className="text-xs text-white/60">{selectedFirmName} · {format(parseISO(fromDate), "d-MMM-yy")} to {format(parseISO(toDate), "d-MMM-yy")}</div>
         </div>
 
         {/* Column headers */}
         <div className="grid grid-cols-[1fr_150px_120px_120px_150px_44px] bg-muted/60 border-b px-4 py-2 text-[11px] font-semibold text-muted-foreground select-none">
-          <button className="text-left flex items-center" onClick={() => toggleSort("name")}>Particulars <SortIcon col="name" /></button>
+          <button className="text-left flex items-center" onClick={() => toggleSort("name")}>{viewBy === "firm" ? "Firm" : viewBy === "group" ? "Client group" : "Particulars"} <SortIcon col="name" /></button>
           <div className="text-right">Opening Balance</div>
           <button className="flex items-center justify-end w-full" onClick={() => toggleSort("debit")}>Debit <SortIcon col="debit" /></button>
           <button className="flex items-center justify-end w-full" onClick={() => toggleSort("credit")}>Credit <SortIcon col="credit" /></button>
@@ -789,16 +910,24 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
               return (
                 <div
-                  key={r.id}
+                  key={r.key}
                   className={cn(
                     "grid grid-cols-[1fr_150px_120px_120px_150px_44px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
                     idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
                   )}
-                  onClick={() => openLedger(r)}
+                  onClick={() => handleRowClick(r)}
                 >
                   <div className="flex items-center gap-1.5 min-w-0">
-                    <FileText size={11} className="text-muted-foreground flex-shrink-0" />
+                    {r.kind === "firm" ? <Building2 size={11} className="text-muted-foreground flex-shrink-0" />
+                      : r.kind === "group" ? <Users size={11} className="text-muted-foreground flex-shrink-0" />
+                      : <FileText size={11} className="text-muted-foreground flex-shrink-0" />}
                     <span className="font-medium truncate text-[#1A2744] hover:underline">{r.name}</span>
+                    {r.kind !== "client" && (
+                      <span className="text-[10px] text-muted-foreground flex-shrink-0">{r.clientCount} client{r.clientCount !== 1 ? "s" : ""}</span>
+                    )}
+                    {r.kind === "client" && isAllFirms && r.firmIds.length > 1 && (
+                      <span className="text-[10px] text-muted-foreground flex-shrink-0">{r.firmIds.length} firms</span>
+                    )}
                   </div>
                   <div className="text-right tabular-nums">
                     {open === 0 ? <span className="text-muted-foreground">—</span> : (
@@ -813,7 +942,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                     )}
                   </div>
                   <div className="flex items-center justify-center" onClick={e => e.stopPropagation()}>
-                    {r.email && (
+                    {r.kind === "client" && r.email && (
                       <button title={`Email to ${r.email}`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => setEmailClient(r)}>
                         <Mail size={12} />
                       </button>
@@ -830,7 +959,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           <div className="grid grid-cols-[1fr_150px_120px_120px_150px_44px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
             <div className="flex items-center gap-1.5">
               <TrendingUp size={13} className="text-orange-400" /> Grand Total
-              <span className="text-[10px] font-normal text-white/60 ml-1">({filtered.length})</span>
+              <span className="text-[10px] font-normal text-white/60 ml-1">({grandTotal.clients} client{grandTotal.clients !== 1 ? "s" : ""})</span>
             </div>
             <div className="text-right tabular-nums">
               {fmtINR(gtOA)}&nbsp;<span className={cn("text-[10px] font-normal", gtOL === "Cr" ? "text-green-300" : "text-orange-300")}>{gtOL}</span>
@@ -848,7 +977,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       <div className="flex gap-4 text-[11px] text-muted-foreground">
         <span><span className="text-orange-600 font-semibold">Dr</span> = owed to firm</span>
         <span><span className="text-green-600 font-semibold">Cr</span> = advance/overpaid</span>
-        <span>Click row → ledger detail</span>
+        <span>{viewBy === "client" ? "Click row → ledger detail" : `Click a ${viewBy === "firm" ? "firm" : "group"} → its clients`}</span>
+        {viewBy === "group" && <span>A client in several groups is listed under each; the grand total counts it once</span>}
         <span><Mail size={10} className="inline" /> = email ledger to client</span>
       </div>
 
