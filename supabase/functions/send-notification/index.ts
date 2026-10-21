@@ -107,6 +107,32 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
+// ── Invoice lines table (billing reminders / statement of outstanding) ──
+// Built here from structured payload.invoice_lines (never caller HTML), so
+// every value is escaped.
+function fmtInr(n: unknown): string {
+  return `₹${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function buildInvoiceLinesTable(payload: Record<string, any>): string {
+  const lines = Array.isArray(payload.invoice_lines) ? payload.invoice_lines : [];
+  if (lines.length === 0) return "";
+  const th = "padding:6px 8px;border-bottom:2px solid #e5e7eb;text-align:left;font-size:12px;color:#6b7280";
+  const td = "padding:6px 8px;border-bottom:1px solid #f3f4f6;font-size:13px";
+  const rows = lines.map((l: any) => `<tr>
+      <td style="${td}">${escapeHtml(l.invoice_no || "")}</td>
+      <td style="${td}">${escapeHtml(l.invoice_date || "")}</td>
+      <td style="${td}">${escapeHtml(l.due_date || "")}</td>
+      <td style="${td};text-align:right">${fmtInr(l.outstanding)}</td>
+    </tr>`).join("");
+  const total = lines.reduce((s: number, l: any) => s + Number(l.outstanding || 0), 0);
+  return `<table style="width:100%;border-collapse:collapse;margin:16px 0">
+    <tr><th style="${th}">Invoice No.</th><th style="${th}">Date</th><th style="${th}">Due Date</th><th style="${th};text-align:right">Outstanding</th></tr>
+    ${rows}
+    <tr><td colspan="3" style="${td};font-weight:600">Total outstanding</td><td style="${td};text-align:right;font-weight:600;color:#dc2626">${fmtInr(total)}</td></tr>
+  </table>`;
+}
+
 // ── Email HTML builder ───────────────────────────────────────────────
 
 function buildEmailHTML(type: string, payload: Record<string, any>): string {
@@ -233,11 +259,13 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
       return wrapper(`
         <p>Dear ${clientName},</p>
         <p>This is a friendly reminder for the outstanding payment:</p>
-        <table class="info">
+        ${buildInvoiceLinesTable(payload) || `<table class="info">
           <tr><td>Invoice No.</td><td>${invoiceNo}</td></tr>
+          ${dueDate ? `<tr><td>Due Date</td><td>${dueDate}</td></tr>` : ""}
           <tr><td>Outstanding Amount</td><td style="color:#dc2626">${amt}</td></tr>
-        </table>
-        <p>Please process the payment at your earliest convenience to avoid any inconvenience.</p>
+        </table>`}
+        <p>Please process the payment at your earliest convenience to avoid any inconvenience.
+        If you have already paid, kindly ignore this reminder and share the payment details with us.</p>
         <p>Regards,<br><strong>${firmName}</strong></p>`);
 
     case "tds_due_7_days":
@@ -263,7 +291,10 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
     case "ledger_statement":
       return wrapper(`
         <p>Dear ${clientName},</p>
-        <p>Please find your ledger statement for your review. Kindly confirm the balances at your earliest.</p>
+        ${payload.invoice_lines
+          ? `<p>Please find below the statement of invoices outstanding as on ${escapeHtml(payload.statement_date || "")}. Kindly review and arrange payment, or let us know if any of these have already been settled.</p>
+             ${buildInvoiceLinesTable(payload)}`
+          : `<p>Please find your ledger statement for your review. Kindly confirm the balances at your earliest.</p>`}
         ${customMessage ? `<p>${customMessage}</p>` : ""}
         <p>Regards,<br><strong>${firmName}</strong></p>`);
 
@@ -457,6 +488,10 @@ async function renderFromTemplate(
       due_date:       payload.due_date || "",
       document_type:  payload.document_type || "",
       custom_message: payload.custom_message || "",
+      // Billing reminders / statement of outstanding
+      invoice_table:  buildInvoiceLinesTable(payload),
+      days_overdue:   payload.days_overdue != null ? String(payload.days_overdue) : "",
+      statement_date: payload.statement_date || "",
     };
     const subst = (s: string) =>
       (s || "").replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => (k in vars ? vars[k] : ""));
@@ -473,9 +508,15 @@ async function sendEmail(
   customSubject?: string,
   ccEmails?: string[],
 ): Promise<{ success: boolean; providerId?: string; error?: string }> {
-  const fromEmail = Deno.env.get("SMTP_SENDER") || "accounts@vjdesai.com";
+  const defaultFrom = Deno.env.get("SMTP_SENDER") || "accounts@vjdesai.com";
+  // Per-firm mailbox (firms.settings.sender_email, set server-side in the main
+  // handler — never taken from the caller). Must be a mailbox in the same
+  // Microsoft 365 tenant; if Graph rejects it we retry once from the default.
+  const fromEmail = payload.firm_sender_email || defaultFrom;
   const firmName  = payload.firm_name || "V J Desai & Co. LLP";
   let subject     = customSubject || subjects[type] || `Notification from ${firmName}`;
+  // The static map names one firm; use the sending firm's own name.
+  if (!customSubject && type === "invoice_generated") subject = `Invoice from ${firmName}`;
   let html        = buildEmailHTML(type, payload);
 
   // Use the firm's active saved template when present (skip for custom_html relays).
@@ -506,7 +547,9 @@ async function sendEmail(
           message: {
             subject,
             body:         { contentType: "HTML", content: html },
-            toRecipients: [{ emailAddress: { address: toEmail } }],
+            // "a@x.com, b@y.com" → several To recipients (reminder To overrides).
+            toRecipients: toEmail.split(/[,;]/).map(e => e.trim()).filter(Boolean)
+              .map(e => ({ emailAddress: { address: e } })),
             ...(ccRecipients.length > 0 ? { ccRecipients } : {}),
             from:         { emailAddress: { name: firmName, address: fromEmail } },
             // Deliverability (Issue 3 — reduce spam classification): a valid
@@ -514,7 +557,7 @@ async function sendEmail(
             // like genuine 1:1 correspondence rather than bulk mail, and lets
             // clients reply directly. (The decisive spam fix is DNS — SPF, DKIM
             // and DMARC for the sending domain in Microsoft 365.)
-            replyTo: [{ emailAddress: { address: payload.reply_to || fromEmail, name: firmName } }],
+            replyTo: [{ emailAddress: { address: payload.reply_to || payload.firm_reply_to || fromEmail, name: firmName } }],
             // Attach PDF when base64 data is supplied by the caller
             ...(payload.pdf_base64 ? {
               attachments: [{
@@ -537,7 +580,11 @@ async function sendEmail(
 
     const data = await res.json();
     const errMsg = data?.error?.message || JSON.stringify(data);
-    console.error(`[Email] ✗ Failed to ${toEmail}: ${errMsg}`);
+    console.error(`[Email] ✗ Failed to ${toEmail} from ${fromEmail}: ${errMsg}`);
+    if (fromEmail !== defaultFrom) {
+      console.warn(`[Email] retrying from default sender ${defaultFrom}`);
+      return sendEmail(type, toEmail, { ...payload, firm_sender_email: undefined }, customSubject, ccEmails);
+    }
     return { success: false, error: errMsg };
   } catch (err: any) {
     console.error(`[Email] ✗ Exception: ${err.message}`);
@@ -796,10 +843,18 @@ Deno.serve(async (req) => {
 
     // Enrich payload with firm name for email branding
     const { data: firmData } = await adminClient
-      .from("firms").select("name").eq("id", firm_id).single();
-    const enrichedPayload = {
-      ...payload,
+      .from("firms").select("name, settings").eq("id", firm_id).single();
+    const firmSettings = (firmData?.settings || {}) as Record<string, any>;
+    const validEmail = (v: unknown) => typeof v === "string" && v.includes("@") ? v.trim() : null;
+    const firmSender  = validEmail(firmSettings.sender_email);
+    const firmReplyTo = validEmail(firmSettings.reply_to_email);
+    // A caller must never choose the sending mailbox — drop any supplied value.
+    const { firm_sender_email: _ignored, firm_reply_to: _ignored2, ...callerPayload } = (payload || {}) as Record<string, any>;
+    const enrichedPayload: Record<string, any> = {
+      ...callerPayload,
       firm_name: firmData?.name || "V J Desai & Co. LLP",
+      ...(firmSender  ? { firm_sender_email: firmSender } : {}),
+      ...(firmReplyTo ? { firm_reply_to: firmReplyTo }    : {}),
     };
 
     // ── Smart-batched portal activity digest ─────────────────────────────

@@ -641,7 +641,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         ? await openLedger(emailClient)
         : sheetEntries;
       const { base64 } = await generateClientLedgerPdf(emailClient, entries);
-      const { error } = await supabase.functions.invoke("send-notification", {
+      const { data, error } = await supabase.functions.invoke("send-notification", {
         body: {
           type:         "ledger_statement",
           firm_id:      selectedFirmId,
@@ -656,6 +656,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         },
       });
       if (error) throw new Error(error.message);
+      // supabase-js does not throw on a failed delivery — check the real status.
+      const delivery = (data as any)?.results?.direct?.email;
+      if (delivery?.status !== "sent") throw new Error(delivery?.error || "Delivery failed");
       toast.success(`Ledger sent to ${emailClient.email}`);
       setEmailClient(null);
     } catch (e: any) { toast.error("Email failed: " + e.message); }
