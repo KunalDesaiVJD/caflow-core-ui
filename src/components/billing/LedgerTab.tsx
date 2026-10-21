@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import DocLink from "@/components/billing/DocLink";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -808,7 +809,7 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
                 ) : rows.map((r, i) => (
                   <TableRow key={r.id || i}>
                     <TableCell>{r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : ""}</TableCell>
-                    <TableCell className="font-mono text-xs">{r.docNo}</TableCell>
+                    <TableCell className="font-mono text-xs"><DocLink docNo={r.docNo} documentId={r.document_id} entryType={r.entry_type} /></TableCell>
                     <TableCell>{r.narration}</TableCell>
                     <TableCell className="text-right">{r.debit > 0 ? fmtINR(r.debit) : "—"}</TableCell>
                     <TableCell className="text-right">{r.credit > 0 ? fmtINR(r.credit) : "—"}</TableCell>
@@ -1602,7 +1603,7 @@ function GroupLedgerView() {
                     <TableRow key={`${gi}-${ei}`}>
                       {ei === 0 && !hasOb && clientCell}
                       <TableCell>{e.entry_date ? format(new Date(e.entry_date), "dd/MM/yyyy") : ""}</TableCell>
-                      <TableCell className="font-mono text-xs">{getDocNo(e)}</TableCell>
+                      <TableCell className="font-mono text-xs"><DocLink docNo={getDocNo(e)} documentId={e.document_id} entryType={e.entry_type} /></TableCell>
                       <TableCell>{e.narration || ""}</TableCell>
                       <TableCell className="text-right">{d > 0 ? fmtINR(d) : "—"}</TableCell>
                       <TableCell className="text-right">{c > 0 ? fmtINR(c) : "—"}</TableCell>
@@ -2116,7 +2117,7 @@ function FirmRevenueLedgerView() {
               ) : rows.map((r, i) => (
                 <TableRow key={r.id || i}>
                   <TableCell>{r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : ""}</TableCell>
-                  <TableCell className="font-mono text-xs">{r.docNo}</TableCell>
+                  <TableCell className="font-mono text-xs"><DocLink docNo={r.docNo} documentId={r.document_id} entryType={r.entry_type} /></TableCell>
                   <TableCell>{r.clientName}</TableCell>
                   <TableCell><Badge variant="outline" className="capitalize text-xs">{r.docType}</Badge></TableCell>
                   <TableCell className="text-right">{r.debit > 0 ? fmtINR(r.debit) : "—"}</TableCell>

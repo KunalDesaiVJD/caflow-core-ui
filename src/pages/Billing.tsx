@@ -49,12 +49,13 @@ import {
   CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
   BarChart3, Percent, Upload, Download, Pencil, Settings2,
   Receipt, BookOpen, FileSpreadsheet, Bell, Mail, MessageSquare,
-  Archive, ChevronDown, ChevronUp, User, RefreshCw, Share2, Phone, History, X,
+  Archive, ChevronDown, ChevronUp, User, RefreshCw, Share2, Phone, History, X, Lock,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { generateInvoicePdfBlob, invoicePdfFilename } from "@/lib/invoicePdfGenerator";
+import { LOCKABLE_DOC_TYPES, firmLockDay, isPeriodLocked, lockMessage } from "@/lib/invoiceLock";
 
 // ─── Types ───
 interface Invoice {
@@ -333,6 +334,11 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [clientMap, setClientMap] = useState<ClientMap>({});
   const [firmMap, setFirmMap] = useState<FirmMap>({});
+  // firm_id → invoice lock day (firms.settings.invoice_lock_day); see lib/invoiceLock.
+  const [lockDays, setLockDays] = useState<Record<string, number | null>>({});
+  const isDocLocked = (inv: { firm_id?: string | null; invoice_date?: string | null; document_type?: string | null; status?: string | null }) =>
+    !isSuperadmin && LOCKABLE_DOC_TYPES.includes(inv.document_type || "invoice") && (inv.status || "draft") !== "draft"
+    && isPeriodLocked(inv.invoice_date, lockDays[inv.firm_id || ""] ?? null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -417,7 +423,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     let cQuery = supabase.from("clients").select("id, name, entity_type, email, mobile, compliance_flags, responsible_person_id").eq("is_draft", false);
     const { data: clientData } = await cQuery;
 
-    const { data: firmData } = await supabase.from("firms").select("id, name, display_name");
+    const { data: firmData } = await supabase.from("firms").select("id, name, display_name, settings");
     const { data: groupData } = await supabase.from("client_groups").select("id, name");
     // Load firm-scoped active users for Responsible Person filter
     let usersQuery = supabase.from("users").select("id, name").neq("role", "client").eq("is_active", true).order("name");
@@ -438,6 +444,9 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     setInvoices((invData as Invoice[]) || []);
     setClientMap(cMap);
     setFirmMap(fMap);
+    const lMap: Record<string, number | null> = {};
+    (firmData || []).forEach((f: any) => { lMap[f.id] = firmLockDay(f.settings); });
+    setLockDays(lMap);
     setFirms((firmData || []).map((f: any) => ({ id: f.id, name: f.display_name || f.name })));
     setGroups((groupData || []).map((g: any) => ({ id: g.id, name: g.name })));
     setResponsiblePersons((usersData || []).map((u: any) => ({ id: u.id, name: u.name })));
@@ -696,6 +705,12 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
 
   const handleDelete = async () => {
     if (!deleteId) return;
+    const target = invoices.find(i => i.id === deleteId);
+    if (target && isDocLocked(target as any)) {
+      toast({ title: "Month closed", description: lockMessage(target.invoice_date!, lockDays[target.firm_id || ""]!), variant: "destructive" });
+      setDeleteId(null);
+      return;
+    }
     if (!canDelete) {
       toast({ title: "Not allowed", description: "You don't have permission to delete billing documents.", variant: "destructive" });
       setDeleteId(null);
@@ -1223,7 +1238,13 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            {canDelete && inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
+            {canDelete && isDocLocked(inv) && (
+              <Button variant="ghost" size="icon" className="h-7 w-7 cursor-default opacity-50" disabled
+                title={lockMessage(inv.invoice_date!, lockDays[inv.firm_id || ""]!)}>
+                <Lock size={14} />
+              </Button>
+            )}
+            {canDelete && !isDocLocked(inv) && inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
               <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
                 <Trash2 size={14} className="text-destructive" />
               </Button>

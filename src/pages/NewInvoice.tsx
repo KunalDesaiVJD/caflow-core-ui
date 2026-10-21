@@ -42,6 +42,7 @@ import { buildInvoiceHtml, downloadPdfFromHtml } from "@/lib/invoicePdfGenerator
 import { resolveFirmNameForDate } from "@/lib/firmName";
 import { BILLING_ATOMIC_NUMBERING } from "@/lib/billingFlags";
 import { isValidGstin } from "@/lib/gstinUtils";
+import { LOCKABLE_DOC_TYPES, firmLockDay, isPeriodLocked, lockMessage } from "@/lib/invoiceLock";
 
 // ─── Export Invoice Currencies ───
 const EXPORT_CURRENCIES = [
@@ -347,6 +348,9 @@ const NewInvoice = () => {
   });
   const [isIntraState, setIsIntraState] = useState(true);
   const [status, setStatus] = useState("draft");
+  // Date and status as stored, for the period lock (the form fields can change).
+  const [savedDate, setSavedDate] = useState<string | null>(null);
+  const [savedStatus, setSavedStatus] = useState<string | null>(null);
   const [showLogo, setShowLogo] = useState(true);
   const [remarksConditions, setRemarksConditions] = useState("");
   // Editable payment-terms window (days). Default 45; shown on the invoice as
@@ -606,6 +610,8 @@ const NewInvoice = () => {
         setInvoiceNo(inv.invoice_no || "");
         setSeqNumber((inv as any).seq_number || null);
         setInvoiceDate(inv.invoice_date || "");
+        setSavedDate(inv.invoice_date || null);
+        setSavedStatus(inv.status || "draft");
         setReferenceNo((inv as any).reference_no || "");
         setStatus(inv.status || "draft");
         setShowLogo(inv.show_logo ?? true);
@@ -872,6 +878,13 @@ const NewInvoice = () => {
     if (!invoiceNo.trim()) { toast({ title: "Document number cannot be blank", variant: "destructive" }); return; }
     if (items.length === 0) { toast({ title: "Add at least one item", variant: "destructive" }); return; }
     if (duplicateWarning) { toast({ title: "Document number already exists. Please change it.", variant: "destructive" }); return; }
+    if (isLocked) { toast({ title: "This month is closed", description: lockMessage(savedDate!, lockDay!), variant: "destructive" }); return; }
+    // Issuing (or re-dating) a document into a closed month is blocked too.
+    if (!isSuperadmin && LOCKABLE_DOC_TYPES.includes(docType) && (newStatus || status) !== "draft"
+        && isPeriodLocked(invoiceDate, lockDay)) {
+      toast({ title: "Date is in a closed month", description: lockMessage(invoiceDate, lockDay!), variant: "destructive" });
+      return;
+    }
     setSaving(true);
     try {
       const effectiveStatus = newStatus || status;
@@ -1037,6 +1050,8 @@ const NewInvoice = () => {
       }
 
       setStatus(effectiveStatus);
+      setSavedDate(invoiceDate);
+      setSavedStatus(effectiveStatus);
       if (!isEdit) navigate("/billing");
     } catch (e: any) {
       toast({ title: "Error", description: e.message, variant: "destructive" });
@@ -1119,7 +1134,11 @@ const NewInvoice = () => {
   // Per firm preference: documents stay editable at ANY status (no locking).
   // Editing re-syncs the ledger entry on save (see handleSave), and the Billing
   // Health panel surfaces any resulting drift, so editability is safe.
-  const isLocked = false;
+  // Period lock: an issued invoice / credit note in a closed month is read-only
+  // for everyone except a superadmin (enforced again by a DB trigger).
+  const lockDay = firmLockDay(firm?.settings);
+  const isLocked = isEdit && !isSuperadmin && LOCKABLE_DOC_TYPES.includes(docType)
+    && savedStatus !== null && savedStatus !== "draft" && isPeriodLocked(savedDate, lockDay);
   const canConvert = isEdit && (docType === "quotation" || docType === "proforma") && status === "finalized";
 
   // Generate invoice HTML
@@ -1173,7 +1192,7 @@ const NewInvoice = () => {
       <div className="flex items-center gap-3 px-4 py-3 border-b border-border bg-background shrink-0">
         <Button variant="ghost" size="icon" onClick={() => navigate("/billing")}><ArrowLeft size={18} /></Button>
         <div className="flex-1">
-          <h1 className="text-lg font-bold text-foreground">{isEdit ? `Edit ${DOC_TYPE_LABELS[docType]}` : `New ${DOC_TYPE_LABELS[docType]}`}</h1>
+          <h1 className="text-lg font-bold text-foreground">{isLocked ? `View ${DOC_TYPE_LABELS[docType]}` : isEdit ? `Edit ${DOC_TYPE_LABELS[docType]}` : `New ${DOC_TYPE_LABELS[docType]}`}</h1>
           {status !== "draft" && <Badge className={cn("text-xs capitalize ml-2", status === "finalized" ? "bg-blue-100 text-blue-700" : "")}>{status}</Badge>}
         </div>
         <div className="flex gap-2">
@@ -1212,6 +1231,13 @@ const NewInvoice = () => {
                 {prefillData.due_date && <span> · Due {prefillData.due_date}</span>}
                 <span className="block text-blue-500 dark:text-blue-400 mt-0.5">Review the details below and click <strong>Save Draft</strong> or <strong>Finalize</strong> to create the invoice.</span>
               </div>
+            </div>
+          )}
+
+          {isLocked && savedDate && lockDay && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
+              <Lock size={14} className="shrink-0 mt-0.5" />
+              <span><span className="font-semibold">Read-only — period closed.</span> {lockMessage(savedDate, lockDay)}</span>
             </div>
           )}
 
