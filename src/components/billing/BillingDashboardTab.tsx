@@ -10,6 +10,7 @@ import {
 } from "recharts";
 import { format, differenceInDays, startOfMonth, endOfMonth } from "date-fns";
 import { cn } from "@/lib/utils";
+import { statusLabel } from "@/lib/billingCancellation";
 
 interface DashInvoice {
   id: string;
@@ -164,7 +165,7 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
   }, [invoices]);
 
   const statusPieData = useMemo(() =>
-    Object.entries(statusCounts).map(([name, count]) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), count })),
+    Object.entries(statusCounts).map(([name, count]) => ({ name: statusLabel(name), count })),
     [statusCounts],
   );
 
@@ -263,7 +264,7 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
         <span className="text-xs text-muted-foreground self-center font-medium">Document Status:</span>
         {Object.entries(statusCounts).map(([status, count]) => (
           <Badge key={status} variant="outline" className={cn("capitalize text-xs px-3 py-1", STATUS_COLORS[status] || "")}>
-            {status}: {count}
+            {statusLabel(status)}: {count}
           </Badge>
         ))}
         <Badge variant="outline" className="text-xs px-3 py-1 bg-muted">
@@ -413,7 +414,7 @@ export default function BillingDashboardTab({ firmId }: { firmId: string | null 
                     <TableCell className="text-sm truncate max-w-[120px]">{clients.find(c => c.id === inv.client_id)?.name || "—"}</TableCell>
                     <TableCell>
                       <Badge variant="outline" className={cn("capitalize text-xs", STATUS_COLORS[inv.status || "draft"] || "")}>
-                        {inv.status || "draft"}
+                        {statusLabel(inv.status)}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right font-semibold text-sm">{fmtMoney(inv.total_amount || inv.amount || 0)}</TableCell>

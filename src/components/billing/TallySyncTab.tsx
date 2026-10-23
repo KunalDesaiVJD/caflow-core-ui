@@ -60,6 +60,8 @@ export default function TallySyncTab({ firmId }: Props) {
       const [invRes, logRes, qRes, stgRes, cliRes] = await Promise.all([
         sb.from("invoices").select("id,invoice_no,document_type,invoice_date,total_amount,client_id")
           .eq("firm_id", firmId).in("document_type", ["invoice", "credit_note"])
+          // A cancelled document is never pushed (one already in Tally is deleted there by trigger).
+          .or("status.is.null,status.not.in.(voided,cancelled)")
           .order("invoice_date", { ascending: false }).limit(300),
         sb.from("tally_voucher_log").select("invoice_id,tally_vch_id").eq("firm_id", firmId).eq("direction", "forward"),
         sb.from("tally_sync_queue").select("invoice_id,status,last_error").eq("firm_id", firmId).eq("direction", "forward"),

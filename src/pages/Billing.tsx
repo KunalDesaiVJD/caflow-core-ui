@@ -49,13 +49,14 @@ import {
   CheckCircle2, Eye, Copy, Trash2, ChevronLeft, ChevronRight,
   BarChart3, Percent, Upload, Download, Pencil, Settings2,
   Receipt, BookOpen, FileSpreadsheet, Bell, Mail, MessageSquare,
-  Archive, ChevronDown, ChevronUp, User, RefreshCw, Share2, Phone, History, X, Lock,
+  Archive, ChevronDown, ChevronUp, User, RefreshCw, Share2, Phone, History, X, Lock, Ban,
 } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { generateInvoicePdfBlob, invoicePdfFilename } from "@/lib/invoicePdfGenerator";
 import { LOCKABLE_DOC_TYPES, firmLockDay, isPeriodLocked, lockMessage } from "@/lib/invoiceLock";
+import { cancelBillingDocument, canCancelDocument, isCancelled, statusLabel } from "@/lib/billingCancellation";
 
 // ─── Types ───
 interface Invoice {
@@ -121,6 +122,7 @@ const STATUS_COLORS: Record<string, string> = {
   paid: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300",
   overdue: "bg-destructive/15 text-destructive",
   converted: "bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300",
+  voided: "bg-gray-100 text-gray-500 line-through dark:bg-gray-800 dark:text-gray-400",
 };
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -176,7 +178,7 @@ function DocumentFilterBar({
         <SelectTrigger className="w-[140px]"><SelectValue /></SelectTrigger>
         <SelectContent>
           <SelectItem value="all">All Status</SelectItem>
-          {statusOptions.map(s => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
+          {statusOptions.map(s => <SelectItem key={s} value={s}>{statusLabel(s)}</SelectItem>)}
         </SelectContent>
       </Select>
       <div className="space-y-1">
@@ -350,6 +352,9 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   const [toDate, setToDate] = useState("");
   const [viewBy, setViewBy] = useState<"all" | "responsible" | "group" | "firm" | "multifirm">("all");
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<Invoice | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
 
   // For filter dropdowns
   const [firms, setFirms] = useState<{ id: string; name: string }[]>([]);
@@ -501,6 +506,8 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
 
   // One definition of a document's total, shared by rows, subtotals, footer and Excel export.
   const docTotal = (i: any) => i.total_amount || (i.amount || 0) + (i.gst_amount || 0);
+  // What a document contributes to totals: a cancelled document counts as nil.
+  const liveTotal = (i: any) => isCancelled(i.effectiveStatus ?? i.status) ? 0 : docTotal(i);
 
   const enriched = useMemo(() => {
     return invoices.map(inv => ({ ...inv, effectiveStatus: inv.status || "draft" }));
@@ -563,7 +570,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
       } else if (viewBy === "firm" || viewBy === "multifirm") {
         label = firmMap[key] || "Unknown Firm";
       }
-      const subtotal = invs.reduce((s, i) => s + docTotal(i), 0);
+      const subtotal = invs.reduce((s, i) => s + liveTotal(i), 0);
       result.push({ key, label, invoices: invs, subtotal });
     }
     result.sort((a, b) => a.label.localeCompare(b.label));
@@ -603,6 +610,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
 
   const handleShareSend = async () => {
     if (!shareInvoice) return;
+    if (isCancelled(shareInvoice.status)) { toast({ title: "This document is cancelled", variant: "destructive" }); return; }
     if (!canSend) { toast({ title: "Not allowed", description: "You don't have permission to send billing documents.", variant: "destructive" }); return; }
     setShareSending(true);
     try {
@@ -754,6 +762,31 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     fetchData();
   };
 
+  const handleCancelDocument = async () => {
+    const target = cancelTarget;
+    if (!target) return;
+    if (!canDelete) {
+      toast({ title: "Not allowed", description: "You don't have permission to cancel billing documents.", variant: "destructive" });
+      return;
+    }
+    if (isDocLocked(target as any)) {
+      toast({ title: "Month closed", description: lockMessage(target.invoice_date!, lockDays[target.firm_id || ""]!), variant: "destructive" });
+      return;
+    }
+    setCancelling(true);
+    const result = await cancelBillingDocument(target as any, cancelReason);
+    setCancelling(false);
+    if (!result.ok) {
+      toast({ title: result.title, description: result.description, variant: "destructive" });
+      if (result.title?.startsWith("Cancelled")) { setCancelTarget(null); fetchData(); }
+      return;
+    }
+    toast({ title: `${target.invoice_no || "Document"} cancelled`, description: "Removed from the ledger and reports. Its number stays reserved." });
+    setSelectedIds(prev => { const next = new Set(prev); next.delete(target.id); return next; });
+    setCancelTarget(null);
+    fetchData();
+  };
+
   const handleSend = async (inv: Invoice, sendToResponsible = false) => {
     if (!canSend) { toast({ title: "Not allowed", description: "You don't have permission to send billing documents.", variant: "destructive" }); return; }
     const total = inv.total_amount || (inv.amount || 0) + (inv.gst_amount || 0);
@@ -834,7 +867,8 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   // Bulk send handler
   const handleBulkSend = async () => {
     if (!canSend) { toast({ title: "Not allowed", description: "You don't have permission to send billing documents.", variant: "destructive" }); return; }
-    const selected = filtered.filter(inv => selectedIds.has(inv.id));
+    // A cancelled document is never sent.
+    const selected = filtered.filter(inv => selectedIds.has(inv.id) && !isCancelled(inv.effectiveStatus));
     if (selected.length === 0) return;
     setBulkSending(true);
     setBulkProgress({ current: 0, total: selected.length });
@@ -1140,10 +1174,10 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   };
 
   const statusOptions = documentType === "invoice"
-    ? ["draft", "finalized", "sent", "paid", "overdue"]
+    ? ["draft", "finalized", "sent", "paid", "overdue", "voided"]
     : documentType === "quotation_proforma"
       ? ["draft", "finalized", "sent", "converted"]
-      : ["draft", "finalized", "sent", "paid"];
+      : ["draft", "finalized", "sent", "paid", "voided"];
 
   const colCount = documentType === "quotation_proforma" ? 10 : 9;
 
@@ -1157,8 +1191,8 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
       clientMap[inv.client_id || ""]?.name || inv.to_name || "",
       firmMap[inv.firm_id || ""] || "",
       inv.invoice_date ? format(new Date(inv.invoice_date), "dd/MM/yyyy") : "",
-      docTotal(inv),
-      inv.effectiveStatus,
+      liveTotal(inv),
+      statusLabel(inv.effectiveStatus),
       inv.due_date ? format(new Date(inv.due_date), "dd/MM/yyyy") : "",
     ];
     const amtIdx = head.indexOf("Amount (₹)");
@@ -1174,7 +1208,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     } else {
       filtered.forEach(inv => aoa.push(toRow(inv)));
     }
-    aoa.push(totalRow(`Total (${filtered.length} documents)`, filtered.reduce((s, i) => s + docTotal(i), 0)));
+    aoa.push(totalRow(`Total (${filtered.length} documents)`, filtered.reduce((s, i) => s + liveTotal(i), 0)));
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!cols"] = head.map(h => ({ wch: h === "Client" ? 32 : 14 }));
     const wb = XLSX.utils.book_new();
@@ -1186,6 +1220,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     const clientName = clientMap[inv.client_id || ""]?.name || (inv as any).to_name || "—";
     const firmName = firmMap[inv.firm_id || ""] || "—";
     const total = docTotal(inv);
+    const cancelled = isCancelled(inv.effectiveStatus);
     return (
       <TableRow key={inv.id} className={cn(selectedIds.has(inv.id) && "bg-accent/30")}>
         <TableCell>
@@ -1198,9 +1233,12 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
         <TableCell className="font-medium">{clientName}</TableCell>
         <TableCell className="text-sm text-muted-foreground">{firmName}</TableCell>
         <TableCell className="text-sm">{inv.invoice_date ? format(new Date(inv.invoice_date), "dd/MM/yyyy") : "—"}</TableCell>
-        <TableCell className="text-right font-semibold tabular-nums">₹{total.toLocaleString("en-IN")}</TableCell>
+        <TableCell className={cn("text-right font-semibold tabular-nums", cancelled && "line-through text-muted-foreground")}>₹{total.toLocaleString("en-IN")}</TableCell>
         <TableCell>
-          <Badge className={cn("text-xs capitalize", STATUS_COLORS[inv.effectiveStatus] || STATUS_COLORS.draft)}>{inv.effectiveStatus}</Badge>
+          <Badge className={cn("text-xs", STATUS_COLORS[inv.effectiveStatus] || STATUS_COLORS.draft)}
+            title={cancelled && (inv as any).voided_reason ? `Reason: ${(inv as any).voided_reason}` : undefined}>
+            {statusLabel(inv.effectiveStatus)}
+          </Badge>
         </TableCell>
         <TableCell className="text-sm">{inv.due_date ? format(new Date(inv.due_date), "dd/MM/yyyy") : "—"}</TableCell>
         <TableCell>
@@ -1208,9 +1246,11 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
             <Button variant="ghost" size="icon" className="h-7 w-7" title="View/Edit" onClick={() => navigate(`/billing/edit/${inv.id}`)}>
               <Eye size={14} />
             </Button>
-            <Button variant="ghost" size="icon" className="h-7 w-7" title="Share" onClick={() => openShareDialog(inv)}>
-              <Share2 size={14} />
-            </Button>
+            {!cancelled && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" title="Share" onClick={() => openShareDialog(inv)}>
+                <Share2 size={14} />
+              </Button>
+            )}
             {documentType === "quotation_proforma" && inv.effectiveStatus === "finalized" && (
               <Button variant="ghost" size="icon" className="h-7 w-7" title="Convert to Invoice" onClick={() => navigate(`/billing/new?type=invoice&source=${inv.id}`)}>
                 <RefreshCw size={14} className="text-primary" />
@@ -1244,7 +1284,13 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
                 <Lock size={14} />
               </Button>
             )}
-            {canDelete && !isDocLocked(inv) && inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
+            {canDelete && !isDocLocked(inv) && canCancelDocument(inv) && (
+              <Button variant="ghost" size="icon" className="h-7 w-7" title="Cancel document"
+                onClick={() => { setCancelReason(""); setCancelTarget(inv); }}>
+                <Ban size={14} className="text-amber-600" />
+              </Button>
+            )}
+            {canDelete && !isDocLocked(inv) && !cancelled && inv.effectiveStatus !== "paid" && inv.effectiveStatus !== "converted" && (
               <Button variant="ghost" size="icon" className="h-7 w-7" title="Delete" onClick={() => setDeleteId(inv.id)}>
                 <Trash2 size={14} className="text-destructive" />
               </Button>
@@ -1497,7 +1543,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
                       : `Total (${filtered.length} document${filtered.length !== 1 ? "s" : ""})`}
                   </TableCell>
                   <TableCell className="text-right font-bold tabular-nums text-foreground">
-                    ₹{filtered.reduce((s, i) => s + docTotal(i), 0).toLocaleString("en-IN")}
+                    ₹{filtered.reduce((s, i) => s + liveTotal(i), 0).toLocaleString("en-IN")}
                   </TableCell>
                   <TableCell colSpan={3} />
                 </TableRow>
@@ -1517,6 +1563,32 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Cancel confirmation */}
+      <AlertDialog open={!!cancelTarget} onOpenChange={open => { if (!open && !cancelling) setCancelTarget(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel {cancelTarget?.document_type === "credit_note" ? "Credit Note" : "Invoice"} {cancelTarget?.invoice_no}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The document stays on record marked Cancelled, its amount is removed from the client ledger, reports and
+              reminders, and its number ({cancelTarget?.invoice_no}) will not be used again. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="space-y-1.5">
+            <Label htmlFor="cancel-reason">Reason for cancellation</Label>
+            <Textarea id="cancel-reason" value={cancelReason} onChange={e => setCancelReason(e.target.value)}
+              placeholder="e.g. Raised on the wrong client" rows={3} />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={cancelling}>Keep document</AlertDialogCancel>
+            <AlertDialogAction onClick={e => { e.preventDefault(); handleCancelDocument(); }}
+              disabled={cancelling || !cancelReason.trim()}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              {cancelling ? "Cancelling..." : "Cancel document"}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

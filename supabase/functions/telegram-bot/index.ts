@@ -992,7 +992,7 @@ async function handleSendEmail(chatId: number, intent: Intent) {
   const invoiceQuery = supabase
     .from("invoices")
     .select("*")
-    .neq("status", "draft")
+    .not("status", "in", "(draft,voided)")
     .order("invoice_date", { ascending: false })
     .limit(1);
 
@@ -1384,7 +1384,8 @@ async function getSummary(input: Record<string, any>): Promise<any> {
   if (error) return { error: error.message };
 
   const today       = new Date();
-  const all         = invoices ?? [];
+  // Cancelled (voided) documents are void: never part of billed totals.
+  const all         = (invoices ?? []).filter(i => i.status !== "voided");
   const paid        = all.filter(i => i.status === "paid");
   const outstanding = all.filter(i => ["finalized", "sent"].includes(i.status ?? ""));
   const overdue     = outstanding.filter(i => i.due_date && new Date(i.due_date) < today);
@@ -1556,7 +1557,7 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
       const { data: invoices } = await supabase
         .from("invoices")
         .select("invoice_no,invoice_date,to_name,total_amount,gst_amount,amount,status")
-        .neq("status", "draft")
+        .not("status", "in", "(draft,voided)")
         .gte("invoice_date", fyStart)
         .lte("invoice_date", fyEnd)
         .order("invoice_date", { ascending: true });
@@ -1598,7 +1599,7 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
     const ids = await searchClientIds(input.client_name);
     if (ids.length) {
       const { data } = await supabase.from("invoices").select("*")
-        .in("client_id", ids).neq("status", "draft")
+        .in("client_id", ids).not("status", "in", "(draft,voided)")
         .order("invoice_date", { ascending: false }).limit(3);
       invoices = data ?? [];
     }
@@ -1654,7 +1655,7 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
   let inv: any = null;
   if (includeInvoice) {
     const invQ = supabase.from("invoices").select("*")
-      .neq("status", "draft").order("invoice_date", { ascending: false }).limit(1);
+      .not("status", "in", "(draft,voided)").order("invoice_date", { ascending: false }).limit(1);
     const { data: invData } = await (input.invoice_doc_no
       ? invQ.ilike("invoice_no", `%${input.invoice_doc_no}%`)
       : invQ.eq("client_id", clientId)
@@ -1823,7 +1824,8 @@ async function getClientDetails(input: Record<string, any>): Promise<any> {
     .limit(5);
 
   const today       = new Date();
-  const all         = invoices ?? [];
+  // Cancelled (voided) documents are void: never part of billed totals.
+  const all         = (invoices ?? []).filter(i => i.status !== "voided");
   const outstanding = all.filter(i => ["finalized", "sent"].includes(i.status ?? ""));
   const overdue     = outstanding.filter(i => i.due_date && new Date(i.due_date) < today);
   const sumAmt      = (arr: any[]) => arr.reduce((s, i) => s + (i.total_amount ?? i.amount ?? 0), 0);
@@ -2098,7 +2100,7 @@ async function handleSendPdf(chatId: number, intent: Intent, ctx: TgContext | nu
       const { data } = await supabase
         .from("invoices").select("*")
         .in("client_id", clients.map(c => c.id))
-        .neq("status", "draft")
+        .not("status", "in", "(draft,voided)")
         .order("invoice_date", { ascending: false }).limit(5);
       invoices = data ?? [];
     }
