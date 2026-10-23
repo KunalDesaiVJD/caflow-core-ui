@@ -377,8 +377,19 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
   };
 
   const handleSave = async () => {
-    if (!formClientId || !receiptDate || !amountReceived || Number(amountReceived) <= 0 || !paymentMode) {
+    const hasAmount = Number(amountReceived) > 0;
+    const hasTds = Number(tdsAmount) > 0 || Number(gstTdsAmount) > 0;
+    if (!formClientId || !receiptDate) {
       toast({ title: "Please fill all mandatory fields", variant: "destructive" });
+      return;
+    }
+    // A receipt amount is not compulsory when only TDS / GST TDS is being recorded.
+    if (!hasAmount && !hasTds) {
+      toast({ title: "Enter a receipt amount, or a TDS / GST TDS amount", variant: "destructive" });
+      return;
+    }
+    if (hasAmount && !paymentMode) {
+      toast({ title: "Please select the payment mode", variant: "destructive" });
       return;
     }
     // Q1: honour the firm chosen in the dialog; fall back to the resolved firm.
@@ -390,9 +401,11 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
 
     setSaving(true);
     const dateStr = format(receiptDate, "yyyy-MM-dd");
-    const amt = Number(amountReceived);
+    const amt = Number(amountReceived) || 0;
     const tds = Number(tdsAmount) || 0;
     const gstTds = Number(gstTdsAmount) || 0;
+    // TDS-only entries carry no payment mode of their own; the table requires one, so store "Other".
+    const mode = paymentMode || "Other";
     const invoiceId = receiptType === "against_invoice" && formInvoiceId ? formInvoiceId : null;
     const fy = getFYFromDate(dateStr);
 
@@ -408,7 +421,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
           const { data, error } = await (supabase as any).rpc("post_receipt", {
             p_firm_id: resolvedFirmId, p_client_id: formClientId, p_invoice_id: null,
             p_receipt_type: "on_account", p_receipt_date: dateStr, p_amount: amt,
-            p_payment_mode: paymentMode, p_payment_reference: paymentReference || null,
+            p_payment_mode: mode, p_payment_reference: paymentReference || null,
             p_tds: tds || 0, p_gst_tds: gstTds || 0,
             p_tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
             p_remarks: remarks || null, p_gstin: formGstin && formGstin !== "all" ? formGstin : null,
@@ -420,7 +433,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
           const { data: nr, error: rErr } = await supabase.from("billing_receipts").insert({
             firm_id: resolvedFirmId, client_id: formClientId, invoice_id: null,
             receipt_type: "on_account", receipt_date: dateStr, amount_received: amt,
-            payment_mode: paymentMode.toLowerCase(), payment_reference: paymentReference || null,
+            payment_mode: mode.toLowerCase(), payment_reference: paymentReference || null,
             tds_amount: tds || null, gst_tds_amount: gstTds || null,
             tds_date: tds > 0 && tdsDate ? format(tdsDate, "yyyy-MM-dd") : null,
             remarks: remarks || null, gstin: formGstin && formGstin !== "all" ? formGstin : null,
@@ -428,10 +441,10 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
           }).select("id").single();
           if (rErr) throw rErr;
           newReceiptId = nr.id;
-          await supabase.from("client_ledger_entries").insert({
+          if (amt > 0) await supabase.from("client_ledger_entries").insert({
             firm_id: resolvedFirmId, client_id: formClientId, entry_date: dateStr, entry_type: "receipt",
             document_id: newReceiptId, debit_amount: 0, credit_amount: amt,
-            narration: `Payment received — ${paymentMode}`, financial_year: fy,
+            narration: `Payment received — ${mode}`, financial_year: fy,
           });
           if (tds > 0) await supabase.from("client_ledger_entries").insert({ firm_id: resolvedFirmId, client_id: formClientId, entry_date: dateStr, entry_type: "adjustment", document_id: newReceiptId, debit_amount: 0, credit_amount: tds, narration: "TDS deducted", financial_year: fy });
           if (gstTds > 0) await supabase.from("client_ledger_entries").insert({ firm_id: resolvedFirmId, client_id: formClientId, entry_date: dateStr, entry_type: "adjustment", document_id: newReceiptId, debit_amount: 0, credit_amount: gstTds, narration: "GST TDS deducted", financial_year: fy });
@@ -458,7 +471,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
           receipt_type: receiptType,
           receipt_date: dateStr,
           amount_received: amt,
-          payment_mode: paymentMode.toLowerCase(),
+          payment_mode: mode.toLowerCase(),
           payment_reference: paymentReference || null,
           tds_amount: tds || null,
           gst_tds_amount: gstTds || null,
@@ -473,7 +486,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
         // Delete old ledger entries and re-create them fresh
         await supabase.from("client_ledger_entries").delete().eq("document_id", editingId);
 
-        await supabase.from("client_ledger_entries").insert({
+        if (amt > 0) await supabase.from("client_ledger_entries").insert({
           firm_id: resolvedFirmId,
           client_id: formClientId,
           entry_date: dateStr,
@@ -481,7 +494,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
           document_id: editingId,
           debit_amount: 0,
           credit_amount: amt,
-          narration: `Payment received — ${paymentMode}`,
+          narration: `Payment received — ${mode}`,
           financial_year: fy,
         });
 
@@ -524,7 +537,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
           p_receipt_type: receiptType,
           p_receipt_date: dateStr,
           p_amount: amt,
-          p_payment_mode: paymentMode,
+          p_payment_mode: mode,
           p_payment_reference: paymentReference || null,
           p_tds: tds || 0,
           p_gst_tds: gstTds || 0,
@@ -545,7 +558,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
           receipt_type: receiptType,
           receipt_date: dateStr,
           amount_received: amt,
-          payment_mode: paymentMode.toLowerCase(),
+          payment_mode: mode.toLowerCase(),
           payment_reference: paymentReference || null,
           tds_amount: tds || null,
           gst_tds_amount: gstTds || null,
@@ -560,7 +573,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
 
         if (receiptType === "against_invoice" && invoiceId) await markInvoicePaidIfSettled(invoiceId, dateStr);
 
-        await supabase.from("client_ledger_entries").insert({
+        if (amt > 0) await supabase.from("client_ledger_entries").insert({
           firm_id: resolvedFirmId,
           client_id: formClientId,
           entry_date: dateStr,
@@ -568,7 +581,7 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
           document_id: receiptId,
           debit_amount: 0,
           credit_amount: amt,
-          narration: `Payment received — ${paymentMode}`,
+          narration: `Payment received — ${mode}`,
           financial_year: fy,
         });
 
@@ -810,8 +823,12 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
                       {r.receipt_type === "against_invoice" ? "Against Invoice" : "On Account"}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right font-semibold tabular-nums">₹{Number(r.amount_received).toLocaleString("en-IN")}</TableCell>
-                  <TableCell className="text-sm">{r.payment_mode}</TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums">
+                    {Number(r.amount_received) > 0 ? `₹${Number(r.amount_received).toLocaleString("en-IN")}` : <span className="text-muted-foreground">—</span>}
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    {Number(r.amount_received) > 0 ? r.payment_mode : <Badge variant="secondary" className="text-xs">TDS only</Badge>}
+                  </TableCell>
                   <TableCell className="text-sm font-mono">{r.invoice_id ? (invoiceMap[r.invoice_id] || "—") : "—"}</TableCell>
                   <TableCell className="text-right text-sm tabular-nums">
                     {(r.tds_amount || 0) > 0 ? `₹${Number(r.tds_amount).toLocaleString("en-IN")}` : "—"}
@@ -1029,12 +1046,13 @@ export default function ReceiptsTab({ overrideFirmId }: { overrideFirmId?: strin
             </div>
 
             <div className="space-y-1">
-              <Label>Amount Received (₹) *</Label>
-              <Input type="number" value={amountReceived} onChange={e => setAmountReceived(e.target.value)} placeholder="0.00" min="0.01" step="0.01" />
+              <Label>Amount Received (₹){!(Number(tdsAmount) > 0 || Number(gstTdsAmount) > 0) && " *"}</Label>
+              <Input type="number" value={amountReceived} onChange={e => setAmountReceived(e.target.value)} placeholder="0.00" min="0" step="0.01" />
+              <p className="text-[11px] text-muted-foreground">Optional when you enter TDS / GST TDS below — leave blank to record TDS only.</p>
             </div>
 
             <div className="space-y-1">
-              <Label>Payment Mode *</Label>
+              <Label>Payment Mode{Number(amountReceived) > 0 && " *"}</Label>
               <Select value={paymentMode} onValueChange={setPaymentMode}>
                 <SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger>
                 <SelectContent>

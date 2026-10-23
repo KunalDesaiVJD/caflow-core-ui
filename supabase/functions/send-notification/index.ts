@@ -29,7 +29,7 @@ const subjects: Record<string, string> = {
   credit_note_issued:        "Credit Note Issued",
   quotation_sent:            "Quotation for Your Review",
   proforma_sent:             "Proforma Invoice",
-  ledger_statement:          "Ledger Statement",
+  ledger_statement:          "Statement of Account",
   payment_reminder:          "Payment Reminder",
   internal_filing_reminder:  "Filing Reminder",
   // Audit communication templates
@@ -107,7 +107,7 @@ function escapeHtml(value: unknown): string {
     .replace(/'/g, "&#39;");
 }
 
-// ── Invoice lines table (billing reminders / statement of outstanding) ──
+// ── Invoice lines table (billing reminders / statement of account) ──
 // Built here from structured payload.invoice_lines (never caller HTML), so
 // every value is escaped.
 function fmtInr(n: unknown): string {
@@ -292,9 +292,9 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
       return wrapper(`
         <p>Dear ${clientName},</p>
         ${payload.invoice_lines
-          ? `<p>Please find below the statement of invoices outstanding as on ${escapeHtml(payload.statement_date || "")}. Kindly review and arrange payment, or let us know if any of these have already been settled.</p>
+          ? `<p>Please find below your statement of account (invoices outstanding) as on ${escapeHtml(payload.statement_date || "")}. Kindly review and arrange payment, or let us know if any of these have already been settled.</p>
              ${buildInvoiceLinesTable(payload)}`
-          : `<p>Please find your ledger statement for your review. Kindly confirm the balances at your earliest.</p>`}
+          : `<p>Please find your statement of account for your review. Kindly confirm the balances at your earliest.</p>`}
         ${customMessage ? `<p>${customMessage}</p>` : ""}
         <p>Regards,<br><strong>${firmName}</strong></p>`);
 
@@ -488,7 +488,7 @@ async function renderFromTemplate(
       due_date:       payload.due_date || "",
       document_type:  payload.document_type || "",
       custom_message: payload.custom_message || "",
-      // Billing reminders / statement of outstanding
+      // Billing reminders / statement of account
       invoice_table:  buildInvoiceLinesTable(payload),
       days_overdue:   payload.days_overdue != null ? String(payload.days_overdue) : "",
       statement_date: payload.statement_date || "",

@@ -22,7 +22,7 @@
  *     on/after (due date + start days), fewer than max reminders sent, and at
  *     least repeat-days since the last reminder. All of a client's due
  *     invoices go in ONE email.
- *   Statement of outstanding — monthly (or quarterly: Jan/Apr/Jul/Oct), on or
+ *   Statement of Account — monthly (or quarterly: Jan/Apr/Jul/Oct), on or
  *     after the chosen day, once per period, when the client's total
  *     outstanding ≥ min balance.
  */
@@ -353,7 +353,7 @@ async function buildPlan(admin: any, firmIds: string[]) {
       skip("invoice", `Invoice reminders off (${source.invoice_enabled})`);
     }
 
-    // ── Statement of outstanding ──
+    // ── Statement of Account (outstanding invoices) ──
     if (e.ledger_enabled) {
       const period = ledgerPeriod(today, e.ledger_frequency, Number(e.ledger_day));
       if (!period) continue;
@@ -402,7 +402,7 @@ async function sendOne(admin: any, p: Planned, runId: string, trigger: string, t
       days_overdue: oldest,
       statement_date: fmtDate(today),
       invoice_lines: lines,
-      ...(p.kind === "ledger" ? { custom_subject: `Statement of outstanding as on ${fmtDate(today)}` } : {}),
+      ...(p.kind === "ledger" ? { custom_subject: `Statement of Account as on ${fmtDate(today)}` } : {}),
     },
   };
 

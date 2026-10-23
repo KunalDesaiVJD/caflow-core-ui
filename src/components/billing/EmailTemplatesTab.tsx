@@ -48,7 +48,7 @@ const DEFAULT_SUBJECTS: Record<TemplateType, string> = {
   proforma_sent: "Proforma Invoice",
   credit_note_issued: "Credit Note Issued",
   payment_reminder: "Payment Reminder — Action Required",
-  ledger_statement: "Your Account Ledger Statement",
+  ledger_statement: "Your Statement of Account",
   tds_due_7_days: "TDS Due in 7 Days — Please Act",
   tds_due_1_day: "URGENT: TDS Due Tomorrow",
   audit_report_ready: "Audit Report Ready for Review",
@@ -61,7 +61,7 @@ const TEMPLATE_LABELS: Record<TemplateType, string> = {
   proforma_sent: "Proforma Invoice Sent",
   credit_note_issued: "Credit Note Issued",
   payment_reminder: "Payment Reminder",
-  ledger_statement: "Ledger Statement",
+  ledger_statement: "Statement of Account",
   tds_due_7_days: "TDS Due in 7 Days",
   tds_due_1_day: "TDS Due Tomorrow (Urgent)",
   audit_report_ready: "Audit Report Ready",
@@ -209,11 +209,11 @@ const TYPE_CONTENT: Record<TemplateType, { category: string; body: string; cta: 
     cta: "Pay Now",
   },
   ledger_statement: {
-    category: "Ledger Statement",
-    body: `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">Please find attached your account ledger statement. This document provides a comprehensive overview of all transactions in your account.</p>
+    category: "Statement of Account",
+    body: `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">Please find attached your statement of account. This document provides a comprehensive overview of all transactions in your account.</p>
 <div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:16px 20px;margin:0 0 20px;"><p style="margin:0;color:#374151;font-size:13px;line-height:1.6;">The statement includes all invoices raised, payments received, and any outstanding balances as on date.</p></div>
 <p style="margin:0 0 8px;color:#374151;font-size:14px;line-height:1.6;">Please review and confirm the balances. In case of any discrepancy, kindly contact us immediately.</p>`,
-    cta: "Download Statement",
+    cta: "Download Statement of Account",
   },
   tds_due_7_days: {
     category: "TDS Reminder",
@@ -250,7 +250,7 @@ const TYPE_CONTENT: Record<TemplateType, { category: string; body: string; cta: 
   <li>Real-time invoice and payment tracking</li>
   <li>Automated TDS compliance reminders</li>
   <li>Digital document sharing and approvals</li>
-  <li>Ledger statements and financial reports</li>
+  <li>Statements of account and financial reports</li>
 </ul>`,
     cta: "Access Client Portal",
   },

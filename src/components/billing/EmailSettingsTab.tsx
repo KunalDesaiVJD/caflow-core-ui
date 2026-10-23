@@ -16,7 +16,7 @@ const DOC_TYPES = [
   { key: "credit_note", label: "Credit Note",         description: "Credit notes / adjustments" },
   { key: "quotation",   label: "Quotation",           description: "Quotes sent before work begins" },
   { key: "proforma",    label: "Proforma Invoice",    description: "Proforma invoices for advance payment" },
-  { key: "ledger",      label: "Ledger Statement",    description: "Outstanding ledger statements" },
+  { key: "ledger",      label: "Statement of Account", description: "Outstanding statements of account" },
   { key: "reminder",    label: "Payment Reminder",    description: "Automated overdue payment reminders" },
 ] as const;
 
