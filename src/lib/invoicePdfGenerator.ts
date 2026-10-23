@@ -523,6 +523,8 @@ export function buildInvoiceHtml(inv: InvoiceRecord): string {
       <h1 style="font-size:20px;font-weight:700;color:#8B4513;letter-spacing:1.5px;margin:0;padding:0;display:inline">${heading}</h1>
     </div>
 
+    ${inv.status === "voided" ? `<div style="text-align:center;margin:-8px 0 12px;padding:4px 0;border:2px solid #b91c1c;color:#b91c1c;font-size:14px;font-weight:700;letter-spacing:3px">CANCELLED${inv.voided_reason ? ` <span style="font-size:10px;font-weight:400;letter-spacing:0">— ${String(inv.voided_reason).replace(/[<>&]/g, "")}</span>` : ""}</div>` : ""}
+
     ${exportDeclaration}
 
     <div style="display:flex;justify-content:space-between;margin-bottom:14px">

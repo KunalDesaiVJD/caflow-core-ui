@@ -43,6 +43,7 @@ import { resolveFirmNameForDate } from "@/lib/firmName";
 import { BILLING_ATOMIC_NUMBERING } from "@/lib/billingFlags";
 import { isValidGstin } from "@/lib/gstinUtils";
 import { LOCKABLE_DOC_TYPES, firmLockDay, isPeriodLocked, lockMessage } from "@/lib/invoiceLock";
+import { isCancelled } from "@/lib/billingCancellation";
 
 // ─── Export Invoice Currencies ───
 const EXPORT_CURRENCIES = [
@@ -351,6 +352,7 @@ const NewInvoice = () => {
   // Date and status as stored, for the period lock (the form fields can change).
   const [savedDate, setSavedDate] = useState<string | null>(null);
   const [savedStatus, setSavedStatus] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
   const [showLogo, setShowLogo] = useState(true);
   const [remarksConditions, setRemarksConditions] = useState("");
   // Editable payment-terms window (days). Default 45; shown on the invoice as
@@ -612,6 +614,7 @@ const NewInvoice = () => {
         setInvoiceDate(inv.invoice_date || "");
         setSavedDate(inv.invoice_date || null);
         setSavedStatus(inv.status || "draft");
+        setCancelReason((inv as any).voided_reason || "");
         setReferenceNo((inv as any).reference_no || "");
         setStatus(inv.status || "draft");
         setShowLogo(inv.show_logo ?? true);
@@ -878,6 +881,7 @@ const NewInvoice = () => {
     if (!invoiceNo.trim()) { toast({ title: "Document number cannot be blank", variant: "destructive" }); return; }
     if (items.length === 0) { toast({ title: "Add at least one item", variant: "destructive" }); return; }
     if (duplicateWarning) { toast({ title: "Document number already exists. Please change it.", variant: "destructive" }); return; }
+    if (isCancelledDoc) { toast({ title: "This document is cancelled", description: "A cancelled document cannot be edited or re-issued.", variant: "destructive" }); return; }
     if (isLocked) { toast({ title: "This month is closed", description: lockMessage(savedDate!, lockDay!), variant: "destructive" }); return; }
     // Issuing (or re-dating) a document into a closed month is blocked too.
     if (!isSuperadmin && LOCKABLE_DOC_TYPES.includes(docType) && (newStatus || status) !== "draft"
@@ -1137,8 +1141,10 @@ const NewInvoice = () => {
   // Period lock: an issued invoice / credit note in a closed month is read-only
   // for everyone except a superadmin (enforced again by a DB trigger).
   const lockDay = firmLockDay(firm?.settings);
-  const isLocked = isEdit && !isSuperadmin && LOCKABLE_DOC_TYPES.includes(docType)
-    && savedStatus !== null && savedStatus !== "draft" && isPeriodLocked(savedDate, lockDay);
+  // A cancelled document is read-only for everyone, superadmins included.
+  const isCancelledDoc = isEdit && isCancelled(savedStatus);
+  const isLocked = isCancelledDoc || (isEdit && !isSuperadmin && LOCKABLE_DOC_TYPES.includes(docType)
+    && savedStatus !== null && savedStatus !== "draft" && isPeriodLocked(savedDate, lockDay));
   const canConvert = isEdit && (docType === "quotation" || docType === "proforma") && status === "finalized";
 
   // Generate invoice HTML
@@ -1234,7 +1240,17 @@ const NewInvoice = () => {
             </div>
           )}
 
-          {isLocked && savedDate && lockDay && (
+          {isCancelledDoc && (
+            <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-800">
+              <Lock size={14} className="shrink-0 mt-0.5" />
+              <span>
+                <span className="font-semibold">Cancelled — read-only.</span> This document is excluded from the ledger and
+                reports, and its number is not reused.{cancelReason ? ` Reason: ${cancelReason}` : ""}
+              </span>
+            </div>
+          )}
+
+          {isLocked && !isCancelledDoc && savedDate && lockDay && (
             <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
               <Lock size={14} className="shrink-0 mt-0.5" />
               <span><span className="font-semibold">Read-only — period closed.</span> {lockMessage(savedDate, lockDay)}</span>
@@ -1493,12 +1509,15 @@ const NewInvoice = () => {
                     onBlur={async () => {
                       if (!docNoManual || !invoiceNo.trim() || !selectedFirmId) return;
                       const { data } = await supabase.from("invoices")
-                        .select("id")
+                        .select("id, status")
                         .eq("invoice_no", invoiceNo.trim())
                         .eq("firm_id", selectedFirmId)
                         .neq("id", invoiceId || "00000000-0000-0000-0000-000000000000")
                         .limit(1);
-                      if (data && data.length > 0) setDuplicateWarning("This number already exists!");
+                      // A cancelled document keeps its number, so it still counts as taken.
+                      if (data && data.length > 0) setDuplicateWarning(isCancelled(data[0].status)
+                        ? "This number belongs to a cancelled document and cannot be reused."
+                        : "This number already exists!");
                       else setDuplicateWarning("");
                     }}
                   />

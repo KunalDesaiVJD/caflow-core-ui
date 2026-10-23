@@ -1210,8 +1210,11 @@ function GroupLedgerView() {
     if (clientIds.length === 0) return;
 
     const resolvedFirmIds = (firmIds.length === 0 || firmIds[0] === "all") ? [] : firmIds;
+    // Issued documents only: drafts are not documents yet, cancelled ones are void.
     let zipInvQuery = supabase.from("invoices").select("id, invoice_no, client_id")
-      .in("client_id", clientIds).eq("financial_year", fy);
+      .in("client_id", clientIds).eq("financial_year", fy)
+      .in("document_type", ["invoice", "credit_note"])
+      .not("status", "in", "(draft,voided,cancelled)");
     if (resolvedFirmIds.length > 0) zipInvQuery = zipInvQuery.in("firm_id", resolvedFirmIds);
     const { data: invoices } = await zipInvQuery;
     if (!invoices?.length) { toast({ title: "No invoices found" }); return; }

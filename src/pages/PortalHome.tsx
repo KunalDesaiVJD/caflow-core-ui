@@ -174,6 +174,7 @@ export default function PortalHome() {
       supabase.from("itr_demands").select("*").eq("client_id", activeClient.id).eq("status", "open"),
       supabase.from("documents").select("*").eq("client_id", activeClient.id).is("deleted_at", null).order("filename"),
       supabase.from("invoices").select("*").eq("client_id", activeClient.id)
+        .or("status.is.null,status.not.in.(voided,cancelled)")
         .order("due_date", { ascending: false }),
       user
         ? supabase.from("notification_log").select("*").eq("recipient_id", user.id)
