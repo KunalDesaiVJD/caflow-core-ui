@@ -30,6 +30,7 @@ import JSZip from "jszip";
 import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/lib/jspdfUnicodeFont";
 import type { LegalNameChange } from "@/lib/firmName";
 import { ledgerEntryKind, receiptDocNo, kasarDocNo, LEDGER_KIND_LABEL } from "@/lib/ledgerEntryKinds";
+import { drawClientSummaryTable, drawFirmBankDetails, loadFirmBankDetails, startBreakdownPage, stampPageFooters } from "@/lib/multiClientLedgerPdf";
 
 const fmtINR = (n: number) => "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -863,7 +864,7 @@ function GroupLedgerView() {
   const [fromDate, setFromDate] = useState(() => fyToDateRange(getCurrentFY()).start);
   const [toDate, setToDate] = useState(() => fyToDateRange(getCurrentFY()).end);
   const [data, setData] = useState<{ clientId: string; clientName: string; entries: any[] }[]>([]);
-  const [groupObMap, setGroupObMap] = useState<Record<string, { amount: number; date: string; narration: string }>>({});
+  const [groupObMap, setGroupObMap] = useState<Record<string, { amount: number; date: string; narration: string; firmIds: string[] }>>({});
   const [invoiceMap, setInvoiceMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
@@ -921,11 +922,11 @@ function GroupLedgerView() {
     // same rule as the single-client ledger.
     let obQ = (supabase as any)
       .from("client_billing_opening_balances")
-      .select("client_id, amount, balance_date, narration")
+      .select("client_id, firm_id, amount, balance_date, narration")
       .in("client_id", clientIds);
     if (resolvedFirmIds.length > 0) obQ = obQ.in("firm_id", resolvedFirmIds);
     const { data: obRows } = await obQ;
-    const newObMap: Record<string, { amount: number; date: string; narration: string }> = {};
+    const newObMap: Record<string, { amount: number; date: string; narration: string; firmIds: string[] }> = {};
     const obCount: Record<string, number> = {};
     (obRows || []).forEach((ob: any) => {
       const prev = newObMap[ob.client_id];
@@ -935,6 +936,7 @@ function GroupLedgerView() {
         amount: (prev?.amount || 0) + (Number(ob.amount) || 0),
         date: prev && prev.date > date ? prev.date : date,
         narration: obCount[ob.client_id] > 1 ? `${obCount[ob.client_id]} balances combined` : (ob.narration || ""),
+        firmIds: [...(prev?.firmIds || []), ...(ob.firm_id ? [ob.firm_id] : [])],
       };
     });
     setGroupObMap(newObMap);
@@ -1009,6 +1011,19 @@ function GroupLedgerView() {
       return "";
     };
 
+    // Page 1 — summary by client: Opening, Debit, Credit, Closing only
+    const sumOf = (entries: any[], k: "debit_amount" | "credit_amount") => entries.reduce((s: number, e: any) => s + (Number(e[k]) || 0), 0);
+    drawClientSummaryTable(doc, autoTable, {
+      startY: 26,
+      rows: data.map(({ clientId, clientName, entries }) => {
+        const opening = groupObMap[clientId]?.amount || 0;
+        const debit = sumOf(entries, "debit_amount"), credit = sumOf(entries, "credit_amount");
+        return { name: clientName, opening, debit, credit, closing: opening + debit - credit };
+      }),
+      totalLabel: `GROUP TOTAL (${data.length} client${data.length !== 1 ? "s" : ""})`,
+    });
+
+    // Page 2 onwards — client-wise breakdown
     const tableRows: any[][] = [];
     data.forEach(({ clientId, clientName, entries }) => {
       const ob = groupObMap[clientId];
@@ -1072,25 +1087,22 @@ function GroupLedgerView() {
     };
 
     autoTable(doc, {
-      startY: 26,
+      startY: startBreakdownPage(doc, `Client-wise Ledger — ${groupName}`),
       head: tableHead,
       body: tableRows,
       styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
       headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 8.5 },
       alternateRowStyles: { fillColor: [248, 251, 255] },
       columnStyles: isAllFirms ? colStylesAllFirms : colStylesNormal,
-      margin: { left: 10, right: 10 },
-      didDrawPage: (hookData) => {
-        const pageCount = (doc as any).internal.getNumberOfPages();
-        setPdfUnicodeFont(doc, "normal");
-        doc.setFontSize(7);
-        doc.setTextColor(120, 130, 145);
-        doc.text(`Page ${hookData.pageNumber} of ${pageCount}   |   CAFlow — Confidential`, 148.5, 205, { align: "center" });
-        doc.setDrawColor(...DARK_BLUE);
-        doc.setLineWidth(0.5);
-        doc.line(10, 202, 287, 202);
-      },
+      margin: { left: 10, right: 10, bottom: 16 },
     });
+
+    // End of the ledger — bank details of each firm that has entries or an opening balance in it
+    const involvedFirmIds = isAllFirms
+      ? data.flatMap(d => [...d.entries.map((e: any) => e.firm_id), ...(groupObMap[d.clientId]?.firmIds || [])])
+      : firmIds;
+    drawFirmBankDetails(doc, autoTable, await loadFirmBankDetails(involvedFirmIds));
+    stampPageFooters(doc, "CAFlow — Confidential");
 
     return doc.output("blob");
   };

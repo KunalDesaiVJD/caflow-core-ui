@@ -1,16 +1,18 @@
 /**
- * Group statement of account PDF: a summary by client (receipts, TDS / GST TDS,
- * kasar and credit notes in their own columns) followed by each client's ledger
- * with every receipt, TDS and kasar on its own line.
+ * Group statement of account PDF: page 1 is a summary by client (Opening,
+ * Debit, Credit, Closing); from page 2 each client's ledger with every receipt,
+ * TDS and kasar on its own line; then each firm's bank details.
  */
 import { format, parseISO } from "date-fns";
 import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/lib/jspdfUnicodeFont";
 import type { LedgerEntryKind } from "@/lib/ledgerEntryKinds";
 import type { LedgerEntry } from "@/lib/statementOfAccount";
+import {
+  drawClientSummaryTable, drawFirmBankDetails, pdfBalance, startBreakdownPage, stampPageFooters,
+  type FirmBankDetails,
+} from "@/lib/multiClientLedgerPdf";
 
 export interface GroupStatementClient { clientId: string; name: string; entries: LedgerEntry[] }
-
-const drCr = (net: number) => (net >= 0 ? { abs: net, label: "Dr" as const } : { abs: -net, label: "Cr" as const });
 
 /** Period figures for one client's statement, with credits split by kind. */
 export function summariseEntries(entries: LedgerEntry[]) {
@@ -25,6 +27,8 @@ export function summariseEntries(entries: LedgerEntry[]) {
 export async function buildGroupStatementPdf(o: {
   groupName: string; firmLabel: string; logoDataUrl: string | null;
   fromDate: string; toDate: string; perClient: GroupStatementClient[];
+  /** Bank details of the firms in the statement, printed at the end. */
+  bankDetails?: FirmBankDetails[];
 }): Promise<{ base64: string; blob: Blob }> {
   const jsPDF = (await import("jspdf")).default;
   const autoTable = (await import("jspdf-autotable")).default;
@@ -46,41 +50,19 @@ export async function buildGroupStatementPdf(o: {
   doc.text(`Period: ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}   |   Generated: ${format(new Date(), "d MMM yyyy, HH:mm")}`, textX, 21);
 
   const sums = perClient.map(c => ({ ...c, s: summariseEntries(c.entries) }));
-  const total = sums.reduce((t, c) => ({
-    opening: t.opening + c.s.opening, debit: t.debit + c.s.debit, receipts: t.receipts + c.s.receipts,
-    tds: t.tds + c.s.tds, kasar: t.kasar + c.s.kasar, creditNotes: t.creditNotes + c.s.creditNotes, closing: t.closing + c.s.closing,
-  }), { opening: 0, debit: 0, receipts: 0, tds: 0, kasar: 0, creditNotes: 0, closing: 0 });
-  const bal = (n: number) => { if (Math.abs(n) < 0.005) return "—"; const { abs, label } = drCr(n); return `${formatPdfCurrency(abs)} ${label}`; };
-  const amt = (n: number) => (n > 0.005 ? formatPdfCurrency(n) : "—");
   const hdr = { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: WHITE };
-  const right = { ...hdr, halign: "right" as const };
 
-  // 1) Summary by client
-  const summaryRows: any[][] = sums.map(c => [c.name, bal(c.s.opening), amt(c.s.debit), amt(c.s.receipts), amt(c.s.tds), amt(c.s.kasar), amt(c.s.creditNotes), bal(c.s.closing)]);
-  summaryRows.push([
-    { content: `GROUP TOTAL (${sums.length} client${sums.length !== 1 ? "s" : ""})`, styles: hdr },
-    { content: bal(total.opening), styles: right }, { content: amt(total.debit), styles: right },
-    { content: amt(total.receipts), styles: right }, { content: amt(total.tds), styles: right },
-    { content: amt(total.kasar), styles: right }, { content: amt(total.creditNotes), styles: right },
-    { content: bal(total.closing), styles: right },
-  ]);
-  autoTable(doc, {
+  // Page 1 — summary by client: Opening, Debit, Credit, Closing only
+  drawClientSummaryTable(doc, autoTable, {
     startY: 28,
-    head: [["Client", "Opening Balance", "Debit (Invoices)", "Receipts", "TDS / GST TDS", "Kasar", "Credit Notes", "Closing Balance"]],
-    body: summaryRows,
-    styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
-    headStyles: { font: "NotoSans", fillColor: [40, 80, 130], textColor: WHITE, fontStyle: "bold", halign: "center" },
-    alternateRowStyles: { fillColor: [248, 251, 255] },
-    columnStyles: {
-      0: { cellWidth: 67 },
-      1: { cellWidth: 30, halign: "right" }, 2: { cellWidth: 30, halign: "right" }, 3: { cellWidth: 30, halign: "right" },
-      4: { cellWidth: 30, halign: "right" }, 5: { cellWidth: 30, halign: "right" }, 6: { cellWidth: 30, halign: "right" },
-      7: { cellWidth: 30, halign: "right" },
-    },
-    margin: { left: 10, right: 10 },
+    rows: sums.map(c => ({
+      name: c.name, opening: c.s.opening, debit: c.s.debit,
+      credit: c.s.receipts + c.s.tds + c.s.kasar + c.s.creditNotes, closing: c.s.closing,
+    })),
+    totalLabel: `GROUP TOTAL (${sums.length} client${sums.length !== 1 ? "s" : ""})`,
   });
 
-  // 2) Each client's ledger — receipts, TDS and kasar on their own lines
+  // Page 2 onwards — each client's ledger, receipts, TDS and kasar on their own lines
   const detail: any[][] = [];
   for (const c of sums) {
     detail.push([{ content: c.name, colSpan: 6, styles: { fontStyle: "bold" as const, fillColor: [225, 233, 245] as [number, number, number], textColor: DARK_BLUE } }]);
@@ -90,36 +72,35 @@ export async function buildGroupStatementPdf(o: {
         e.doc_no, e.narration,
         e.debit  > 0 ? formatPdfCurrency(e.debit)  : "—",
         e.credit > 0 ? formatPdfCurrency(e.credit) : "—",
-        bal(e.balance),
+        pdfBalance(e.balance),
       ]);
     }
     const totDr = c.entries.reduce((x, e) => x + e.debit, 0);
     const totCr = c.entries.reduce((x, e) => x + e.credit, 0);
+    const sub = { fontStyle: "bold" as const, fillColor: [240, 244, 250] as [number, number, number] };
     detail.push([
-      { content: `Closing balance — ${c.name}`, colSpan: 3, styles: { fontStyle: "bold" as const, fillColor: [240, 244, 250] as [number, number, number] } },
-      { content: formatPdfCurrency(totDr), styles: { fontStyle: "bold" as const, fillColor: [240, 244, 250] as [number, number, number], halign: "right" as const } },
-      { content: formatPdfCurrency(totCr), styles: { fontStyle: "bold" as const, fillColor: [240, 244, 250] as [number, number, number], halign: "right" as const } },
-      { content: bal(c.entries[c.entries.length - 1].balance), styles: { fontStyle: "bold" as const, fillColor: [240, 244, 250] as [number, number, number], halign: "right" as const } },
+      { content: `Closing balance — ${c.name}`, colSpan: 3, styles: sub },
+      { content: formatPdfCurrency(totDr), styles: { ...sub, halign: "right" as const } },
+      { content: formatPdfCurrency(totCr), styles: { ...sub, halign: "right" as const } },
+      { content: pdfBalance(c.entries[c.entries.length - 1].balance), styles: { ...sub, halign: "right" as const } },
     ]);
   }
   autoTable(doc, {
-    startY: (doc as any).lastAutoTable.finalY + 8,
+    startY: startBreakdownPage(doc, `Client-wise Ledger — ${groupName}`),
     head: [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance"]],
     body: detail,
     styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.2, lineColor: [200, 210, 225], lineWidth: 0.3 },
-    headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: WHITE, fontStyle: "bold" },
+    headStyles: { ...hdr, font: "NotoSans" },
     columnStyles: {
       0: { cellWidth: 24, halign: "center" }, 1: { cellWidth: 28, halign: "center" }, 2: { cellWidth: 111 },
       3: { cellWidth: 38, halign: "right" }, 4: { cellWidth: 38, halign: "right" }, 5: { cellWidth: 38, halign: "right" },
     },
-    margin: { left: 10, right: 10 },
-    didDrawPage: (hookData: any) => {
-      const pc = (doc as any).internal.getNumberOfPages();
-      doc.setFontSize(7); setPdfUnicodeFont(doc, "normal"); doc.setTextColor(120, 130, 145);
-      doc.text(`Page ${hookData.pageNumber} of ${pc}   |   ${groupName}   |   Confidential`, 148, 208, { align: "center" });
-      doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.4); doc.line(14, 204, 283, 204);
-    },
+    margin: { left: 10, right: 10, bottom: 16 },
   });
+
+  // End of the ledger — bank details of each firm
+  drawFirmBankDetails(doc, autoTable, o.bankDetails ?? []);
+  stampPageFooters(doc, `${groupName}   |   Confidential`);
 
   const blob = doc.output("blob");
   const base64 = doc.output("datauristring").split(",")[1];

@@ -32,6 +32,7 @@ import DocLink from "@/components/billing/DocLink";
 import type { LedgerEntryKind } from "@/lib/ledgerEntryKinds";
 import { composeLedgerEntries, type LedgerEntry, type RawInvoice, type RawReceipt, type RawKasar } from "@/lib/statementOfAccount";
 import { buildGroupStatementPdf } from "@/lib/groupStatementPdf";
+import { loadFirmBankDetails } from "@/lib/multiClientLedgerPdf";
 import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
 } from "@/lib/jspdfUnicodeFont";
@@ -520,6 +521,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       firmLabel: group.firmIds.map(id => firms.find(f => f.id === id)?.name ?? "").filter(Boolean).join(", "),
       logoDataUrl: onlyFirm?.logo_url ? await loadLogoBase64(onlyFirm.logo_url) : null,
       fromDate, toDate, perClient,
+      bankDetails: await loadFirmBankDetails(group.firmIds),
     });
   }
 
