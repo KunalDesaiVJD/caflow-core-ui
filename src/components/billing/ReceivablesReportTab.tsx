@@ -13,6 +13,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
@@ -28,6 +29,9 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import DocLink from "@/components/billing/DocLink";
+import type { LedgerEntryKind } from "@/lib/ledgerEntryKinds";
+import { composeLedgerEntries, type LedgerEntry, type RawInvoice, type RawReceipt, type RawKasar } from "@/lib/statementOfAccount";
+import { buildGroupStatementPdf } from "@/lib/groupStatementPdf";
 import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
 } from "@/lib/jspdfUnicodeFont";
@@ -92,16 +96,6 @@ function addBalances(into: Balances, b: Balances) {
   into.debit += b.debit; into.credit += b.credit;
 }
 
-interface LedgerEntry {
-  entry_date: string;
-  doc_no: string;
-  doc_id?: string;        // invoice / credit note id — makes the doc no a link
-  doc_type?: string;
-  narration: string;
-  debit: number;
-  credit: number;
-  balance: number;
-}
 
 type SortKey = "name" | "closing" | "debit" | "credit";
 type SortDir = "asc" | "desc";
@@ -166,6 +160,14 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   // Email dialog
   const [emailClient,  setEmailClient]  = useState<DisplayRow | null>(null);
   const [emailSending, setEmailSending] = useState(false);
+
+  // Group statement email dialog (whole group, one document)
+  const [groupEmail,   setGroupEmail]   = useState<DisplayRow | null>(null);
+  const [gTo,          setGTo]          = useState("");
+  const [gCc,          setGCc]          = useState("");
+  const [gSubject,     setGSubject]     = useState("");
+  const [gMsg,         setGMsg]         = useState("");
+  const [gSending,     setGSending]     = useState(false);
 
   // Telegram / PDF
   const [tgSending,    setTgSending]    = useState(false);
@@ -356,10 +358,11 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   // ── Fetch ledger for sheet ────────────────────────────────────────────────
 
+  const firmTagFor = (multiFirm: boolean) => (fid: string) =>
+    multiFirm ? `[${firms.find(f => f.id === fid)?.name ?? "Firm"}] ` : "";
+
   async function openLedger(client: DisplayRow): Promise<LedgerEntry[]> {
     const ledgerFirms = client.firmIds;
-    const multiFirm = ledgerFirms.length > 1;
-    const firmTag = (fid: string) => multiFirm ? `[${firms.find(f => f.id === fid)?.name ?? "Firm"}] ` : "";
     setSheetClient(client);
     setSheetEntries([]);
     setSheetLoading(true);
@@ -402,71 +405,17 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
       // One opening-balance row per firm; several when the view spans firms.
       const obRows: any[] = obResult?.data || [];
-      const obDate: string   = obRows.map(r => r.balance_date).filter(Boolean).sort()[0] || fromDate;
-      const obNarration      = obRows.length === 1 && obRows[0].narration ? obRows[0].narration : "Opening Balance";
-
-      // opening = manual OB + pre-period invoices − pre-period receipts
-      const opening = netOpening(client);
-
-      const entries: LedgerEntry[] = [];
-
-      if (opening !== 0) {
-        entries.push({
-          entry_date: obDate || fromDate,
-          doc_no: "—",
-          narration: obNarration,
-          debit:   opening > 0 ? opening : 0,
-          credit:  opening < 0 ? -opening : 0,
-          balance: opening,
-        });
-      }
-
-      type Tmp = { date: string; doc_no: string; doc_id?: string; doc_type?: string; narration: string; debit: number; credit: number };
-      const tmp: Tmp[] = [];
-
-      for (const inv of invData || []) {
-        const isCredit = inv.document_type === "credit_note";
-        const amt = Number(inv.total_amount || 0);
-        tmp.push({
-          date:      inv.invoice_date || fromDate,
-          doc_no:    inv.invoice_no || inv.id.slice(0, 8).toUpperCase(),
-          doc_id:    inv.id,
-          doc_type:  inv.document_type,
-          narration: firmTag(inv.firm_id) + (isCredit ? `Credit Note — ${inv.invoice_no || ""}` : `Invoice — ${inv.invoice_no || ""}`),
-          debit:     isCredit ? 0 : amt,
-          credit:    isCredit ? amt : 0,
-        });
-      }
-
-      for (const rec of recData || []) {
-        const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0) + Number(rec.gst_tds_amount || 0);
-        tmp.push({
-          date:      rec.receipt_date,
-          doc_no:    rec.id.slice(0, 8).toUpperCase(),
-          narration: firmTag(rec.firm_id) + `Receipt — ${rec.payment_mode || ""}${rec.remarks ? ` (${rec.remarks})` : ""}`.replace(/—\s*$/, "").trim(),
-          debit:     0,
-          credit:    amt,
-        });
-      }
-
-      for (const k of kasarData || []) {
-        tmp.push({
-          date:      k.kasar_date,
-          doc_no:    `KSR-${k.id.slice(0, 6).toUpperCase()}`,
-          narration: firmTag(k.firm_id) + (k.narration ? `Kasar — ${k.narration}` : "Kasar settlement"),
-          debit:     0,
-          credit:    Number(k.amount || 0),
-        });
-      }
-
-      tmp.sort((a, b) => a.date.localeCompare(b.date));
-
-      let balance = opening;
-      for (const t of tmp) {
-        balance += t.debit - t.credit;
-        entries.push({ entry_date: t.date, doc_no: t.doc_no, doc_id: t.doc_id, doc_type: t.doc_type, narration: t.narration, debit: t.debit, credit: t.credit, balance });
-      }
-
+      const entries = composeLedgerEntries({
+        // opening = manual OB + pre-period invoices − pre-period receipts
+        opening: netOpening(client),
+        obDate: obRows.map(r => r.balance_date).filter(Boolean).sort()[0] || fromDate,
+        obNarration: obRows.length === 1 && obRows[0].narration ? obRows[0].narration : "Opening Balance",
+        invoices: (invData || []) as RawInvoice[],
+        receipts: (recData || []) as RawReceipt[],
+        kasars: (kasarData || []) as RawKasar[],
+        fromDate,
+        firmTag: firmTagFor(ledgerFirms.length > 1),
+      });
       setSheetEntries(entries);
       return entries;
     } catch (e: any) {
@@ -474,6 +423,180 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       return [];
     } finally {
       setSheetLoading(false);
+    }
+  }
+
+  // ── Group statement of account ────────────────────────────────────────────
+  // One document for a whole client group: a summary by client (receipts, TDS,
+  // kasar and credit notes in their own columns) followed by each client's ledger.
+
+  /** Sum the loaded (client, firm) balances of one group into a group row. */
+  function buildGroupRow(groupId: string, name: string): DisplayRow {
+    const row: DisplayRow = {
+      key: `group:${groupId}`, kind: "group", id: groupId, name, email: null,
+      firmIds: [], atomKeys: [], clientCount: 0, ...emptyBalances(),
+    };
+    const clientSet = new Set<string>();
+    const firmSet = new Set<string>();
+    for (const a of rows) {
+      if (!(groupsOfClient[a.id] ?? []).includes(groupId)) continue;
+      addBalances(row, a);
+      row.atomKeys.push(`${a.id}|${a.firmId}`);
+      clientSet.add(a.id);
+      firmSet.add(a.firmId);
+    }
+    row.clientCount = clientSet.size;
+    row.firmIds = Array.from(firmSet);
+    return row;
+  }
+
+  type GroupStatementClient = { clientId: string; name: string; entries: LedgerEntry[] };
+
+  async function loadGroupStatement(group: DisplayRow): Promise<GroupStatementClient[]> {
+    const atomKeys = new Set(group.atomKeys);
+    const atoms = rows.filter(a => atomKeys.has(`${a.id}|${a.firmId}`));
+    const clientIds = Array.from(new Set(atoms.map(a => a.id)));
+    const groupFirms = group.firmIds;
+
+    const invoices: (RawInvoice & { client_id: string })[] = [];
+    const receipts: (RawReceipt & { client_id: string })[] = [];
+    const kasars: (RawKasar & { client_id: string })[] = [];
+    const obs: any[] = [];
+    for (let i = 0; i < clientIds.length; i += 100) {
+      const chunk = clientIds.slice(i, i + 100);
+      const [inv, rec, kas, ob] = await Promise.all([
+        fetchAllRows<any>(() => supabase.from("invoices")
+          .select("id, client_id, firm_id, invoice_no, invoice_date, total_amount, document_type")
+          .in("client_id", chunk).in("firm_id", groupFirms)
+          .in("document_type", ["invoice", "credit_note"]).in("status", BILLABLE_STATUSES)
+          .or(`invoice_date.is.null,and(invoice_date.gte.${fromDate},invoice_date.lte.${toDate})`)
+          .order("invoice_date").order("id")),
+        fetchAllRows<any>(() => supabase.from("billing_receipts")
+          .select("id, client_id, firm_id, receipt_date, amount_received, tds_amount, gst_tds_amount, payment_mode, remarks")
+          .in("client_id", chunk).in("firm_id", groupFirms)
+          .gte("receipt_date", fromDate).lte("receipt_date", toDate)
+          .order("receipt_date").order("id")),
+        fetchAllRows<any>(() => (supabase as any).from("billing_kasars")
+          .select("id, client_id, firm_id, kasar_date, amount, narration")
+          .in("client_id", chunk).in("firm_id", groupFirms)
+          .gte("kasar_date", fromDate).lte("kasar_date", toDate)
+          .order("kasar_date").order("id")),
+        fetchAllRows<any>(() => (supabase as any).from("client_billing_opening_balances")
+          .select("id, client_id, amount, balance_date, narration")
+          .in("client_id", chunk).in("firm_id", groupFirms).is("gstin", null)
+          .order("id")),
+      ]);
+      invoices.push(...inv); receipts.push(...rec); kasars.push(...kas); obs.push(...ob);
+    }
+
+    const byClient = <T extends { client_id: string }>(list: T[]) => {
+      const m = new Map<string, T[]>();
+      for (const r of list) { if (!m.has(r.client_id)) m.set(r.client_id, []); m.get(r.client_id)!.push(r); }
+      return m;
+    };
+    const invBy = byClient(invoices), recBy = byClient(receipts), kasBy = byClient(kasars), obBy = byClient(obs);
+    const tag = firmTagFor(groupFirms.length > 1);
+
+    const out: GroupStatementClient[] = [];
+    for (const clientId of clientIds) {
+      const mine = atoms.filter(a => a.id === clientId);
+      const clientObs = obBy.get(clientId) ?? [];
+      const entries = composeLedgerEntries({
+        opening: mine.reduce((sum, a) => sum + netOpening(a), 0),
+        obDate: clientObs.map(r => r.balance_date).filter(Boolean).sort()[0] || fromDate,
+        obNarration: clientObs.length === 1 && clientObs[0].narration ? clientObs[0].narration : "Opening Balance",
+        invoices: invBy.get(clientId) ?? [], receipts: recBy.get(clientId) ?? [], kasars: kasBy.get(clientId) ?? [],
+        fromDate, firmTag: tag,
+      });
+      if (entries.length > 0) out.push({ clientId, name: mine[0]?.name ?? "—", entries });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  async function generateGroupStatementPdf(group: DisplayRow, perClient: GroupStatementClient[]): Promise<{ base64: string; blob: Blob }> {
+    const onlyFirm = group.firmIds.length === 1 ? firms.find(f => f.id === group.firmIds[0]) : null;
+    return buildGroupStatementPdf({
+      groupName: group.name,
+      firmLabel: group.firmIds.map(id => firms.find(f => f.id === id)?.name ?? "").filter(Boolean).join(", "),
+      logoDataUrl: onlyFirm?.logo_url ? await loadLogoBase64(onlyFirm.logo_url) : null,
+      fromDate, toDate, perClient,
+    });
+  }
+
+  const splitEmails = (v: string) => v.split(/[,;\s]+/).map(e => e.trim()).filter(Boolean);
+
+  function openGroupEmail(group: DisplayRow) {
+    const period = `${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`;
+    setGroupEmail(group);
+    setGTo(""); setGCc("");
+    setGSubject(`Statement of Account — ${group.name} — ${period}`);
+    setGMsg(`Dear Sir/Madam,\n\nPlease find attached the statement of account for ${group.name} for the period ${period}.\n\nKindly review and revert if any discrepancies are noticed.\n\nRegards`);
+  }
+
+  /** Emails of the group's clients, offered as one-click suggestions for the To field. */
+  const groupEmailSuggestions = useMemo(() => {
+    if (!groupEmail) return [] as string[];
+    const keys = new Set(groupEmail.atomKeys);
+    const set = new Set<string>();
+    for (const a of rows) if (a.email && keys.has(`${a.id}|${a.firmId}`)) set.add(a.email.trim());
+    return Array.from(set).sort();
+  }, [groupEmail, rows]);
+
+  async function handleSendGroupEmail() {
+    if (!groupEmail) return;
+    const to = splitEmails(gTo);
+    if (to.length === 0 || to.some(e => !e.includes("@"))) { toast.error("Enter at least one valid recipient email address"); return; }
+    const cc = splitEmails(gCc).filter(e => !to.includes(e));
+    setGSending(true);
+    try {
+      const perClient = await loadGroupStatement(groupEmail);
+      if (perClient.length === 0) { toast.error("Nothing to send — no balances or transactions for this group in the period"); return; }
+      const { base64 } = await generateGroupStatementPdf(groupEmail, perClient);
+      const firmForSend = groupEmail.firmIds.length === 1 ? groupEmail.firmIds[0] : sendFirmId;
+      const filename = `Statement_of_Account_${groupEmail.name.replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 40)}_${fromDate}_${toDate}.pdf`;
+
+      const sent: string[] = [];
+      const failed: { addr: string; reason: string }[] = [];
+      for (const [idx, addr] of to.entries()) {
+        const { data, error } = await supabase.functions.invoke("send-notification", {
+          body: {
+            type: "ledger_statement",
+            firm_id: firmForSend,
+            direct_email: addr,
+            // CC once (with the first recipient), not once per To address.
+            ...(idx === 0 && cc.length > 0 ? { custom_cc: cc } : {}),
+            payload: {
+              client_name: groupEmail.name,
+              custom_subject: gSubject || `Statement of Account — ${groupEmail.name}`,
+              custom_message: gMsg,
+              pdf_base64: base64,
+              pdf_filename: filename,
+            },
+          },
+        });
+        // supabase-js does not throw on a failed delivery — read the real per-recipient status.
+        const delivery = (data as any)?.results?.direct?.email;
+        if (error) {
+          let reason = error.message || "Send failed";
+          try { const ctx = await (error as any).context?.json?.(); if (ctx?.error) reason = ctx.error; } catch { /* ignore */ }
+          failed.push({ addr, reason });
+        } else if (delivery?.status !== "sent") {
+          failed.push({ addr, reason: delivery?.error || "Delivery failed" });
+        } else {
+          sent.push(addr);
+        }
+      }
+      if (failed.length === 0) {
+        toast.success(`Statement of account for ${groupEmail.name} sent to ${sent.join(", ")}${cc.length ? ` + ${cc.length} CC` : ""}`);
+        setGroupEmail(null);
+      } else {
+        toast.error("Failed to send: " + failed.map(f => `${f.addr} — ${f.reason}`).join("; "));
+        if (sent.length > 0) toast.success(`Sent to ${sent.join(", ")}`);
+      }
+    } catch (e: any) {
+      toast.error("Group email failed: " + e.message);
+    } finally {
+      setGSending(false);
     }
   }
 
@@ -669,7 +792,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
     doc.setTextColor(255, 255, 255);
     setPdfUnicodeFont(doc, "bold"); doc.setFontSize(13);
-    doc.text("CLIENT LEDGER STATEMENT", textX, 10);
+    doc.text("STATEMENT OF ACCOUNT", textX, 10);
     setPdfUnicodeFont(doc, "normal"); doc.setFontSize(8);
     doc.text(`${selectedFirmName}   |   Client: ${client.name}`, textX, 16);
     doc.text(`Period: ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}   |   Generated: ${format(new Date(), "d MMM yyyy HH:mm")}`, textX, 21);
@@ -728,7 +851,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     try {
       const { blob } = await generateClientLedgerPdf(sheetClient, sheetEntries);
       const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `Ledger_${sheetClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`; a.click();
+      const a = document.createElement("a"); a.href = url; a.download = `Statement_of_Account_${sheetClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`; a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) { toast.error("PDF failed: " + e.message); }
   }
@@ -756,7 +879,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
             custom_subject: `Statement of Account — ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`,
             custom_message: `Please find attached your statement of account for the period ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}. Kindly review and revert if any discrepancies are noticed.`,
             pdf_base64:     base64,
-            pdf_filename:   `Ledger_${emailClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`,
+            pdf_filename:   `Statement_of_Account_${emailClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`,
           },
         },
       });
@@ -872,10 +995,16 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           <div className="flex items-center justify-between gap-2">
             <div className="font-semibold text-sm">Sundry Debtors — {viewLabel}</div>
             {groupFilter && (
-              <button className="text-[11px] bg-white/15 hover:bg-white/25 rounded px-2 py-0.5 flex items-center gap-1"
-                onClick={() => { setGroupFilter(null); setViewBy("group"); }}>
-                <X size={10} /> Back to all groups
-              </button>
+              <div className="flex items-center gap-2">
+                <button className="text-[11px] bg-white/15 hover:bg-white/25 rounded px-2 py-0.5 flex items-center gap-1"
+                  onClick={() => openGroupEmail(buildGroupRow(groupFilter.id, groupFilter.name))}>
+                  <Mail size={10} /> Email group statement
+                </button>
+                <button className="text-[11px] bg-white/15 hover:bg-white/25 rounded px-2 py-0.5 flex items-center gap-1"
+                  onClick={() => { setGroupFilter(null); setViewBy("group"); }}>
+                  <X size={10} /> Back to all groups
+                </button>
+              </div>
             )}
           </div>
           <div className="text-xs text-white/60">{selectedFirmName} · {format(parseISO(fromDate), "d-MMM-yy")} to {format(parseISO(toDate), "d-MMM-yy")}</div>
@@ -948,7 +1077,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                   </div>
                   <div className="flex items-center justify-center" onClick={e => e.stopPropagation()}>
                     {r.kind === "client" && r.email && (
-                      <button title={`Email to ${r.email}`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => setEmailClient(r)}>
+                      <button title={`Email statement of account to ${r.email}`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => setEmailClient(r)}>
+                        <Mail size={12} />
+                      </button>
+                    )}
+                    {r.kind === "group" && r.id !== NO_GROUP && (
+                      <button title={`Email the whole ${r.name} group statement of account`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => openGroupEmail(r)}>
                         <Mail size={12} />
                       </button>
                     )}
@@ -984,7 +1118,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         <span><span className="text-green-600 font-semibold">Cr</span> = advance/overpaid</span>
         <span>{viewBy === "client" ? "Click row → ledger detail" : `Click a ${viewBy === "firm" ? "firm" : "group"} → its clients`}</span>
         {viewBy === "group" && <span>A client in several groups is listed under each; the grand total counts it once</span>}
-        <span><Mail size={10} className="inline" /> = email ledger to client</span>
+        <span><Mail size={10} className="inline" /> = email statement of account ({viewBy === "group" ? "whole group" : "client"})</span>
       </div>
 
       {/* ── Client Ledger Sheet ── */}
@@ -995,7 +1129,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               <div>
                 <div className="text-base font-bold">{sheetClient?.name}</div>
                 <div className="text-xs text-white/60 font-normal mt-0.5">
-                  Ledger · {format(parseISO(fromDate), "d MMM yyyy")} to {format(parseISO(toDate), "d MMM yyyy")}
+                  Statement of Account · {format(parseISO(fromDate), "d MMM yyyy")} to {format(parseISO(toDate), "d MMM yyyy")}
                 </div>
               </div>
               <div className="flex gap-2">
@@ -1036,6 +1170,26 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               })()}
             </div>
           )}
+
+          {sheetClient && !sheetLoading && (() => {
+            // Credits split by kind, so receipts, TDS and kasar read as separate amounts.
+            const sum = (...kinds: LedgerEntryKind[]) =>
+              sheetEntries.filter(e => e.kind && kinds.includes(e.kind)).reduce((t, e) => t + e.credit, 0);
+            const parts: { label: string; amount: number }[] = [
+              { label: "Receipts", amount: sum("receipt") },
+              { label: "TDS", amount: sum("tds") },
+              { label: "GST TDS", amount: sum("gst_tds") },
+              { label: "Kasar", amount: sum("kasar") },
+              { label: "Credit notes", amount: sum("credit_note") },
+            ].filter(x => x.amount > 0.005);
+            if (parts.length === 0) return null;
+            return (
+              <div className="px-4 py-1.5 border-b bg-slate-50/60 text-[11px] text-muted-foreground flex flex-wrap gap-x-4 gap-y-0.5 flex-shrink-0">
+                <span className="font-medium">Credit made up of:</span>
+                {parts.map(x => <span key={x.label}>{x.label} <span className="tabular-nums text-foreground">₹{fmtINR(x.amount)}</span></span>)}
+              </div>
+            );
+          })()}
 
           <div className="flex-1 overflow-auto">
             {sheetLoading ? (
@@ -1082,13 +1236,70 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       </Sheet>
 
       {/* ── Email dialog ── */}
+      {/* ── Group statement email dialog ── */}
+      <Dialog open={!!groupEmail} onOpenChange={open => { if (!open && !gSending) setGroupEmail(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base"><Mail size={16} className="text-blue-600" /> Email Group Statement of Account</DialogTitle>
+          </DialogHeader>
+          {groupEmail && (
+            <div className="space-y-3 py-1">
+              <p className="text-xs text-muted-foreground">
+                <span className="font-semibold text-foreground">{groupEmail.name}</span> — {groupEmail.clientCount} client{groupEmail.clientCount !== 1 ? "s" : ""}
+                {groupEmail.firmIds.length > 1 ? ` across ${groupEmail.firmIds.length} firms` : ""} · {format(parseISO(fromDate), "d MMM yyyy")} → {format(parseISO(toDate), "d MMM yyyy")}.
+                One PDF goes to the addresses below: a summary by client, then each client's ledger.
+              </p>
+              <div className="space-y-1">
+                <Label htmlFor="g-email-to" className="text-xs">To <span className="text-destructive">*</span></Label>
+                <Input id="g-email-to" value={gTo} onChange={e => setGTo(e.target.value)} placeholder="email@example.com, another@example.com" className="h-8 text-xs" />
+                {groupEmailSuggestions.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    <span className="text-[11px] text-muted-foreground">Client emails:</span>
+                    {groupEmailSuggestions.map(em => {
+                      const picked = splitEmails(gTo).includes(em);
+                      return (
+                        <button key={em} type="button"
+                          onClick={() => setGTo(picked ? splitEmails(gTo).filter(x => x !== em).join(", ") : [...splitEmails(gTo), em].join(", "))}
+                          className={cn("px-2 py-0.5 rounded-full text-[11px] border", picked ? "bg-primary text-primary-foreground border-primary" : "bg-muted hover:bg-muted/70")}>
+                          {em}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-[11px] text-amber-700">The statement lists every client in the group with their balances — send it only to someone entitled to see all of them.</p>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="g-email-cc" className="text-xs">CC <span className="text-muted-foreground">(optional)</span></Label>
+                <Input id="g-email-cc" value={gCc} onChange={e => setGCc(e.target.value)} placeholder="cc@example.com" className="h-8 text-xs" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="g-email-subject" className="text-xs">Subject</Label>
+                <Input id="g-email-subject" value={gSubject} onChange={e => setGSubject(e.target.value)} className="h-8 text-xs" />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="g-email-msg" className="text-xs">Message</Label>
+                <Textarea id="g-email-msg" rows={6} value={gMsg} onChange={e => setGMsg(e.target.value)} className="text-xs" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" disabled={gSending} onClick={() => setGroupEmail(null)}>Cancel</Button>
+            <Button size="sm" disabled={gSending || !gTo.trim()} onClick={handleSendGroupEmail} className="gap-1.5">
+              {gSending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
+              {gSending ? "Preparing & sending…" : "Send Group Statement"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={!!emailClient} onOpenChange={open => { if (!open && !emailSending) setEmailClient(null); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base"><Mail size={16} className="text-blue-600" /> Send Ledger Statement</DialogTitle>
+            <DialogTitle className="flex items-center gap-2 text-base"><Mail size={16} className="text-blue-600" /> Send Statement of Account</DialogTitle>
           </DialogHeader>
           <div className="text-sm text-muted-foreground space-y-2 py-1">
-            <p>Send ledger PDF to <span className="font-semibold text-foreground">{emailClient?.name}</span>?</p>
+            <p>Send statement of account PDF to <span className="font-semibold text-foreground">{emailClient?.name}</span>?</p>
             <p className="text-xs">Recipient: <span className="font-mono">{emailClient?.email}</span></p>
             <p className="text-xs">Period: {format(parseISO(fromDate), "d MMM yyyy")} → {format(parseISO(toDate), "d MMM yyyy")}</p>
           </div>

@@ -17,10 +17,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow, TableFooter,
 } from "@/components/ui/table";
 import { format } from "date-fns";
-import { BookOpen, Download, Archive, Users, Building2, Share2, Mail, Phone, X } from "lucide-react";
+import { BookOpen, Download, Archive, Users, Building2, Share2 } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -29,7 +28,8 @@ import { buildClientGstins } from "@/lib/gstinUtils";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
 import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/lib/jspdfUnicodeFont";
-import { resolveFirmNameForDate, type LegalNameChange } from "@/lib/firmName";
+import type { LegalNameChange } from "@/lib/firmName";
+import { ledgerEntryKind, receiptDocNo, kasarDocNo, LEDGER_KIND_LABEL } from "@/lib/ledgerEntryKinds";
 
 const fmtINR = (n: number) => "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -98,9 +98,13 @@ async function buildLedgerEntries(
       firm_id: e.firm_id || undefined,
     }));
 
-    // Collect document_ids already present in client_ledger_entries (receipt type)
+    // Collect receipt ids already present in client_ledger_entries. A TDS-only
+    // receipt has no "receipt" row (no amount received) — only its TDS adjustment
+    // rows — so those count too, or its TDS would be added a second time below.
     const existingReceiptDocIds = new Set(
-      leEntries.filter(e => e.entry_type === "receipt" && e.document_id).map(e => e.document_id!)
+      leEntries
+        .filter(e => (e.entry_type === "receipt" || e.entry_type === "adjustment") && e.document_id)
+        .map(e => e.document_id!)
     );
 
     let rcptMergeQ = supabase.from("billing_receipts")
@@ -113,7 +117,7 @@ async function buildLedgerEntries(
 
     (extraReceipts || []).forEach(r => {
       if (existingReceiptDocIds.has(r.id)) return; // already in client_ledger_entries
-      leEntries.push({
+      if (Number(r.amount_received) > 0) leEntries.push({
         id: `rct-${r.id}`,
         entry_date: r.receipt_date,
         entry_type: "receipt",
@@ -134,6 +138,7 @@ async function buildLedgerEntries(
           credit_amount: Number(r.tds_amount),
           narration: "TDS deducted",
           client_id: r.client_id,
+          firm_id: r.firm_id || undefined,
         });
       }
       if (Number(r.gst_tds_amount) > 0) {
@@ -146,6 +151,7 @@ async function buildLedgerEntries(
           credit_amount: Number(r.gst_tds_amount),
           narration: "GST TDS deducted",
           client_id: r.client_id,
+          firm_id: r.firm_id || undefined,
         });
       }
     });
@@ -216,15 +222,6 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
   const [invoiceMap, setInvoiceMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
-  // ── Email dialog state ────────────────────────────────────────────────
-  const [emailOpen,    setEmailOpen]    = useState(false);
-  const [emailTo,      setEmailTo]      = useState("");
-  const [emailCCList,  setEmailCCList]  = useState<string[]>([]);
-  const [emailCCInput, setEmailCCInput] = useState("");
-  const [emailSubject, setEmailSubject] = useState("");
-  const [emailMsg,     setEmailMsg]     = useState("");
-  const [emailSending, setEmailSending] = useState(false);
-
   // ── Opening balance state ─────────────────────────────────────────────
   const [obAmount, setObAmount] = useState<number>(0);
   const [obDate, setObDate] = useState<string>("");
@@ -238,16 +235,6 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
   const [obSaving, setObSaving] = useState(false);
   const [obDeleting, setObDeleting] = useState(false);
   const [obConfirmDelete, setObConfirmDelete] = useState(false);
-
-  const selectedClientEmails = useMemo(() => {
-    const c = clients.find(x => x.id === clientId);
-    if (!c) return [];
-    const arr: string[] = [];
-    if (c.email) arr.push(c.email);
-    const extra = Array.isArray((c.compliance_flags as any)?.extra_emails) ? (c.compliance_flags as any).extra_emails as string[] : [];
-    extra.forEach(e => { if (e && !arr.includes(e)) arr.push(e); });
-    return arr;
-  }, [clients, clientId]);
 
   const clientGstins = useMemo(() => {
     const c = clients.find(x => x.id === clientId);
@@ -363,10 +350,11 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
       let docNo = "";
       if (e.entry_type === "invoice" || e.entry_type === "credit_note") {
         docNo = e.document_id ? (invoiceMap[e.document_id] || e.document_id.slice(0, 8)) : "";
-      } else if (e.entry_type === "receipt") {
-        docNo = e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : "";
+      } else if (e.entry_type === "receipt" || e.entry_type === "adjustment") {
+        // TDS / GST TDS rows carry their receipt's number so they trace back to it.
+        docNo = receiptDocNo(e.document_id);
       } else if (e.entry_type === "kasar") {
-        docNo = e.document_id ? `KSR-${e.document_id.slice(0, 6)}` : "";
+        docNo = kasarDocNo(e.document_id);
       }
       let narration = e.narration || "";
       if (!narration) {
@@ -453,7 +441,7 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
     const cName = clients.find(c => c.id === clientId)?.name || "Client";
     const fName = firmId === "all" ? "All Firms" : (firms.find(f => f.id === firmId)?.name || "");
     const aoa: any[][] = [];
-    aoa.push(["CLIENT LEDGER STATEMENT"]);
+    aoa.push(["STATEMENT OF ACCOUNT"]);
     aoa.push([`Client: ${cName}`]);
     aoa.push([`Firm: ${fName}`]);
     aoa.push([`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`]);
@@ -490,11 +478,11 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
       { s: { r: 4, c: 0 }, e: { r: 4, c: 6 } },
     ];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Client Ledger");
-    XLSX.writeFile(wb, `Ledger_${cName}_${fromDate}_${toDate}.xlsx`);
+    XLSX.utils.book_append_sheet(wb, ws, "Statement of Account");
+    XLSX.writeFile(wb, `Statement_of_Account_${cName}_${fromDate}_${toDate}.xlsx`);
   };
 
-  // Download and Email share one builder so the two can never drift apart.
+  // Emailing a statement of account lives in the Report tab; this view only downloads.
   const handleDownloadPdf = async () => {
     const { blob, filename } = await buildClientLedgerPdfBlob();
     const url = URL.createObjectURL(blob);
@@ -505,7 +493,7 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
     URL.revokeObjectURL(url);
   };
 
-  // ── Build PDF as Blob (shared by email send) ──────────────────────────
+  // ── Build the statement of account PDF ─────────────────────────────────
   const buildClientLedgerPdfBlob = async (): Promise<{ blob: Blob; filename: string }> => {
     const jsPDF = (await import("jspdf")).default;
     const autoTable = (await import("jspdf-autotable")).default;
@@ -533,7 +521,7 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(13);
     setPdfUnicodeFont(doc, "bold");
-    doc.text("CLIENT LEDGER STATEMENT", textStartX, 9);
+    doc.text("STATEMENT OF ACCOUNT", textStartX, 9);
     doc.setFontSize(8);
     setPdfUnicodeFont(doc, "normal");
     doc.text(`Firm: ${fName}   |   Client: ${cName}`, textStartX, 15);
@@ -612,76 +600,8 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
     });
 
     const pdfBlob = doc.output("blob");
-    const filename = `Ledger_${cName}_${fromDate}_${toDate}.pdf`;
+    const filename = `Statement_of_Account_${cName}_${fromDate}_${toDate}.pdf`;
     return { blob: pdfBlob, filename };
-  };
-
-  // ── Open email compose dialog ─────────────────────────────────────────
-  const openEmailDialog = () => {
-    const cName = clients.find(c => c.id === clientId)?.name || "Client";
-    const allEmails = selectedClientEmails;
-    setEmailTo(allEmails[0] || "");
-    setEmailCCList(allEmails.slice(1));
-    setEmailCCInput("");
-    setEmailSubject(`Ledger Statement — ${cName} — ${fy}`);
-    setEmailMsg(
-      `Dear Sir/Madam,\n\nPlease find attached the Ledger Statement for ${cName} for the period ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}.\n\nKindly review and confirm the balances at your earliest convenience.\n\nRegards`
-    );
-    setEmailOpen(true);
-  };
-
-  // ── Send ledger by email ──────────────────────────────────────────────
-  const handleEmailLedger = async () => {
-    if (!emailTo.trim()) {
-      toast({ title: "Please enter a recipient email address", variant: "destructive" });
-      return;
-    }
-    setEmailSending(true);
-    try {
-      const { blob: pdfBlob, filename: pdfFilename } = await buildClientLedgerPdfBlob();
-      const arrayBuffer = await pdfBlob.arrayBuffer();
-      const pdfBase64 = btoa(
-        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-      );
-      const cName = clients.find(c => c.id === clientId)?.name || "Client";
-      const safeClient = cName.replace(/[^a-zA-Z0-9]/g, "_");
-      const allCC = [...emailCCList, ...(emailCCInput.trim() ? [emailCCInput.trim()] : [])].filter(e => e && e !== emailTo.trim());
-
-      const { data, error } = await supabase.functions.invoke("send-notification", {
-        body: {
-          type: "ledger_statement",
-          // "All firms" view: send as the user's home firm (firm_id is required).
-          firm_id: firmId && firmId !== "all" ? firmId : user?.firm_id,
-          direct_email: emailTo.trim(),
-          custom_cc: allCC,
-          payload: {
-            client_name: cName,
-            custom_subject: emailSubject || `Ledger Statement — ${cName} — ${fy}`,
-            custom_message: emailMsg,
-            pdf_base64: pdfBase64,
-            pdf_filename: pdfFilename || `Ledger_${safeClient}_${fromDate}_${toDate}.pdf`,
-          },
-        },
-      });
-      const emailStatus = (data as any)?.results?.direct?.email?.status;
-      let reason = "";
-      if (error) {
-        reason = error.message || "Send failed";
-        try { const ctx = await (error as any).context?.json?.(); if (ctx?.error) reason = ctx.error; } catch { /* ignore */ }
-      } else if (emailStatus && emailStatus !== "sent") {
-        reason = (data as any)?.results?.direct?.email?.error || "Delivery failed";
-      }
-      if (reason) {
-        toast({ title: "Failed to send email", description: reason, variant: "destructive" });
-      } else {
-        toast({ title: `Ledger emailed to ${emailTo.trim()}${allCC.length ? ` + ${allCC.length} CC` : ""}` });
-        setEmailOpen(false);
-      }
-    } catch (err: any) {
-      console.error("[ClientLedgerEmail]", err);
-      toast({ title: "Failed to send email", description: err.message, variant: "destructive" });
-    }
-    setEmailSending(false);
   };
 
   return (
@@ -838,7 +758,7 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
                 if (phone) {
                   const cleanPhone = phone.replace(/\D/g, "");
                   const fullPhone = cleanPhone.startsWith("91") ? cleanPhone : `91${cleanPhone}`;
-                  const msg = encodeURIComponent(`Dear Client,\n\nPlease find your ledger statement for FY ${fy}.\n\nRegards`);
+                  const msg = encodeURIComponent(`Dear Client,\n\nPlease find your statement of account for FY ${fy}.\n\nRegards`);
                   window.open(`https://wa.me/${fullPhone}?text=${msg}`, "_blank");
                   // Also trigger PDF download
                   handleDownloadPdf();
@@ -846,131 +766,10 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
               }}>
                 <Share2 size={14} /> Send via WhatsApp
               </Button>
-              <Button
-                size="sm"
-                className="gap-1 bg-[#1A2744] hover:bg-[#243460] text-white"
-                onClick={openEmailDialog}
-              >
-                <Mail size={14} /> Send via Email
-              </Button>
             </div>
           )}
         </>
       )}
-
-      {/* ── Email Ledger Dialog ──────────────────────────────────────────── */}
-      <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Mail size={18} /> Email Ledger Statement
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 py-2">
-            {/* To field with chip selection */}
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold uppercase text-muted-foreground">To <span className="text-destructive">*</span></Label>
-              {selectedClientEmails.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {selectedClientEmails.map(email => (
-                    <button
-                      key={email}
-                      type="button"
-                      onClick={() => setEmailTo(email)}
-                      className={`px-3 py-1 rounded-full text-xs border transition-colors ${emailTo === email ? "bg-primary text-primary-foreground border-primary" : "bg-muted text-muted-foreground border-border hover:border-primary"}`}
-                    >
-                      {email}
-                    </button>
-                  ))}
-                </div>
-              )}
-              <Input
-                type="email"
-                placeholder="Or type a custom To address..."
-                value={emailTo}
-                onChange={e => setEmailTo(e.target.value)}
-              />
-            </div>
-            {/* CC field with chip selection */}
-            <div className="space-y-1.5">
-              <Label className="text-xs font-semibold uppercase text-muted-foreground">CC <span className="text-muted-foreground text-xs font-normal">(optional)</span></Label>
-              {selectedClientEmails.filter(e => e !== emailTo).length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {selectedClientEmails.filter(e => e !== emailTo).map(email => (
-                    <button
-                      key={email}
-                      type="button"
-                      onClick={() => setEmailCCList(prev => prev.includes(email) ? prev.filter(x => x !== email) : [...prev, email])}
-                      className={`px-3 py-1 rounded-full text-xs border transition-colors ${emailCCList.includes(email) ? "bg-blue-600 text-white border-blue-600" : "bg-muted text-muted-foreground border-border hover:border-blue-400"}`}
-                    >
-                      {email}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {emailCCList.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {emailCCList.map(email => (
-                    <span key={email} className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 text-xs">
-                      {email}
-                      <button type="button" onClick={() => setEmailCCList(prev => prev.filter(e => e !== email))}><X size={10} /></button>
-                    </span>
-                  ))}
-                </div>
-              )}
-              <Input
-                placeholder="Add CC address and press Enter..."
-                value={emailCCInput}
-                onChange={e => setEmailCCInput(e.target.value)}
-                onKeyDown={e => {
-                  if ((e.key === "Enter" || e.key === ",") && emailCCInput.trim()) {
-                    e.preventDefault();
-                    const email = emailCCInput.trim().replace(/,$/, "");
-                    if (email && !emailCCList.includes(email)) setEmailCCList(prev => [...prev, email]);
-                    setEmailCCInput("");
-                  }
-                }}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="cl-email-subject">Subject</Label>
-              <Input
-                id="cl-email-subject"
-                value={emailSubject}
-                onChange={e => setEmailSubject(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label htmlFor="cl-email-msg">Message</Label>
-              <Textarea
-                id="cl-email-msg"
-                rows={5}
-                value={emailMsg}
-                onChange={e => setEmailMsg(e.target.value)}
-                className="text-sm"
-              />
-            </div>
-            <p className="text-xs text-muted-foreground flex items-center gap-1">
-              <Download size={12} /> PDF ledger will be auto-attached.
-            </p>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEmailOpen(false)} disabled={emailSending}>
-              Cancel
-            </Button>
-            <Button
-              className="bg-[#1A2744] hover:bg-[#243460] text-white gap-1"
-              onClick={handleEmailLedger}
-              disabled={emailSending}
-            >
-              {emailSending
-                ? <><span className="animate-spin mr-1">⏳</span> Sending…</>
-                : <><Mail size={14} /> Send Email</>
-              }
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Opening Balance Dialog */}
       <Dialog open={obDialogOpen} onOpenChange={v => { setObDialogOpen(v); if (!v) setObConfirmDelete(false); }}>
@@ -1068,14 +867,6 @@ function GroupLedgerView() {
   const [invoiceMap, setInvoiceMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
 
-  // ── Email dialog state ──────────────────────────────────────────────
-  const [emailOpen, setEmailOpen]       = useState(false);
-  const [emailTo, setEmailTo]           = useState("");
-  const [emailCC, setEmailCC]           = useState("");
-  const [emailSubject, setEmailSubject] = useState("");
-  const [emailMsg, setEmailMsg]         = useState("");
-  const [emailSending, setEmailSending] = useState(false);
-
   useEffect(() => {
     (async () => {
       let groupQuery = supabase.from("client_groups").select("id, name, firm_id").order("name");
@@ -1160,12 +951,12 @@ function GroupLedgerView() {
 
   const getDocNo = (e: any) => {
     if (e.entry_type === "invoice" || e.entry_type === "credit_note") return e.document_id ? (invoiceMap[e.document_id] || e.document_id.slice(0, 8)) : "";
-    if (e.entry_type === "receipt") return e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : "";
-    if (e.entry_type === "kasar") return e.document_id ? `KSR-${e.document_id.slice(0, 6)}` : "";
+    if (e.entry_type === "receipt" || e.entry_type === "adjustment") return receiptDocNo(e.document_id);
+    if (e.entry_type === "kasar") return kasarDocNo(e.document_id);
     return "";
   };
 
-  // ── Shared PDF builder — used by both Download and Email ──────────
+  // ── PDF builder ──────────────────────────────────────────────────────
   const buildGroupLedgerPdfBlob = async (): Promise<Blob> => {
     const jsPDF = (await import("jspdf")).default;
     const autoTable = (await import("jspdf-autotable")).default;
@@ -1200,7 +991,7 @@ function GroupLedgerView() {
     doc.setTextColor(255, 255, 255);
     doc.setFontSize(14);
     setPdfUnicodeFont(doc, "bold");
-    doc.text("GROUP LEDGER STATEMENT", textStartX, 10);
+    doc.text("GROUP STATEMENT OF ACCOUNT", textStartX, 10);
     doc.setFontSize(9);
     setPdfUnicodeFont(doc, "normal");
     doc.text(`Group: ${groupName}   |   Firm(s): ${selectedFirmNames}   |   Period: ${format(new Date(fromDate), "dd/MM/yyyy")} – ${format(new Date(toDate), "dd/MM/yyyy")}`, textStartX, 17);
@@ -1213,8 +1004,8 @@ function GroupLedgerView() {
     const subtotalColSpan = isAllFirms ? 5 : 4;
     const getDocNoLocal = (e: any) => {
       if (e.entry_type === "invoice" || e.entry_type === "credit_note") return e.document_id ? (invoiceMap[e.document_id] || e.document_id.slice(0, 8)) : "";
-      if (e.entry_type === "receipt") return e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : "";
-      if (e.entry_type === "kasar") return e.document_id ? `KSR-${e.document_id.slice(0, 6)}` : "";
+      if (e.entry_type === "receipt" || e.entry_type === "adjustment") return receiptDocNo(e.document_id);
+      if (e.entry_type === "kasar") return kasarDocNo(e.document_id);
       return "";
     };
 
@@ -1304,97 +1095,6 @@ function GroupLedgerView() {
     return doc.output("blob");
   };
 
-  // ── Open email dialog — pre-fill subject ────────────────────────────
-  const openEmailDialog = () => {
-    const groupName = groups.find(g => g.id === groupId)?.name || "Group";
-    // Pick firm active in this ledger view; resolve the name in force at the ledger period end.
-    const activeFirmId = (firmIds.length > 0 && firmIds[0] !== "all") ? firmIds[0] : (firms[0]?.id ?? "");
-    const activeFirm   = firms.find(f => f.id === activeFirmId) ?? firms[0] ?? null;
-    const signatureName = resolveFirmNameForDate(activeFirm as any, toDate) || activeFirm?.name || "";
-    setEmailSubject(`Group Ledger Statement — ${groupName}`);
-    setEmailMsg(`Dear Sir/Madam,\n\nPlease find attached the Group Ledger Statement for ${groupName} for the period ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}.\n\nKindly confirm the balances at your earliest.\n\nRegards,\n${signatureName}`);
-    setEmailTo("");
-    setEmailCC("");
-    setEmailOpen(true);
-  };
-
-  // ── Send group ledger by email ──────────────────────────────────────
-  const handleEmailLedger = async () => {
-    if (!emailTo.trim()) {
-      toast({ title: "Please enter a recipient email address", variant: "destructive" });
-      return;
-    }
-    setEmailSending(true);
-    try {
-      toast({ title: "Generating PDF…" });
-      const pdfBlob = await buildGroupLedgerPdfBlob();
-
-      // Convert Blob → base64 string
-      const pdfBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(pdfBlob);
-      });
-
-      const groupName = groups.find(g => g.id === groupId)?.name || "Group";
-      const firmId = (firmIds.length > 0 && firmIds[0] !== "all") ? firmIds[0] : (firms[0]?.id ?? "");
-      const safeGroup = groupName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 40);
-
-      const toAddresses = emailTo.split(",").map(e => e.trim()).filter(Boolean);
-      const ccAddresses = emailCC.split(",").map(e => e.trim()).filter(Boolean);
-
-      // REGRESSION FIX (H13): inspect the real result — never show success
-      // unconditionally. supabase-js does not throw on 403/500, so we must read
-      // both `error` and the per-recipient delivery status.
-      const sent: string[] = [];
-      const failed: { addr: string; reason: string }[] = [];
-      for (const [idx, addr] of toAddresses.entries()) {
-        const { data, error } = await supabase.functions.invoke("send-notification", {
-          body: {
-            type: "ledger_statement",
-            firm_id: firmId,
-            direct_email: addr,
-            // CC once (with the first recipient), not once per To address.
-            ...(idx === 0 && ccAddresses.length > 0 ? { custom_cc: ccAddresses } : {}),
-            payload: {
-              client_name: groupName,
-              custom_subject: emailSubject || `Group Ledger Statement — ${groupName}`,
-              custom_message: emailMsg,
-              pdf_base64: pdfBase64,
-              pdf_filename: `GroupLedger_${safeGroup}_${fromDate}_${toDate}.pdf`,
-            },
-          },
-        });
-        const emailStatus = (data as any)?.results?.direct?.email?.status;
-        const emailErr = (data as any)?.results?.direct?.email?.error;
-        if (error) {
-          let reason = error.message || "Send failed";
-          try { const ctx = await (error as any).context?.json?.(); if (ctx?.error) reason = ctx.error; } catch { /* ignore */ }
-          failed.push({ addr, reason });
-        } else if (emailStatus && emailStatus !== "sent") {
-          failed.push({ addr, reason: emailErr || "Delivery failed" });
-        } else {
-          sent.push(addr);
-        }
-      }
-
-      if (failed.length === 0) {
-        toast({ title: `Ledger emailed to ${sent.join(", ")}` });
-        setEmailOpen(false);
-      } else if (sent.length === 0) {
-        toast({ title: "Failed to send email", description: failed.map(f => `${f.addr}: ${f.reason}`).join("; "), variant: "destructive" });
-      } else {
-        toast({ title: `Sent ${sent.length}, failed ${failed.length}`, description: failed.map(f => `${f.addr}: ${f.reason}`).join("; "), variant: "destructive" });
-        setEmailOpen(false);
-      }
-    } catch (err: any) {
-      console.error("[GroupLedgerEmail]", err);
-      toast({ title: "Failed to send email", description: err.message, variant: "destructive" });
-    }
-    setEmailSending(false);
-  };
-
   const handleDownloadXlsx = () => {
     const groupName = groups.find(g => g.id === groupId)?.name || "Group";
     const selectedFirmNames = firmIds[0] === "all"
@@ -1404,7 +1104,7 @@ function GroupLedgerView() {
     // Build AOA (array-of-arrays) for professional formatting
     const aoa: any[][] = [];
     // Title block
-    aoa.push(["GROUP LEDGER STATEMENT"]);
+    aoa.push(["GROUP STATEMENT OF ACCOUNT"]);
     aoa.push([`Group: ${groupName}`]);
     aoa.push([`Firm(s): ${selectedFirmNames}`]);
     aoa.push([`Period: ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}`]);
@@ -1474,10 +1174,10 @@ function GroupLedgerView() {
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Group Ledger");
-    XLSX.writeFile(wb, `GroupLedger_${groupName}_${fromDate}_${toDate}.xlsx`);
+    XLSX.writeFile(wb, `Group_Statement_of_Account_${groupName}_${fromDate}_${toDate}.xlsx`);
   };
 
-  // Download uses the same builder as Email so both always match the screen
+  // Download uses the same builder as the on-screen table so they always match
   // (the old standalone copy here had drifted and dropped opening balances).
   const handleDownloadPdf = async () => {
     const groupName = groups.find(g => g.id === groupId)?.name || "Group";
@@ -1485,7 +1185,7 @@ function GroupLedgerView() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `GroupLedger_${groupName}_${fromDate}_${toDate}.pdf`;
+    a.download = `Group_Statement_of_Account_${groupName}_${fromDate}_${toDate}.pdf`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -1652,67 +1352,7 @@ function GroupLedgerView() {
             <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
             <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
             <Button variant="outline" size="sm" onClick={handleDownloadZip} className="gap-1"><Archive size={14} /> Download All Invoices (ZIP)</Button>
-            <Button variant="outline" size="sm" onClick={openEmailDialog} className="gap-1"><Mail size={14} /> Email Ledger</Button>
           </div>
-
-          {/* ── Email Ledger Dialog ─────────────────────────────────────── */}
-          <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2"><Mail size={18} /> Email Group Ledger</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 py-2">
-                <div className="space-y-1">
-                  <Label htmlFor="gl-email-to">To <span className="text-destructive">*</span></Label>
-                  <Input
-                    id="gl-email-to"
-                    type="text"
-                    placeholder="email@example.com, another@example.com"
-                    value={emailTo}
-                    onChange={e => setEmailTo(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">Separate multiple addresses with commas</p>
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="gl-email-cc">CC <span className="text-muted-foreground">(optional)</span></Label>
-                  <Input
-                    id="gl-email-cc"
-                    type="text"
-                    placeholder="cc@example.com"
-                    value={emailCC}
-                    onChange={e => setEmailCC(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="gl-email-subject">Subject</Label>
-                  <Input
-                    id="gl-email-subject"
-                    type="text"
-                    value={emailSubject}
-                    onChange={e => setEmailSubject(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="gl-email-msg">Message</Label>
-                  <Textarea
-                    id="gl-email-msg"
-                    rows={5}
-                    value={emailMsg}
-                    onChange={e => setEmailMsg(e.target.value)}
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground flex items-center gap-1">
-                  📎 The Group Ledger PDF will be attached automatically.
-                </p>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setEmailOpen(false)} disabled={emailSending}>Cancel</Button>
-                <Button onClick={handleEmailLedger} disabled={emailSending || !emailTo.trim()} className="gap-1">
-                  {emailSending ? "Sending…" : <><Mail size={14} /> Send Email</>}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
         </>
       )}
     </div>
@@ -1735,14 +1375,6 @@ function FirmRevenueLedgerView() {
   const [clientMap, setClientMap] = useState<Record<string, string>>({});
   const [invoiceMap, setInvoiceMap] = useState<Record<string, { no: string; type: string }>>({});
   const [loading, setLoading] = useState(false);
-
-  // ── Email dialog state ──────────────────────────────────────────────
-  const [emailOpen, setEmailOpen]       = useState(false);
-  const [emailTo, setEmailTo]           = useState("");
-  const [emailCC, setEmailCC]           = useState("");
-  const [emailSubject, setEmailSubject] = useState("");
-  const [emailMsg, setEmailMsg]         = useState("");
-  const [emailSending, setEmailSending] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -1862,17 +1494,24 @@ function FirmRevenueLedgerView() {
       const c = Number(e.credit_amount) || 0;
       running += d - c;
       const inv = e.document_id ? invoiceMap[e.document_id] : null;
-      const docNo = inv?.no || (e.entry_type === "receipt" && e.document_id ? `RCT-${e.document_id.slice(0, 6)}` : e.entry_type === "kasar" && e.document_id ? `KSR-${e.document_id.slice(0, 6)}` : "");
-      return { ...e, debit: d, credit: c, running, docNo, docType: inv?.type || e.entry_type, clientName: clientMap[e.client_id] || "" };
+      const kind = ledgerEntryKind(e.entry_type, e.narration);
+      const docNo = inv?.no || (kind === "receipt" || kind === "tds" || kind === "gst_tds" || kind === "adjustment" ? receiptDocNo(e.document_id) : kind === "kasar" ? kasarDocNo(e.document_id) : "");
+      // Readable type for the table, PDF and Excel: Invoice / Credit Note / Receipt / TDS / GST TDS / Kasar.
+      const docType = LEDGER_KIND_LABEL[kind];
+      return { ...e, debit: d, credit: c, running, docNo, docType, kind, clientName: clientMap[e.client_id] || "" };
     });
   }, [entries, invoiceMap, clientMap]);
 
   const totalInvoiced = rows.filter(r => r.entry_type === "invoice").reduce((s, r) => s + r.debit, 0);
   const totalCN = rows.filter(r => r.entry_type === "credit_note").reduce((s, r) => s + r.credit, 0);
   const totalReceived = rows.filter(r => r.entry_type === "receipt").reduce((s, r) => s + r.credit, 0);
-  const netOutstanding = totalInvoiced - totalCN - totalReceived;
+  // TDS / GST TDS and kasar settle the same outstanding as receipts, so they are shown
+  // on their own and counted in the net — not silently left out of it.
+  const totalTds = rows.filter(r => r.kind === "tds" || r.kind === "gst_tds").reduce((s, r) => s + r.credit, 0);
+  const totalKasar = rows.filter(r => r.kind === "kasar").reduce((s, r) => s + r.credit, 0);
+  const netOutstanding = rows.reduce((s, r) => s + r.debit - r.credit, 0);
 
-  // ── Build PDF blob for email ───────────────────────────────────────
+  // ── Build the PDF blob ─────────────────────────────────────────────
   const buildFirmLedgerPdfBlob = async (): Promise<Blob> => {
     const jsPDF = (await import("jspdf")).default;
     const autoTable = (await import("jspdf-autotable")).default;
@@ -1933,82 +1572,6 @@ function FirmRevenueLedgerView() {
       },
     });
     return doc.output("blob");
-  };
-
-  const openFirmEmailDialog = () => {
-    const fName = firms.find(f => f.id === firmId)?.name || "Firm";
-    const activeFirm = firms.find(f => f.id === firmId) ?? null;
-    const signatureName = resolveFirmNameForDate(activeFirm as any, toDate) || activeFirm?.name || "";
-    setEmailSubject(`Firm Revenue Ledger — ${fName}`);
-    setEmailMsg(`Dear Sir/Madam,\n\nPlease find attached the Firm Revenue Ledger for ${fName} for the period ${format(new Date(fromDate), "dd/MM/yyyy")} to ${format(new Date(toDate), "dd/MM/yyyy")}.\n\nRegards,\n${signatureName}`);
-    setEmailTo("");
-    setEmailCC("");
-    setEmailOpen(true);
-  };
-
-  const handleFirmEmailLedger = async () => {
-    if (!emailTo.trim()) {
-      toast({ title: "Please enter a recipient email address", variant: "destructive" });
-      return;
-    }
-    setEmailSending(true);
-    try {
-      toast({ title: "Generating PDF…" });
-      const pdfBlob = await buildFirmLedgerPdfBlob();
-      const pdfBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => resolve((reader.result as string).split(",")[1]);
-        reader.onerror = reject;
-        reader.readAsDataURL(pdfBlob);
-      });
-      const fName = firms.find(f => f.id === firmId)?.name || "Firm";
-      const safeName = fName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 40);
-      const toAddresses = emailTo.split(",").map(e => e.trim()).filter(Boolean);
-      const ccAddresses = emailCC.split(",").map(e => e.trim()).filter(Boolean);
-      const sent: string[] = [];
-      const failed: { addr: string; reason: string }[] = [];
-      for (const [idx, addr] of toAddresses.entries()) {
-        const { data, error } = await supabase.functions.invoke("send-notification", {
-          body: {
-            type: "ledger_statement",
-            firm_id: firmId,
-            direct_email: addr,
-            // CC once (with the first recipient), not once per To address.
-            ...(idx === 0 && ccAddresses.length > 0 ? { custom_cc: ccAddresses } : {}),
-            payload: {
-              client_name: fName,
-              custom_subject: emailSubject || `Firm Revenue Ledger — ${fName}`,
-              custom_message: emailMsg,
-              pdf_base64: pdfBase64,
-              pdf_filename: `FirmRevenue_${safeName}_${fromDate}_${toDate}.pdf`,
-            },
-          },
-        });
-        const emailStatus = (data as any)?.results?.direct?.email?.status;
-        const emailErr = (data as any)?.results?.direct?.email?.error;
-        if (error) {
-          let reason = error.message || "Send failed";
-          try { const ctx = await (error as any).context?.json?.(); if (ctx?.error) reason = ctx.error; } catch { /* ignore */ }
-          failed.push({ addr, reason });
-        } else if (emailStatus && emailStatus !== "sent") {
-          failed.push({ addr, reason: emailErr || "Delivery failed" });
-        } else {
-          sent.push(addr);
-        }
-      }
-      if (failed.length === 0) {
-        toast({ title: `Ledger emailed to ${sent.join(", ")}` });
-        setEmailOpen(false);
-      } else if (sent.length === 0) {
-        toast({ title: "Failed to send email", description: failed.map(f => `${f.addr}: ${f.reason}`).join("; "), variant: "destructive" });
-      } else {
-        toast({ title: `Sent ${sent.length}, failed ${failed.length}`, description: failed.map(f => `${f.addr}: ${f.reason}`).join("; "), variant: "destructive" });
-        setEmailOpen(false);
-      }
-    } catch (err: any) {
-      toast({ title: "Failed to send email", description: err.message, variant: "destructive" });
-    }
-    setEmailSending(false);
   };
 
   const handleDownloadXlsx = () => {
@@ -2119,7 +1682,7 @@ function FirmRevenueLedgerView() {
                   <TableCell>{r.entry_date ? format(new Date(r.entry_date), "dd/MM/yyyy") : ""}</TableCell>
                   <TableCell className="font-mono text-xs"><DocLink docNo={r.docNo} documentId={r.document_id} entryType={r.entry_type} /></TableCell>
                   <TableCell>{r.clientName}</TableCell>
-                  <TableCell><Badge variant="outline" className="capitalize text-xs">{r.docType}</Badge></TableCell>
+                  <TableCell><Badge variant="outline" className="text-xs">{r.docType}</Badge></TableCell>
                   <TableCell className="text-right">{r.debit > 0 ? fmtINR(r.debit) : "—"}</TableCell>
                   <TableCell className="text-right">{r.credit > 0 ? fmtINR(r.credit) : "—"}</TableCell>
                   <TableCell className="text-right font-medium">{fmtINR(r.running)}</TableCell>
@@ -2138,7 +1701,7 @@ function FirmRevenueLedgerView() {
             )}
           </Table>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <Card><CardContent className="py-3 text-center">
               <p className="text-xs text-muted-foreground">Total Invoiced</p>
               <p className="text-lg font-bold text-foreground">{fmtINR(totalInvoiced)}</p>
@@ -2150,6 +1713,14 @@ function FirmRevenueLedgerView() {
             <Card><CardContent className="py-3 text-center">
               <p className="text-xs text-muted-foreground">Received</p>
               <p className="text-lg font-bold text-foreground">{fmtINR(totalReceived)}</p>
+            </CardContent></Card>
+            <Card><CardContent className="py-3 text-center">
+              <p className="text-xs text-muted-foreground">TDS / GST TDS</p>
+              <p className="text-lg font-bold text-foreground">{fmtINR(totalTds)}</p>
+            </CardContent></Card>
+            <Card><CardContent className="py-3 text-center">
+              <p className="text-xs text-muted-foreground">Kasar</p>
+              <p className="text-lg font-bold text-foreground">{fmtINR(totalKasar)}</p>
             </CardContent></Card>
             <Card><CardContent className="py-3 text-center">
               <p className="text-xs text-muted-foreground">Net Outstanding</p>
@@ -2173,46 +1744,7 @@ function FirmRevenueLedgerView() {
             }}>
               <Share2 size={14} /> Send via WhatsApp
             </Button>
-            <Button size="sm" className="gap-1 bg-[#1A2744] hover:bg-[#243460] text-white" onClick={openFirmEmailDialog}>
-              <Mail size={14} /> Send via Email
-            </Button>
           </div>
-
-          {/* ── Firm Revenue Email Dialog ─────────────────────────────── */}
-          <Dialog open={emailOpen} onOpenChange={setEmailOpen}>
-            <DialogContent className="max-w-lg">
-              <DialogHeader>
-                <DialogTitle className="flex items-center gap-2"><Mail size={18} /> Email Firm Revenue Ledger</DialogTitle>
-              </DialogHeader>
-              <div className="space-y-4 py-2">
-                <div className="space-y-1">
-                  <Label htmlFor="frl-email-to">To <span className="text-destructive">*</span></Label>
-                  <Input id="frl-email-to" type="text" placeholder="email@example.com, another@example.com"
-                    value={emailTo} onChange={e => setEmailTo(e.target.value)} />
-                  <p className="text-xs text-muted-foreground">Separate multiple addresses with commas</p>
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="frl-email-cc">CC <span className="text-muted-foreground">(optional)</span></Label>
-                  <Input id="frl-email-cc" type="text" placeholder="cc@example.com"
-                    value={emailCC} onChange={e => setEmailCC(e.target.value)} />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="frl-email-subject">Subject</Label>
-                  <Input id="frl-email-subject" type="text" value={emailSubject} onChange={e => setEmailSubject(e.target.value)} />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="frl-email-msg">Message</Label>
-                  <Textarea id="frl-email-msg" rows={5} value={emailMsg} onChange={e => setEmailMsg(e.target.value)} />
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setEmailOpen(false)} disabled={emailSending}>Cancel</Button>
-                <Button className="gap-1 bg-[#1A2744] hover:bg-[#243460] text-white" onClick={handleFirmEmailLedger} disabled={emailSending}>
-                  {emailSending ? "Sending…" : <><Mail size={14} /> Send Email</>}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
         </>
       )}
     </div>

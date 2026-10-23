@@ -201,7 +201,7 @@ function PolicyEditor({
         <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-1">
           <p className="font-medium text-sm">Currently in effect for this client</p>
           <p>Invoice reminders: <strong>{describeInvoice(effective.settings)}</strong> <span className="text-muted-foreground">({effective.source.invoice_enabled})</span></p>
-          <p>Statement of outstanding: <strong>{describeLedger(effective.settings)}</strong> <span className="text-muted-foreground">({effective.source.ledger_enabled})</span></p>
+          <p>Statement of Account: <strong>{describeLedger(effective.settings)}</strong> <span className="text-muted-foreground">({effective.source.ledger_enabled})</span></p>
           <p>To: <strong>{effective.to.join(", ") || "— no email —"}</strong>{effective.cc.length > 0 && <> · CC: {effective.cc.join(", ")}</>}</p>
         </div>
       )}
@@ -242,11 +242,11 @@ function PolicyEditor({
         </div>
       </section>
 
-      {/* Statement of outstanding */}
+      {/* Statement of Account (outstanding invoices) */}
       <section className="space-y-3 border-t pt-4">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <h4 className="text-sm font-semibold">Statement of outstanding (ledger)</h4>
+            <h4 className="text-sm font-semibold">Statement of Account (outstanding invoices)</h4>
             <p className="text-xs text-muted-foreground">A table of every unpaid invoice with the total, once per period.</p>
           </div>
           <TriSelect value={policy.ledger_enabled} onChange={v => onChange({ ledger_enabled: v })} onLabel="Send" offLabel="Don't send" />
@@ -784,7 +784,7 @@ export default function BillingRemindersTab({
                     <TableHead>Client</TableHead>
                     <TableHead>Reminders</TableHead>
                     <TableHead>Invoice reminders</TableHead>
-                    <TableHead>Statement</TableHead>
+                    <TableHead>Statement of Account</TableHead>
                     <TableHead>To / CC</TableHead>
                     <TableHead className="text-right">Outstanding</TableHead>
                   </TableRow>
@@ -904,7 +904,7 @@ export default function BillingRemindersTab({
               <p className="text-sm">
                 <strong>{preview.planned.length}</strong> email{preview.planned.length !== 1 ? "s" : ""} would be sent
                 ({preview.planned.filter(p => p.kind === "invoice").length} payment reminders,{" "}
-                {preview.planned.filter(p => p.kind === "ledger").length} statements).
+                {preview.planned.filter(p => p.kind === "ledger").length} statements of account).
                 {preview.planned.length > preview.per_run_cap && ` Up to ${preview.per_run_cap} go per run; the rest go in the next hourly run.`}
               </p>
               {preview.planned.length > 0 && (
@@ -919,7 +919,7 @@ export default function BillingRemindersTab({
                     {preview.planned.map((p, i) => (
                       <TableRow key={i}>
                         <TableCell className="text-sm">{p.client_name}</TableCell>
-                        <TableCell className="text-xs">{p.kind === "invoice" ? "Payment reminder" : `Statement (${p.period_key})`}</TableCell>
+                        <TableCell className="text-xs">{p.kind === "invoice" ? "Payment reminder" : `Statement of Account (${p.period_key})`}</TableCell>
                         <TableCell className="text-xs">{p.to.join(", ")}{p.cc.length > 0 && <div className="text-muted-foreground">CC: {p.cc.join(", ")}</div>}</TableCell>
                         <TableCell className="text-xs">
                           {p.invoices.slice(0, 4).map(inv => (
@@ -942,7 +942,7 @@ export default function BillingRemindersTab({
                   <div className="max-h-56 overflow-y-auto text-xs border rounded">
                     {preview.skipped.map((s, i) => (
                       <div key={i} className="flex justify-between gap-3 px-2 py-1 border-b last:border-0">
-                        <span>{s.client_name} <span className="text-muted-foreground">({s.kind === "invoice" ? "reminder" : "statement"})</span></span>
+                        <span>{s.client_name} <span className="text-muted-foreground">({s.kind === "invoice" ? "reminder" : "statement of account"})</span></span>
                         <span className="text-muted-foreground text-right">{s.reason}</span>
                       </div>
                     ))}
