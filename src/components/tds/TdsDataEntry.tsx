@@ -242,6 +242,45 @@ const calcTaxWithRebate = (totalIncome: number, regime: "new" | "old"): number =
 // #3 FIX: Parse date strings as LOCAL midnight to avoid UTC-vs-local timezone shift.
 // new Date("2025-02-07") → UTC 00:00 → IST 05:30 the same day, which compares AFTER
 // new Date(y, m-1, d) → local 00:00 IST.  Both must use the same reference.
+/** A challan that carries only interest (no TDS / surcharge) — Genius records
+ *  late-deposit interest as its own challan. */
+export const isInterestOnlyChallan = (c: Pick<Challan, "total_tax_deposited" | "surcharge_deposited" | "interest_deposited">) =>
+  (c.total_tax_deposited || 0) === 0 && (c.surcharge_deposited || 0) === 0 && (c.interest_deposited || 0) > 0;
+
+/**
+ * Matches each interest-only challan's deposit against the interest the OTHER
+ * challans' entries owe beyond what those challans declare themselves (oldest
+ * deposit first). See the comment above interestChallanPlan in the component.
+ * With no interest-only challan in the list the plan is empty.
+ */
+export function planInterestChallans(
+  challans: Challan[], rowsOf: (c: Challan) => Deductee[],
+): { avail: Map<string, number>; via: Map<string, number>; consumed: Map<string, number> } {
+  const avail = new Map<string, number>();     // TDS challan id -> interest it may draw from interest challans
+  const via = new Map<string, number>();       // TDS challan id -> interest it draws from them today
+  const consumed = new Map<string, number>();  // interest-only challan id -> amount of its deposit matched
+  const interestOnly = challans.filter(isInterestOnlyChallan);
+  if (interestOnly.length === 0) return { avail, via, consumed };
+  const byDate = (x: Challan, y: Challan) => (x.deposit_date || "").localeCompare(y.deposit_date || "");
+  let pool = interestOnly.reduce((sum, c) => sum + (c.interest_deposited || 0), 0);
+  const total = pool;
+  for (const c of challans.filter((x) => !isInterestOnlyChallan(x)).sort(byDate)) {
+    const live = withChallanInterest(rowsOf(c) as any[], c.deposit_date || null, tdsOfEntry).reduce((sum, r) => sum + r.interest_amount, 0);
+    const take = Math.min(Math.max(0, live - (c.interest_deposited || 0)), pool);
+    pool -= take;
+    avail.set(c.id, take); via.set(c.id, take);
+  }
+  // Whatever no challan drew stays available to the next edit on any of them.
+  for (const id of avail.keys()) avail.set(id, (avail.get(id) || 0) + pool);
+  let used = total - pool;
+  for (const c of [...interestOnly].sort(byDate)) {
+    const part = Math.min(c.interest_deposited || 0, used);
+    consumed.set(c.id, part);
+    used -= part;
+  }
+  return { avail, via, consumed };
+}
+
 /** The TDS figure this screen works interest out on (Data Entry order). */
 const tdsOfEntry = (d: { tds_amount?: number | null; total_tax_deducted?: number | null }) => d.tds_amount || d.total_tax_deducted || 0;
 
@@ -1448,6 +1487,10 @@ export function TdsDataEntry({
     if (!selectedChallan || !filing || isFilingLocked) return;
     // Issue 7F: Block add when challan balance = 0
     const bd = getChallanBreakdownAll(selectedChallan.id);
+    if (bd.interestOnly) {
+      toast({ title: "Interest challan", description: "This challan only carries interest (no TDS) — it is matched to the late-deposit interest on the other challans, so no deductee entries go against it.", variant: "destructive" });
+      return;
+    }
     const balance = (selectedChallan.total_challan_amount || 0) - bd.applied;
     if (balance <= 0) {
       toast({ title: "Challan fully utilized", description: "No remaining balance in this challan to add more entries.", variant: "destructive" });
@@ -1591,10 +1634,15 @@ export function TdsDataEntry({
           .filter((d: any) => !(isCorrectionMode && (d as any).action === "delete"));
         const projectedRows = siblingRows.map((d: any) => d.id === deducteeId ? { ...d, ...updates } : d);
         const pooled = computeChallanPooled(challanObj as any, projectedRows as any);
-        if (pooled.overApplied && pooled.effectiveApplied > bdBefore.effectiveApplied) {
+        // Same allowance as getChallanBreakdownAll: interest a separate
+        // interest challan already paid is not counted against this challan.
+        const projectedApplied = pooled.effectiveApplied
+          - (isInterestOnlyChallan(challanObj as Challan) ? 0
+            : interestPaidViaIntChallan(challanId, pooled.interest, (challanObj as Challan).interest_deposited || 0));
+        if (isChallanOverApplied(projectedApplied, pooled.allocatable) && projectedApplied > bdBefore.effectiveApplied) {
           toast({
             title: "Over-applied — entry blocked",
-            description: `This would take the challan to ₹${pooled.effectiveApplied.toLocaleString("en-IN")} against a total of ₹${pooled.allocatable.toLocaleString("en-IN")} — exceeds it by ₹${(pooled.effectiveApplied - pooled.allocatable).toLocaleString("en-IN")}. Reduce this entry or increase the challan total first.`,
+            description: `This would take the challan to ₹${projectedApplied.toLocaleString("en-IN")} against a total of ₹${pooled.allocatable.toLocaleString("en-IN")} — exceeds it by ₹${(projectedApplied - pooled.allocatable).toLocaleString("en-IN")}. Reduce this entry or increase the challan total first.`,
             variant: "destructive",
           });
           return;
@@ -1806,6 +1854,33 @@ export function TdsDataEntry({
     return total ? { add, modify, del, total } : null;
   }, [isCorrectionMode, selectedChallan, deductees, allChallanDeductees]);
 
+  // ── Separate INTEREST challans ──────────────────────────────────────────
+  // Genius records late-deposit interest as its OWN challan (no TDS, only an
+  // Interest amount — e.g. BSR 0510002, Rs 215 on 21/10/2026), while the TDS
+  // challan the late entries sit on carries no interest. The grid's live
+  // 201(1A) figure for those entries was added to THEIR challan, so it showed
+  // "Over-applied" by exactly the interest that was in fact paid on the other
+  // challan — and the interest challan itself read as Unconsumed.
+  //
+  // Here an interest-only challan is recognised as such and its deposit is
+  // matched against the interest the other challans' entries owe beyond what
+  // those challans declare themselves (oldest deposit first). The matched part
+  // is "paid via the interest challan": it is left out of the TDS challan's
+  // Applied and counted as consumed on the interest challan. Interest owed
+  // beyond all interest challans still counts against its own challan, so a
+  // real shortfall is still flagged. With no interest-only challan in the
+  // filing the plan is empty and nothing changes.
+  const interestChallanPlan = useMemo(() => planInterestChallans(challans, (c) => {
+    const raw = c.id === selectedChallan?.id ? [...prevEntries, ...deductees] : (allChallanDeductees[c.id] || []);
+    return isCorrectionMode ? raw.filter(d => (d as any).action !== "delete") : raw;
+  }), [challans, selectedChallan, prevEntries, deductees, allChallanDeductees, isCorrectionMode]);
+
+  /** The part of a TDS challan's own live interest that an interest-only
+   *  challan has already paid — `liveInterest` is the challan's total auto
+   *  interest, passed in so an edit's projected figure can be checked too. */
+  const interestPaidViaIntChallan = (challanId: string, liveInterest: number, ownDeposited: number) =>
+    Math.min(Math.max(0, liveInterest - ownDeposited), interestChallanPlan.avail.get(challanId) || 0);
+
   const getChallanBreakdownAll = useCallback((challanId: string) => {
     // Use ALL entries across all quarters for accurate balance (7A)
     const allForChallanRaw = challanId === selectedChallan?.id
@@ -1863,14 +1938,25 @@ export function TdsDataEntry({
     // `total_challan_amount - late_fees_234e` (the exact duplication that let
     // one of them — the Genius Export guard — silently diverge).
     const pooled = computeChallanPooled((challanObj as Challan | null) || {}, allForChallan as any);
+    // Interest that a SEPARATE interest challan paid (see interestChallanPlan):
+    // left out of this TDS challan's Applied; on the interest challan itself
+    // the matched amount counts as consumed.
+    const ch = challanObj as Challan | null;
+    const interestOnly = !!ch && isInterestOnlyChallan(ch);
+    const viaIntChallan = ch && !interestOnly ? interestPaidViaIntChallan(challanId, pooled.interest, ch.interest_deposited || 0) : 0;
+    const intChallanConsumed = interestOnly ? (interestChallanPlan.consumed.get(challanId) || 0) : 0;
+    const interest = pooled.interest - viaIntChallan + intChallanConsumed;
+    const effectiveApplied = pooled.effectiveApplied - viaIntChallan + intChallanConsumed;
     return {
-      tds: pooled.tds, interest: pooled.interest, surcharge: pooled.surcharge, lateFees: pooled.lateFees,
-      applied: pooled.tds + pooled.interest + pooled.surcharge, kasarVatav: pooled.kasarVatav,
-      effectiveApplied: pooled.effectiveApplied, allocatable: pooled.allocatable,
-      overApplied: pooled.overApplied, unconsumed: pooled.unconsumed,
+      tds: pooled.tds, interest, surcharge: pooled.surcharge, lateFees: pooled.lateFees,
+      applied: pooled.tds + interest + pooled.surcharge, kasarVatav: pooled.kasarVatav,
+      effectiveApplied, allocatable: pooled.allocatable,
+      overApplied: isChallanOverApplied(effectiveApplied, pooled.allocatable),
+      unconsumed: Math.max(0, pooled.allocatable - effectiveApplied),
       count: allForChallan.length, byForm,
+      interestOnly, viaIntChallan,
     };
-  }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, archivedChallans, isCorrectionMode]);
+  }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, archivedChallans, isCorrectionMode, interestChallanPlan]);
 
   // Keep getChallanBreakdown as alias for backward compat
   const getChallanBreakdown = getChallanBreakdownAll;
@@ -2012,7 +2098,10 @@ export function TdsDataEntry({
     });
     const matched: string[] = [], unmatched: string[] = [];
     challans.forEach(c => {
-      const entered = challanTotMap.get(c.id) || 0;
+      // Interest paid via a separate interest challan moves from the TDS
+      // challan's side to the interest challan's (see interestChallanPlan).
+      const entered = (challanTotMap.get(c.id) || 0)
+        - getChallanBreakdownAll(c.id).viaIntChallan + (interestChallanPlan.consumed.get(c.id) || 0);
       if (Math.abs(entered - c.total_challan_amount) <= 1) matched.push(c.bsr_code || c.id.slice(0, 8));
       else unmatched.push(c.bsr_code || c.id.slice(0, 8));
     });
@@ -2829,6 +2918,16 @@ export function TdsDataEntry({
                                     <CreditCard size={12} className="text-primary shrink-0" />
                                     <span className="text-xs font-semibold font-mono truncate">{c.bsr_code || "No BSR"}</span>
                                     {c.section_code && <Badge variant="outline" className="text-[9px] px-1">{c.section_code}</Badge>}
+                                    {bd.interestOnly && (
+                                      <Badge className="text-[9px] px-1 bg-amber-100 text-amber-700" title="No TDS on this challan — it pays the late-deposit interest of entries on the other challans">
+                                        Interest challan
+                                      </Badge>
+                                    )}
+                                    {!bd.interestOnly && bd.viaIntChallan > 0 && (
+                                      <Badge className="text-[9px] px-1 bg-amber-100 text-amber-700" title="Interest on this challan's entries was paid on a separate interest challan">
+                                        Int. ₹{bd.viaIntChallan.toLocaleString("en-IN")} via interest challan
+                                      </Badge>
+                                    )}
                                     {/* Combined-payment challan: same bank challan funding more than one
                                         form — this row was created under c.form_type, not the form
                                         currently open, but its Applied/Available below already includes
@@ -3037,6 +3136,12 @@ export function TdsDataEntry({
                               <Badge variant="outline" className="text-[9px] gap-1 border-violet-300 text-violet-700 dark:text-violet-300">
                                 Kasar-Vatav: ₹{(selectedChallan.kasar_vatav_amount || 0).toLocaleString("en-IN")}
                               </Badge>
+                            )}
+                            {bd.interestOnly && (
+                              <Badge className="text-[9px] bg-amber-100 text-amber-700">Interest challan — ₹{(interestChallanPlan.consumed.get(selectedChallan.id) || 0).toLocaleString("en-IN")} matched to interest on other challans</Badge>
+                            )}
+                            {!bd.interestOnly && bd.viaIntChallan > 0 && (
+                              <Badge className="text-[9px] bg-amber-100 text-amber-700">Interest ₹{bd.viaIntChallan.toLocaleString("en-IN")} paid via separate interest challan</Badge>
                             )}
                             {overApplied ? (
                               <Badge className="text-[9px] bg-red-100 text-red-700">Over-applied</Badge>
@@ -3460,6 +3565,8 @@ export function TdsDataEntry({
                                           // from rounding this row alone by ₹1.
                                           const interest = rowInterest(d, depDate);
                                           const exactTxt = exact.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                                          // Interest on this challan that a separate interest challan paid.
+                                          const viaIntChallan = interestChallanPlan.via.get(d.challan_id) || 0;
 
                                           // Date context for tooltip display
                                           const entryDt  = payDate ? parseLocalDate(payDate) : null;
@@ -3488,6 +3595,11 @@ export function TdsDataEntry({
                                               <p className="text-muted-foreground text-[10px]">
                                                 Rounded once on the challan's total interest, as Genius does — the rows add up to the challan's interest.
                                               </p>
+                                              {viaIntChallan > 0 && (
+                                                <p className="text-amber-700 text-[10px] font-medium">
+                                                  Interest on this challan (₹{viaIntChallan.toLocaleString("en-IN")}) was paid on a separate interest challan — it is not added to this challan's Applied.
+                                                </p>
+                                              )}
                                             </div>
                                           ) : (
                                             <div className="space-y-1">
@@ -3507,8 +3619,9 @@ export function TdsDataEntry({
                                               <Tooltip>
                                                 <TooltipTrigger asChild>
                                                   {interest > 0 ? (
-                                                    <span className="font-medium tabular-nums text-amber-600 cursor-help underline decoration-dotted decoration-amber-400">
-                                                      ₹{interest.toLocaleString("en-IN")}
+                                                    <span className={cn("font-medium tabular-nums cursor-help underline decoration-dotted",
+                                                      viaIntChallan > 0 ? "text-muted-foreground decoration-muted-foreground" : "text-amber-600 decoration-amber-400")}>
+                                                      ₹{interest.toLocaleString("en-IN")}{viaIntChallan > 0 && <sup className="ml-0.5 text-[8px]">int. challan</sup>}
                                                     </span>
                                                   ) : (
                                                     <span className="tabular-nums text-muted-foreground cursor-help">—</span>
