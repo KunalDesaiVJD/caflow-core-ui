@@ -58,11 +58,17 @@ describe("buildGroupStatementPdf", () => {
     const { base64, blob } = await buildGroupStatementPdf({
       groupName: "Alpha Group", firmLabel: "V J Desai & Co. LLP", logoDataUrl: null,
       fromDate: "2026-04-01", toDate: "2026-10-23", perClient: [clientA, clientB],
+      bankDetails: [
+        { firmName: "V J Desai & Co. LLP", bankName: "HDFC Bank", accountNumber: "50200012345678", ifsc: "HDFC0000123", branch: "Ahmedabad" },
+        { firmName: "VJD Advisory LLP", bankName: "ICICI Bank", accountNumber: "123405001234", ifsc: "ICIC0001234", branch: "Surat" },
+      ],
     });
     const bytes = Buffer.from(base64, "base64");
     expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
     expect(bytes.length).toBeGreaterThan(10_000);
     expect(blob.size).toBe(bytes.length);
+    // Summary on page 1, client-wise ledger from page 2
+    expect(bytes.toString("latin1").match(/\/Type \/Page\b/g)?.length).toBeGreaterThanOrEqual(2);
     if (process.env.SAVE_SAMPLE_PDF) (await import("node:fs")).writeFileSync(process.env.SAVE_SAMPLE_PDF, bytes);
   }, 30_000);
 });
