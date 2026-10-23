@@ -33,6 +33,7 @@ import {
   Collapsible, CollapsibleContent, CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { format, addDays } from "date-fns";
+import { effectiveDueDate } from "@/lib/billingReminderRules";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft, Plus, Trash2, Save, Lock, Download,
@@ -972,6 +973,8 @@ const NewInvoice = () => {
         to_gstin: toGstin,
         bank_details_snapshot: bankDetails,
         payment_due_days: paymentDueDays,
+        // Payment reminders run off due_date; keep it in step with the printed terms.
+        ...(docType === "invoice" ? { due_date: effectiveDueDate({ invoice_date: invoiceDate, payment_due_days: paymentDueDays }) } : {}),
         payment_terms: `PAYMENT IS DUE WITHIN ${paymentDueDays} DAYS FROM THE INVOICE DATE`,
         line_items: items.map(li => ({
           description: li.description,

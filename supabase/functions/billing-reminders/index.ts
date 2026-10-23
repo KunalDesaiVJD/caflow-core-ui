@@ -25,9 +25,17 @@
  *   Statement of Account — monthly (or quarterly: Jan/Apr/Jul/Oct), on or
  *     after the chosen day, once per period, when the client's total
  *     outstanding ≥ min balance.
+ *   Fixed schedule (invoice_timing = 'schedule') replaces first/repeat/max
+ *     with exact days relative to the due date. Escalation adds escalate_cc
+ *     from reminder N on. Paused clients and non-sending weekdays wait.
+ *   An invoice with no due_date uses invoice date + payment terms.
+ *   A client whose rules conflict gets nothing of that kind until resolved.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  type Layer, hasValue, resolvePolicy, effectiveDueDate, formatValue, WEEKDAYS,
+} from "../_shared/billingReminderRules.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -43,74 +51,12 @@ function jsonResponse(body: unknown, status = 200) {
 }
 
 // ── Policy model ─────────────────────────────────────────────────────
-
-const POLICY_FIELDS = [
-  "invoice_enabled", "invoice_start_days", "invoice_repeat_days", "invoice_max_count", "invoice_min_amount",
-  "ledger_enabled", "ledger_frequency", "ledger_day", "ledger_min_balance",
-  "to_emails", "send_to_responsible",
-] as const;
-type PolicyField = typeof POLICY_FIELDS[number];
-
-// Safe by default: nothing is sent until some level switches it on.
-const SYSTEM_DEFAULTS: Record<PolicyField, unknown> = {
-  invoice_enabled: false,
-  invoice_start_days: 3,
-  invoice_repeat_days: 7,
-  invoice_max_count: 4,
-  invoice_min_amount: 1,
-  ledger_enabled: false,
-  ledger_frequency: "monthly",
-  ledger_day: 5,
-  ledger_min_balance: 1,
-  to_emails: null,
-  send_to_responsible: false,
-};
+// Resolution + conflict rules live in ../_shared/billingReminderRules.ts — a
+// byte-identical copy of src/lib/billingReminderRules.ts, which the
+// Reminders screen uses to block conflicting rules.
 
 const PER_RUN_CAP = 150;   // emails per invocation; the rest go next hourly run
 const CONCURRENCY = 4;
-
-interface Layer { level: string; label: string; policy: Record<string, any> }
-
-function hasValue(v: unknown): boolean {
-  return v !== null && v !== undefined && !(Array.isArray(v) && v.length === 0);
-}
-
-/** Resolve one client's effective settings from its layers (most specific first). */
-function resolvePolicy(client: Layer | null, groups: Layer[], firm: Layer | null, firmGroups: Layer[]) {
-  const effective: Record<string, any> = {};
-  const source: Record<string, string> = {};
-  const isEnabledField = (f: string) => f === "invoice_enabled" || f === "ledger_enabled";
-
-  const fromMany = (f: PolicyField, layers: Layer[]): Layer | null => {
-    const withValue = layers.filter(l => hasValue(l.policy[f]));
-    if (withValue.length === 0) return null;
-    // Several groups disagree on on/off → "off" wins.
-    if (isEnabledField(f)) return withValue.find(l => l.policy[f] === false) || withValue[0];
-    return withValue[0];
-  };
-
-  for (const f of POLICY_FIELDS) {
-    const hit =
-      (client && hasValue(client.policy[f]) ? client : null) ||
-      fromMany(f, groups) ||
-      (firm && hasValue(firm.policy[f]) ? firm : null) ||
-      fromMany(f, firmGroups);
-    effective[f] = hit ? hit.policy[f] : SYSTEM_DEFAULTS[f];
-    source[f] = hit ? hit.label : "Default";
-  }
-
-  // CC adds up across every level.
-  const cc = new Set<string>();
-  const ccSources: string[] = [];
-  for (const l of [...firmGroups, ...(firm ? [firm] : []), ...groups, ...(client ? [client] : [])]) {
-    const list = (l.policy.cc_emails || []) as string[];
-    if (list.length) ccSources.push(l.label);
-    list.forEach(e => e && cc.add(e.trim().toLowerCase()));
-  }
-  effective.cc_emails = [...cc];
-  source.cc_emails = ccSources.join(" + ") || "—";
-  return { effective, source };
-}
 
 // ── Dates (IST) ──────────────────────────────────────────────────────
 
@@ -185,15 +131,18 @@ async function buildPlan(admin: any, firmIds: string[]) {
     fetchAll(() => admin.from("clients")
       .select("id, name, email, firm_id, is_active, is_draft, deleted_at, responsible_person_id")
       .in("firm_id", firmIds).is("deleted_at", null).order("name")),
-    admin.from("client_groups").select("id, name, firm_id").in("firm_id", firmIds).order("name").then((r: any) => r.data || []),
+    // Client groups are usually global (firm_id NULL), so include those.
+    admin.from("client_groups").select("id, name, firm_id")
+      .or(`firm_id.in.(${firmIds.join(",")}),firm_id.is.null`).order("name").then((r: any) => r.data || []),
     admin.from("firm_group_members").select("firm_group_id, firm_id").in("firm_id", firmIds).then((r: any) => r.data || []),
   ]);
   const activeClients = clients.filter((c: any) => c.is_active !== false && c.is_draft !== true);
 
-  const groupIds = clientGroups.map((g: any) => g.id);
-  const memberships = groupIds.length
-    ? await fetchAll(() => admin.from("client_group_memberships").select("client_id, group_id").in("group_id", groupIds))
-    : [];
+  const knownGroups = new Set(clientGroups.map((g: any) => g.id));
+  const memberships = (await inChunks<any>(activeClients.map((c: any) => c.id), 200, async (chunk) =>
+    (await admin.from("client_group_memberships").select("client_id, group_id").in("client_id", chunk)).data || []))
+    .filter((m: any) => knownGroups.has(m.group_id));
+  const groupIds = [...new Set(memberships.map((m: any) => m.group_id))] as string[];
   const firmGroupIds = [...new Set(fgMembers.map((m: any) => m.firm_group_id))] as string[];
   const firmGroups = firmGroupIds.length
     ? (await admin.from("firm_groups").select("id, name").in("id", firmGroupIds).order("name")).data || []
@@ -229,13 +178,15 @@ async function buildPlan(admin: any, firmIds: string[]) {
 
   // Open invoices (outstanding), all firms.
   const invoices = await fetchAll(() => admin.from("invoices")
-    .select("id, invoice_no, client_id, firm_id, amount_due, total_amount, invoice_date, due_date, last_reminded_at, status, payment_status")
+    .select("id, invoice_no, client_id, firm_id, amount_due, total_amount, invoice_date, due_date, payment_due_days, last_reminded_at, status, payment_status")
     .in("firm_id", firmIds)
     .eq("document_type", "invoice")
     .not("client_id", "is", null)
     .not("status", "in", OPEN_STATUS_EXCLUDE)
     .or("payment_status.is.null,payment_status.neq.paid")
-    .order("due_date", { ascending: true }));
+    .order("invoice_date", { ascending: true }));
+  // Invoices saved before 23-Oct-2026 have no due_date: use invoice date + payment terms.
+  for (const i of invoices) i.due_date = effectiveDueDate(i);
   const outstandingOf = (i: any) => Number(i.amount_due ?? i.total_amount ?? 0);
   const openInvoices = invoices.filter((i: any) => outstandingOf(i) > 0);
 
@@ -278,10 +229,12 @@ async function buildPlan(admin: any, firmIds: string[]) {
   const planned: Planned[] = [];
   const skipped: { client_id: string; client_name: string; firm_id: string; kind: string; reason: string }[] = [];
 
+  const weekday = new Date(today + "T00:00:00Z").getUTCDay();
+
   for (const c of activeClients) {
-    const layer = (scope: string, id: string, label: string): Layer | null => {
+    const layer = (scope: Layer["level"], id: string, label: string): Layer | null => {
       const p = byScope.get(`${scope}:${id}`);
-      return p ? { level: scope, label, policy: p } : null;
+      return p ? { level: scope, id, label, policy: p } : null;
     };
     const clientLayer = layer("client", c.id, "Client");
     const groupLayers = (groupsOfClient.get(c.id) || [])
@@ -292,7 +245,7 @@ async function buildPlan(admin: any, firmIds: string[]) {
       .map(g => layer("firm_group", g, `Firm group: ${fgName.get(g)}`)).filter(Boolean) as Layer[];
     fgLayers.sort((a, b) => a.label.localeCompare(b.label));
 
-    const { effective: e, source } = resolvePolicy(clientLayer, groupLayers, firmLayer, fgLayers);
+    const { effective: e, source, issues } = resolvePolicy(clientLayer, groupLayers, firmLayer, fgLayers);
 
     const to: string[] = hasValue(e.to_emails) ? e.to_emails : (c.email ? [c.email] : []);
     const cc = new Set<string>(e.cc_emails);
@@ -311,41 +264,80 @@ async function buildPlan(admin: any, firmIds: string[]) {
       settings: e, source, to, cc: ccList,
       outstanding: totalOutstanding, open_invoices: clientInvoices.length,
       has_client_policy: !!clientLayer,
+      issues: issues.map(i => ({ kind: i.kind, message: i.message })),
     });
 
     const skip = (kind: string, reason: string) =>
       skipped.push({ client_id: c.id, client_name: c.name, firm_id: c.firm_id, kind, reason });
 
+    // Conflicting rules: send nothing of that kind until someone resolves them.
+    const conflict = (kind: "invoice" | "ledger") =>
+      issues.find(i => i.kind === kind || i.kind === "both");
+    // Paused, or not a sending day: everything waits (interval reminders and
+    // statements are "on or after", so they go on the next allowed day).
+    const anyOn = e.invoice_enabled || e.ledger_enabled;
+    if (anyOn && e.paused_until && today <= String(e.paused_until).slice(0, 10)) {
+      skip(e.invoice_enabled ? "invoice" : "ledger", `Paused until ${fmtDate(e.paused_until)} (${source.paused_until})`);
+      continue;
+    }
+    if (anyOn && hasValue(e.send_weekdays) && !(e.send_weekdays as number[]).includes(weekday)) {
+      skip(e.invoice_enabled ? "invoice" : "ledger",
+        `Not a sending day — ${WEEKDAYS[weekday]}; sends on ${formatValue("send_weekdays", e.send_weekdays)} (${source.send_weekdays})`);
+      continue;
+    }
+
     // ── Invoice reminders ──
-    if (e.invoice_enabled && clientInvoices.length) {
+    const invoiceConflict = e.invoice_enabled && conflict("invoice");
+    if (invoiceConflict && clientInvoices.length) {
+      skip("invoice", `Conflicting rules — ${invoiceConflict.message}`);
+    } else if (e.invoice_enabled && clientInvoices.length) {
       const due: Planned["invoices"] = [];
-      let notYet = 0, maxed = 0, recent = 0, small = 0;
+      let notYet = 0, maxed = 0, recent = 0, small = 0, noDate = 0;
+      const schedule = e.invoice_timing === "schedule" ? (e.invoice_schedule_days || []) as number[] : null;
       for (const i of clientInvoices) {
-        if (!i.due_date) continue;
+        if (!i.due_date) { noDate++; continue; }
         const amt = outstandingOf(i);
         if (amt < Number(e.invoice_min_amount ?? 0)) { small++; continue; }
-        if (today < addDays(i.due_date, Number(e.invoice_start_days ?? 0))) { notYet++; continue; }
         const h = history.get(i.id) || { count: 0, last: null };
-        if (h.count >= Number(e.invoice_max_count)) { maxed++; continue; }
         const lastTs = [h.last, i.last_reminded_at].filter(Boolean).sort().pop() as string | undefined;
-        if (lastTs && daysBetween(istDateOf(lastTs), today) < Number(e.invoice_repeat_days)) { recent++; continue; }
+        if (schedule) {
+          // Fixed schedule: reminder k goes on (due + schedule[k-1]). After a
+          // gap (engine off, pause) send once for the latest step passed — no
+          // catch-up burst.
+          const passed = schedule.filter(d => today >= addDays(i.due_date, d)).length;
+          if (passed === 0) { notYet++; continue; }
+          if (h.count >= schedule.length) { maxed++; continue; }
+          if (h.count >= passed) { recent++; continue; }
+          if (lastTs && istDateOf(lastTs) >= addDays(i.due_date, schedule[passed - 1])) { recent++; continue; }
+        } else {
+          if (today < addDays(i.due_date, Number(e.invoice_start_days ?? 0))) { notYet++; continue; }
+          if (h.count >= Number(e.invoice_max_count)) { maxed++; continue; }
+          if (lastTs && daysBetween(istDateOf(lastTs), today) < Number(e.invoice_repeat_days)) { recent++; continue; }
+        }
         due.push({
           id: i.id, invoice_no: i.invoice_no, invoice_date: i.invoice_date, due_date: i.due_date,
           outstanding: amt, days_overdue: daysBetween(i.due_date, today), reminder_no: h.count + 1,
         });
       }
       if (due.length) {
+        // Escalation: from reminder N on, also CC the escalation addresses.
+        const escalate = hasValue(e.escalate_after) && due.some(i => i.reminder_no >= Number(e.escalate_after));
+        const invCc = escalate
+          ? [...new Set([...ccList, ...((e.escalate_cc || []) as string[]).map(x => x.trim().toLowerCase())])]
+              .filter(x => !to.some(t => t.toLowerCase() === x))
+          : ccList;
         if (to.length === 0) skip("invoice", "No email address for client");
         else planned.push({
-          kind: "invoice", firm_id: c.firm_id, client_id: c.id, client_name: c.name, to, cc: ccList,
+          kind: "invoice", firm_id: c.firm_id, client_id: c.id, client_name: c.name, to, cc: invCc,
           invoices: due, amount: due.reduce((s, i) => s + i.outstanding, 0),
         });
-      } else if (notYet + maxed + recent + small > 0) {
+      } else if (notYet + maxed + recent + small + noDate > 0) {
         const bits = [
           notYet && `${notYet} not yet due for a reminder`,
           recent && `${recent} reminded recently`,
           maxed && `${maxed} reached max reminders`,
           small && `${small} below minimum amount`,
+          noDate && `${noDate} with no invoice or due date`,
         ].filter(Boolean);
         skip("invoice", bits.join(", "));
       }
@@ -354,7 +346,10 @@ async function buildPlan(admin: any, firmIds: string[]) {
     }
 
     // ── Statement of Account (outstanding invoices) ──
-    if (e.ledger_enabled) {
+    const ledgerConflict = e.ledger_enabled && conflict("ledger");
+    if (ledgerConflict) {
+      if (clientInvoices.length) skip("ledger", `Conflicting rules — ${ledgerConflict.message}`);
+    } else if (e.ledger_enabled) {
       const period = ledgerPeriod(today, e.ledger_frequency, Number(e.ledger_day));
       if (!period) continue;
       if (ledgerSent.has(`${c.id}:${period.key}`)) continue;
@@ -499,9 +494,17 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: "Unauthorized" }, 401);
       }
       const policies = await fetchAll(() => admin.from("billing_reminder_policies")
-        .select("scope_type, firm_id, firm_group_id")
+        .select("scope_type, firm_id, firm_group_id, client_group_id")
         .or("invoice_enabled.eq.true,ledger_enabled.eq.true"));
       const ids = new Set<string>(policies.filter((p: any) => p.firm_id).map((p: any) => p.firm_id));
+      // Client groups are usually global (shared by every firm): reach the firms of their members.
+      const globalGroups = policies.filter((p: any) => p.scope_type === "client_group").map((p: any) => p.client_group_id);
+      if (globalGroups.length) {
+        const members = await fetchAll(() => admin.from("client_group_memberships").select("client_id").in("group_id", globalGroups));
+        const memberFirms = await inChunks([...new Set(members.map((m: any) => m.client_id))] as string[], 200, async (chunk) =>
+          (await admin.from("clients").select("firm_id").in("id", chunk)).data || []);
+        memberFirms.forEach((c: any) => c.firm_id && ids.add(c.firm_id));
+      }
       const fgIds = policies.filter((p: any) => p.scope_type === "firm_group").map((p: any) => p.firm_group_id);
       if (fgIds.length) {
         const { data } = await admin.from("firm_group_members").select("firm_id").in("firm_group_id", fgIds);

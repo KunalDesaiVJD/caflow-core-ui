@@ -21,8 +21,10 @@ import {
 } from "@/components/ui/table";
 import { formatDistanceToNow } from "date-fns";
 import {
-  Bell, Building2, Users, User, Layers, Plus, Play, Eye, RefreshCw, Trash2, Save, Mail, Search, Clock,
+  Bell, Building2, Users, User, Layers, Plus, Play, Eye, RefreshCw, Trash2, Save, Mail, Search, Clock, AlertTriangle,
 } from "lucide-react";
+import { describeInvoice, describeLedger, WEEKDAYS } from "@/lib/billingReminderRules";
+import { checkRuleConflicts, type ConflictReport } from "./reminderRuleConflicts";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 // Tables from 20261021120000_billing_reminder_policies.sql. The engine that
@@ -49,6 +51,12 @@ interface Policy {
   invoice_repeat_days: number | null;
   invoice_max_count: number | null;
   invoice_min_amount: number | null;
+  invoice_timing: "interval" | "schedule" | null;
+  invoice_schedule_days: number[] | null;
+  escalate_after: number | null;
+  escalate_cc: string[] | null;
+  send_weekdays: number[] | null;
+  paused_until: string | null;
   ledger_enabled: boolean | null;
   ledger_frequency: "monthly" | "quarterly" | null;
   ledger_day: number | null;
@@ -75,6 +83,7 @@ interface EffectiveRow {
   outstanding: number;
   open_invoices: number;
   has_client_policy: boolean;
+  issues?: { kind: string; message: string }[];
 }
 
 interface PreviewResult {
@@ -96,6 +105,8 @@ const emptyPolicy = (scope: Scope): Policy => ({
   client_id: scope.type === "client" ? scope.id : null,
   invoice_enabled: null, invoice_start_days: null, invoice_repeat_days: null,
   invoice_max_count: null, invoice_min_amount: null,
+  invoice_timing: null, invoice_schedule_days: null, escalate_after: null, escalate_cc: null,
+  send_weekdays: null, paused_until: null,
   ledger_enabled: null, ledger_frequency: null, ledger_day: null, ledger_min_balance: null,
   to_emails: null, cc_emails: null, send_to_responsible: null, notes: null,
 });
@@ -118,16 +129,10 @@ const numOrNull = (s: string): number | null => (s.trim() === "" ? null : Number
 const triValue = (v: boolean | null) => (v === null ? "inherit" : v ? "on" : "off");
 const fromTri = (v: string): boolean | null => (v === "inherit" ? null : v === "on");
 
-function describeInvoice(s: Record<string, any>): string {
-  if (!s.invoice_enabled) return "Off";
-  const d = Number(s.invoice_start_days ?? 0);
-  const first = d === 0 ? "on due date" : d > 0 ? `${d}d after due` : `${-d}d before due`;
-  return `${first}, every ${s.invoice_repeat_days}d, max ${s.invoice_max_count}`;
-}
-function describeLedger(s: Record<string, any>): string {
-  if (!s.ledger_enabled) return "Off";
-  return `${s.ledger_frequency === "quarterly" ? "Quarterly" : "Monthly"}, day ${s.ledger_day}`;
-}
+const parseDays = (s: string): number[] | null => {
+  const list = s.split(/[,;\s]+/).map(x => x.trim()).filter(Boolean).map(Number);
+  return list.length ? list : null;
+};
 
 // ─── Tri-state select (Inherit / On / Off) ────────────────────────────────────
 
@@ -156,6 +161,18 @@ function EmailListField({ label, value, onChange, placeholder, hint }: {
       <Input className="h-8" placeholder={placeholder} value={text}
         onChange={e => { setText(e.target.value); onChange(parseEmails(e.target.value)); }} />
       <p className="text-[11px] text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+function DaysListField({ value, onChange }: { value: number[] | null; onChange: (v: number[] | null) => void }) {
+  const [text, setText] = useState((value || []).join(", "));
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs">Send on these days (relative to due date)</Label>
+      <Input className="h-8 w-72" placeholder="e.g. -3, 0, 7, 15, 30" value={text}
+        onChange={e => { setText(e.target.value); onChange(parseDays(e.target.value)); }} />
+      <p className="text-[11px] text-muted-foreground">Negative = before the due date. One reminder on each day, in order.</p>
     </div>
   );
 }
@@ -215,6 +232,25 @@ function PolicyEditor({
           </div>
           <TriSelect value={policy.invoice_enabled} onChange={v => onChange({ invoice_enabled: v })} onLabel="Send" offLabel="Don't send" />
         </div>
+        <div className="space-y-1">
+          <Label className="text-xs">Timing</Label>
+          <Select value={policy.invoice_timing ?? "inherit"}
+            onValueChange={v => onChange({ invoice_timing: v === "inherit" ? null : v as "interval" | "schedule" })}>
+            <SelectTrigger className="w-[260px] h-8"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">Inherit</SelectItem>
+              <SelectItem value="interval">Repeat interval (first + every N days)</SelectItem>
+              <SelectItem value="schedule">Fixed schedule (exact days)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {policy.invoice_timing === "schedule" ? (
+          <div className="flex flex-wrap gap-4">
+            <DaysListField key={`sched-${scope.type}-${scope.id}-${policy.id ?? "new"}`}
+              value={policy.invoice_schedule_days} onChange={v => onChange({ invoice_schedule_days: v })} />
+            <NumField label="Skip if outstanding below ₹" value={policy.invoice_min_amount} min={0} width="w-28" onChange={v => onChange({ invoice_min_amount: v })} />
+          </div>
+        ) : (
         <div className="flex flex-wrap gap-4">
           <div className="space-y-1">
             <Label className="text-xs">First reminder</Label>
@@ -239,6 +275,19 @@ function PolicyEditor({
           <NumField label="Then repeat every (days)" value={policy.invoice_repeat_days} min={1} onChange={v => onChange({ invoice_repeat_days: v })} />
           <NumField label="Max reminders per invoice" value={policy.invoice_max_count} min={1} onChange={v => onChange({ invoice_max_count: v })} />
           <NumField label="Skip if outstanding below ₹" value={policy.invoice_min_amount} min={0} width="w-28" onChange={v => onChange({ invoice_min_amount: v })} />
+        </div>
+        )}
+        <div className="flex flex-wrap gap-4 items-start">
+          <NumField label="Escalate from reminder no." value={policy.escalate_after} min={1} hint="e.g. 3 = the 3rd reminder onwards" onChange={v => onChange({ escalate_after: v })} />
+          <div className="flex-1 min-w-[240px]">
+            <EmailListField
+              key={`esc-${scope.type}-${scope.id}-${policy.id ?? "new"}`}
+              label="…and then also CC"
+              placeholder="e.g. partner@yourfirm.com"
+              hint="Added to CC on escalated reminders only."
+              value={policy.escalate_cc} onChange={v => onChange({ escalate_cc: v })}
+            />
+          </div>
         </div>
       </section>
 
@@ -265,6 +314,46 @@ function PolicyEditor({
           </div>
           <NumField label="On day of month" value={policy.ledger_day} min={1} max={28} hint="1–28" onChange={v => onChange({ ledger_day: v })} />
           <NumField label="Skip if total below ₹" value={policy.ledger_min_balance} min={0} width="w-28" onChange={v => onChange({ ledger_min_balance: v })} />
+        </div>
+      </section>
+
+      {/* When to send (both kinds) */}
+      <section className="space-y-3 border-t pt-4">
+        <h4 className="text-sm font-semibold">When to send</h4>
+        <div className="flex flex-wrap gap-6 items-start">
+          <div className="space-y-1">
+            <Label className="text-xs">Sending days</Label>
+            <Select value={policy.send_weekdays == null ? "inherit" : "custom"}
+              onValueChange={v => onChange({ send_weekdays: v === "inherit" ? null : [1, 2, 3, 4, 5, 6] })}>
+              <SelectTrigger className="w-[190px] h-8"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="inherit">Inherit (default: every day)</SelectItem>
+                <SelectItem value="custom">Only on chosen days</SelectItem>
+              </SelectContent>
+            </Select>
+            {policy.send_weekdays != null && (
+              <div className="flex gap-2 pt-1">
+                {WEEKDAYS.map((d, i) => (
+                  <label key={d} className="flex items-center gap-1 text-xs cursor-pointer">
+                    <Checkbox checked={policy.send_weekdays!.includes(i)}
+                      onCheckedChange={v => onChange({
+                        send_weekdays: v ? [...policy.send_weekdays!, i].sort() : policy.send_weekdays!.filter(x => x !== i),
+                      })} />
+                    {d}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">Pause everything until</Label>
+            <div className="flex gap-1">
+              <Input type="date" className="h-8 w-40" value={policy.paused_until ?? ""}
+                onChange={e => onChange({ paused_until: e.target.value || null })} />
+              {policy.paused_until && <Button variant="ghost" size="sm" className="h-8 text-xs" onClick={() => onChange({ paused_until: null })}>Clear</Button>}
+            </div>
+            <p className="text-[11px] text-muted-foreground">E.g. payment promised or invoice disputed. Blank = inherit.</p>
+          </div>
         </div>
       </section>
 
@@ -323,12 +412,14 @@ export default function BillingRemindersTab({
   const [effective, setEffective] = useState<EffectiveRow[] | null>(null);
   const [effectiveError, setEffectiveError] = useState<string | null>(null);
   const [effectiveLoading, setEffectiveLoading] = useState(false);
-  const [tableFilter, setTableFilter] = useState<"all" | "send" | "nosend" | "custom">("all");
+  const [tableFilter, setTableFilter] = useState<"all" | "send" | "nosend" | "custom" | "conflict">("all");
   const [tableSearch, setTableSearch] = useState("");
 
   const [selected, setSelected] = useState<Scope | null>(null);
   const [draft, setDraft] = useState<Policy | null>(null);
   const [saving, setSaving] = useState(false);
+  const [conflicts, setConflicts] = useState<ConflictReport | null>(null);
+  const [checking, setChecking] = useState(false);
   const [clientSearch, setClientSearch] = useState("");
 
   const [senderEmail, setSenderEmail] = useState("");
@@ -347,11 +438,12 @@ export default function BillingRemindersTab({
     const [fgRes, fgmRes, cgRes, cRes, pRes, runRes, firmsRes] = await Promise.all([
       sb.from("firm_groups").select("id, name").order("name"),
       sb.from("firm_group_members").select("firm_group_id, firm_id"),
-      sb.from("client_groups").select("id, name, firm_id").eq("firm_id", resolvedFirmId).order("name"),
+      // Client groups are usually global (firm_id NULL — wizard and customer sync create them that way).
+      sb.from("client_groups").select("id, name, firm_id").or(`firm_id.eq.${resolvedFirmId},firm_id.is.null`).order("name"),
       sb.from("clients").select("id, name, email, firm_id").eq("firm_id", resolvedFirmId)
         .eq("is_draft", false).is("deleted_at", null).order("name"),
       sb.from("billing_reminder_policies").select("*")
-        .or(`firm_id.eq.${resolvedFirmId},scope_type.eq.firm_group`),
+        .or(`firm_id.eq.${resolvedFirmId},scope_type.eq.firm_group,scope_type.eq.client_group`),
       sb.from("billing_reminder_runs").select("*")
         .or(`firm_id.eq.${resolvedFirmId},firm_id.is.null`)
         .order("started_at", { ascending: false }).limit(1),
@@ -401,17 +493,17 @@ export default function BillingRemindersTab({
   useEffect(() => { fetchAll(); }, [fetchAll]);
   useEffect(() => { fetchEffective(); }, [fetchEffective]);
 
-  // Default selection: the current firm.
+  // Default selection: the current firm — also after the parent switches firm.
+  // (A separate reset effect used to run after this one and leave the editor empty.)
+  const [selectedForFirm, setSelectedForFirm] = useState<string | null>(null);
   useEffect(() => {
-    if (!selected && resolvedFirmId && firms.length) {
-      const f = firms.find(x => x.id === resolvedFirmId);
-      if (f) selectScope({ type: "firm", id: f.id, name: f.name, firmId: f.id });
-    }
+    if (!resolvedFirmId || !firms.length) return;
+    if (selected && selectedForFirm === resolvedFirmId) return;
+    const f = firms.find(x => x.id === resolvedFirmId);
+    if (f) { selectScope({ type: "firm", id: f.id, name: f.name, firmId: f.id }); setSelectedForFirm(resolvedFirmId); }
+    else { setSelected(null); setDraft(null); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [firms, resolvedFirmId]);
-
-  // Reset when the parent switches firm.
-  useEffect(() => { setSelected(null); setDraft(null); }, [resolvedFirmId]);
 
   const policyFor = useCallback((scope: Scope) => policies.find(p =>
     p.scope_type === scope.type && (
@@ -422,21 +514,53 @@ export default function BillingRemindersTab({
 
   // Re-sync the editor after any save, so a newly inserted row carries its id.
   useEffect(() => {
-    if (selected) { const p = policyFor(selected); setDraft(p ? { ...p } : emptyPolicy(selected)); }
+    if (selected) { const p = policyFor(selected); setDraft({ ...emptyPolicy(selected), ...(p || {}) }); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [policies]);
 
   function selectScope(scope: Scope) {
+    setConflicts(null);
     setSelected(scope);
-    const existing = policyFor(scope);
-    setDraft(existing ? { ...existing } : emptyPolicy(scope));
+    setDraft({ ...emptyPolicy(scope), ...(policyFor(scope) || {}) });
   }
+
+  // ── Conflict check (re-run 600 ms after the last edit, and again on save) ──
+  const runConflictCheck = useCallback(async (p: Policy, scope: Scope) => {
+    setChecking(true);
+    try {
+      const report = await checkRuleConflicts(p, { type: scope.type, id: scope.id });
+      setConflicts(report);
+      return report;
+    } catch (err: any) {
+      const report = { own: [`Could not check for conflicts: ${err.message}`], cross: [], checked: 0 };
+      setConflicts(report);
+      return report;
+    } finally {
+      setChecking(false);
+    }
+  }, []);
+  useEffect(() => {
+    if (!draft || !selected) return;
+    const t = setTimeout(() => runConflictCheck(draft, selected), 600);
+    return () => clearTimeout(t);
+  }, [draft, selected, runConflictCheck]);
+  const blocked = !!conflicts && (conflicts.own.length > 0 || conflicts.cross.length > 0);
 
   // ── Save / clear policy ──
   const savePolicy = async () => {
     if (!draft || !selected) return;
     setSaving(true);
     try {
+      // Never save a rule that conflicts — check again against the latest data.
+      const report = await runConflictCheck(draft, selected);
+      if (report.own.length || report.cross.length) {
+        toast({
+          title: "Not saved — this rule conflicts",
+          description: "Fix the conflicts listed above the Save button, then save again.",
+          variant: "destructive",
+        });
+        return;
+      }
       const { id, ...rest } = draft as any;
       const row = { ...rest, updated_by: resolvedUserId, updated_at: new Date().toISOString() };
       const sb = supabase as any;
@@ -466,6 +590,16 @@ export default function BillingRemindersTab({
 
   const clearPolicy = async () => {
     if (!draft?.id || !selected) return;
+    const report = await checkRuleConflicts(emptyPolicy(selected), { type: selected.type, id: selected.id });
+    if (report.cross.length) {
+      setConflicts(report);
+      toast({
+        title: "Not reset — the rules above would then conflict",
+        description: report.cross[0].message,
+        variant: "destructive",
+      });
+      return;
+    }
     const { error } = await (supabase as any).from("billing_reminder_policies").delete().eq("id", draft.id);
     if (error) { toast({ title: "Could not clear", description: error.message, variant: "destructive" }); return; }
     toast({ title: `${selected.name} now inherits every setting` });
@@ -480,6 +614,15 @@ export default function BillingRemindersTab({
     const existing = policyFor(scope);
     const flag = value === "inherit" ? null : value === "send";
     const patch = { invoice_enabled: flag, ledger_enabled: flag, updated_by: resolvedUserId, updated_at: new Date().toISOString() };
+    const report = await checkRuleConflicts({ ...emptyPolicy(scope), ...(existing || {}), ...patch }, { type: "client", id: scope.id });
+    if (report.own.length || report.cross.length) {
+      toast({
+        title: `Not changed — ${row.client_name}'s rules would conflict`,
+        description: [...report.own, ...report.cross.map(c => c.message)][0],
+        variant: "destructive",
+      });
+      return;
+    }
     const sb = supabase as any;
     const { error } = existing?.id
       ? await sb.from("billing_reminder_policies").update(patch).eq("id", existing.id)
@@ -560,6 +703,7 @@ export default function BillingRemindersTab({
       if (tableFilter === "send") return sends;
       if (tableFilter === "nosend") return !sends;
       if (tableFilter === "custom") return r.has_client_policy;
+      if (tableFilter === "conflict") return (r.issues || []).length > 0;
       return true;
     });
   }, [effective, tableFilter, tableSearch]);
@@ -567,7 +711,11 @@ export default function BillingRemindersTab({
   const counts = useMemo(() => {
     const rows = effective || [];
     const send = rows.filter(r => r.settings.invoice_enabled || r.settings.ledger_enabled).length;
-    return { total: rows.length, send, nosend: rows.length - send, noEmail: rows.filter(r => r.to.length === 0).length };
+    return {
+      total: rows.length, send, nosend: rows.length - send,
+      noEmail: rows.filter(r => r.to.length === 0).length,
+      conflict: rows.filter(r => (r.issues || []).length > 0).length,
+    };
   }, [effective]);
 
   const selectedEffective = selected?.type === "client"
@@ -601,7 +749,8 @@ export default function BillingRemindersTab({
           <h2 className="text-lg font-semibold flex items-center gap-2"><Bell size={18} /> Billing Reminders</h2>
           <p className="text-sm text-muted-foreground">
             Settings for each firm group, firm, client group and client, all in one place. The most specific level wins:
-            client → client group → firm → firm group.
+            client → client group → firm → firm group. A rule that conflicts with another (for example two groups of
+            the same client asking for different things) can't be saved.
           </p>
           <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
             <Clock size={12} /> Runs automatically every day at 10:00 IST.
@@ -649,9 +798,10 @@ export default function BillingRemindersTab({
 
             <div className="space-y-1">
               <p className="text-xs font-semibold uppercase text-muted-foreground">Client groups</p>
-              {clientGroups.length === 0 && <p className="text-xs text-muted-foreground px-2">No client groups in this firm</p>}
+              {clientGroups.length === 0 && <p className="text-xs text-muted-foreground px-2">No client groups yet</p>}
               {clientGroups.map(g => (
-                <ScopeButton key={g.id} scope={{ type: "client_group", id: g.id, name: g.name, firmId: g.firm_id ?? resolvedFirmId }} />
+                <ScopeButton key={g.id} scope={{ type: "client_group", id: g.id, name: g.name, firmId: g.firm_id }}
+                  extra={!g.firm_id ? <span className="text-[10px] text-muted-foreground" title="Shared by all firms">all firms</span> : undefined} />
               ))}
             </div>
 
@@ -725,13 +875,39 @@ export default function BillingRemindersTab({
                   </section>
                 )}
 
-                <div className="flex justify-between gap-2 border-t pt-4">
+                {blocked && conflicts && (
+                  <div className="rounded-md border border-destructive/50 bg-destructive/5 p-3 space-y-2 text-xs">
+                    <p className="font-medium text-sm text-destructive flex items-center gap-1.5">
+                      <AlertTriangle size={14} /> This rule conflicts — it can't be saved until this is fixed
+                    </p>
+                    <ul className="space-y-1.5 list-disc pl-4">
+                      {conflicts.own.map((m, i) => <li key={`o${i}`}>{m}</li>)}
+                      {conflicts.cross.map((c, i) => (
+                        <li key={`c${i}`}>
+                          {c.message}
+                          <div className="text-muted-foreground">
+                            Affects {c.clients.length} client{c.clients.length !== 1 ? "s" : ""}: {c.clients.slice(0, 8).join(", ")}
+                            {c.clients.length > 8 && ` and ${c.clients.length - 8} more`}
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div className="flex justify-between items-center gap-2 border-t pt-4">
                   <Button variant="ghost" size="sm" className="text-xs" onClick={clearPolicy} disabled={!draft.id || saving}>
                     Reset to inherit everything
                   </Button>
-                  <Button size="sm" className="gap-1.5" onClick={savePolicy} disabled={saving}>
-                    <Save size={13} /> {saving ? "Saving..." : "Save"}
-                  </Button>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[11px] text-muted-foreground">
+                      {checking ? "Checking for conflicts…"
+                        : conflicts && !blocked ? `No conflicts (${conflicts.checked} client${conflicts.checked !== 1 ? "s" : ""} checked)` : ""}
+                    </span>
+                    <Button size="sm" className="gap-1.5" onClick={savePolicy} disabled={saving || checking || blocked}>
+                      <Save size={13} /> {saving ? "Saving..." : "Save"}
+                    </Button>
+                  </div>
                 </div>
               </CardContent>
             </>
@@ -751,6 +927,7 @@ export default function BillingRemindersTab({
                 <p className="text-xs text-muted-foreground">
                   {counts.total} clients · {counts.send} will receive · {counts.nosend} won't
                   {counts.noEmail > 0 && <span className="text-amber-600"> · {counts.noEmail} have no email address</span>}
+                  {counts.conflict > 0 && <span className="text-destructive"> · {counts.conflict} held back by conflicting rules</span>}
                 </p>
               )}
             </div>
@@ -763,6 +940,7 @@ export default function BillingRemindersTab({
                   <SelectItem value="send">Will receive</SelectItem>
                   <SelectItem value="nosend">Won't receive</SelectItem>
                   <SelectItem value="custom">Client-level settings</SelectItem>
+                  <SelectItem value="conflict">Conflicting rules</SelectItem>
                 </SelectContent>
               </Select>
               <Button variant="ghost" size="sm" className="h-8" onClick={fetchEffective} disabled={effectiveLoading}>
@@ -803,6 +981,11 @@ export default function BillingRemindersTab({
                             {r.client_name}
                           </button>
                           {r.groups.length > 0 && <div className="text-[11px] text-muted-foreground">{r.groups.join(", ")}</div>}
+                          {(r.issues || []).map((i, k) => (
+                            <div key={k} className="text-[11px] text-destructive flex gap-1 items-start mt-0.5">
+                              <AlertTriangle size={11} className="shrink-0 mt-0.5" /> {i.message}
+                            </div>
+                          ))}
                         </TableCell>
                         <TableCell>
                           <Select value={quick} onValueChange={v => v !== "custom" && setClientSend(r, v as "inherit" | "send" | "nosend")}>
