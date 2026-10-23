@@ -39,6 +39,13 @@ interface NotificationLog {
 
 const PAGE_SIZE = 20;
 
+// notification_log is shared with audit, TDS, portal and user-onboarding sends.
+// This tab lives under Billing, so it only shows the types billing sends.
+const BILLING_TYPES = [
+  "invoice_generated", "quotation_sent", "proforma_sent", "credit_note_issued",
+  "payment_reminder", "ledger_statement", "internal_filing_reminder",
+];
+
 function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
   try { return format(new Date(iso), "dd/MM/yyyy HH:mm"); } catch { return iso; }
@@ -81,12 +88,6 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
 
-  const allTypes = [
-    "invoice_generated", "quotation_sent", "proforma_sent", "credit_note_issued",
-    "payment_reminder", "ledger_statement", "tds_due_7_days", "tds_due_1_day",
-    "audit_report_ready", "new_user_welcome",
-  ];
-
   // Same filters for the on-screen page and the CSV export. Search runs server-side
   // so the count / pagination reflect it; dates are local-day bounds converted to UTC.
   const buildQuery = useCallback(() => {
@@ -99,7 +100,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
 
     if (statusFilter !== "all") q = q.eq("status", statusFilter);
     if (channelFilter !== "all") q = q.eq("channel", channelFilter);
-    if (typeFilter !== "all") q = q.eq("type", typeFilter);
+    q = typeFilter !== "all" ? q.eq("type", typeFilter) : q.in("type", BILLING_TYPES);
     if (dateFrom) q = q.gte("sent_at", new Date(`${dateFrom}T00:00:00`).toISOString());
     if (dateTo) {
       const end = new Date(`${dateTo}T00:00:00`);
@@ -165,8 +166,8 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-lg font-semibold">Email &amp; Notification Log</h2>
-          <p className="text-sm text-muted-foreground">History of all emails and WhatsApp messages sent from this firm.</p>
+          <h2 className="text-lg font-semibold">Billing Email Log</h2>
+          <p className="text-sm text-muted-foreground">Invoices, credit notes, quotations, ledgers and payment reminders sent from this firm.</p>
         </div>
         <Button variant="outline" size="sm" className="gap-1.5" onClick={exportCSV} disabled={logs.length === 0}>
           <Download size={14} /> Export CSV
@@ -208,8 +209,8 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
           <Select value={typeFilter} onValueChange={setTypeFilter}>
             <SelectTrigger className="h-8 w-[190px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Types</SelectItem>
-              {allTypes.map(t => <SelectItem key={t} value={t} className="text-xs capitalize">{t.replace(/_/g, " ")}</SelectItem>)}
+              <SelectItem value="all">All Billing Types</SelectItem>
+              {BILLING_TYPES.map(t => <SelectItem key={t} value={t} className="text-xs capitalize">{t.replace(/_/g, " ")}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
