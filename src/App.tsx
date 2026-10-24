@@ -77,6 +77,7 @@ const TaxAuditTemplateSettings = lazy(() => import("./pages/TaxAuditTemplateSett
 const Chat                     = lazy(() => import("./pages/Chat"));
 const Depreciation             = lazy(() => import("./pages/Depreciation"));
 const Msme43b                  = lazy(() => import("./pages/Msme43b"));
+const Recon26as                = lazy(() => import("./pages/Recon26as"));
 const AuditPipeline            = lazy(() => import("./pages/AuditPipeline"));
 const AuditMasterConfig        = lazy(() => import("./pages/AuditMasterConfig"));
 const AuditWorksheetPageWrapper = lazy(() => import("./pages/AuditWorksheetPageWrapper"));
@@ -308,6 +309,7 @@ const App = () => (
               <Route path="/chat" element={<Chat />} />
               <Route path="/depreciation" element={<Depreciation />} />
               <Route path="/msme-43b" element={<Msme43b />} />
+              <Route path="/26as-recon" element={<Recon26as />} />
               <Route path="/documents" element={<Documents />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/settings/users" element={<UserManagement />} />

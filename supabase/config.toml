@@ -121,3 +121,8 @@ verify_jwt = true
 # near-identical second function.
 [functions.tax-document-extract]
 verify_jwt = false
+
+# Browser-invoked; self-validates the caller's JWT via supabase.auth.getUser
+# (same pattern as tax-document-extract).
+[functions.tds-26as-recon-ai]
+verify_jwt = false
