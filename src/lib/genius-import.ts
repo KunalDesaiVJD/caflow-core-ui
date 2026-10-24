@@ -580,11 +580,17 @@ export interface ExistingChallanRef {
   quarter: string;
   financial_year: string;
   form_type: string;
+  bsr_code?: string | null;
+  deposit_date?: string | null;
 }
 
 export interface ChallanLookupResult {
   /** Safe to reuse: same client, same financial year. */
   reusable: Map<string, ExistingChallanRef>;
+  /** Every same-client, same-FY challan per Bank Challan Number — a short
+   *  serial number repeats across banks and dates, so the importer picks the
+   *  one whose BSR code and deposit date also match (see pickReusableChallan). */
+  candidates: Map<string, ExistingChallanRef[]>;
   /** Same client, same Bank Challan Number, but a DIFFERENT financial year —
    *  never reused (a challan cannot legitimately fund a different FY's
    *  return), but worth explaining rather than silently creating a new
@@ -629,26 +635,50 @@ export async function resolveExistingChallansByNumber(
   financialYear: string,
 ): Promise<ChallanLookupResult> {
   const reusable = new Map<string, ExistingChallanRef>();
+  const candidates = new Map<string, ExistingChallanRef[]>();
   const yearMismatched: { challanNumber: string; ref: ExistingChallanRef }[] = [];
   const numList = Array.from(new Set(bankChallanNumbers.filter((n): n is string => !!n)));
-  if (numList.length === 0) return { reusable, yearMismatched };
+  if (numList.length === 0) return { reusable, candidates, yearMismatched };
 
   const { data } = await supabase
     .from("tds_challans")
-    .select("id, challan_serial_no, bsr_code, quarter, financial_year, form_type")
+    .select("id, challan_serial_no, bsr_code, deposit_date, quarter, financial_year, form_type")
     .eq("client_id", clientId)
     .in("challan_serial_no", numList);
   for (const row of (data || []) as any[]) {
     const key = String(row.challan_serial_no ?? "");
     if (!key) continue;
-    const ref: ExistingChallanRef = { id: String(row.id), quarter: row.quarter, financial_year: row.financial_year, form_type: row.form_type };
+    const ref: ExistingChallanRef = {
+      id: String(row.id), quarter: row.quarter, financial_year: row.financial_year, form_type: row.form_type,
+      bsr_code: row.bsr_code ?? null, deposit_date: row.deposit_date ?? null,
+    };
     if (row.financial_year === financialYear) {
       if (!reusable.has(key)) reusable.set(key, ref);
+      const list = candidates.get(key); if (list) list.push(ref); else candidates.set(key, [ref]);
     } else if (!reusable.has(key)) {
       yearMismatched.push({ challanNumber: key, ref });
     }
   }
-  return { reusable, yearMismatched };
+  return { reusable, candidates, yearMismatched };
+}
+
+/**
+ * The existing challan that really IS this file's challan. A bank challan is
+ * identified by BSR code + deposit date + serial number together — the serial
+ * alone is a short number that restarts per bank per day, so two different
+ * challans of the same client can share it. Matching on the serial alone
+ * attached a 24Q Q1 return's 99 salary entries (₹8,45,043) to an unrelated
+ * ₹26,464 challan that happened to also be "00006", which then read as
+ * hugely over-applied. A field missing on either side is not compared, so
+ * an older row without a BSR or date still matches as before.
+ */
+export function pickReusableChallan(
+  candidates: ExistingChallanRef[] | undefined, bsrCode: string | null | undefined, depositDate: string | null | undefined,
+): ExistingChallanRef | undefined {
+  const norm = (v: string | null | undefined) => String(v ?? "").trim();
+  return (candidates || []).find((ref) =>
+    (!norm(bsrCode) || !norm(ref.bsr_code) || norm(ref.bsr_code) === norm(bsrCode)) &&
+    (!norm(depositDate) || !norm(ref.deposit_date) || norm(ref.deposit_date).slice(0, 10) === norm(depositDate).slice(0, 10)));
 }
 
 /**
@@ -1059,9 +1089,11 @@ export async function importGeniusXls(
   // Build map: Challan Number (from file) -> existing challan's UUID, scoped
   // to THIS client AND this financial year. See resolveExistingChallansByNumber()
   // for why both scopes are load-bearing rather than defensive.
-  const { reusable: existingChallanByNum, yearMismatched } = await resolveExistingChallansByNumber(
+  const { candidates: existingChallansByNum, yearMismatched } = await resolveExistingChallansByNumber(
     parsed.challans.map((c) => c.bankChallanNo), filing.client_id, financialYear,
   );
+  const existingChallanFor = (c: { bankChallanNo: string; bsrCode: string; depositDate: string | null }) =>
+    c.bankChallanNo ? pickReusableChallan(existingChallansByNum.get(c.bankChallanNo), c.bsrCode, c.depositDate) : undefined;
 
   if (yearMismatched.length > 0) {
     const sample = yearMismatched.slice(0, 3)
@@ -1077,7 +1109,7 @@ export async function importGeniusXls(
   const reusedChallans: { fileSerial: number; challanNum: string; from: string; fromForm: string; fromQuarter: string; fromFy: string }[] = [];
   const newChallans: typeof parsed.challans = [];
   parsed.challans.forEach(c => {
-    const existingRec = c.bankChallanNo ? existingChallanByNum.get(c.bankChallanNo) : undefined;
+    const existingRec = existingChallanFor(c);
     if (existingRec) {
       reusedChallans.push({
         fileSerial: c.serialNo,
@@ -1188,7 +1220,7 @@ export async function importGeniusXls(
   });
   parsed.challans.forEach(c => {
     if (serialToId.has(c.serialNo)) return; // already mapped as new
-    const existingRec = c.bankChallanNo ? existingChallanByNum.get(c.bankChallanNo) : undefined;
+    const existingRec = existingChallanFor(c);
     if (existingRec) serialToId.set(c.serialNo, existingRec.id);
   });
 

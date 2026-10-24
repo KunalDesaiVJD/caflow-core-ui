@@ -4,7 +4,8 @@ import { uploadTdsImportFile } from "@/lib/tds/uploadImportFile";
 import { downloadStorageFile, removePublicDocumentByUrl } from "@/lib/openStorageFile";
 import { isQuarterInTdsRange, clientHasTdsForm } from "@/lib/tdsQuarter";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
-import { computeChallanOverApplied } from "@/lib/tds/rateEngine";
+import { computeChallanPooled, isChallanOverApplied } from "@/lib/tds/rateEngine";
+import { isInterestOnlyChallan, planInterestChallans, rowsCountedAgainst } from "@/lib/tds/challanScope";
 import { READY_TO_FILE_STATUS, isProcessedWorkStatus } from "@/components/tds/TdsFilingsManager";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
@@ -410,7 +411,7 @@ export function TdsValidateFinalise({
     // correct, intentional users of the correction-aware ledger — this
     // screen must not become a third.
     const { data: ch } = await supabase.from("tds_challans")
-      .select("id, challan_serial_no, total_challan_amount, late_fees_234e, kasar_vatav_amount, deposit_date")
+      .select("id, challan_serial_no, total_challan_amount, late_fees_234e, kasar_vatav_amount, deposit_date, quarter, financial_year, total_tax_deposited, surcharge_deposited, interest_deposited")
       .eq("filing_id", match.id);
     if (stale()) return;
     const chIds = (ch || []).map((c: any) => c.id);
@@ -430,17 +431,27 @@ export function TdsValidateFinalise({
     // challan_id ONLY (not filing_id) for the combined-payment reason above.
     if (chIds.length) {
       const { data: chDeds } = await supabase.from("tds_deductees")
-        .select("challan_id, total_tax_deducted, tds_amount, interest_amount, surcharge_amount, date_of_payment")
+        .select("challan_id, total_tax_deducted, tds_amount, interest_amount, surcharge_amount, date_of_payment, quarter, financial_year")
         .in("challan_id", chIds);
       if (stale()) return;
       const byChallan = new Map<string, typeof chDeds>();
       for (const d of chDeds || []) {
         const g = byChallan.get(d.challan_id as string); if (g) g.push(d); else byChallan.set(d.challan_id as string, [d]);
       }
+      // Same scoping as Data Entry's challan cards: entries from a quarter
+      // before the challan's own are not counted against it, and interest
+      // paid on a separate interest-only challan is not counted against the
+      // TDS challans (see challanScope.ts).
+      const rowsOf = (c: any) => rowsCountedAgainst(c, byChallan.get(c.id) || []);
+      const interestPlan = planInterestChallans((ch || []) as any[], rowsOf);
       const overApplied = (ch || [])
         .map((c: any) => {
-          const { overApplied, effectiveApplied, allocatable } = computeChallanOverApplied(c, byChallan.get(c.id) || []);
-          return overApplied ? { id: c.id, challanNo: c.challan_serial_no as string | null, shortfall: effectiveApplied - allocatable } : null;
+          const pooled = computeChallanPooled(c, rowsOf(c));
+          const allocatable = pooled.allocatable;
+          const effectiveApplied = isInterestOnlyChallan(c)
+            ? pooled.effectiveApplied + (interestPlan.consumed.get(c.id) || 0)
+            : pooled.effectiveApplied - (interestPlan.via.has(c.id) ? Math.max(0, pooled.interest - (c.interest_deposited || 0)) : 0);
+          return isChallanOverApplied(effectiveApplied, allocatable) ? { id: c.id, challanNo: c.challan_serial_no as string | null, shortfall: effectiveApplied - allocatable } : null;
         })
         .filter((x): x is { id: string; challanNo: string | null; shortfall: number } => x != null);
       setOverAppliedChallans(overApplied);

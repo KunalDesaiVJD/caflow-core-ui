@@ -44,16 +44,18 @@ describe("interest-only challans (Genius records late-deposit interest as its ow
     expect(plan.consumed.get(INT_ID)).toBe(319); // the whole deposit is accounted for
   });
 
-  it("a smaller interest challan covers only part — the rest still counts against the TDS challan", () => {
-    const plan = planInterestChallans(challans, rowsOf); // pool 215 < 319 owed
-    expect(plan.via.get("c3")).toBe(215);
+  it("a smaller interest challan: the TDS challan still never reads over-applied — the gap is an interest short-payment", () => {
+    const plan = planInterestChallans(challans, rowsOf); // pool 215 < 319 owed (Shivon Infra, the real layout)
+    expect(plan.via.get("c3")).toBe(319);        // none of the interest is counted against the TDS challan
     expect(plan.consumed.get(INT_ID)).toBe(215);
+    expect(plan.shortfall).toBe(104);
   });
 
   it("a larger interest challan leaves the surplus unconsumed", () => {
     const plan = planInterestChallans(challans.map((c) => (c.id === INT_ID ? ch(INT_ID, "2026-10-21", 0, 500) : c)), rowsOf);
     expect(plan.via.get("c3")).toBe(319);
     expect(plan.consumed.get(INT_ID)).toBe(319);
-    expect(plan.avail.get("c3")).toBe(500);      // 319 drawn + 181 still available to later edits
+    expect(plan.avail.get("c3")).toBe(Number.POSITIVE_INFINITY); // later edits' interest also goes to the interest challan
+    expect(plan.shortfall).toBe(0);
   });
 });
