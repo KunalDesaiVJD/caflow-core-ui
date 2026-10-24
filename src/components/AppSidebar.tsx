@@ -50,6 +50,7 @@ const auditUtilities = [
   { title: "Master Configuration", path: "/audit/master-config", icon: Settings },
   { title: "Depreciation", path: "/depreciation", icon: Calculator },
   { title: "MSME 43B(h) Analyser", path: "/msme-43b", icon: Scale },
+  { title: "26AS vs Books Recon", path: "/26as-recon", icon: FileSearch },
   { title: "ERP Ledger", path: "/erp-ledger", icon: BookOpen },
   { title: "Documents", path: "/documents", icon: FolderOpen },
   // REMOVED: Comparative Reports — removed per client request
