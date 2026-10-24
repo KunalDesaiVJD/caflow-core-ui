@@ -35,6 +35,7 @@ import {
   Tooltip, TooltipContent, TooltipProvider, TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
@@ -47,6 +48,7 @@ import { generateGeniusExport } from "@/lib/genius-export";
 import { importGeniusXls, repairFilingSectionCodes } from "@/lib/genius-import";
 import { markUnderProcessIfNotStarted } from "@/lib/tds/filingActivity";
 import { logReconAudit } from "@/lib/tdsReconAudit";
+import { isInterestOnlyChallan, planInterestChallans, tdsOfEntry, rowsCountedAgainst, countsAgainstChallan } from "@/lib/tds/challanScope";
 
 // ─── Types ───
 interface ClientOption {
@@ -239,50 +241,13 @@ const calcTaxWithRebate = (totalIncome: number, regime: "new" | "old"): number =
   return Math.round(tax + cess);
 };
 
+// Interest-only challans / period scoping live in @/lib/tds/challanScope;
+// re-exported here for existing imports.
+export { isInterestOnlyChallan, planInterestChallans };
+
 // #3 FIX: Parse date strings as LOCAL midnight to avoid UTC-vs-local timezone shift.
 // new Date("2025-02-07") → UTC 00:00 → IST 05:30 the same day, which compares AFTER
 // new Date(y, m-1, d) → local 00:00 IST.  Both must use the same reference.
-/** A challan that carries only interest (no TDS / surcharge) — Genius records
- *  late-deposit interest as its own challan. */
-export const isInterestOnlyChallan = (c: Pick<Challan, "total_tax_deposited" | "surcharge_deposited" | "interest_deposited">) =>
-  (c.total_tax_deposited || 0) === 0 && (c.surcharge_deposited || 0) === 0 && (c.interest_deposited || 0) > 0;
-
-/**
- * Matches each interest-only challan's deposit against the interest the OTHER
- * challans' entries owe beyond what those challans declare themselves (oldest
- * deposit first). See the comment above interestChallanPlan in the component.
- * With no interest-only challan in the list the plan is empty.
- */
-export function planInterestChallans(
-  challans: Challan[], rowsOf: (c: Challan) => Deductee[],
-): { avail: Map<string, number>; via: Map<string, number>; consumed: Map<string, number> } {
-  const avail = new Map<string, number>();     // TDS challan id -> interest it may draw from interest challans
-  const via = new Map<string, number>();       // TDS challan id -> interest it draws from them today
-  const consumed = new Map<string, number>();  // interest-only challan id -> amount of its deposit matched
-  const interestOnly = challans.filter(isInterestOnlyChallan);
-  if (interestOnly.length === 0) return { avail, via, consumed };
-  const byDate = (x: Challan, y: Challan) => (x.deposit_date || "").localeCompare(y.deposit_date || "");
-  let pool = interestOnly.reduce((sum, c) => sum + (c.interest_deposited || 0), 0);
-  const total = pool;
-  for (const c of challans.filter((x) => !isInterestOnlyChallan(x)).sort(byDate)) {
-    const live = withChallanInterest(rowsOf(c) as any[], c.deposit_date || null, tdsOfEntry).reduce((sum, r) => sum + r.interest_amount, 0);
-    const take = Math.min(Math.max(0, live - (c.interest_deposited || 0)), pool);
-    pool -= take;
-    avail.set(c.id, take); via.set(c.id, take);
-  }
-  // Whatever no challan drew stays available to the next edit on any of them.
-  for (const id of avail.keys()) avail.set(id, (avail.get(id) || 0) + pool);
-  let used = total - pool;
-  for (const c of [...interestOnly].sort(byDate)) {
-    const part = Math.min(c.interest_deposited || 0, used);
-    consumed.set(c.id, part);
-    used -= part;
-  }
-  return { avail, via, consumed };
-}
-
-/** The TDS figure this screen works interest out on (Data Entry order). */
-const tdsOfEntry = (d: { tds_amount?: number | null; total_tax_deducted?: number | null }) => d.tds_amount || d.total_tax_deducted || 0;
 
 const parseLocalDate = (dateStr: string): Date => {
   const parts = dateStr.split("-");
@@ -464,7 +429,6 @@ export function TdsDataEntry({
 
   // Client/FY/Quarter/Form are the SHARED Workspace context (owned by the parent),
   // so a return selected here is already loaded when the user opens Validate & Finalise.
-  const [clientSearch, setClientSearch] = useState("");
   const [filingLoaded, setFilingLoaded] = useState(false);
 
   const [filing, setFiling] = useState<TdsFiling | null>(null);
@@ -842,7 +806,7 @@ export function TdsDataEntry({
     // worked out over each challan's whole row set, not row by row.
     for (const [challanId, rows] of Object.entries(cfGrouped)) {
       const depDate = challanById.get(challanId)?.deposit_date || null;
-      const applied = withChallanInterest(rows, depDate, tdsOfEntry)
+      const applied = withChallanInterest(rowsCountedAgainst(challanById.get(challanId), rows), depDate, tdsOfEntry)
         .reduce((s, d) => s + (d.total_tax_deducted || d.tds_amount || 0) + d.interest_amount + (d.surcharge_amount || 0), 0);
       appliedMap.set(challanId, applied);
     }
@@ -1630,7 +1594,7 @@ export function TdsDataEntry({
         || carryForwardChallans.find(cf => cf.challan.id === challanId)?.challan
         || archivedChallans.find(ac => ac.id === challanId) || null;
       if (challanObj) {
-        const siblingRows = (challanId === selectedChallan?.id ? [...prevEntries, ...deductees] : (allChallanDeductees[challanId] || []))
+        const siblingRows = rowsCountedAgainst(challanObj as Challan, challanId === selectedChallan?.id ? [...prevEntries, ...deductees] : (allChallanDeductees[challanId] || []))
           .filter((d: any) => !(isCorrectionMode && (d as any).action === "delete"));
         const projectedRows = siblingRows.map((d: any) => d.id === deducteeId ? { ...d, ...updates } : d);
         const pooled = computeChallanPooled(challanObj as any, projectedRows as any);
@@ -1871,7 +1835,7 @@ export function TdsDataEntry({
   // real shortfall is still flagged. With no interest-only challan in the
   // filing the plan is empty and nothing changes.
   const interestChallanPlan = useMemo(() => planInterestChallans(challans, (c) => {
-    const raw = c.id === selectedChallan?.id ? [...prevEntries, ...deductees] : (allChallanDeductees[c.id] || []);
+    const raw = rowsCountedAgainst(c, c.id === selectedChallan?.id ? [...prevEntries, ...deductees] : (allChallanDeductees[c.id] || []));
     return isCorrectionMode ? raw.filter(d => (d as any).action !== "delete") : raw;
   }), [challans, selectedChallan, prevEntries, deductees, allChallanDeductees, isCorrectionMode]);
 
@@ -1890,13 +1854,22 @@ export function TdsDataEntry({
     // can see what was removed — but a removed entry no longer consumes any of
     // the challan, so it must not count toward Applied / Unconsumed or the
     // deductee count. Without this the balances describe the OLD return.
-    const allForChallan = isCorrectionMode
+    const allForChallanLive = isCorrectionMode
       ? allForChallanRaw.filter(d => (d as any).action !== "delete")
       : allForChallanRaw;
     const challanObj = challans.find(c => c.id === challanId)
       || (selectedChallan?.id === challanId ? selectedChallan : null)
       || carryForwardChallans.find(cf => cf.challan.id === challanId)?.challan
       || archivedChallans.find(ac => ac.id === challanId) || null;
+    // Entries from a quarter BEFORE the challan's own were paid from that
+    // earlier return's challans, not this one — kept on screen as read-only
+    // history but left out of Applied (see countsAgainstChallan).
+    const allForChallan = rowsCountedAgainst(challanObj as Challan | null, allForChallanLive);
+    const earlierRows = allForChallanLive.filter(d => !countsAgainstChallan(challanObj as Challan | null, d));
+    const earlierQuarter = {
+      count: earlierRows.length,
+      tds: earlierRows.reduce((s, d) => s + Math.round(d.total_tax_deducted || d.tds_amount || 0), 0),
+    };
     // Each row's own interest_amount is only ever WRITTEN by the grid's
     // per-cell edit handler (see the "amount_paid_credited"/"date_of_payment"
     // branch above) — a row that arrived via Genius Excel import (or any path
@@ -1954,7 +1927,7 @@ export function TdsDataEntry({
       overApplied: isChallanOverApplied(effectiveApplied, pooled.allocatable),
       unconsumed: Math.max(0, pooled.allocatable - effectiveApplied),
       count: allForChallan.length, byForm,
-      interestOnly, viaIntChallan,
+      interestOnly, viaIntChallan, earlierQuarter,
     };
   }, [selectedChallan, prevEntries, deductees, allChallanDeductees, challans, carryForwardChallans, archivedChallans, isCorrectionMode, interestChallanPlan]);
 
@@ -2085,6 +2058,7 @@ export function TdsDataEntry({
     const challanTotMap = new Map<string, number>();
     const challanForMatch = new Map(challans.map(c => [c.id, c]));
     deductees.forEach(d => {
+      if (!countsAgainstChallan(challanForMatch.get(d.challan_id), d)) return;
       // Interest recomputed live — same fix, same rationale, as
       // getChallanBreakdownAll/fetchCarryForwardChallans above: a row's
       // stored interest_amount can be stale-zero (bulk import, never
@@ -2409,30 +2383,20 @@ export function TdsDataEntry({
         <div className="flex flex-wrap gap-3 items-end">
           <div className="space-y-1">
             <Label className="text-xs">Client</Label>
-            <Select value={selClient} onValueChange={v => { setSelClient(v); setClientSearch(""); }}>
-              <SelectTrigger className="w-[220px]"><SelectValue placeholder="Select client" /></SelectTrigger>
-              <SelectContent>
-                <div className="px-2 pb-1 pt-1 sticky top-0 bg-popover z-10">
-                  <Input
-                    placeholder="Search client…"
-                    value={clientSearch}
-                    onChange={e => setClientSearch(e.target.value)}
-                    onKeyDown={e => e.stopPropagation()}
-                    className="h-7 text-xs"
-                  />
-                </div>
-                {clients
-                  .filter(c => clientHasTdsForm(c.tds_forms_applicable, selForm))
-                  .filter(c => !clientSearch || (c.name || "").toLowerCase().includes(clientSearch.toLowerCase()))
-                  .map(c => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)
-                }
-                {clients
-                  .filter(c => clientHasTdsForm(c.tds_forms_applicable, selForm))
-                  .filter(c => !clientSearch || (c.name || "").toLowerCase().includes(clientSearch.toLowerCase())).length === 0 && (
-                  <div className="py-4 text-center text-xs text-muted-foreground">No clients found</div>
-                )}
-              </SelectContent>
-            </Select>
+            {/* Popover + type-to-filter list: the old search box sat inside a
+                Radix Select, which pulls focus onto the items as you type or
+                move the mouse, so typing a name rarely narrowed anything. */}
+            <SearchableSelect
+              className="w-[220px] h-10"
+              value={selClient}
+              onValueChange={setSelClient}
+              placeholder="Select client"
+              searchPlaceholder="Search client…"
+              emptyText="No clients found"
+              options={clients
+                .filter(c => clientHasTdsForm(c.tds_forms_applicable, selForm))
+                .map(c => ({ value: c.id, label: c.name || "—" }))}
+            />
           </div>
           <div className="space-y-1">
             <Label className="text-xs">FY</Label>
@@ -3140,8 +3104,16 @@ export function TdsDataEntry({
                             {bd.interestOnly && (
                               <Badge className="text-[9px] bg-amber-100 text-amber-700">Interest challan — ₹{(interestChallanPlan.consumed.get(selectedChallan.id) || 0).toLocaleString("en-IN")} matched to interest on other challans</Badge>
                             )}
+                            {bd.interestOnly && interestChallanPlan.shortfall > 0 && (
+                              <Badge className="text-[9px] bg-red-100 text-red-700" title="Interest the entries owe beyond what the interest challan(s) paid. It does not make any TDS challan over-applied.">Interest short-paid ₹{interestChallanPlan.shortfall.toLocaleString("en-IN")}</Badge>
+                            )}
                             {!bd.interestOnly && bd.viaIntChallan > 0 && (
                               <Badge className="text-[9px] bg-amber-100 text-amber-700">Interest ₹{bd.viaIntChallan.toLocaleString("en-IN")} paid via separate interest challan</Badge>
+                            )}
+                            {bd.earlierQuarter.count > 0 && (
+                              <Badge className="text-[9px] bg-slate-100 text-slate-700" title={`These entries belong to a quarter before this challan's own (${selectedChallan.quarter} FY ${selectedChallan.financial_year}), so they were paid from that return's challans. They are shown read-only and not counted in Applied.`}>
+                                {bd.earlierQuarter.count} earlier-quarter {bd.earlierQuarter.count === 1 ? "entry" : "entries"} (TDS ₹{bd.earlierQuarter.tds.toLocaleString("en-IN")}) not counted
+                              </Badge>
                             )}
                             {overApplied ? (
                               <Badge className="text-[9px] bg-red-100 text-red-700">Over-applied</Badge>
