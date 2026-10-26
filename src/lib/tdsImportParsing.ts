@@ -534,3 +534,151 @@ export function countPansInGrids(sheetNames: string[], gridOf: (name: string) =>
   }
   return pans.size;
 }
+
+// ── Firm's quarterly 24Q/26Q workbook (Challan Master + "24Q Q1" … "26Q Q4") ─
+// The firm's own TDS data-entry workbook keeps ONE sheet per form per quarter
+// ("24Q Q1" … "24Q Q4", "26Q Q1" … "26Q Q4") next to a "Challan Master". Read
+// generically it fails Stage 1 in several ways at once: every quarter and both
+// forms land in one import (the compare's PAN rescue then keeps another
+// quarter's rows for the same employee), 24Q rows carry no section, salary has
+// four money columns (Salary / Bonus / Other / TOTAL), "RECOMMENDED TDS" sits
+// beside "TDS Deducted", the challan is one "serial | BSR x | date" string, the
+// sheets carry ~40 helper columns (dep, due, effd, …) that look like dates and
+// amounts, rows deleted in a revision stay on the sheet (act = 0), and the
+// "Salary Working" sheet repeats every employee's PAN as an annual summary.
+// So this layout is read by its own, exact column names into clean rows.
+
+const FORM_SHEET_RE = /^(24Q|26Q|27Q|27EQ)\s*Q([1-4])$/i;
+
+/** The workbook's per-form-per-quarter sheets, when it is this layout
+ * (exact tab names plus a "Challan Master" tab — never a fuzzy match). */
+export function quarterlyFormSheets(sheetNames: string[]): { name: string; form: string; quarter: string }[] | null {
+  const hasChallanMaster = sheetNames.some((n) => n.trim().toLowerCase().replace(/\s+/g, " ") === "challan master");
+  if (!hasChallanMaster) return null;
+  const out: { name: string; form: string; quarter: string }[] = [];
+  for (const name of sheetNames) {
+    const m = name.trim().replace(/\s+/g, " ").match(FORM_SHEET_RE);
+    if (m) out.push({ name, form: m[1].toUpperCase(), quarter: `Q${m[2]}` });
+  }
+  return out.length ? out : null;
+}
+
+const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** A cell date as an unambiguous "30-Apr-2026". SheetJS hands back either local
+ * or UTC midnight depending on version; +12h lands on the right calendar day
+ * in both cases for any Indian/US time zone. */
+function fmtDate(v: unknown): string | null {
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    const d = new Date(v.getTime() + 12 * 3600 * 1000);
+    return `${String(d.getDate()).padStart(2, "0")}-${MON[d.getMonth()]}-${d.getFullYear()}`;
+  }
+  const s = String(v ?? "").trim();
+  return s || null;
+}
+const num = (v: unknown): number | null => {
+  if (v == null || v === "") return null;
+  if (typeof v === "number") return v;
+  const s = String(v).replace(/[,₹\s]/g, "");
+  if (s === "-") return 0;
+  const n = Number(s);
+  return isFinite(n) ? n : null;
+};
+const text = (v: unknown): string => (v == null ? "" : String(v).trim());
+
+/** "14904 | BSR 0510002 | 21-05-2026" → serial + BSR. */
+function splitChallanRef(v: unknown): { no: string | null; bsr: string | null } {
+  const parts = text(v).split("|").map((p) => p.trim());
+  const no = parts[0] || null;
+  const bsrPart = parts.find((p) => /^bsr\b/i.test(p));
+  const bsr = bsrPart ? bsrPart.replace(/^bsr\s*/i, "").trim() || null : null;
+  return { no, bsr };
+}
+
+/** Salary section from the 24Q helper text ("1002 – Salary: Non-Govt employees"). */
+function salarySection(sc: unknown): string {
+  const s = text(sc).toLowerCase();
+  if (/non[\s-]*gov/.test(s)) return "192B";
+  if (/gov/.test(s)) return "192A";
+  return "192B";
+}
+
+/** One form-quarter sheet (raw cell values) → clean deductee rows. */
+function extractFormSheet(grid: unknown[][], form: string): Record<string, unknown>[] {
+  // Header = the first row naming both a Challan and a PAN column.
+  let h = -1;
+  for (let r = 0; r < Math.min(grid.length, 20) && h < 0; r++) {
+    const cells = (grid[r] || []).map(normaliseCell);
+    if (cells.some((c) => c.startsWith("challan")) && cells.some((c) => c.startsWith("pan"))) h = r;
+  }
+  if (h < 0) return [];
+  const head = (grid[h] || []).map(normaliseCell);
+  const col = (test: (c: string) => boolean): number => head.findIndex(test);
+  const c = {
+    challan: col((x) => x.startsWith("challan")),
+    name: col((x) => x.startsWith("employeename") || x.startsWith("deducteename") || x === "name"),
+    pan: col((x) => x.startsWith("pan")),
+    section: col((x) => x.startsWith("section")),
+    date: col((x) => x.startsWith("dateofpayment")),
+    amount: form === "24Q" ? col((x) => x.startsWith("totalsalary")) : col((x) => x.startsWith("amount")),
+    tds: col((x) => x.startsWith("tdsdeducted")),
+    dedDate: col((x) => x.startsWith("dateofdeduction")),
+    interest: col((x) => x.startsWith("interest")),
+    act: col((x) => x === "act"),
+    sc: col((x) => x === "sc"),
+  };
+  if (c.name < 0 || c.amount < 0 || c.tds < 0) return [];
+  const rows: Record<string, unknown>[] = [];
+  for (let r = h + 1; r < grid.length; r++) {
+    const row = grid[r] || [];
+    const name = text(row[c.name]);
+    if (!name) continue;
+    // act = 1 marks a live entry; 0 is a blank slot or a row deleted in a revision.
+    if (c.act >= 0 && num(row[c.act]) !== 1) continue;
+    const pan = c.pan >= 0 ? text(row[c.pan]).toUpperCase() : "";
+    const { no, bsr } = c.challan >= 0 ? splitChallanRef(row[c.challan]) : { no: null, bsr: null };
+    const paid = c.date >= 0 ? fmtDate(row[c.date]) : null;
+    const deducted = c.dedDate >= 0 ? fmtDate(row[c.dedDate]) : null;
+    rows.push({
+      "Deductee Name": name,
+      "PAN": pan || null,
+      "Section": form === "24Q" ? salarySection(c.sc >= 0 ? row[c.sc] : null) : (c.section >= 0 ? text(row[c.section]) || null : null),
+      "Date of Payment": paid,
+      // "Date of Deduction (if later)" — blank means deducted on payment.
+      "Date of Deduction": deducted || paid,
+      "Amount Paid": num(row[c.amount]),
+      "TDS Deducted": num(row[c.tds]),
+      "Interest": c.interest >= 0 ? num(row[c.interest]) : null,
+      "BSR Code": bsr,
+      "Challan No": no,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Rows from the quarterly workbook, limited to the filing being validated
+ * (`scope.form` / `scope.quarter`, e.g. "24Q" / "Q1") so a 24Q Q1 import never
+ * carries Q2's salary or the 26Q sheets. With no scope (or a form the workbook
+ * has no sheet for) every form-quarter sheet is read.
+ * `rawGridOf` must return RAW cell values (numbers, Dates), not display text.
+ */
+export function extractQuarterlyFormRows(
+  sheets: { name: string; form: string; quarter: string }[],
+  rawGridOf: (name: string) => unknown[][],
+  scope?: { form?: string | null; quarter?: string | null },
+): Record<string, unknown>[] {
+  const form = scope?.form?.toUpperCase().match(/24Q|26Q|27Q|27EQ/)?.[0];
+  const q = scope?.quarter?.match(/[1-4]/)?.[0];
+  let pick = sheets;
+  if (form && sheets.some((s) => s.form === form)) {
+    pick = sheets.filter((s) => s.form === form && (!q || s.quarter === `Q${q}`));
+  }
+  const all: Record<string, unknown>[] = [];
+  for (const s of pick) {
+    for (const r of extractFormSheet(rawGridOf(s.name), s.form)) {
+      r[SHEET_KEY] = s.name;
+      all.push(r);
+    }
+  }
+  return all;
+}

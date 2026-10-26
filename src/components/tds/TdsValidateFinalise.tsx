@@ -44,7 +44,8 @@ import {
   RotateCcw, Loader2, Users, FileWarning, Info, X, BadgeCheck, Trash2, Eye, BookOpen, ClipboardCheck,
   ChevronDown, ChevronRight, Lock,
 } from "lucide-react";
-import { parseWorkbookRows, parseCsvRows } from "@/lib/tdsWorkbook";
+import { parseWorkbookRows, parseCsvRows, type ImportScope } from "@/lib/tdsWorkbook";
+import { isEncryptedOfficeFile, decryptOfficeFile, WrongPasswordError } from "@/lib/officeDecrypt";
 import { logReconAudit } from "@/lib/tdsReconAudit";
 import { TdsPanVerification, type PanStageStatus } from "./TdsPanVerification";
 import { TdsChallanDownloadValidation, type ChallanDownloadStageStatus } from "./TdsChallanDownloadValidation";
@@ -196,8 +197,9 @@ type WorkerProgress = { stage: string; sheet?: number; totalSheets?: number; row
 // this is the hard guarantee that the import can never hang indefinitely on
 // "Reading file…".
 const PARSE_STALL_MS = 60_000;
+type ParsePayload = { fileType: "xlsx"; buffer: ArrayBuffer; password?: string; scope?: ImportScope } | { fileType: "csv"; text: string };
 function parseInWorker(
-  payload: { fileType: "xlsx"; buffer: ArrayBuffer } | { fileType: "csv"; text: string },
+  payload: ParsePayload,
   onProgress?: (p: WorkerProgress) => void,
 ): Promise<Record<string, unknown>[]> {
   const worker = getImportWorker();
@@ -218,7 +220,7 @@ function parseInWorker(
       if (!d || d.id !== id) return;
       if (d.type === "progress") { arm(); onProgress?.(d as WorkerProgress); return; } // progress keeps the watchdog alive
       cleanup();
-      if (d.ok) resolve(d.rows); else reject(new Error(d.error || "Could not parse the file"));
+      if (d.ok) resolve(d.rows); else reject(d.wrongPassword ? new WrongPasswordError() : new Error(d.error || "Could not parse the file"));
     };
     // A worker runtime error → drop this worker so a FRESH one is built next
     // import (don't permanently disable — that would force every later import
@@ -347,6 +349,18 @@ export function TdsValidateFinalise({
   // (e.g. "Office Data Only" vs "Imported Data Only") — see ErrorTypeBreakdown.
   const [errorTypeFilter, setErrorTypeFilter] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // Password prompt for an encrypted workbook — readFile awaits the answer.
+  const [pwPrompt, setPwPrompt] = useState<{ fileName: string; wrong: boolean } | null>(null);
+  const [pwValue, setPwValue] = useState("");
+  const pwResolve = useRef<((v: string | null) => void) | null>(null);
+  const askWorkbookPassword = (fileName: string, wrong: boolean): Promise<string | null> =>
+    new Promise((resolve) => { pwResolve.current = resolve; setPwValue(""); setPwPrompt({ fileName, wrong }); });
+  const answerPassword = (v: string | null) => {
+    pwResolve.current?.(v);
+    pwResolve.current = null;
+    setPwPrompt(null);
+    setPwValue("");
+  };
   const loadSeq = useRef(0); // guards against out-of-order loadAll responses
 
   // Override dialog (mandatory reason + audit trail)
@@ -541,6 +555,7 @@ export function TdsValidateFinalise({
 
   // ── Any source format → a normalised payload the importer understands ────────
   // rows (tabular) · pdf_base64 · image_base64 (scanned/photo) · raw_text (text).
+  const EXCEL_EXTS = new Set(["xlsx", "xlsm", "xlsb", "xls", "xltx", "xltm"]);
   const IMAGE_MIME: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif", bmp: "image/bmp", tif: "image/tiff", tiff: "image/tiff", heic: "image/heic", heif: "image/heif" };
   // Base64 without loading the whole file into a data-URL string on the main
   // thread twice — read as ArrayBuffer and encode in chunks.
@@ -556,12 +571,13 @@ export function TdsValidateFinalise({
   // A "parse-stalled" from the worker is NOT retried on the main thread (that
   // would just freeze the tab redoing the stuck work) — it surfaces as an error.
   const parseTabular = async (
-    payload: { fileType: "xlsx"; buffer: ArrayBuffer } | { fileType: "csv"; text: string },
-    fallback: () => Record<string, unknown>[],
+    payload: ParsePayload,
+    fallback: () => Record<string, unknown>[] | Promise<Record<string, unknown>[]>,
     onProgress?: (p: WorkerProgress) => void,
   ): Promise<Record<string, unknown>[]> => {
     try { return await parseInWorker(payload, onProgress); }
     catch (e: any) {
+      if (e instanceof WrongPasswordError) throw e; // re-asked by readFile, not retried here
       if (e?.message === "parse-stalled") throw new Error("Reading the file stalled — it may be too large or corrupt. Try a smaller file or split it into sheets.");
       // Worker unavailable / errored → parse on the main thread, but ONLY for a
       // modest file: a large workbook parsed synchronously here would re-freeze
@@ -582,9 +598,26 @@ export function TdsValidateFinalise({
       const text = await file.text();
       return { file_type: "csv", rows: await parseTabular({ fileType: "csv", text }, () => parseCsvRows(text), onProgress) };
     }
-    if (ext === "xlsx" || ext === "xls" || (!ext && file.type.includes("sheet"))) {
+    if (EXCEL_EXTS.has(ext) || (!ext && file.type.includes("sheet"))) {
       const buffer = await file.arrayBuffer();
-      return { file_type: "xlsx", rows: await parseTabular({ fileType: "xlsx", buffer }, () => parseWorkbookRows(buffer), onProgress) };
+      // Narrow a whole-year workbook (one sheet per form per quarter) to this filing.
+      const scope: ImportScope = { form: selForm, quarter: filing?.quarter ?? selQuarter };
+      if (!isEncryptedOfficeFile(buffer)) {
+        return { file_type: "xlsx", rows: await parseTabular({ fileType: "xlsx", buffer, scope }, () => parseWorkbookRows(buffer, undefined, scope), onProgress) };
+      }
+      // Password-protected workbook: ask, decrypt in the browser (the password
+      // never leaves it), and ask again on a wrong password until cancelled.
+      for (let wrong = false; ; wrong = true) {
+        const password = await askWorkbookPassword(file.name, wrong);
+        if (password == null) throw new Error(`"${file.name}" is password-protected — import cancelled.`);
+        onProgress?.({ stage: "decrypting" });
+        try {
+          return { file_type: "xlsx", rows: await parseTabular({ fileType: "xlsx", buffer, password, scope },
+            async () => parseWorkbookRows(await decryptOfficeFile(buffer, password), undefined, scope), onProgress) };
+        } catch (e) {
+          if (!(e instanceof WrongPasswordError)) throw e;
+        }
+      }
     }
     if (ext === "json") {
       const text = await file.text();
@@ -602,6 +635,7 @@ export function TdsValidateFinalise({
   // Map a worker progress event to a friendly label + a percentage.
   const progressLabel = (p: WorkerProgress): { label: string; pct: number } => {
     switch (p.stage) {
+      case "decrypting": return { label: "Unlocking password-protected workbook…", pct: 8 };
       case "reading": return { label: "Reading workbook…", pct: 12 };
       case "sheets": return { label: `Detecting sheets${p.totalSheets ? ` (${p.totalSheets})` : ""}…`, pct: 20 };
       case "extracting": {
@@ -1687,7 +1721,7 @@ export function TdsValidateFinalise({
                     onClick={() => downloadTemplateFile(`/templates/TDS_Data_Entry_Simple_Template.xlsx?v=${TDS_TEMPLATE_VERSION}`, "TDS_Data_Entry_Simple_Template.xlsx")}>
                     <Download size={12} /> Download Template
                   </Button>
-                  <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
+                  <input ref={fileInputRef} type="file" multiple accept=".xlsx,.xlsm,.xlsb,.xls,.csv,.pdf,.json,.xml,.txt,.html,.png,.jpg,.jpeg,.webp,.gif,.bmp,.tif,.tiff,image/*" className="hidden"
                     onChange={(e) => {
                       const picked = Array.from(e.target.files ?? []);
                       const tgt = replaceTargetId; setReplaceTargetId(null);
@@ -2284,6 +2318,24 @@ export function TdsValidateFinalise({
               {savingOv ? "Saving…" : "Confirm Override"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Password for an encrypted client workbook */}
+      <Dialog open={!!pwPrompt} onOpenChange={(o) => { if (!o) answerPassword(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle className="flex items-center gap-2"><Lock size={16} /> Workbook is password-protected</DialogTitle></DialogHeader>
+          <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (pwValue) answerPassword(pwValue); }}>
+            <p className="text-sm text-muted-foreground">
+              Enter the password for <strong className="break-all">{pwPrompt?.fileName}</strong>. It is used only in this browser to open the file and is not saved or uploaded.
+            </p>
+            <Input type="password" autoFocus value={pwValue} onChange={(e) => setPwValue(e.target.value)} placeholder="Workbook password" />
+            {pwPrompt?.wrong && <p className="text-xs text-destructive">Incorrect password — please try again.</p>}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => answerPassword(null)}>Cancel</Button>
+              <Button type="submit" disabled={!pwValue}>Open</Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 

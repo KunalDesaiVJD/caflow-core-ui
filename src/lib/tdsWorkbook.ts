@@ -23,7 +23,7 @@
  */
 import * as XLSX from "xlsx";
 import Papa from "papaparse";
-import { extractWorkbookRows, extractSheetRows, gridToRows, isTwoSheetTemplate, joinChallanTemplate, isChallanBlockTemplate, explodeChallanBlockTemplate } from "@/lib/tdsImportParsing";
+import { extractWorkbookRows, extractSheetRows, gridToRows, isTwoSheetTemplate, joinChallanTemplate, isChallanBlockTemplate, explodeChallanBlockTemplate, quarterlyFormSheets, extractQuarterlyFormRows } from "@/lib/tdsImportParsing";
 
 const MAX_ROWS = 50000;   // hard ceiling on rows processed per sheet
 const MAX_COLS = 100;     // hard ceiling on columns processed per sheet
@@ -31,6 +31,9 @@ const MAX_COLS = 100;     // hard ceiling on columns processed per sheet
 const perfNow = (): number => (typeof performance !== "undefined" ? performance.now() : Date.now());
 
 export type ParseProgress = { stage: string; sheet?: number; totalSheets?: number; rows?: number; elapsedMs?: number };
+/** The filing being imported into, so a workbook holding every form/quarter
+ * can be narrowed to the one being validated. */
+export type ImportScope = { form?: string | null; quarter?: string | null };
 
 /**
  * The sheet's TRUE used range, derived from its actual cell addresses rather
@@ -112,7 +115,7 @@ function visibleSheetNames(wb: XLSX.WorkBook): string[] {
 
 /** Parse an .xlsx/.xls ArrayBuffer into keyed deductee rows (all visible sheets),
  * reporting stage + per-sheet progress via onProgress. */
-export function parseWorkbookRows(buffer: ArrayBuffer, onProgress?: (p: ParseProgress) => void): Record<string, unknown>[] {
+export function parseWorkbookRows(buffer: ArrayBuffer, onProgress?: (p: ParseProgress) => void, scope?: ImportScope): Record<string, unknown>[] {
   const t0 = perfNow();
   onProgress?.({ stage: "reading", elapsedMs: 0 });
   const wb = XLSX.read(buffer, { type: "array", cellDates: true });
@@ -148,6 +151,23 @@ export function parseWorkbookRows(buffer: ArrayBuffer, onProgress?: (p: ParsePro
     const rows = explodeChallanBlockTemplate(rawRows);
     const tEnd = perfNow();
     try { console.debug(`[tds-import] read ${Math.round(tRead - t0)}ms · extract ${Math.round(tEnd - tRead)}ms · ${rows.length} rows · 1 sheet(s) (challan-grouped template)`); } catch { /* ignore */ }
+    onProgress?.({ stage: "extracted", rows: rows.length, elapsedMs: Math.round(tEnd - t0) });
+    return rows;
+  }
+
+  // The firm's quarterly workbook (Challan Master + "24Q Q1" … "26Q Q4"):
+  // read by exact column name from RAW cell values, narrowed to this filing.
+  const formSheets = quarterlyFormSheets(wb.SheetNames);
+  if (formSheets) {
+    onProgress?.({ stage: "sheets", totalSheets: formSheets.length, elapsedMs: Math.round(tRead - t0) });
+    const rawGridOf = (sn: string): unknown[][] => {
+      const ws = wb.Sheets[sn];
+      const range = ws ? trueRange(ws) : null;
+      return ws && range ? XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true, range }) as unknown[][] : [];
+    };
+    const rows = extractQuarterlyFormRows(formSheets, rawGridOf, scope);
+    const tEnd = perfNow();
+    try { console.debug(`[tds-import] read ${Math.round(tRead - t0)}ms · extract ${Math.round(tEnd - tRead)}ms · ${rows.length} rows (quarterly 24Q/26Q workbook${scope?.form ? `, ${scope.form} ${scope.quarter ?? ""}` : ""})`); } catch { /* ignore */ }
     onProgress?.({ stage: "extracted", rows: rows.length, elapsedMs: Math.round(tEnd - t0) });
     return rows;
   }
