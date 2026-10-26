@@ -14,22 +14,30 @@
  * stage instead of a frozen "Reading file…", and the main thread runs a
  * stall-watchdog that terminates the worker if progress stops.
  */
-import { parseWorkbookRows, parseCsvRows, type ParseProgress } from "@/lib/tdsWorkbook";
+import { parseWorkbookRows, parseCsvRows, type ParseProgress, type ImportScope } from "@/lib/tdsWorkbook";
+import { decryptOfficeFile, WrongPasswordError } from "@/lib/officeDecrypt";
 
 type ParseRequest =
-  | { id: number; fileType: "xlsx"; buffer: ArrayBuffer }
+  | { id: number; fileType: "xlsx"; buffer: ArrayBuffer; password?: string; scope?: ImportScope }
   | { id: number; fileType: "csv"; text: string };
 
-self.onmessage = (e: MessageEvent<ParseRequest>) => {
+self.onmessage = async (e: MessageEvent<ParseRequest>) => {
   const req = e.data;
   const w = self as unknown as Worker;
   const onProgress = (p: ParseProgress) => w.postMessage({ id: req.id, type: "progress", ...p });
   try {
+    // A password-protected workbook is decrypted here, off the main thread
+    // (the key derivation is ~1 s of hashing).
+    let buffer = req.fileType === "xlsx" ? req.buffer : null;
+    if (req.fileType === "xlsx" && req.password != null) {
+      onProgress({ stage: "decrypting" });
+      buffer = await decryptOfficeFile(req.buffer, req.password);
+    }
     const rows = req.fileType === "xlsx"
-      ? parseWorkbookRows(req.buffer, onProgress)
+      ? parseWorkbookRows(buffer!, onProgress, req.scope)
       : parseCsvRows(req.text, onProgress);
     w.postMessage({ id: req.id, ok: true, rows });
   } catch (err) {
-    w.postMessage({ id: req.id, ok: false, error: err instanceof Error ? err.message : String(err) });
+    w.postMessage({ id: req.id, ok: false, error: err instanceof Error ? err.message : String(err), wrongPassword: err instanceof WrongPasswordError });
   }
 };
