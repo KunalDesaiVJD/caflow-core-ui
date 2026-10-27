@@ -1,4 +1,4 @@
-// send-tds-email — delivers queued TDS reminder/confirmation emails.
+// send-tds-email — delivers queued TDS reminder/confirmation/client-query emails.
 //
 // Drains public.tds_email_outbox (status='pending') by sending each message
 // from tds@vjdesai.com via the Microsoft Graph API (application permission
@@ -47,12 +47,19 @@ async function graphToken(): Promise<string> {
   return j.access_token as string;
 }
 
-async function sendMail(token: string, to: string, subject: string, body: string): Promise<void> {
+// to_email / cc_email may hold several addresses (comma or semicolon separated)
+// — a client query is often copied to the client's accountant as well.
+const splitAddrs = (s: string | null | undefined) =>
+  (s ?? '').split(/[,;]/).map((a) => a.trim()).filter(Boolean).map((address) => ({ emailAddress: { address } }));
+
+async function sendMail(token: string, to: string, cc: string | null, subject: string, body: string): Promise<void> {
+  const ccRecipients = splitAddrs(cc);
   const payload = {
     message: {
       subject: subject || '(no subject)',
       body: { contentType: 'HTML', content: body ?? '' },
-      toRecipients: [{ emailAddress: { address: to } }],
+      toRecipients: splitAddrs(to),
+      ...(ccRecipients.length ? { ccRecipients } : {}),
     },
     saveToSentItems: true,
   };
@@ -85,7 +92,7 @@ Deno.serve(async (req) => {
   } catch { /* no body */ }
 
   let q = sb.from('tds_email_outbox')
-    .select('id, to_email, subject, body, kind, template_key, render_vars')
+    .select('id, to_email, cc_email, subject, body, kind, template_key, render_vars')
     .eq('status', 'pending')
     .order('created_at', { ascending: true })
     .limit(limit);
@@ -111,7 +118,7 @@ Deno.serve(async (req) => {
       .select('id');
     if (!claim?.length) continue; // already claimed elsewhere
 
-    if (!row.to_email) {
+    if (!splitAddrs(row.to_email).length) {
       await sb.from('tds_email_outbox').update({ status: 'skipped', error: 'no recipient email' }).eq('id', row.id);
       skipped++;
       continue;
@@ -122,7 +129,7 @@ Deno.serve(async (req) => {
       const html = row.render_vars
         ? buildTdsEmailHtml({ key: row.template_key, kind: row.kind, message: row.body ?? '', vars: row.render_vars })
         : (row.body ?? '');
-      await sendMail(token, row.to_email, row.subject, html);
+      await sendMail(token, row.to_email, row.cc_email, row.subject, html);
       await sb.from('tds_email_outbox')
         .update({ status: 'sent', sent_at: new Date().toISOString(), error: null })
         .eq('id', row.id);

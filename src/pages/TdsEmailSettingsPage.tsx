@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { BellRing, Send, RefreshCw, Loader2, Mail, Clock, CheckCircle2, XCircle, Ban } from "lucide-react";
+import { BellRing, Send, RefreshCw, Loader2, Mail, Clock, CheckCircle2, XCircle, Ban, MessageSquareWarning } from "lucide-react";
 
 type OutboxStatus = "pending" | "sending" | "sent" | "failed" | "skipped" | "cancelled";
 
@@ -15,7 +15,7 @@ interface OutboxRow {
   id: string;
   client_id: string;
   to_email: string;
-  kind: "reminder" | "confirmation";
+  kind: "reminder" | "confirmation" | "query";
   form_type: string | null;
   financial_year: string | null;
   quarter: string | null;
@@ -199,7 +199,9 @@ export function TdsEmailSettingsPage() {
                           <div className="text-xs text-muted-foreground">{r.to_email}</div>
                         </td>
                         <td className="py-2.5 pr-3 whitespace-nowrap">
-                          {r.kind === "confirmation" ? (
+                          {r.kind === "query" ? (
+                            <span className="inline-flex items-center gap-1 text-blue-700"><MessageSquareWarning className="h-3.5 w-3.5" /> Client query</span>
+                          ) : r.kind === "confirmation" ? (
                             <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" /> Confirmation</span>
                           ) : (
                             <span className="inline-flex items-center gap-1 text-amber-700">
