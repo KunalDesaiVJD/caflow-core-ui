@@ -650,6 +650,7 @@ async function logNotification(
   params: {
     firm_id: string; recipient_id: string | null; channel: string; type: string;
     content: Record<string, any>; status: string; provider_id: string | null;
+    client_id?: string | null; client_group_id?: string | null;
   }
 ) {
   // "direct" and "direct_wa" are synthetic IDs — log with null recipient_id
@@ -660,7 +661,7 @@ async function logNotification(
       ? null
       : params.recipient_id;
 
-  await adminClient.from("notification_log").insert({
+  const row = {
     firm_id:      params.firm_id,
     recipient_id,
     channel:      params.channel,
@@ -669,7 +670,15 @@ async function logNotification(
     status:       params.status,
     provider_id:  params.provider_id,
     sent_at:      new Date().toISOString(),
+  };
+  // Lets the Billing email log filter by client / group, whatever path the send took.
+  const { error } = await adminClient.from("notification_log").insert({
+    ...row,
+    client_id:       params.client_id || null,
+    client_group_id: params.client_group_id || null,
   });
+  // A stale / unknown client or group id must never cost us the log row itself.
+  if (error) await adminClient.from("notification_log").insert(row);
 }
 
 // ── Send to a single recipient ───────────────────────────────────────
@@ -683,6 +692,7 @@ async function sendToRecipient(
   channels: ("whatsapp" | "email")[],
   customSubject?: string,
   ccEmails?: string[],
+  logLink: { client_id?: string | null; client_group_id?: string | null } = {},
 ): Promise<Record<string, { status: string; error?: string; provider_id?: string }>> {
   const results: Record<string, { status: string; error?: string; provider_id?: string }> = {};
 
@@ -693,7 +703,7 @@ async function sendToRecipient(
       if (!toEmail) {
         results.email = { status: "failed", error: "No email address" };
         await logNotification(adminClient, {
-          firm_id, recipient_id: recipient.id, channel: "email", type,
+          ...logLink, firm_id, recipient_id: recipient.id, channel: "email", type,
           content: { payload, error: "No email" }, status: "failed", provider_id: null,
         });
         continue;
@@ -714,7 +724,7 @@ async function sendToRecipient(
       };
       const ccList = (ccEmails || []).filter(e => e && e !== toEmail);
       await logNotification(adminClient, {
-        firm_id, recipient_id: recipient.id, channel: "email", type,
+        ...logLink, firm_id, recipient_id: recipient.id, channel: "email", type,
         content: {
           to: toEmail,
           subject: customSubject || payload.custom_subject || subjects[type],
@@ -732,7 +742,7 @@ async function sendToRecipient(
       if (!phone) {
         results.whatsapp = { status: "failed", error: "No phone number" };
         await logNotification(adminClient, {
-          firm_id, recipient_id: recipient.id, channel: "whatsapp", type,
+          ...logLink, firm_id, recipient_id: recipient.id, channel: "whatsapp", type,
           content: { payload, error: "No phone" }, status: "failed", provider_id: null,
         });
         continue;
@@ -744,7 +754,7 @@ async function sendToRecipient(
         ...(r.providerId && { provider_id: r.providerId }),
       };
       await logNotification(adminClient, {
-        firm_id, recipient_id: recipient.id, channel: "whatsapp", type,
+        ...logLink, firm_id, recipient_id: recipient.id, channel: "whatsapp", type,
         content: { payload, template: templateMap[type] },
         status: r.success ? "sent" : "failed",
         provider_id: r.providerId || null,
@@ -773,6 +783,7 @@ Deno.serve(async (req) => {
       direct_email,        // bypass client lookup — send to this address directly
       direct_whatsapp,     // Phase 4B — send WhatsApp to this number directly
       custom_cc,           // array of CC email addresses
+      client_group_id,     // group statements — recorded on the log row only
     } = await req.json();
 
     if (!type || !firm_id)
@@ -927,6 +938,7 @@ Deno.serve(async (req) => {
     }
 
     const allResults: Record<string, any> = {};
+    const logLink = { client_id: client_id || null, client_group_id: client_group_id || null };
 
     if (client_id) {
       if (send_to_client) {
@@ -943,7 +955,7 @@ Deno.serve(async (req) => {
         if (contact) {
           allResults.client = await sendToRecipient(
             adminClient, contact, type, firm_id, enrichedPayload,
-            channels, enrichedPayload.custom_subject, custom_cc,
+            channels, enrichedPayload.custom_subject, custom_cc, logLink,
           );
         } else {
           allResults.client = { error: "Client contact not found" };
@@ -955,6 +967,7 @@ Deno.serve(async (req) => {
         if (rpContact) {
           allResults.responsible = await sendToRecipient(
             adminClient, rpContact, type, firm_id, enrichedPayload, ["whatsapp"],
+            undefined, undefined, logLink,
           );
         } else {
           allResults.responsible = { error: "Responsible person not found" };
@@ -980,7 +993,7 @@ Deno.serve(async (req) => {
       };
       allResults.direct = await sendToRecipient(
         adminClient, directContact, type, firm_id, enrichedPayload, ["email"],
-        enrichedPayload.custom_subject, custom_cc,
+        enrichedPayload.custom_subject, custom_cc, logLink,
       );
     }
 
@@ -994,6 +1007,7 @@ Deno.serve(async (req) => {
       };
       allResults.direct_whatsapp = await sendToRecipient(
         adminClient, waContact, type, firm_id, enrichedPayload, ["whatsapp"],
+        undefined, undefined, logLink,
       );
     }
 

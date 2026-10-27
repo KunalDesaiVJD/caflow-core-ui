@@ -565,6 +565,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
             type: "ledger_statement",
             firm_id: firmForSend,
             direct_email: addr,
+            ...(groupEmail.kind === "group" && groupEmail.id !== NO_GROUP ? { client_group_id: groupEmail.id } : {}),
             // CC once (with the first recipient), not once per To address.
             ...(idx === 0 && cc.length > 0 ? { custom_cc: cc } : {}),
             payload: {
@@ -876,6 +877,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           // A client seen across several firms is sent as the user's home firm.
           firm_id:      emailClient.firmIds.length === 1 ? emailClient.firmIds[0] : sendFirmId,
           direct_email: emailClient.email,
+          client_id:    emailClient.id,
           payload: {
             client_name:    emailClient.name,
             custom_subject: `Statement of Account — ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`,
