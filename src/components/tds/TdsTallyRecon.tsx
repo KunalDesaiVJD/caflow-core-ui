@@ -740,7 +740,15 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const surplusKey = (party: string | null, date: string | null, credit: number | null) => `${normalizeName(party)}|${date ?? ""}|${credit ?? ""}`;
     const priorLedger = (prior || []).filter((p: any) => !p.office_deductee_id
       && (p.result === "Office Data Not Found" || p.result === "Taxable Income Missing from Office Data" || p.result === "TDS Missing from Office Data"));
-    const lm = new Map<string, any>(); for (const p of priorLedger) lm.set(surplusKey(p.tally_party, p.tally_date, p.tally_credit), p);
+    // A LIST per key, consumed in order: two ledger credits can share the same
+    // party+date+credit ("twins"), and a single-slot map let the later twin
+    // overwrite the earlier one — dropping the override from whichever twin
+    // the user had actually approved, or copying it onto the other.
+    const lm = new Map<string, any[]>();
+    for (const p of priorLedger) {
+      const k = surplusKey(p.tally_party, p.tally_date, p.tally_credit);
+      lm.set(k, [...(lm.get(k) || []), p]);
+    }
     const surplusRows = surplusLedger.map((t) => {
       const key = surplusKey(t.party, t.date, t.credit);
       // In dual-ledger mode, tag by WHICH ledger this credit sat in — a
@@ -751,7 +759,10 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       const result: TallyResult = dualLedgerMode
         ? (t.amountKind === "taxable_income" ? "Taxable Income Missing from Office Data" : "TDS Missing from Office Data")
         : "Office Data Not Found";
-      const c = lm.get(key); const keep = !!c?.overridden && c.result === result;
+      const twins = lm.get(key) || [];
+      const at = twins.findIndex((p) => p.overridden && p.result === result);
+      const c = at >= 0 ? twins.splice(at, 1)[0] : twins.shift();
+      const keep = !!c?.overridden && c.result === result;
       return {
         filing_id: fId, batch_id: b?.[0]?.id ?? null, firm_id: firmId, quarter: selQuarter, office_deductee_id: null,
         office_name: null, office_date: null, office_amount: null, office_tds: null, office_section: null,
@@ -935,8 +946,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     if (!ovTarget) return; const reason = ovReason === "Other" ? ovOther.trim() : ovReason;
     if (!reason) { toast({ title: "Override reason is required", variant: "destructive" }); return; }
     setSavingOv(true);
-    const { error } = await supabase.from("tds_tally_results").update({ overridden: true, override_reason: reason, overridden_by: user?.id, overridden_at: new Date().toISOString() }).eq("id", ovTarget.id);
-    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); }
+    // .select() so an update that matched NO row (a re-run replaced this row's
+    // id while the dialog was open, or row-level security filtered it out) is
+    // reported, instead of a success toast over a change that never saved.
+    const { data: saved, error } = await supabase.from("tds_tally_results").update({ overridden: true, override_reason: reason, overridden_by: user?.id, overridden_at: new Date().toISOString() }).eq("id", ovTarget.id).select("id");
+    if (error || !saved?.length) { toast({ title: "Override not saved", description: error?.message || "This record has changed since the page loaded — reload Stage 3 and try again.", variant: "destructive" }); }
     else {
       await logReconAudit({ filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_OVERRIDE", oldValue: `${ovTarget.office_name} — ${ovTarget.result}`, newValue: "Overridden", remark: reason });
       setResults((p) => p ? p.map((x) => x.id === ovTarget.id ? { ...x, overridden: true, override_reason: reason, overridden_by: user?.id ?? null } : x) : p);
@@ -945,9 +959,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     setSavingOv(false);
   };
   const undoOverride = async (r: ResultRow) => {
-    const { error } = await supabase.from("tds_tally_results").update({ overridden: false, override_reason: null, overridden_by: null, overridden_at: null }).eq("id", r.id);
-    if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
-    setResults((p) => p ? p.map((x) => x.id === r.id ? { ...x, overridden: false, override_reason: null } : x) : p);
+    const { data: saved, error } = await supabase.from("tds_tally_results").update({ overridden: false, override_reason: null, overridden_by: null, overridden_at: null }).eq("id", r.id).select("id");
+    if (error || !saved?.length) { toast({ title: "Undo not saved", description: error?.message || "This record has changed since the page loaded — reload Stage 3 and try again.", variant: "destructive" }); return; }
+    setResults((p) => p ? p.map((x) => x.id === r.id ? { ...x, overridden: false, override_reason: null, overridden_by: null, overridden_at: null } : x) : p);
   };
 
   /** Bypass Tally Verification — for a client whose books aren't maintained in

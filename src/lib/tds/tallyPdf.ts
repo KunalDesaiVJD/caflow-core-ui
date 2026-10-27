@@ -803,8 +803,18 @@ export function parseTallyPdfPages(pages: PdfTextItem[][]): TallyPdfParse {
           // Length alone is not enough (a two-word narration like "Client
           // Bonus" reads like a name fragment), so the continuation must also
           // not look like prose.
+          //
+          // Once the narration has started, the name is finished: Tally prints
+          // the whole ledger name first and the narration under it, so a later
+          // short line is the narration WRAPPING, not more of the name:
+          //   "Ketan Parmar (BH Parmar Electrician)" (36)
+          //   "BEING TDS DEDUCT INV NO. 144 AMT-"   <- narration
+          //   "105448/-@ 1%"                        <- still narration
+          // Appending that last line made every invoice its own "party"
+          // ("Ketan Parmar (BH Parmar Electrician) 105448/-@ 1%"), so none of
+          // them could match the deductee or share one saved party mapping.
           const partyFilledColumn = (current.party ?? "").length >= WRAP_MIN_PARTY_LEN;
-          if (partyFilledColumn && isNameContinuation(f.party)) {
+          if (partyFilledColumn && !current.narration && isNameContinuation(f.party)) {
             current.party = `${current.party ?? ""} ${f.party}`.replace(/\s+/g, " ").trim();
           } else {
             current.narration = current.narration ? `${current.narration} ${f.party}` : f.party;
