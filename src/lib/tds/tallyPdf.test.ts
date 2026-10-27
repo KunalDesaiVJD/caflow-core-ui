@@ -941,6 +941,25 @@ describe("parseTallyPdfPages — regression: simple (non-compound) rows are unaf
     expect(rows[0].narration).toBeNull();
   });
 
+  // Real Accurate PMS Pvt Ltd 194C ledger, Q2 FY 2026-27: the narration wraps
+  // onto a second line, and that tail used to be glued onto the party name —
+  // turning one contractor into a separate "party" per invoice.
+  it("never appends a wrapped NARRATION tail to the party name (real Ketan Parmar case)", () => {
+    const page = [
+      ...HEADER,
+      ...simpleByRow(572.3, { date: "2-Sep-26", party: "Ketan Parmar (BH Parmar Electrician)", vchNo: "656", credit: 1054 }),
+      { x: 104.6, y: 560.4, w: 160.0, str: "BEING TDS DEDUCT INV NO. 144 AMT-" },
+      { x: 104.6, y: 548.5, w: 60.0, str: "105448/-@ 1%" },
+      ...simpleByRow(530.0, { party: "Ketan Parmar (BH Parmar Electrician)", vchNo: "660", credit: 163 }),
+      { x: 104.6, y: 518.1, w: 170.0, str: "BEING INV NO. 151 AMT- 16300/- @ 1%" },
+    ];
+    const { rows } = parseTallyPdfPages([page]);
+    expect(rows.map((r) => ({ party: r.party, credit: r.credit, narration: r.narration }))).toEqual([
+      { party: "Ketan Parmar (BH Parmar Electrician)", credit: 1054, narration: "BEING TDS DEDUCT INV NO. 144 AMT- 105448/-@ 1%" },
+      { party: "Ketan Parmar (BH Parmar Electrician)", credit: 163, narration: "BEING INV NO. 151 AMT- 16300/- @ 1%" },
+    ]);
+  });
+
   it("still drops a simple challan/payment row (Debit side)", () => {
     const page = [
       ...HEADER,
