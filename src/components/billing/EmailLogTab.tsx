@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import DOMPurify from "dompurify";
 import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -127,10 +126,17 @@ function channelBadge(channel: string | null) {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function EmailLogTab({ firmId }: { firmId: string | null }) {
-  const { user } = useAuth();
+export default function EmailLogTab(_props: { firmId: string | null }) {
   const { toast } = useToast();
-  const resolvedFirmId = firmId ?? user?.firm_id ?? null;
+  // Defaults to every firm the user can see: a client billed under another firm
+  // (e.g. Dixita Desai) is logged under that firm, and a single-firm view hid it.
+  const [firmFilter, setFirmFilter] = useState("all");
+  const [firms, setFirms] = useState<NamedOption[]>([]);
+  useEffect(() => {
+    supabase.from("firms").select("id, name").order("name")
+      .then(({ data }) => setFirms((data as NamedOption[]) || []));
+  }, []);
+  const firmName = useMemo(() => new Map(firms.map(f => [f.id, f.name])), [firms]);
 
   const [logs, setLogs] = useState<NotificationLog[]>([]);
   const [total, setTotal] = useState(0);
@@ -182,8 +188,8 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
       : (supabase.from("notification_log") as any).select("*", { count: "exact" })
     ).order("sent_at", { ascending: false });
 
-    // Filter by firm when available; super-admins without a firm_id see all logs
-    if (resolvedFirmId) q = q.eq("firm_id", resolvedFirmId);
+    // RLS limits rows to the firms this user may view.
+    if (firmFilter !== "all") q = q.eq("firm_id", firmFilter);
 
     if (clientFilter !== "all") q = q.eq("client_id", clientFilter);
     if (statusFilter !== "all") q = q.eq("status", statusFilter);
@@ -199,7 +205,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
     const term = search.trim().replace(/[,()*%\\]/g, " ").trim();
     if (term) q = q.or(`content->>to.ilike.*${term}*,content->>subject.ilike.*${term}*`);
     return q;
-  }, [resolvedFirmId, statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search, clientFilter, groupFilter]);
+  }, [firmFilter, statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search, clientFilter, groupFilter]);
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -216,7 +222,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
   // Reset page when filters change
-  useEffect(() => { setPage(0); }, [statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search, clientFilter, groupFilter]);
+  useEffect(() => { setPage(0); }, [firmFilter, statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search, clientFilter, groupFilter]);
 
   // Exports every row matching the filters, not just the visible page.
   const exportCSV = async () => {
@@ -229,9 +235,10 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
       if (!data || data.length < CHUNK) break;
     }
     if (all.length === 0) return;
-    const headers = ["Date/Time", "Client / Group", "To", "Type", "Subject", "Status", "Channel"];
+    const headers = ["Date/Time", "Firm", "Client / Group", "To", "Type", "Subject", "Status", "Channel"];
     const rows = all.map(r => [
       formatDateTime(r.sent_at),
+      (r.firm_id && firmName.get(r.firm_id)) || "—",
       partyOf(r),
       r.content?.to ?? "—",
       r.type ?? "—",
@@ -275,6 +282,17 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
           label="Group" placeholder="Search group…" allLabel="All groups"
           options={groups} value={groupFilter} onChange={setGroupFilter} width="w-[180px]"
         />
+
+        <div className="space-y-1">
+          <Label className="text-xs">Firm</Label>
+          <Select value={firmFilter} onValueChange={setFirmFilter}>
+            <SelectTrigger className="h-8 w-[170px] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All firms</SelectItem>
+              {firms.map(f => <SelectItem key={f.id} value={f.id} className="text-xs">{f.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
 
         <div className="space-y-1">
           <Label className="text-xs">Status</Label>
@@ -351,6 +369,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
                 <TableRow>
                   <TableHead className="w-8" />
                   <TableHead>Date/Time</TableHead>
+                  <TableHead>Firm</TableHead>
                   <TableHead>Client / Group</TableHead>
                   <TableHead>To</TableHead>
                   <TableHead>Type</TableHead>
@@ -373,6 +392,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
                           : <ChevronRight size={14} />}
                       </TableCell>
                       <TableCell className="text-sm whitespace-nowrap">{formatDateTime(log.sent_at)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground whitespace-nowrap">{(log.firm_id && firmName.get(log.firm_id)) || "—"}</TableCell>
                       <TableCell className="text-sm max-w-[180px] truncate" title={partyOf(log)}>{partyOf(log)}</TableCell>
                       <TableCell className="text-sm max-w-[200px] truncate" title={log.content?.to ?? ""}>
                         {log.content?.to ?? "—"}
@@ -390,7 +410,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
                     </TableRow>
                     {expandedId === log.id && (
                       <TableRow key={log.id + "-expanded"} className="bg-muted/30">
-                        <TableCell colSpan={8} className="p-4">
+                        <TableCell colSpan={9} className="p-4">
                           <div className="space-y-2 text-sm">
                             <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 items-start text-sm">
                               <span className="font-semibold text-muted-foreground text-xs uppercase pt-0.5">To</span>
