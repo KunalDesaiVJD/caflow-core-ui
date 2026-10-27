@@ -7,7 +7,7 @@
  *     (clients with only OB now appear in the report)
  *  3. Ledger sheet shows OB as first row, matching the Ledger tab
  */
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -25,7 +25,7 @@ import { format, parseISO } from "date-fns";
 import {
   Download, RefreshCw, Search, X, TrendingUp, Users,
   Send, FileText, Mail, MessageCircle, Loader2,
-  ArrowUpDown, ChevronUp, ChevronDown, Building2,
+  ArrowUpDown, ChevronUp, ChevronDown, ChevronRight, Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import DocLink from "@/components/billing/DocLink";
@@ -84,7 +84,8 @@ interface DisplayRow extends Balances {
   kind: ViewBy;
   id: string;          // client / group / firm id
   name: string;
-  email: string | null;
+  email: string | null;        // group rows: the email most of its clients use
+  emails?: string[];           // group rows: every distinct client email
   lastEmailAt: string | null;  // latest across the row's clients
   firmIds: string[];   // firms the underlying atoms belong to
   atomKeys: string[];  // `${clientId}|${firmId}` — lets totals count each atom once
@@ -153,6 +154,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   const [rows,        setRows]        = useState<ClientRow[]>([]);
   const [viewBy,      setViewBy]      = useState<ViewBy>("client");
   const [groupFilter, setGroupFilter] = useState<{ id: string; name: string } | null>(null);
+  // Group view: groups expanded inline to list their clients.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [groupNames,  setGroupNames]  = useState<Record<string, string>>({});
   const [groupsOfClient, setGroupsOfClient] = useState<Record<string, string[]>>({});
   const [firmLogoUrl, setFirmLogoUrl] = useState<string | null>(null);
@@ -648,13 +651,13 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   // Atoms → displayed rows for the chosen view.
   const displayRows = useMemo<DisplayRow[]>(() => {
-    const out = new Map<string, DisplayRow & { _clients: Set<string>; _firms: Set<string> }>();
+    const out = new Map<string, DisplayRow & { _clients: Set<string>; _firms: Set<string>; _emails: Map<string, Set<string>> }>();
     const add = (kind: ViewBy, id: string, name: string, email: string | null, a: ClientRow) => {
       const key = `${kind}:${id}`;
       let d = out.get(key);
       if (!d) {
         d = { key, kind, id, name, email, lastEmailAt: null, firmIds: [], atomKeys: [], clientCount: 0,
-              ...emptyBalances(), _clients: new Set(), _firms: new Set() };
+              ...emptyBalances(), _clients: new Set(), _firms: new Set(), _emails: new Map() };
         out.set(key, d);
       }
       addBalances(d, a);
@@ -662,6 +665,11 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       d.atomKeys.push(`${a.id}|${a.firmId}`);
       d._clients.add(a.id);
       d._firms.add(a.firmId);
+      if (kind === "group" && a.email?.trim()) {
+        const e = a.email.trim();
+        if (!d._emails.has(e)) d._emails.set(e, new Set());
+        d._emails.get(e)!.add(a.id);
+      }
     };
     for (const a of rows) {
       const groups = groupsOfClient[a.id]?.length ? groupsOfClient[a.id] : [NO_GROUP];
@@ -675,18 +683,56 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         for (const g of groups) add("group", g, g === NO_GROUP ? "Not in any group" : (groupNames[g] ?? "—"), null, a);
       }
     }
-    return Array.from(out.values()).map(({ _clients, _firms, ...d }) =>
-      ({ ...d, clientCount: _clients.size, firmIds: Array.from(_firms) }));
+    return Array.from(out.values()).map(({ _clients, _firms, _emails, ...d }) => {
+      // Group's default email: the address used by the most of its clients.
+      const emails = Array.from(_emails.entries()).sort((x, y) => y[1].size - x[1].size).map(([e]) => e);
+      return { ...d, clientCount: _clients.size, firmIds: Array.from(_firms),
+               ...(d.kind === "group" ? { email: emails[0] ?? null, emails } : {}) };
+    });
   }, [rows, viewBy, groupFilter, groupsOfClient, groupNames, firms]);
+
+  // Client-level rows (all firms summed), for groups expanded inline.
+  const clientRowsById = useMemo(() => {
+    const out = new Map<string, DisplayRow>();
+    for (const a of rows) {
+      let d = out.get(a.id);
+      if (!d) {
+        d = { key: `client:${a.id}`, kind: "client", id: a.id, name: a.name, email: a.email, lastEmailAt: null,
+              firmIds: [], atomKeys: [], clientCount: 1, ...emptyBalances() };
+        out.set(a.id, d);
+      }
+      addBalances(d, a);
+      if (a.lastEmailAt && (!d.lastEmailAt || a.lastEmailAt > d.lastEmailAt)) d.lastEmailAt = a.lastEmailAt;
+      d.atomKeys.push(`${a.id}|${a.firmId}`);
+      if (!d.firmIds.includes(a.firmId)) d.firmIds.push(a.firmId);
+    }
+    return out;
+  }, [rows]);
+
+  const hasActivity = (c: Balances) =>
+    Math.abs(netClosing(c)) > 0.005 || c.debit > 0 || c.credit > 0 || Math.abs(netOpening(c)) > 0.005;
+
+  function clientsOfGroup(groupId: string): DisplayRow[] {
+    const out: DisplayRow[] = [];
+    for (const [cid, d] of clientRowsById) {
+      const groups = groupsOfClient[cid]?.length ? groupsOfClient[cid] : [NO_GROUP];
+      if (groups.includes(groupId) && (!hideZero || hasActivity(d))) out.push(d);
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  function toggleGroup(groupId: string) {
+    setExpandedGroups(prev => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId); else next.add(groupId);
+      return next;
+    });
+  }
 
   const filtered = useMemo(() => {
     let r = displayRows;
     if (search) r = r.filter(c => c.name.toLowerCase().includes(search.toLowerCase()));
-    if (hideZero) r = r.filter(c => {
-      const open  = netOpening(c);
-      const close = netClosing(c);
-      return Math.abs(close) > 0.005 || c.debit > 0 || c.credit > 0 || Math.abs(open) > 0.005;
-    });
+    if (hideZero) r = r.filter(hasActivity);
     return [...r].sort((a, b) => {
       let va: number | string = 0, vb: number | string = 0;
       if (sortKey === "name")    { va = a.name; vb = b.name; }
@@ -724,7 +770,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   function handleRowClick(r: DisplayRow) {
     if (r.kind === "client") { openLedger(r); return; }
     if (r.kind === "firm") { setSelectedFirmId(r.id); setViewBy("client"); setGroupFilter(null); return; }
-    setGroupFilter({ id: r.id, name: r.name }); setViewBy("client");
+    toggleGroup(r.id);
   }
 
   // ── Big4 PDF ──────────────────────────────────────────────────────────────
@@ -971,6 +1017,73 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   const { abs: gtOA, label: gtOL } = drCr(grandTotal.openNet);
   const { abs: gtCA, label: gtCL } = drCr(grandTotal.closeNet);
 
+  function renderRow(r: DisplayRow, idx: number, nested = false) {
+    const open  = netOpening(r);
+    const close = netClosing(r);
+    const { abs: oa, label: ol } = drCr(open);
+    const { abs: ca, label: cl } = drCr(close);
+
+    return (
+      <div
+        key={r.key}
+        className={cn(
+          "grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
+          nested ? "bg-blue-50/30" : idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
+        )}
+        onClick={() => handleRowClick(r)}
+      >
+        <div className={cn("flex items-center gap-1.5 min-w-0", nested && "pl-6")}>
+          {r.kind === "group" && (expandedGroups.has(r.id)
+            ? <ChevronDown size={12} className="text-muted-foreground flex-shrink-0" />
+            : <ChevronRight size={12} className="text-muted-foreground flex-shrink-0" />)}
+          {r.kind === "firm" ? <Building2 size={11} className="text-muted-foreground flex-shrink-0" />
+            : r.kind === "group" ? <Users size={11} className="text-muted-foreground flex-shrink-0" />
+            : <FileText size={11} className="text-muted-foreground flex-shrink-0" />}
+          <span className="font-medium truncate text-[#1A2744] hover:underline">{r.name}</span>
+          {r.kind !== "client" && (
+            <span className="text-[10px] text-muted-foreground flex-shrink-0">{r.clientCount} client{r.clientCount !== 1 ? "s" : ""}</span>
+          )}
+          {r.kind === "client" && isAllFirms && r.firmIds.length > 1 && (
+            <span className="text-[10px] text-muted-foreground flex-shrink-0">{r.firmIds.length} firms</span>
+          )}
+        </div>
+        <div className="text-right tabular-nums">
+          {open === 0 ? <span className="text-muted-foreground">—</span> : (
+            <>{fmtINR(oa)}&nbsp;<span className={cn("text-[10px]", ol === "Cr" ? "text-green-600" : "text-orange-600")}>{ol}</span></>
+          )}
+        </div>
+        <div className="text-right tabular-nums">{r.debit > 0 ? fmtINR(r.debit) : <span className="text-muted-foreground">—</span>}</div>
+        <div className="text-right tabular-nums">{r.credit > 0 ? fmtINR(r.credit) : <span className="text-muted-foreground">—</span>}</div>
+        <div className="text-right tabular-nums font-semibold">
+          {close === 0 ? <span className="text-muted-foreground">—</span> : (
+            <>{fmtINR(ca)}&nbsp;<span className={cn("text-[10px]", cl === "Cr" ? "text-green-600" : "text-orange-600")}>{cl}</span></>
+          )}
+        </div>
+        <div className="text-center tabular-nums" title={r.lastEmailAt ? format(new Date(r.lastEmailAt), "d-MMM-yyyy h:mm a") : undefined}>
+          {r.lastEmailAt ? format(new Date(r.lastEmailAt), "dd-MMM-yy") : <span className="text-muted-foreground">—</span>}
+        </div>
+        <div className="pl-3 truncate" title={r.emails?.length ? r.emails.join(", ") : r.email ?? undefined}>
+          {r.email ? r.email : <span className="text-muted-foreground">—</span>}
+          {r.emails && r.emails.length > 1 && (
+            <span className="text-[10px] text-muted-foreground ml-1">+{r.emails.length - 1}</span>
+          )}
+        </div>
+        <div className="flex items-center justify-center" onClick={e => e.stopPropagation()}>
+          {r.kind === "client" && r.email && (
+            <button title={`Email statement of account to ${r.email}`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => setEmailClient(r)}>
+              <Mail size={12} />
+            </button>
+          )}
+          {r.kind === "group" && r.id !== NO_GROUP && (
+            <button title={`Email the whole ${r.name} group statement of account`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => openGroupEmail(r)}>
+              <Mail size={12} />
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4">
       {/* ── Controls row ── */}
@@ -1086,66 +1199,14 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               No clients with balances found for this period.
             </div>
           ) : (
-            filtered.map((r, idx) => {
-              const open  = netOpening(r);
-              const close = netClosing(r);
-              const { abs: oa, label: ol } = drCr(open);
-              const { abs: ca, label: cl } = drCr(close);
-
-              return (
-                <div
-                  key={r.key}
-                  className={cn(
-                    "grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
-                    idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
-                  )}
-                  onClick={() => handleRowClick(r)}
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    {r.kind === "firm" ? <Building2 size={11} className="text-muted-foreground flex-shrink-0" />
-                      : r.kind === "group" ? <Users size={11} className="text-muted-foreground flex-shrink-0" />
-                      : <FileText size={11} className="text-muted-foreground flex-shrink-0" />}
-                    <span className="font-medium truncate text-[#1A2744] hover:underline">{r.name}</span>
-                    {r.kind !== "client" && (
-                      <span className="text-[10px] text-muted-foreground flex-shrink-0">{r.clientCount} client{r.clientCount !== 1 ? "s" : ""}</span>
-                    )}
-                    {r.kind === "client" && isAllFirms && r.firmIds.length > 1 && (
-                      <span className="text-[10px] text-muted-foreground flex-shrink-0">{r.firmIds.length} firms</span>
-                    )}
-                  </div>
-                  <div className="text-right tabular-nums">
-                    {open === 0 ? <span className="text-muted-foreground">—</span> : (
-                      <>{fmtINR(oa)}&nbsp;<span className={cn("text-[10px]", ol === "Cr" ? "text-green-600" : "text-orange-600")}>{ol}</span></>
-                    )}
-                  </div>
-                  <div className="text-right tabular-nums">{r.debit > 0 ? fmtINR(r.debit) : <span className="text-muted-foreground">—</span>}</div>
-                  <div className="text-right tabular-nums">{r.credit > 0 ? fmtINR(r.credit) : <span className="text-muted-foreground">—</span>}</div>
-                  <div className="text-right tabular-nums font-semibold">
-                    {close === 0 ? <span className="text-muted-foreground">—</span> : (
-                      <>{fmtINR(ca)}&nbsp;<span className={cn("text-[10px]", cl === "Cr" ? "text-green-600" : "text-orange-600")}>{cl}</span></>
-                    )}
-                  </div>
-                  <div className="text-center tabular-nums" title={r.lastEmailAt ? format(new Date(r.lastEmailAt), "d-MMM-yyyy h:mm a") : undefined}>
-                    {r.lastEmailAt ? format(new Date(r.lastEmailAt), "dd-MMM-yy") : <span className="text-muted-foreground">—</span>}
-                  </div>
-                  <div className="pl-3 truncate" title={r.email ?? undefined}>
-                    {r.kind === "client" && r.email ? r.email : <span className="text-muted-foreground">—</span>}
-                  </div>
-                  <div className="flex items-center justify-center" onClick={e => e.stopPropagation()}>
-                    {r.kind === "client" && r.email && (
-                      <button title={`Email statement of account to ${r.email}`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => setEmailClient(r)}>
-                        <Mail size={12} />
-                      </button>
-                    )}
-                    {r.kind === "group" && r.id !== NO_GROUP && (
-                      <button title={`Email the whole ${r.name} group statement of account`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => openGroupEmail(r)}>
-                        <Mail size={12} />
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })
+            filtered.map((r, idx) => (
+              <Fragment key={r.key}>
+                {renderRow(r, idx)}
+                {r.kind === "group" && expandedGroups.has(r.id) && clientsOfGroup(r.id).map((c, ci) => (
+                  <Fragment key={`${r.key}>${c.id}`}>{renderRow(c, ci, true)}</Fragment>
+                ))}
+              </Fragment>
+            ))
           )}
         </div>
 
