@@ -320,37 +320,6 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         for (const c of cData || []) clientMap.set(c.id, { name: c.name || "—", email: c.email ?? null });
       }
 
-      // Last billing email per client. Sends addressed via client_id carry the
-      // client as recipient_id; direct sends (statements, group emails) only
-      // carry the address in content.to, so match those on the client's email.
-      const sentLogs = await fetchAllRows<{ recipient_id: string | null; sent_at: string | null; to: string | null }>(() =>
-        (supabase as any).from("notification_log")
-          .select("recipient_id, sent_at, to:content->>to")
-          .in("firm_id", firmIds)
-          .eq("channel", "email")
-          .eq("status", "sent")
-          .in("type", CLIENT_EMAIL_TYPES)
-          .order("id"));
-      const lastByRecipient = new Map<string, string>();
-      const lastByAddress = new Map<string, string>();
-      const bump = (m: Map<string, string>, k: string, at: string) => {
-        const cur = m.get(k);
-        if (!cur || at > cur) m.set(k, at);
-      };
-      for (const l of sentLogs) {
-        if (!l.sent_at) continue;
-        if (l.recipient_id) bump(lastByRecipient, l.recipient_id, l.sent_at);
-        for (const addr of (l.to || "").split(/[,;]/)) {
-          const a = addr.trim().toLowerCase();
-          if (a) bump(lastByAddress, a, l.sent_at);
-        }
-      }
-      const lastEmailOf = (clientId: string, email: string | null): string | null => {
-        const byId = lastByRecipient.get(clientId) ?? null;
-        const byAddr = email ? lastByAddress.get(email.trim().toLowerCase()) ?? null : null;
-        return byId && byAddr ? (byId > byAddr ? byId : byAddr) : byId ?? byAddr;
-      };
-
       // Client groups (for the group-wise view).
       const { data: gData } = await (supabase as any).from("client_groups")
         .select("id, name, firm_id")
@@ -368,12 +337,44 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       setGroupNames(gNames);
       setGroupsOfClient(gOf);
 
+      // Last billing email per client. Each log row carries client_id (single-
+      // client sends) or client_group_id (one row per group statement); a group
+      // statement counts as sent to every client in that group.
+      const sentLogs = await fetchAllRows<{ client_id: string | null; client_group_id: string | null; sent_at: string | null }>(() =>
+        (supabase as any).from("notification_log")
+          .select("client_id, client_group_id, sent_at")
+          .in("firm_id", firmIds)
+          .eq("channel", "email")
+          .eq("status", "sent")
+          .in("type", CLIENT_EMAIL_TYPES)
+          .or("client_id.not.is.null,client_group_id.not.is.null")
+          .order("id"));
+      const lastByClient = new Map<string, string>();
+      const lastByGroup = new Map<string, string>();
+      const bump = (m: Map<string, string>, k: string, at: string) => {
+        const cur = m.get(k);
+        if (!cur || at > cur) m.set(k, at);
+      };
+      for (const l of sentLogs) {
+        if (!l.sent_at) continue;
+        if (l.client_id) bump(lastByClient, l.client_id, l.sent_at);
+        if (l.client_group_id) bump(lastByGroup, l.client_group_id, l.sent_at);
+      }
+      const lastEmailOf = (clientId: string): string | null => {
+        let last = lastByClient.get(clientId) ?? null;
+        for (const g of gOf[clientId] ?? []) {
+          const at = lastByGroup.get(g);
+          if (at && (!last || at > last)) last = at;
+        }
+        return last;
+      };
+
       const built: ClientRow[] = Array.from(atoms.values())
         .filter(a => clientMap.has(a.clientId))
         .map(a => ({
           id: a.clientId, firmId: a.firmId,
           name: clientMap.get(a.clientId)!.name, email: clientMap.get(a.clientId)!.email,
-          lastEmailAt: lastEmailOf(a.clientId, clientMap.get(a.clientId)!.email),
+          lastEmailAt: lastEmailOf(a.clientId),
           ob: a.ob, openingDr: a.openingDr, openingCr: a.openingCr, debit: a.debit, credit: a.credit,
         }));
 
