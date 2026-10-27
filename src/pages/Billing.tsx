@@ -660,9 +660,9 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
             },
           },
         });
-        // Frontend-side audit log via Vercel serverless function (bypasses Supabase RLS).
-        // Ensures Email Log tab always shows every send, regardless of edge function version.
-        try {
+        // send-notification logs every send it attempts. Log here only when the call
+        // itself failed (auth, network) — logging both doubled every row in the Email Log.
+        if (invokeError) try {
           await fetch("/api/log-email", {
             method: "POST",
             headers: { "Content-Type": "application/json" },

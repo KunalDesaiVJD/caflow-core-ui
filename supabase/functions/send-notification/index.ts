@@ -776,7 +776,7 @@ Deno.serve(async (req) => {
       type,
       firm_id,
       client_id,
-      send_to_client      = true,
+      send_to_client: sendToClientArg,
       send_to_responsible = false,
       payload,
       recipient_id,
@@ -785,6 +785,10 @@ Deno.serve(async (req) => {
       custom_cc,           // array of CC email addresses
       client_group_id,     // group statements — recorded on the log row only
     } = await req.json();
+
+    // With direct_email, client_id only tags the log row: also sending to the
+    // client's own address would email the same person twice.
+    const send_to_client = sendToClientArg ?? !direct_email;
 
     if (!type || !firm_id)
       return jsonResponse({ error: "Missing required fields: type, firm_id" }, 400);
