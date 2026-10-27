@@ -49,6 +49,7 @@ export interface ChallanDownloadStageStatus {
   applicable: boolean; // a downloaded report has been imported
   ran: boolean;        // a comparison has been computed
   issues: number;       // count of office challans that didn't match
+  unmatched?: ChallanMatchResult[]; // the challans behind `issues` (client query emails list them)
 }
 
 interface Props {
@@ -130,7 +131,8 @@ export function TdsChallanDownloadValidation({ filing, selClient, selForm, clien
     if (!onStatusChange) return;
     const ran = !!batch && batch.matched_count !== null;
     const issues = ran ? (batch!.unmatched_count ?? 0) : 0;
-    onStatusChange({ filingId, loaded: !loading, applicable: !!batch, ran, issues });
+    const unmatched = ran ? (batch!.match_results || []).filter((m) => !m.matched) : [];
+    onStatusChange({ filingId, loaded: !loading, applicable: !!batch, ran, issues, unmatched });
   }, [filingId, loading, batch, onStatusChange]);
 
   // Office side: tds_challans for THIS filing directly — never the

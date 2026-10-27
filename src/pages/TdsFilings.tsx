@@ -21,6 +21,8 @@ import { TdsCorrectionsModule } from "@/components/tds/TdsCorrectionsModule";
 import { TdsPortalLoginButtons } from "@/components/tds/TdsPortalLoginButtons";
 import { TdsPropertyModule } from "@/components/tds/property/TdsPropertyModule";
 import { TdsEmailSettingsPage } from "@/pages/TdsEmailSettingsPage";
+import { TdsQueryEmailDialog, type TdsQueryContext } from "@/components/tds/TdsQueryEmailDialog";
+import { Button } from "@/components/ui/button";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -94,6 +96,10 @@ const TdsFilings = () => {
   // Increment to force TdsDashboard to re-fetch when returning from workspace
   const [dashRefreshKey, setDashRefreshKey] = useState(0);
   const [syncing, setSyncing] = useState(false);
+  // Client query email — Validate & Finalise reports its open points here so
+  // the button (visible on every Workspace tab) can pre-fill the email.
+  const [queryCtx, setQueryCtx] = useState<TdsQueryContext | null>(null);
+  const [queryEmailOpen, setQueryEmailOpen] = useState(false);
 
   // ── Filed corrections for the CURRENT workspace context ───────────────────
   // A third Workspace tab appears only once at least one correction return has
@@ -488,7 +494,19 @@ const TdsFilings = () => {
                     sub-tab. See TdsPortalLoginButtons's own header for why this
                     is deliberately NOT full login automation. */}
                 <div className="flex-1" />
-                <div className="flex items-center pr-1">
+                <div className="flex items-center gap-2 pr-1">
+                  {ctxClient && (
+                    <Button
+                      variant="outline" size="sm" className="h-7 text-xs gap-1.5"
+                      onClick={() => setQueryEmailOpen(true)}
+                      title="Email the client about queries raised on this return"
+                    >
+                      <Mail size={13} /> Email client
+                      {(queryCtx?.candidates.length ?? 0) > 0 && (
+                        <Badge className="h-4 px-1 text-[10px] bg-destructive/10 text-destructive hover:bg-destructive/10">{queryCtx!.candidates.length}</Badge>
+                      )}
+                    </Button>
+                  )}
                   <TdsPortalLoginButtons clientId={ctxClient || null} />
                 </div>
               </div>
@@ -511,6 +529,7 @@ const TdsFilings = () => {
                   onNavigateDataEntry={() => setWorkspaceTab("data-entry")}
                   selClient={ctxClient} selFy={ctxFy} selQuarter={ctxQuarter} selForm={ctxForm}
                   forceStage1Signal={forceStage1Signal}
+                  onQueryContextChange={setQueryCtx}
                 />
               </div>
 
@@ -667,6 +686,17 @@ const TdsFilings = () => {
           )}
         </div>
       </div>
+      {ctxClient && (
+        <TdsQueryEmailDialog
+          open={queryEmailOpen}
+          onOpenChange={setQueryEmailOpen}
+          clientId={ctxClient}
+          formType={ctxForm}
+          quarter={ctxQuarter}
+          financialYear={ctxFy}
+          context={queryCtx}
+        />
+      )}
     </div>
   );
 };

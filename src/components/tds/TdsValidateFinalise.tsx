@@ -50,6 +50,7 @@ import { logReconAudit } from "@/lib/tdsReconAudit";
 import { TdsPanVerification, type PanStageStatus } from "./TdsPanVerification";
 import { TdsChallanDownloadValidation, type ChallanDownloadStageStatus } from "./TdsChallanDownloadValidation";
 import { TdsTallyRecon, type TallyStageStatus } from "./TdsTallyRecon";
+import type { TdsQueryCandidate, TdsQueryContext } from "./TdsQueryEmailDialog";
 
 interface ClientOption {
   id: string; name: string | null; pan: string | null; tan_number?: string | null;
@@ -73,6 +74,9 @@ interface Props {
   // link navigates here for a specific filing — forces the Stage tab back to
   // "1" regardless of whichever stage this component was last left on.
   forceStage1Signal?: number;
+  // Reports the open stage's unresolved points up to the Workspace, whose
+  // "Email client" button turns them into a query email.
+  onQueryContextChange?: (ctx: TdsQueryContext) => void;
 }
 
 interface FieldDiff {
@@ -98,6 +102,15 @@ interface ReconResult {
 const fmtVal = (v: unknown): string => {
   if (v === null || v === undefined || v === "") return "—";
   return String(v);
+};
+
+/** Stage-2 PAN verdicts reworded for the client (query emails) — panReason's
+ *  wording talks about Office Data and the TRACES file, which mean nothing to them. */
+const PAN_CLIENT_QUERY: Record<string, string> = {
+  "PAN Missing in Office Data": "We do not have the PAN of this party. Please share the PAN.",
+  "Invalid PAN Format": "The PAN we have for this party is not in a valid format. Please confirm the correct PAN.",
+  "PAN Inoperative": "This PAN is shown as inoperative on TRACES (usually because it is not linked with Aadhaar), so TDS at a higher rate may apply. Please ask the party to link PAN with Aadhaar, or confirm how to proceed.",
+  "Duplicate PAN Across Parties": "The same PAN appears against more than one party. Please confirm the correct PAN for this party.",
 };
 
 /** All 7 compared fields, in fixed order. */
@@ -269,7 +282,7 @@ const PAN_STATUS_BLOCKED: PanStageStatus = { filingId: null, loaded: false, appl
 
 export function TdsValidateFinalise({
   clients, isSuperadmin, resolveFirmId, onNavigateDataEntry,
-  selClient, selFy, selQuarter, selForm, forceStage1Signal,
+  selClient, selFy, selQuarter, selForm, forceStage1Signal, onQueryContextChange,
 }: Props) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -1285,6 +1298,51 @@ export function TdsValidateFinalise({
     // errType carries selForm — without it here a form switch would leave the
     // Stage-4 audit rows labelled for the previous form.
   }, [results, summary, panStatus, tallyStatus, errType]);
+
+  // ── Client query email — the UNRESOLVED points of Stages 1-3, worded for the
+  // client rather than the checker (the client never sees "Stage 1" or the
+  // internal error buckets). Overridden / resolved points are never queried.
+  const queryCandidates = useMemo((): TdsQueryCandidate[] => {
+    const out: TdsQueryCandidate[] = [];
+    for (const r of results || []) {
+      if (r.match_status === "matched" || r.overridden) continue;
+      let query: string;
+      if (r.match_status === "office_only") {
+        query = "This entry is in our records but not in the TDS data shared by you. Please confirm whether it should be included in the return.";
+      } else if (r.match_status === "imported_only") {
+        query = "This entry is in the TDS data shared by you but we have no matching record or challan for it. Please confirm the details and share the supporting challan.";
+      } else {
+        const diffs = (r.field_diffs || []).filter((f) => f.matched === false);
+        const lines = diffs.map((f) => `${FIELD_LABELS[f.field] || f.field}: our records ${fmtVal(f.office)}, your data ${fmtVal(f.imported)}`);
+        query = `${lines.length ? lines.join("; ") : reasonFor(r)}. Please confirm the correct ${diffs.length > 1 ? "details" : "value"}.`;
+      }
+      out.push({ id: `s1:${r.id}`, stage: "Stage 1", record: r.record_label || "—", query });
+    }
+    if (panStatus.applicable && panStatus.getAuditRows) {
+      panStatus.getAuditRows().filter((a) => a.status === "Unresolved").forEach((a, i) => out.push({
+        id: `s2p:${i}:${a.record}`, stage: "Stage 2", record: a.record,
+        query: PAN_CLIENT_QUERY[a.errorType] ?? "The PAN of this party could not be verified. Please share a copy of the PAN card or confirm the correct PAN.",
+      }));
+    }
+    for (const m of challanDownloadStatus.unmatched || []) {
+      out.push({
+        id: `s2c:${m.officeChallanId}`, stage: "Stage 2",
+        record: `Challan ${m.officeSerialNo || "—"}${m.officeDate ? ` dt ${m.officeDate}` : ""} · ₹${m.officeAmount.toLocaleString("en-IN")}`,
+        query: `This challan could not be traced in the Income Tax portal payment history${m.reason ? ` (${m.reason})` : ""}. Please share the challan copy / correct BSR code, serial number and date.`,
+      });
+    }
+    if (tallyStatus.applicable && tallyStatus.getAuditRows) {
+      tallyStatus.getAuditRows().filter((a) => a.status === "Unresolved").forEach((a, i) => out.push({
+        id: `s3:${i}:${a.record}`, stage: "Stage 3", record: a.record,
+        query: `${a.errorType}${a.reason ? ` — ${a.reason}` : ""}. Please clarify the difference between your books (Tally) and the TDS data.`,
+      }));
+    }
+    return out;
+  }, [results, panStatus, challanDownloadStatus, tallyStatus]);
+
+  useEffect(() => {
+    onQueryContextChange?.({ filingId: filing?.id ?? null, firmId: filing?.firm_id ?? null, stage, candidates: queryCandidates });
+  }, [onQueryContextChange, filing?.id, filing?.firm_id, stage, queryCandidates]);
 
   // Distinct error types actually present, so the filter never lists a type that
   // matches nothing (and picks up a brand-new one automatically).

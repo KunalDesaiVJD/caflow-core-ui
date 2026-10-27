@@ -8,14 +8,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Save, Bell, CheckCircle2 } from "lucide-react";
+import { Loader2, Save, Bell, CheckCircle2, MessageSquareWarning } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildTdsEmailHtml } from "@/lib/tdsEmailTemplate";
 
 interface Tpl {
   key: string;
   name: string;
-  kind: "reminder" | "confirmation";
+  kind: "reminder" | "confirmation" | "query";
   step: number | null;
   subject: string;
   body: string;
@@ -29,6 +29,7 @@ interface Tpl {
 const VARS = [
   "contact_person", "client_name", "tan", "form_type", "quarter", "financial_year",
   "due_date", "ack_no", "filing_date", "staff_name", "firm_name", "firm_email", "firm_phone",
+  "reply_by", "query_count",
 ];
 const SAMPLE: Record<string, string> = {
   contact_person: "Rajesh Shah",
@@ -44,7 +45,15 @@ const SAMPLE: Record<string, string> = {
   firm_name: "V. J. Desai & Co. LLP",
   firm_email: "tds@vjdesai.com",
   firm_phone: "+91 265 000 0000",
+  reply_by: "05 Aug 2026",
+  query_count: "2",
 };
+// Client-query template only: the table of points the staff picks in the
+// Workspace's "Email client" dialog.
+const SAMPLE_QUERIES = [
+  { record: "Ramesh Traders (AAAPR1234C)", query: "TDS Amount: our records 12,500, your data 15,000. Please confirm the correct value." },
+  { record: "Challan 00123 dt 07/07/2026 · ₹48,200", query: "This challan could not be traced in the Income Tax portal payment history. Please share the challan copy." },
+];
 const renderPreview = (s: string) => s.replace(/\{\{(\w+)\}\}/g, (_m, k) => SAMPLE[k] ?? `{{${k}}}`);
 
 export function TdsEmailTemplatesEditor() {
@@ -109,6 +118,7 @@ export function TdsEmailTemplatesEditor() {
 
   const reminders = templates.filter(t => t.kind === "reminder");
   const confirmations = templates.filter(t => t.kind === "confirmation");
+  const queries = templates.filter(t => t.kind === "query");
 
   const listItem = (t: Tpl) => (
     <button
@@ -132,7 +142,7 @@ export function TdsEmailTemplatesEditor() {
       <CardHeader>
         <CardTitle>TDS email templates</CardTitle>
         <CardDescription>
-          The copy used for data reminders and filing confirmations, sent from tds@vjdesai.com.
+          The copy used for data reminders, filing confirmations and client query emails, sent from tds@vjdesai.com.
           Edit the wording freely — <code className="text-xs">{"{{variables}}"}</code> are filled in automatically per client and filing.
         </CardDescription>
       </CardHeader>
@@ -148,6 +158,12 @@ export function TdsEmailTemplatesEditor() {
               <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><CheckCircle2 className="h-3.5 w-3.5" /> Confirmations</p>
               <div className="space-y-1.5">{confirmations.map(listItem)}</div>
             </div>
+            {queries.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground"><MessageSquareWarning className="h-3.5 w-3.5" /> Client queries</p>
+                <div className="space-y-1.5">{queries.map(listItem)}</div>
+              </div>
+            )}
           </div>
 
           {/* Editor */}
@@ -182,7 +198,7 @@ export function TdsEmailTemplatesEditor() {
                 <p className="mb-3 text-sm font-medium">{renderPreview(subject)}</p>
                 <iframe
                   title="Email preview"
-                  srcDoc={buildTdsEmailHtml({ key: selKey, kind: current.kind, message: renderPreview(body), vars: SAMPLE })}
+                  srcDoc={buildTdsEmailHtml({ key: selKey, kind: current.kind, message: renderPreview(body), vars: current.kind === "query" ? { ...SAMPLE, query_items: SAMPLE_QUERIES } : SAMPLE })}
                   sandbox=""
                   className="w-full rounded-md border bg-white"
                   style={{ height: 620 }}
