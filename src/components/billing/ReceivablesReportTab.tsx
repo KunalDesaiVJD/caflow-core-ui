@@ -965,7 +965,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           // A client seen across several firms is sent as the user's home firm.
           firm_id:      emailClient.firmIds.length === 1 ? emailClient.firmIds[0] : sendFirmId,
           direct_email: emailClient.email,
-          client_id:    emailClient.id,
+          client_id:    emailClient.id,   // tags the log row only
+          send_to_client: false,
           payload: {
             client_name:    emailClient.name,
             custom_subject: `Statement of Account — ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`,
