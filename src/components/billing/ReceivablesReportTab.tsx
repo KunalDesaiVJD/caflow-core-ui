@@ -73,6 +73,7 @@ interface ClientRow extends Balances {
   firmId: string;
   name: string;
   email: string | null;
+  lastEmailAt: string | null;  // latest billing email successfully sent to this client
 }
 
 type ViewBy = "client" | "group" | "firm";
@@ -84,10 +85,17 @@ interface DisplayRow extends Balances {
   id: string;          // client / group / firm id
   name: string;
   email: string | null;
+  lastEmailAt: string | null;  // latest across the row's clients
   firmIds: string[];   // firms the underlying atoms belong to
   atomKeys: string[];  // `${clientId}|${firmId}` — lets totals count each atom once
   clientCount: number;
 }
+
+// Billing emails sent to clients (notification_log types), for "Last email sent on".
+const CLIENT_EMAIL_TYPES = [
+  "invoice_generated", "quotation_sent", "proforma_sent", "credit_note_issued",
+  "payment_reminder", "ledger_statement",
+];
 
 const ALL_FIRMS = "__all__";
 const NO_GROUP = "__none__";
@@ -329,11 +337,44 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       setGroupNames(gNames);
       setGroupsOfClient(gOf);
 
+      // Last billing email per client. Each log row carries client_id (single-
+      // client sends) or client_group_id (one row per group statement); a group
+      // statement counts as sent to every client in that group.
+      const sentLogs = await fetchAllRows<{ client_id: string | null; client_group_id: string | null; sent_at: string | null }>(() =>
+        (supabase as any).from("notification_log")
+          .select("client_id, client_group_id, sent_at")
+          .in("firm_id", firmIds)
+          .eq("channel", "email")
+          .eq("status", "sent")
+          .in("type", CLIENT_EMAIL_TYPES)
+          .or("client_id.not.is.null,client_group_id.not.is.null")
+          .order("id"));
+      const lastByClient = new Map<string, string>();
+      const lastByGroup = new Map<string, string>();
+      const bump = (m: Map<string, string>, k: string, at: string) => {
+        const cur = m.get(k);
+        if (!cur || at > cur) m.set(k, at);
+      };
+      for (const l of sentLogs) {
+        if (!l.sent_at) continue;
+        if (l.client_id) bump(lastByClient, l.client_id, l.sent_at);
+        if (l.client_group_id) bump(lastByGroup, l.client_group_id, l.sent_at);
+      }
+      const lastEmailOf = (clientId: string): string | null => {
+        let last = lastByClient.get(clientId) ?? null;
+        for (const g of gOf[clientId] ?? []) {
+          const at = lastByGroup.get(g);
+          if (at && (!last || at > last)) last = at;
+        }
+        return last;
+      };
+
       const built: ClientRow[] = Array.from(atoms.values())
         .filter(a => clientMap.has(a.clientId))
         .map(a => ({
           id: a.clientId, firmId: a.firmId,
           name: clientMap.get(a.clientId)!.name, email: clientMap.get(a.clientId)!.email,
+          lastEmailAt: lastEmailOf(a.clientId),
           ob: a.ob, openingDr: a.openingDr, openingCr: a.openingCr, debit: a.debit, credit: a.credit,
         }));
 
@@ -434,7 +475,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   /** Sum the loaded (client, firm) balances of one group into a group row. */
   function buildGroupRow(groupId: string, name: string): DisplayRow {
     const row: DisplayRow = {
-      key: `group:${groupId}`, kind: "group", id: groupId, name, email: null,
+      key: `group:${groupId}`, kind: "group", id: groupId, name, email: null, lastEmailAt: null,
       firmIds: [], atomKeys: [], clientCount: 0, ...emptyBalances(),
     };
     const clientSet = new Set<string>();
@@ -612,11 +653,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       const key = `${kind}:${id}`;
       let d = out.get(key);
       if (!d) {
-        d = { key, kind, id, name, email, firmIds: [], atomKeys: [], clientCount: 0,
+        d = { key, kind, id, name, email, lastEmailAt: null, firmIds: [], atomKeys: [], clientCount: 0,
               ...emptyBalances(), _clients: new Set(), _firms: new Set() };
         out.set(key, d);
       }
       addBalances(d, a);
+      if (a.lastEmailAt && (!d.lastEmailAt || a.lastEmailAt > d.lastEmailAt)) d.lastEmailAt = a.lastEmailAt;
       d.atomKeys.push(`${a.id}|${a.firmId}`);
       d._clients.add(a.id);
       d._firms.add(a.firmId);
@@ -1014,13 +1056,16 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           <div className="text-xs text-white/60">{selectedFirmName} · {format(parseISO(fromDate), "d-MMM-yy")} to {format(parseISO(toDate), "d-MMM-yy")}</div>
         </div>
 
+        <div className="overflow-x-auto"><div className="min-w-[1100px]">
         {/* Column headers */}
-        <div className="grid grid-cols-[1fr_150px_120px_120px_150px_44px] bg-muted/60 border-b px-4 py-2 text-[11px] font-semibold text-muted-foreground select-none">
+        <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] bg-muted/60 border-b px-4 py-2 text-[11px] font-semibold text-muted-foreground select-none">
           <button className="text-left flex items-center" onClick={() => toggleSort("name")}>{viewBy === "firm" ? "Firm" : viewBy === "group" ? "Client group" : "Particulars"} <SortIcon col="name" /></button>
           <div className="text-right">Opening Balance</div>
           <button className="flex items-center justify-end w-full" onClick={() => toggleSort("debit")}>Debit <SortIcon col="debit" /></button>
           <button className="flex items-center justify-end w-full" onClick={() => toggleSort("credit")}>Credit <SortIcon col="credit" /></button>
           <button className="flex items-center justify-end w-full" onClick={() => toggleSort("closing")}>Closing Balance <SortIcon col="closing" /></button>
+          <div className="text-center">Last email sent on</div>
+          <div className="pl-3">Default email ID</div>
           <div />
         </div>
 
@@ -1028,8 +1073,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         <div className="divide-y">
           {loading ? (
             Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="grid grid-cols-[1fr_150px_120px_120px_150px_44px] px-4 py-2.5 gap-2">
+              <div key={i} className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] px-4 py-2.5 gap-2">
                 <Skeleton className="h-4 w-3/4" /><Skeleton className="h-4 w-full ml-auto" />
+                <Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" />
                 <Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" />
                 <Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-8 mx-auto" />
               </div>
@@ -1050,7 +1096,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                 <div
                   key={r.key}
                   className={cn(
-                    "grid grid-cols-[1fr_150px_120px_120px_150px_44px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
+                    "grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
                     idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
                   )}
                   onClick={() => handleRowClick(r)}
@@ -1079,6 +1125,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                       <>{fmtINR(ca)}&nbsp;<span className={cn("text-[10px]", cl === "Cr" ? "text-green-600" : "text-orange-600")}>{cl}</span></>
                     )}
                   </div>
+                  <div className="text-center tabular-nums" title={r.lastEmailAt ? format(new Date(r.lastEmailAt), "d-MMM-yyyy h:mm a") : undefined}>
+                    {r.lastEmailAt ? format(new Date(r.lastEmailAt), "dd-MMM-yy") : <span className="text-muted-foreground">—</span>}
+                  </div>
+                  <div className="pl-3 truncate" title={r.email ?? undefined}>
+                    {r.kind === "client" && r.email ? r.email : <span className="text-muted-foreground">—</span>}
+                  </div>
                   <div className="flex items-center justify-center" onClick={e => e.stopPropagation()}>
                     {r.kind === "client" && r.email && (
                       <button title={`Email statement of account to ${r.email}`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => setEmailClient(r)}>
@@ -1099,7 +1151,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
         {/* Grand Total */}
         {!loading && filtered.length > 0 && (
-          <div className="grid grid-cols-[1fr_150px_120px_120px_150px_44px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
+          <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
             <div className="flex items-center gap-1.5">
               <TrendingUp size={13} className="text-orange-400" /> Grand Total
               <span className="text-[10px] font-normal text-white/60 ml-1">({grandTotal.clients} client{grandTotal.clients !== 1 ? "s" : ""})</span>
@@ -1112,9 +1164,10 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
             <div className="text-right tabular-nums">
               {fmtINR(gtCA)}&nbsp;<span className={cn("text-[10px] font-normal", gtCL === "Cr" ? "text-green-300" : "text-orange-300")}>{gtCL}</span>
             </div>
-            <div />
+            <div /><div /><div />
           </div>
         )}
+        </div></div>
       </div>
 
       <div className="flex gap-4 text-[11px] text-muted-foreground">
