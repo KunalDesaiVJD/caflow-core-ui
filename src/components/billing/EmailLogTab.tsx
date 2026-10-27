@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import DOMPurify from "dompurify";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -13,12 +13,17 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
+  Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { cn } from "@/lib/utils";
+import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { format } from "date-fns";
 import {
   Mail, MessageSquare, CheckCircle2, XCircle, ChevronDown, ChevronRight,
-  Download, Inbox, Filter,
+  Download, Inbox, Filter, Check, ChevronsUpDown, X,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -33,7 +38,11 @@ interface NotificationLog {
   status: string | null;
   sent_at: string | null;
   provider_id: string | null;
+  client_id: string | null;
+  client_group_id: string | null;
 }
+
+interface NamedOption { id: string; name: string }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -45,6 +54,55 @@ const BILLING_TYPES = [
   "invoice_generated", "quotation_sent", "proforma_sent", "credit_note_issued",
   "payment_reminder", "ledger_statement", "internal_filing_reminder",
 ];
+
+// Searchable picker — 800+ clients is too many for a plain Select.
+function SearchPicker({ label, placeholder, allLabel, options, value, onChange, width }: {
+  label: string; placeholder: string; allLabel: string;
+  options: NamedOption[]; value: string; onChange: (v: string) => void; width: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find(o => o.id === value);
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs">{label}</Label>
+      <div className="flex items-center gap-1">
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button variant="outline" role="combobox" className={cn("h-8 justify-between text-xs font-normal px-2", width)}>
+              <span className="truncate">{selected?.name ?? allLabel}</span>
+              <ChevronsUpDown size={12} className="opacity-50 shrink-0" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="p-0 w-[280px]" align="start">
+            <Command>
+              <CommandInput placeholder={placeholder} className="h-8 text-xs" />
+              <CommandList className="max-h-60">
+                <CommandEmpty className="py-3 text-xs text-center text-muted-foreground">No match</CommandEmpty>
+                <CommandGroup>
+                  <CommandItem value={`__all__ ${allLabel}`} onSelect={() => { onChange("all"); setOpen(false); }} className="text-xs">
+                    <Check size={11} className={cn("mr-2", value === "all" ? "opacity-100" : "opacity-0")} />
+                    {allLabel}
+                  </CommandItem>
+                  {options.map(o => (
+                    <CommandItem key={o.id} value={`${o.name} ${o.id}`} onSelect={() => { onChange(o.id); setOpen(false); }} className="text-xs">
+                      <Check size={11} className={cn("mr-2", value === o.id ? "opacity-100" : "opacity-0")} />
+                      {o.name}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+        {value !== "all" && (
+          <Button variant="ghost" size="icon" className="h-8 w-6" title="Clear" onClick={() => onChange("all")}>
+            <X size={12} />
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return "—";
@@ -87,17 +145,47 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
+  const [clientFilter, setClientFilter] = useState("all");
+  const [groupFilter, setGroupFilter] = useState("all");
+
+  const [clients, setClients] = useState<NamedOption[]>([]);
+  const [groups, setGroups] = useState<NamedOption[]>([]);
+
+  // Client groups are usually global (firm_id NULL), so they are not filtered by firm.
+  useEffect(() => {
+    (async () => {
+      const all: NamedOption[] = [];
+      for (let from = 0; ; from += 1000) {
+        const { data } = await supabase.from("clients").select("id, name")
+          .eq("is_draft", false).order("name").range(from, from + 999);
+        all.push(...((data as NamedOption[]) || []));
+        if (!data || data.length < 1000) break;
+      }
+      setClients(all);
+      const { data: g } = await supabase.from("client_groups").select("id, name").order("name");
+      setGroups((g as NamedOption[]) || []);
+    })();
+  }, []);
+
+  const clientName = useMemo(() => new Map(clients.map(c => [c.id, c.name])), [clients]);
+  const groupName = useMemo(() => new Map(groups.map(g => [g.id, g.name])), [groups]);
+  const partyOf = (r: NotificationLog) =>
+    (r.client_id && clientName.get(r.client_id)) || (r.client_group_id && groupName.get(r.client_group_id)) || "—";
 
   // Same filters for the on-screen page and the CSV export. Search runs server-side
   // so the count / pagination reflect it; dates are local-day bounds converted to UTC.
   const buildQuery = useCallback(() => {
-    let q = (supabase.from("notification_log") as any)
-      .select("*", { count: "exact" })
-      .order("sent_at", { ascending: false });
+    // Group filter runs through an RPC (rows for the group or any member client)
+    // so a large group's member ids never go into the URL.
+    let q = (groupFilter !== "all"
+      ? (supabase as any).rpc("notification_log_in_group", { p_group_id: groupFilter }, { count: "exact" }).select("*")
+      : (supabase.from("notification_log") as any).select("*", { count: "exact" })
+    ).order("sent_at", { ascending: false });
 
     // Filter by firm when available; super-admins without a firm_id see all logs
     if (resolvedFirmId) q = q.eq("firm_id", resolvedFirmId);
 
+    if (clientFilter !== "all") q = q.eq("client_id", clientFilter);
     if (statusFilter !== "all") q = q.eq("status", statusFilter);
     if (channelFilter !== "all") q = q.eq("channel", channelFilter);
     q = typeFilter !== "all" ? q.eq("type", typeFilter) : q.in("type", BILLING_TYPES);
@@ -111,7 +199,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
     const term = search.trim().replace(/[,()*%\\]/g, " ").trim();
     if (term) q = q.or(`content->>to.ilike.*${term}*,content->>subject.ilike.*${term}*`);
     return q;
-  }, [resolvedFirmId, statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search]);
+  }, [resolvedFirmId, statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search, clientFilter, groupFilter]);
 
   const fetchLogs = useCallback(async () => {
     setLoading(true);
@@ -128,7 +216,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
   useEffect(() => { fetchLogs(); }, [fetchLogs]);
 
   // Reset page when filters change
-  useEffect(() => { setPage(0); }, [statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search]);
+  useEffect(() => { setPage(0); }, [statusFilter, channelFilter, typeFilter, dateFrom, dateTo, search, clientFilter, groupFilter]);
 
   // Exports every row matching the filters, not just the visible page.
   const exportCSV = async () => {
@@ -141,9 +229,10 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
       if (!data || data.length < CHUNK) break;
     }
     if (all.length === 0) return;
-    const headers = ["Date/Time", "To", "Type", "Subject", "Status", "Channel"];
+    const headers = ["Date/Time", "Client / Group", "To", "Type", "Subject", "Status", "Channel"];
     const rows = all.map(r => [
       formatDateTime(r.sent_at),
+      partyOf(r),
       r.content?.to ?? "—",
       r.type ?? "—",
       r.content?.subject ?? "—",
@@ -177,6 +266,15 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
       {/* Filter Bar */}
       <div className="flex flex-wrap gap-3 items-end rounded-lg border bg-muted/30 p-3">
         <Filter size={14} className="text-muted-foreground self-center mt-1" />
+
+        <SearchPicker
+          label="Client" placeholder="Search client…" allLabel="All clients"
+          options={clients} value={clientFilter} onChange={setClientFilter} width="w-[200px]"
+        />
+        <SearchPicker
+          label="Group" placeholder="Search group…" allLabel="All groups"
+          options={groups} value={groupFilter} onChange={setGroupFilter} width="w-[180px]"
+        />
 
         <div className="space-y-1">
           <Label className="text-xs">Status</Label>
@@ -253,6 +351,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
                 <TableRow>
                   <TableHead className="w-8" />
                   <TableHead>Date/Time</TableHead>
+                  <TableHead>Client / Group</TableHead>
                   <TableHead>To</TableHead>
                   <TableHead>Type</TableHead>
                   <TableHead>Subject</TableHead>
@@ -274,6 +373,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
                           : <ChevronRight size={14} />}
                       </TableCell>
                       <TableCell className="text-sm whitespace-nowrap">{formatDateTime(log.sent_at)}</TableCell>
+                      <TableCell className="text-sm max-w-[180px] truncate" title={partyOf(log)}>{partyOf(log)}</TableCell>
                       <TableCell className="text-sm max-w-[200px] truncate" title={log.content?.to ?? ""}>
                         {log.content?.to ?? "—"}
                       </TableCell>
@@ -290,7 +390,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
                     </TableRow>
                     {expandedId === log.id && (
                       <TableRow key={log.id + "-expanded"} className="bg-muted/30">
-                        <TableCell colSpan={7} className="p-4">
+                        <TableCell colSpan={8} className="p-4">
                           <div className="space-y-2 text-sm">
                             <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 items-start text-sm">
                               <span className="font-semibold text-muted-foreground text-xs uppercase pt-0.5">To</span>

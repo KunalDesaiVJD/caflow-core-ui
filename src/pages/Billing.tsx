@@ -669,6 +669,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
             body: JSON.stringify({
               firm_id:      shareInvoice.firm_id,
               recipient_id: shareInvoice.client_id || null,
+              client_id:    shareInvoice.client_id || null,
               channel:      "email",
               type:         "invoice_generated",
               content: {

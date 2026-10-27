@@ -24,6 +24,8 @@ export default async function handler(req: any, res: any) {
   const {
     firm_id,
     recipient_id,
+    client_id,
+    client_group_id,
     channel = "email",
     type = "invoice_generated",
     content,
@@ -38,6 +40,8 @@ export default async function handler(req: any, res: any) {
   const { error } = await adminClient.from("notification_log").insert({
     firm_id,
     recipient_id: recipient_id || null,
+    client_id: client_id || null,
+    client_group_id: client_group_id || null,
     channel,
     type,
     content,
