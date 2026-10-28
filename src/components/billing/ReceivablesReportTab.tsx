@@ -7,6 +7,7 @@
  *     (clients with only OB now appear in the report)
  *  3. Ledger sheet shows OB as first row, matching the Ledger tab
  */
+import { downloadBlob } from "@/lib/downloadBlob";
 import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
@@ -595,9 +596,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         ({ blob } = await generateGroupStatementPdf(r, perClient));
         filename = `Statement_of_Account_${r.name.replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 40)}_${fromDate}_${toDate}.pdf`;
       }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, filename);
     } catch (e: any) {
       toast.error("Download failed: " + (e?.message || "unknown error"));
     } finally {
@@ -898,9 +897,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     setExportingPdf(true);
     try {
       const { blob } = await generateReportPdf();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `Sundry_Debtors_${viewBy}_${fromDate}_to_${toDate}.pdf`; a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `Sundry_Debtors_${viewBy}_${fromDate}_to_${toDate}.pdf`);
     } catch (e: any) { toast.error("PDF failed: " + e.message); }
     finally { setExportingPdf(false); }
   }
@@ -980,9 +977,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     if (!sheetClient) return;
     try {
       const { blob } = await generateClientLedgerPdf(sheetClient, sheetEntries);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a"); a.href = url; a.download = `Statement_of_Account_${sheetClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`; a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(blob, `Statement_of_Account_${sheetClient.name.replace(/\s+/g, "_")}_${toDate}.pdf`);
     } catch (e: any) { toast.error("PDF failed: " + e.message); }
   }
 

@@ -22,11 +22,11 @@ export const isBillingEmailType = (type: string) => BILLING_EMAIL_TYPES.has(type
 const NAVY = "#1a3a5c";
 const GOLD = "#c8960c";
 
-/** Logo band used at the top of every billing email. */
+/** Logo band used at the top of every billing email: navy edge, centred logo, gold rule. */
 export function logoHeaderHtml(): string {
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-bottom:3px solid ${GOLD};">
-  <tr><td style="padding:20px 28px;">
-    <img src="${BRAND_LOGO_URL}" alt="${HEAD_FIRM_NAME}" width="230" style="display:block;border:0;outline:none;height:auto;max-width:230px;">
+  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-top:5px solid ${NAVY};border-bottom:3px solid ${GOLD};">
+  <tr><td align="center" style="padding:26px 28px 22px;">
+    <img src="${BRAND_LOGO_URL}" alt="${HEAD_FIRM_NAME} — ${HEAD_FIRM_TAGLINE}" width="300" style="display:block;margin:0 auto;border:0;outline:none;height:auto;width:300px;max-width:100%;">
   </td></tr>
 </table>`;
 }
@@ -87,7 +87,8 @@ export function ledgerStatementBody(o: { clientName?: string; customMessage?: st
   const msg = o.customMessage ? `<p>${esc(o.customMessage).replace(/\r?\n/g, "<br>")}</p>` : "";
   return `
         <p>Dear ${esc(o.clientName || "Client")},</p>
-        <p>Please find your statement of account for your review. Kindly confirm the balances at your earliest.</p>
+        <p>Please find attached your statement of account for the period mentioned in the attachment.</p>
         ${msg}
-        <p>Regards,<br><strong>${esc(o.firmName || HEAD_FIRM_NAME)}</strong></p>`;
+        <p>Kindly check the balances against your books. If you find any difference, please let us know within 7 days so that we can reconcile it together. If a balance is payable, we request you to arrange payment at your earliest convenience; our bank details are given at the end of the statement.</p>
+        <p>Warm regards,<br><strong>${esc(o.firmName || HEAD_FIRM_NAME)}</strong><br><span style="color:#6b7280">${HEAD_FIRM_TAGLINE}</span></p>`;
 }

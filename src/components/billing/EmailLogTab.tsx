@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { downloadBlob } from "@/lib/downloadBlob";
 import DOMPurify from "dompurify";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -248,12 +249,7 @@ export default function EmailLogTab(_props: { firmId: string | null }) {
     ]);
     const csv = [headers, ...rows].map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `email-log-${format(new Date(), "yyyy-MM-dd")}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `email-log-${format(new Date(), "yyyy-MM-dd")}.csv`);
   };
 
   const totalPages = Math.ceil(total / PAGE_SIZE);

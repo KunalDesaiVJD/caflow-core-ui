@@ -45,22 +45,22 @@ type TemplateType = (typeof TEMPLATE_TYPES)[number];
 
 const DEFAULT_SUBJECTS: Record<TemplateType, string> = {
   invoice_generated: "Invoice from {{firm_name}}",
-  quotation_sent: "Quotation for Your Review",
-  proforma_sent: "Proforma Invoice",
-  credit_note_issued: "Credit Note Issued",
-  payment_reminder: "Payment Reminder — Action Required",
-  ledger_statement: "Your Statement of Account",
-  tds_due_7_days: "TDS Due in 7 Days — Please Act",
-  tds_due_1_day: "URGENT: TDS Due Tomorrow",
-  audit_report_ready: "Audit Report Ready for Review",
-  new_user_welcome: "Welcome to CAFlow — {{firm_name}}",
+  quotation_sent: "Quotation from {{firm_name}}",
+  proforma_sent: "Proforma Invoice from {{firm_name}}",
+  credit_note_issued: "Credit Note from {{firm_name}}",
+  payment_reminder: "Payment Reminder — {{firm_name}}",
+  ledger_statement: "Statement of Account — {{firm_name}}",
+  tds_due_7_days: "TDS Payment Due in 7 Days",
+  tds_due_1_day: "Action Needed: TDS Payment Due Tomorrow",
+  audit_report_ready: "Your Audit Report is Ready for Review",
+  new_user_welcome: "Welcome to {{firm_name}}",
 };
 
 const TEMPLATE_LABELS: Record<TemplateType, string> = {
   invoice_generated: "Invoice Generated",
   quotation_sent: "Quotation Sent",
   proforma_sent: "Proforma Invoice Sent",
-  credit_note_issued: "Credit Note Issued",
+  credit_note_issued: "Credit Note from {{firm_name}}",
   payment_reminder: "Payment Reminder",
   ledger_statement: "Statement of Account",
   tds_due_7_days: "TDS Due in 7 Days",
@@ -76,7 +76,20 @@ const AVAILABLE_VARIABLES = [
   "{{due_date}}",
   "{{firm_name}}",
   "{{document_type}}",
+  "{{custom_message}}",
+  "{{invoice_table}}",
+  "{{statement_date}}",
+  "{{days_overdue}}",
 ];
+
+// Sample values so the preview reads like a real email instead of showing raw {{placeholders}}.
+const SAMPLE_INVOICE_TABLE = `<table style="width:100%;border-collapse:collapse;margin:16px 0"><tr><th style="padding:6px 8px;border-bottom:2px solid #e5e7eb;text-align:left;font-size:12px;color:#6b7280">Invoice No.</th><th style="padding:6px 8px;border-bottom:2px solid #e5e7eb;text-align:left;font-size:12px;color:#6b7280">Date</th><th style="padding:6px 8px;border-bottom:2px solid #e5e7eb;text-align:left;font-size:12px;color:#6b7280">Due Date</th><th style="padding:6px 8px;border-bottom:2px solid #e5e7eb;text-align:right;font-size:12px;color:#6b7280">Outstanding</th></tr><tr><td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;font-size:13px">INV/26-27/114</td><td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;font-size:13px">01 Oct 2026</td><td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;font-size:13px">15 Nov 2026</td><td style="padding:6px 8px;border-bottom:1px solid #f3f4f6;font-size:13px;text-align:right">₹1,18,000.00</td></tr></table>`;
+const SAMPLE_VARS: Record<string, string> = {
+  client_name: "Sample Client Pvt Ltd", firm_name: HEAD_FIRM_NAME, invoice_no: "INV/26-27/114",
+  amount: "₹1,18,000.00", due_date: "15 Nov 2026", document_type: "Invoice", custom_message: "",
+  invoice_table: SAMPLE_INVOICE_TABLE, statement_date: "28 Oct 2026", days_overdue: "12",
+};
+const withSampleValues = (html: string) => html.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => SAMPLE_VARS[k] ?? "");
 
 const FONT_OPTIONS = [
   { value: "Arial, Helvetica, sans-serif", label: "Arial (Sans-Serif)" },
@@ -156,104 +169,107 @@ const THEMES: Record<string, ThemeConfig> = {
 
 // ─── Type-specific email body content ────────────────────────────────────────
 
+const P = (t: string) => `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.7;">${t}</p>`;
+const ROW = (label: string, value: string, i: number, tone = "#e5e7eb", valueColor = "#111827") =>
+  `<tr${i % 2 === 0 ? ' style="background-color:#f8fafc;"' : ""}><td style="padding:10px 16px;border:1px solid ${tone};font-size:13px;color:#6b7280;font-weight:500;width:42%;">${label}</td><td style="padding:10px 16px;border:1px solid ${tone};font-size:13px;color:${valueColor};font-weight:600;">${value}</td></tr>`;
+const TABLE = (rows: string[]) =>
+  `<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 20px;">\n  ${rows.join("\n  ")}\n</table>`;
+const NOTE = (t: string, bg: string, bar: string, color: string) =>
+  `<div style="background:${bg};border-left:4px solid ${bar};padding:14px 18px;border-radius:0 6px 6px 0;margin:0 0 20px;"><p style="margin:0;color:${color};font-size:13px;line-height:1.6;">${t}</p></div>`;
+
+// {{amount}} already carries the ₹ sign; no CTA button for billing emails — the document is attached.
 const TYPE_CONTENT: Record<TemplateType, { category: string; body: string; cta: string }> = {
   invoice_generated: {
     category: "Invoice",
-    body: `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">We are pleased to inform you that your invoice has been generated. Please find the details below:</p>
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 20px;">
-  <tr style="background-color:#f8fafc;"><td style="padding:10px 16px;border:1px solid #e5e7eb;font-size:13px;color:#6b7280;font-weight:500;width:40%;">Invoice Number</td><td style="padding:10px 16px;border:1px solid #e5e7eb;font-size:13px;color:#111827;font-weight:600;">{{invoice_no}}</td></tr>
-  <tr><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#6b7280;font-weight:500;">Amount</td><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#111827;font-weight:600;">₹{{amount}}</td></tr>
-  <tr style="background-color:#f8fafc;"><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#6b7280;font-weight:500;">Due Date</td><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#111827;font-weight:600;">{{due_date}}</td></tr>
-</table>
-<p style="margin:0 0 8px;color:#374151;font-size:14px;line-height:1.6;">Please make the payment by the due date to avoid any late charges.</p>`,
-    cta: "View & Download Invoice",
+    body: [
+      P("Thank you for choosing {{firm_name}}. Please find attached our invoice for the services rendered. The details are summarised below."),
+      TABLE([ROW("Invoice No.", "{{invoice_no}}", 0), ROW("Invoice Amount", "{{amount}}", 1), ROW("Payment Due Date", "{{due_date}}", 2)]),
+      P("We request you to arrange payment on or before the due date. Our bank details for remittance are printed on the invoice; please quote the invoice number in your payment reference."),
+      P("Should you have any question about this invoice, simply reply to this email and we will be glad to assist."),
+    ].join("\n"),
+    cta: "",
   },
   quotation_sent: {
     category: "Quotation",
-    body: `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">We are pleased to share our quotation for your review and approval.</p>
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 20px;">
-  <tr style="background-color:#f8fafc;"><td style="padding:10px 16px;border:1px solid #e5e7eb;font-size:13px;color:#6b7280;font-weight:500;width:40%;">Reference No.</td><td style="padding:10px 16px;border:1px solid #e5e7eb;font-size:13px;color:#111827;font-weight:600;">{{invoice_no}}</td></tr>
-  <tr><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#6b7280;font-weight:500;">Quoted Amount</td><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#111827;font-weight:600;">₹{{amount}}</td></tr>
-</table>
-<p style="margin:0 0 8px;color:#374151;font-size:14px;line-height:1.6;">Kindly review the quotation and revert with your approval or any modifications at your earliest convenience.</p>`,
-    cta: "Review Quotation",
+    body: [
+      P("Thank you for giving us the opportunity to be of service. Please find attached our quotation for your consideration."),
+      TABLE([ROW("Quotation No.", "{{invoice_no}}", 0), ROW("Quoted Amount", "{{amount}}", 1)]),
+      P("Kindly review the scope and fees and let us know if you would like to proceed, or if you would like any change. We shall commence the engagement on receipt of your confirmation."),
+    ].join("\n"),
+    cta: "",
   },
   proforma_sent: {
     category: "Proforma Invoice",
-    body: `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">Please find attached your proforma invoice for the services to be rendered.</p>
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 20px;">
-  <tr style="background-color:#f8fafc;"><td style="padding:10px 16px;border:1px solid #e5e7eb;font-size:13px;color:#6b7280;font-weight:500;width:40%;">Proforma No.</td><td style="padding:10px 16px;border:1px solid #e5e7eb;font-size:13px;color:#111827;font-weight:600;">{{invoice_no}}</td></tr>
-  <tr><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#6b7280;font-weight:500;">Amount</td><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#111827;font-weight:600;">₹{{amount}}</td></tr>
-  <tr style="background-color:#f8fafc;"><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#6b7280;font-weight:500;">Valid Until</td><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#111827;font-weight:600;">{{due_date}}</td></tr>
-</table>`,
-    cta: "View Proforma Invoice",
+    body: [
+      P("Please find attached the proforma invoice for the services proposed to be rendered to you."),
+      TABLE([ROW("Proforma No.", "{{invoice_no}}", 0), ROW("Amount", "{{amount}}", 1)]),
+      P("Please note that a proforma invoice is issued for your approval and payment planning; it is not a tax invoice. The tax invoice will be issued as per our engagement terms."),
+    ].join("\n"),
+    cta: "",
   },
   credit_note_issued: {
     category: "Credit Note",
-    body: `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">A credit note has been issued to your account. Please find the details below:</p>
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 20px;">
-  <tr style="background-color:#f8fafc;"><td style="padding:10px 16px;border:1px solid #e5e7eb;font-size:13px;color:#6b7280;font-weight:500;width:40%;">Credit Note No.</td><td style="padding:10px 16px;border:1px solid #e5e7eb;font-size:13px;color:#111827;font-weight:600;">{{invoice_no}}</td></tr>
-  <tr><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#6b7280;font-weight:500;">Credit Amount</td><td style="padding:10px 16px;border:1px solid #e5e7eb;border-top:none;font-size:13px;color:#111827;font-weight:600;">₹{{amount}}</td></tr>
-</table>
-<p style="margin:0 0 8px;color:#374151;font-size:14px;line-height:1.6;">This credit will be adjusted in your future invoices or can be refunded upon request.</p>`,
-    cta: "View Credit Note",
+    body: [
+      P("We have issued a credit note in your favour. A copy is attached for your records."),
+      TABLE([ROW("Credit Note No.", "{{invoice_no}}", 0), ROW("Credit Amount", "{{amount}}", 1)]),
+      P("The amount will be adjusted against your outstanding balance or future invoices, and will be reflected in your next statement of account. Please get in touch if you would like to discuss it."),
+    ].join("\n"),
+    cta: "",
   },
   payment_reminder: {
     category: "Payment Reminder",
-    body: `<div style="background:#fef2f2;border-left:4px solid #ef4444;padding:14px 18px;border-radius:0 6px 6px 0;margin:0 0 20px;"><p style="margin:0;color:#991b1b;font-size:14px;font-weight:600;">⚠ Payment Due</p><p style="margin:4px 0 0;color:#dc2626;font-size:13px;">Invoice {{invoice_no}} · ₹{{amount}} · Due: {{due_date}}</p></div>
-<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">This is a friendly reminder that your payment is due. We kindly request you to make the payment at the earliest to avoid any inconvenience.</p>
-<table width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;margin:0 0 20px;">
-  <tr style="background-color:#fef2f2;"><td style="padding:10px 16px;border:1px solid #fecaca;font-size:13px;color:#6b7280;font-weight:500;width:40%;">Invoice No.</td><td style="padding:10px 16px;border:1px solid #fecaca;font-size:13px;color:#111827;font-weight:600;">{{invoice_no}}</td></tr>
-  <tr><td style="padding:10px 16px;border:1px solid #fecaca;border-top:none;font-size:13px;color:#6b7280;font-weight:500;">Outstanding Amount</td><td style="padding:10px 16px;border:1px solid #fecaca;border-top:none;font-size:13px;color:#dc2626;font-weight:700;">₹{{amount}}</td></tr>
-  <tr style="background-color:#fef2f2;"><td style="padding:10px 16px;border:1px solid #fecaca;border-top:none;font-size:13px;color:#6b7280;font-weight:500;">Due Date</td><td style="padding:10px 16px;border:1px solid #fecaca;border-top:none;font-size:13px;color:#dc2626;font-weight:700;">{{due_date}}</td></tr>
-</table>`,
-    cta: "Pay Now",
+    body: [
+      NOTE("Gentle reminder — payment outstanding", "#fef2f2", "#ef4444", "#991b1b"),
+      P("We trust you are well. Our records show that the payment below is outstanding as on the date of this email."),
+      "{{invoice_table}}",
+      P("We would appreciate your arranging payment at the earliest. If you have already paid, please accept our thanks and share the payment date and UTR / reference so that we can update our books."),
+    ].join("\n"),
+    cta: "",
   },
   ledger_statement: {
     category: "Statement of Account",
-    body: `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">Please find attached your statement of account. This document provides a comprehensive overview of all transactions in your account.</p>
-<div style="background:#f8fafc;border:1px solid #e5e7eb;border-radius:6px;padding:16px 20px;margin:0 0 20px;"><p style="margin:0;color:#374151;font-size:13px;line-height:1.6;">The statement includes all invoices raised, payments received, and any outstanding balances as on date.</p></div>
-<p style="margin:0 0 8px;color:#374151;font-size:14px;line-height:1.6;">Please review and confirm the balances. In case of any discrepancy, kindly contact us immediately.</p>`,
-    cta: "Download Statement of Account",
+    body: [
+      P("Please find attached your statement of account for the period mentioned in the attachment."),
+      NOTE("Kindly check the balances against your books. If you find any difference, please let us know within 7 days so that we can reconcile it together.", "#f8fafc", "#1a3a5c", "#374151"),
+      P("If the balance is payable, we request you to arrange payment at your earliest convenience. Our bank details are given at the end of the statement."),
+    ].join("\n"),
+    cta: "",
   },
   tds_due_7_days: {
     category: "TDS Reminder",
-    body: `<div style="background:#fffbeb;border-left:4px solid #f59e0b;padding:14px 18px;border-radius:0 6px 6px 0;margin:0 0 20px;"><p style="margin:0;color:#92400e;font-size:14px;font-weight:600;">⏰ TDS Due in 7 Days</p><p style="margin:4px 0 0;color:#b45309;font-size:13px;">Ensure timely compliance to avoid penalty and interest charges.</p></div>
-<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">This is to inform you that your TDS (Tax Deducted at Source) payment is due within the next <strong>7 days</strong>.</p>
-<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">Please ensure the TDS amount is deposited with the government before the due date to avoid interest @ 1.5% per month and penalty provisions under the Income Tax Act.</p>`,
-    cta: "View TDS Details",
+    body: [
+      NOTE("TDS payment due within 7 days", "#fffbeb", "#f59e0b", "#92400e"),
+      P("This is a courtesy reminder that the TDS (Tax Deducted at Source) deducted by you is due for deposit with the Government within the next <strong>7 days</strong>."),
+      P("Timely deposit avoids interest under section 201(1A) and the related late-fee and penalty consequences. Please let us know if you would like us to prepare the challan."),
+    ].join("\n"),
+    cta: "",
   },
   tds_due_1_day: {
     category: "URGENT: TDS",
-    body: `<div style="background:#fef2f2;border-left:4px solid #ef4444;padding:14px 18px;border-radius:0 6px 6px 0;margin:0 0 20px;"><p style="margin:0;color:#991b1b;font-size:14px;font-weight:600;">🚨 URGENT: TDS Due Tomorrow!</p><p style="margin:4px 0 0;color:#dc2626;font-size:13px;">Immediate action required to avoid penalty and interest.</p></div>
-<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;"><strong>This is an urgent reminder</strong> — your TDS payment is due tomorrow. Failure to deposit may result in:</p>
-<ul style="margin:0 0 16px;padding-left:24px;color:#374151;font-size:14px;line-height:1.8;">
-  <li>Interest @ 1.5% per month u/s 201(1A)</li>
-  <li>Penalty u/s 271C equal to TDS amount</li>
-  <li>Prosecution proceedings under the Income Tax Act</li>
-</ul>
-<p style="margin:0;color:#374151;font-size:14px;line-height:1.6;">Please deposit the TDS amount immediately.</p>`,
-    cta: "Take Action Now",
+    body: [
+      NOTE("Action needed — TDS payment due tomorrow", "#fef2f2", "#ef4444", "#991b1b"),
+      P("Your TDS payment is due for deposit <strong>tomorrow</strong>. A delay attracts interest at 1.5% per month under section 201(1A), and may lead to penalty and further proceedings."),
+      P("Please arrange the deposit today and share the challan details with us so that we can update your TDS records."),
+    ].join("\n"),
+    cta: "",
   },
   audit_report_ready: {
     category: "Audit Report",
-    body: `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">We are pleased to inform you that your audit report is ready for review and approval.</p>
-<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:16px 20px;margin:0 0 20px;"><p style="margin:0;color:#166534;font-size:13px;font-weight:600;">✓ Audit Completed Successfully</p><p style="margin:6px 0 0;color:#15803d;font-size:13px;">Your audit report has been prepared and is ready for your review and signature.</p></div>
-<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">Kindly review the report at your earliest convenience. If you have any queries or require modifications, please get in touch with us.</p>`,
-    cta: "Review Audit Report",
+    body: [
+      P("We are pleased to inform you that your audit report is ready for your review."),
+      NOTE("Please read the report carefully and let us have your comments or approval at your earliest convenience.", "#f0fdf4", "#16a34a", "#166534"),
+      P("If you need any clarification or wish to discuss any of the points, please reply to this email and we will arrange a call."),
+    ].join("\n"),
+    cta: "",
   },
   new_user_welcome: {
     category: "Welcome",
-    body: `<p style="margin:0 0 16px;color:#374151;font-size:14px;line-height:1.6;">Welcome aboard! We are delighted to have you as our valued client at <strong>{{firm_name}}</strong>.</p>
-<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:16px 20px;margin:0 0 20px;"><p style="margin:0;color:#166534;font-size:14px;font-weight:600;">🎉 Your account has been created!</p><p style="margin:6px 0 0;color:#15803d;font-size:13px;">You can now access all our services through our secure portal.</p></div>
-<p style="margin:0 0 12px;color:#374151;font-size:14px;line-height:1.6;">As our client, you will have access to:</p>
-<ul style="margin:0 0 16px;padding-left:24px;color:#374151;font-size:14px;line-height:1.8;">
-  <li>Real-time invoice and payment tracking</li>
-  <li>Automated TDS compliance reminders</li>
-  <li>Digital document sharing and approvals</li>
-  <li>Statements of account and financial reports</li>
-</ul>`,
-    cta: "Access Client Portal",
+    body: [
+      P("Welcome to {{firm_name}}. We are delighted to have you with us and look forward to serving you."),
+      P("Through your client portal you can view invoices and statements of account, share documents with us securely, and track the status of your work."),
+      P("Your login details have been shared with you separately. For your security, please change your password when you first sign in."),
+    ].join("\n"),
+    cta: "",
   },
 };
 
@@ -284,8 +300,8 @@ function buildTemplateHTML(
 <tr><td align="center" style="padding:24px 16px;">
 <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
   ${isBillingEmailType(type) ? `<tr>
-    <td style="background-color:#ffffff;border-radius:8px 8px 0 0;border-bottom:3px solid #c8960c;padding:22px 36px;">
-      <img src="${BRAND_LOGO_URL}" alt="${HEAD_FIRM_NAME}" width="230" style="display:block;border:0;height:auto;max-width:230px;">
+    <td align="center" style="background-color:#ffffff;border-radius:8px 8px 0 0;border-top:5px solid #1a3a5c;border-bottom:3px solid #c8960c;padding:26px 36px 22px;">
+      <img src="${BRAND_LOGO_URL}" alt="${HEAD_FIRM_NAME}" width="300" style="display:block;margin:0 auto;border:0;height:auto;width:300px;max-width:100%;">
     </td>
   </tr>` : `<tr>
     <td style="background-color:${headerBg};border-radius:8px 8px 0 0;padding:28px 36px;">
@@ -309,21 +325,14 @@ function buildTemplateHTML(
     <td style="background-color:#ffffff;padding:36px;border:1px solid #e5e7eb;border-top:none;">
       <p style="margin:0 0 20px;color:#111827;font-size:15px;line-height:1.6;font-family:${font};">Dear {{client_name}},</p>
       ${content.body}
-      <table cellpadding="0" cellspacing="0" border="0" style="margin:28px 0 20px;">
-        <tr>
-          <td style="background-color:${accentColor};border-radius:6px;padding:12px 28px;">
-            <a href="#" style="color:#ffffff;text-decoration:none;font-size:14px;font-weight:600;font-family:${font};">${content.cta} →</a>
-          </td>
-        </tr>
-      </table>
-      <p style="margin:20px 0 8px;color:#6b7280;font-size:13px;line-height:1.6;font-family:${font};">For any queries, please do not hesitate to contact us.</p>
+      <p style="margin:20px 0 8px;color:#6b7280;font-size:13px;line-height:1.6;font-family:${font};">If you have any question, please reply to this email or write to accounts@vjdesai.com.</p>
       <p style="margin:16px 0 0;color:#374151;font-size:14px;line-height:1.6;font-family:${font};">Warm regards,<br><strong style="color:#111827;">{{firm_name}}</strong><br><span style="font-size:12px;color:#6b7280;">Chartered Accountants</span></p>
     </td>
   </tr>
   <tr>
     <td style="background-color:${headerBg};border-radius:0 0 8px 8px;padding:18px 36px;text-align:center;">
-      <p style="margin:0;color:#ffffff;opacity:0.75;font-size:11px;font-family:${font};">This email was sent by {{firm_name}} via CAFlow Practice Management System</p>
-      <p style="margin:6px 0 0;color:#ffffff;opacity:0.55;font-size:10px;font-family:${font};">© {{firm_name}}. All rights reserved. | Professional CA Practice Software</p>
+      <p style="margin:0;color:#ffffff;opacity:0.75;font-size:11px;font-family:${font};">{{firm_name}} · Chartered Accountants</p>
+      <p style="margin:6px 0 0;color:#ffffff;opacity:0.55;font-size:10px;font-family:${font};">This message and its attachments are confidential and intended only for the addressee.</p>
     </td>
   </tr>
 </table>
@@ -800,11 +809,11 @@ export default function EmailTemplatesTab({ firmId }: { firmId: string | null })
                 </div>
 
                 {showPreview ? (
-                  <div
-                    className="min-h-[250px] max-h-[380px] overflow-auto rounded border bg-white"
-                    dangerouslySetInnerHTML={{
-                      __html: editState.body_html || "<p style='color:#9ca3af;padding:20px;'>No content — apply a theme to generate HTML.</p>",
-                    }}
+                  <iframe
+                    title="Email preview"
+                    sandbox=""
+                    className="w-full h-[420px] rounded border bg-white"
+                    srcDoc={withSampleValues(editState.body_html) || "<p style='color:#9ca3af;padding:20px;font-family:Arial'>No content — apply a theme to generate HTML.</p>"}
                   />
                 ) : (
                   <Textarea

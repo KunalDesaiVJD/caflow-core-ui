@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { downloadBlob } from "@/lib/downloadBlob";
 import ReceiptsTabComponent from "@/components/billing/ReceiptsTab";
 import LedgerTabComponent from "@/components/billing/LedgerTab";
 import BillingDashboardTab from "@/components/billing/BillingDashboardTab";
@@ -696,12 +697,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
         window.open(`https://wa.me/${fullPhone}?text=${msg}`, "_blank");
         toast({ title: "WhatsApp opened — PDF downloaded for manual attachment" });
         if (pdfBlob) {
-          const url = URL.createObjectURL(pdfBlob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = pdfFilename;
-          a.click();
-          URL.revokeObjectURL(url);
+          downloadBlob(pdfBlob, pdfFilename);
         }
       }
     } catch {
@@ -1101,12 +1097,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     }
 
     const blob = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = zipName;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, zipName);
     setBulkZipProgress({ current: 0, total: 0, active: false });
     toast({ title: `Downloaded ${successCount} invoices as PDF` });
   };
