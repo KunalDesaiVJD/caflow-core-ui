@@ -26,7 +26,7 @@ const GOLD = "#c8960c";
 export function logoHeaderHtml(): string {
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#ffffff;border-bottom:3px solid ${GOLD};">
   <tr><td style="padding:20px 28px;">
-    <img src="${BRAND_LOGO_URL}" alt="${HEAD_FIRM_NAME}" width="190" style="display:block;border:0;outline:none;height:auto;max-width:190px;">
+    <img src="${BRAND_LOGO_URL}" alt="${HEAD_FIRM_NAME}" width="230" style="display:block;border:0;outline:none;height:auto;max-width:230px;">
   </td></tr>
 </table>`;
 }
