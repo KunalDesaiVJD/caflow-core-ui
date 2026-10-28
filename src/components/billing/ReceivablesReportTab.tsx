@@ -23,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { format, parseISO } from "date-fns";
 import {
-  Download, RefreshCw, Search, X, TrendingUp, Users,
+  Download, Eye, RefreshCw, Search, X, TrendingUp, Users,
   Send, FileText, Mail, MessageCircle, Loader2,
   ArrowUpDown, ChevronUp, ChevronDown, ChevronRight, Building2,
 } from "lucide-react";
@@ -33,6 +33,7 @@ import type { LedgerEntryKind } from "@/lib/ledgerEntryKinds";
 import { composeLedgerEntries, type LedgerEntry, type RawInvoice, type RawReceipt, type RawKasar } from "@/lib/statementOfAccount";
 import { buildGroupStatementPdf } from "@/lib/groupStatementPdf";
 import { loadFirmBankDetails } from "@/lib/multiClientLedgerPdf";
+import { renderStatementEmailPreview } from "@/lib/billingEmailPreview";
 import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
 } from "@/lib/jspdfUnicodeFont";
@@ -175,6 +176,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   // Group statement email dialog (whole group, one document)
   const [groupEmail,   setGroupEmail]   = useState<DisplayRow | null>(null);
+  const [preview, setPreview] = useState<{ title: string; meta: string[]; html: string } | null>(null);
+  const [downloadingKey, setDownloadingKey] = useState<string | null>(null);
   const [gTo,          setGTo]          = useState("");
   const [gCc,          setGCc]          = useState("");
   const [gSubject,     setGSubject]     = useState("");
@@ -567,6 +570,39 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       fromDate, toDate, perClient,
       bankDetails: await loadFirmBankDetails(group.firmIds),
     });
+  }
+
+  async function showEmailPreview(title: string, meta: string[], clientName: string, customMessage?: string) {
+    setPreview({ title, meta, html: "" });
+    const html = await renderStatementEmailPreview({ clientName, customMessage });
+    setPreview({ title, meta, html });
+  }
+
+  /** Download a client's or a group's statement of account straight from the table row. */
+  async function handleDownloadRow(r: DisplayRow) {
+    setDownloadingKey(r.key);
+    try {
+      let blob: Blob;
+      let filename: string;
+      if (r.kind === "client") {
+        const entries = await openLedger(r);
+        setSheetClient(null);
+        ({ blob } = await generateClientLedgerPdf(r, entries));
+        filename = `Statement_of_Account_${r.name.replace(/\s+/g, "_")}_${toDate}.pdf`;
+      } else {
+        const perClient = await loadGroupStatement(r);
+        if (perClient.length === 0) { toast.error("Nothing to download — no balances or transactions in the period"); return; }
+        ({ blob } = await generateGroupStatementPdf(r, perClient));
+        filename = `Statement_of_Account_${r.name.replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 40)}_${fromDate}_${toDate}.pdf`;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      toast.error("Download failed: " + (e?.message || "unknown error"));
+    } finally {
+      setDownloadingKey(null);
+    }
   }
 
   const splitEmails = (v: string) => v.split(/[,;\s]+/).map(e => e.trim()).filter(Boolean);
@@ -1031,7 +1067,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       <div
         key={r.key}
         className={cn(
-          "grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
+          "grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
           nested ? "bg-blue-50/30" : idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
         )}
         onClick={() => handleRowClick(r)}
@@ -1073,6 +1109,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           )}
         </div>
         <div className="flex items-center justify-center" onClick={e => e.stopPropagation()}>
+          {(r.kind === "client" || r.kind === "group") && (
+            <button title={`Download statement of account PDF — ${r.name}`} disabled={downloadingKey === r.key}
+              className="p-1 rounded text-muted-foreground hover:text-emerald-600 hover:bg-emerald-50 disabled:opacity-50" onClick={() => handleDownloadRow(r)}>
+              {downloadingKey === r.key ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+            </button>
+          )}
           {r.kind === "client" && r.email && (
             <button title={`Email statement of account to ${r.email}`} className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50" onClick={() => setEmailClient(r)}>
               <Mail size={12} />
@@ -1175,7 +1217,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
         <div className="overflow-x-auto"><div className="min-w-[1100px]">
         {/* Column headers */}
-        <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] bg-muted/60 border-b px-4 py-2 text-[11px] font-semibold text-muted-foreground select-none">
+        <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] bg-muted/60 border-b px-4 py-2 text-[11px] font-semibold text-muted-foreground select-none">
           <button className="text-left flex items-center" onClick={() => toggleSort("name")}>{viewBy === "firm" ? "Firm" : viewBy === "group" ? "Client group" : "Particulars"} <SortIcon col="name" /></button>
           <div className="text-right">Opening Balance</div>
           <button className="flex items-center justify-end w-full" onClick={() => toggleSort("debit")}>Debit <SortIcon col="debit" /></button>
@@ -1190,7 +1232,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         <div className="divide-y">
           {loading ? (
             Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] px-4 py-2.5 gap-2">
+              <div key={i} className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] px-4 py-2.5 gap-2">
                 <Skeleton className="h-4 w-3/4" /><Skeleton className="h-4 w-full ml-auto" />
                 <Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" />
                 <Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" />
@@ -1216,7 +1258,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
         {/* Grand Total */}
         {!loading && filtered.length > 0 && (
-          <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_44px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
+          <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
             <div className="flex items-center gap-1.5">
               <TrendingUp size={13} className="text-orange-400" /> Grand Total
               <span className="text-[10px] font-normal text-white/60 ml-1">({grandTotal.clients} client{grandTotal.clients !== 1 ? "s" : ""})</span>
@@ -1407,6 +1449,11 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           )}
           <DialogFooter>
             <Button variant="outline" size="sm" disabled={gSending} onClick={() => setGroupEmail(null)}>Cancel</Button>
+            <Button variant="outline" size="sm" disabled={gSending || !groupEmail} className="gap-1.5"
+              onClick={() => groupEmail && showEmailPreview("Email preview — group statement",
+                [`To: ${gTo || "—"}`, ...(gCc ? [`CC: ${gCc}`] : []), `Subject: ${gSubject}`, "Attachment: group statement PDF"], groupEmail.name, gMsg)}>
+              <Eye size={13} /> Preview
+            </Button>
             <Button size="sm" disabled={gSending || !gTo.trim()} onClick={handleSendGroupEmail} className="gap-1.5">
               {gSending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
               {gSending ? "Preparing & sending…" : "Send Group Statement"}
@@ -1427,11 +1474,28 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           </div>
           <DialogFooter>
             <Button variant="outline" size="sm" disabled={emailSending} onClick={() => setEmailClient(null)}>Cancel</Button>
+            <Button variant="outline" size="sm" disabled={emailSending || !emailClient} className="gap-1.5"
+              onClick={() => emailClient && showEmailPreview("Email preview — statement of account",
+                [`To: ${emailClient.email ?? "—"}`, "Attachment: statement of account PDF"], emailClient.name)}>
+              <Eye size={13} /> Preview
+            </Button>
             <Button size="sm" disabled={emailSending} onClick={handleSendEmail} className="gap-1.5">
               {emailSending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
               {emailSending ? "Sending…" : "Send Now"}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!preview} onOpenChange={open => { if (!open) setPreview(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader><DialogTitle className="text-base">{preview?.title}</DialogTitle></DialogHeader>
+          <div className="text-xs text-muted-foreground space-y-0.5">
+            {preview?.meta.map(m => <p key={m}>{m}</p>)}
+          </div>
+          {preview && !preview.html
+            ? <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-muted-foreground" /></div>
+            : <iframe title="Email preview" sandbox="" srcDoc={preview?.html} className="w-full h-[460px] rounded border bg-white" />}
         </DialogContent>
       </Dialog>
     </div>

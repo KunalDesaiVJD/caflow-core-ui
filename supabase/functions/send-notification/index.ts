@@ -11,7 +11,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  HEAD_FIRM_NAME, HEAD_FIRM_NAME_PATTERN, brandedShell, ensureLogoHeader, isBillingEmailType,
+  HEAD_FIRM_NAME, HEAD_FIRM_NAME_PATTERN, brandedShell, ensureLogoHeader, isBillingEmailType, ledgerStatementBody,
 } from "../_shared/emailBrand.ts";
 
 const corsHeaders = {
@@ -293,6 +293,9 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
         <p style="color:#dc2626">Immediate action required to avoid penalties.</p>`);
 
     case "ledger_statement":
+      if (!payload.invoice_lines) {
+        return wrapper(ledgerStatementBody({ clientName: payload.client_name, customMessage: payload.custom_message, firmName: payload.firm_name }));
+      }
       return wrapper(`
         <p>Dear ${clientName},</p>
         ${payload.invoice_lines

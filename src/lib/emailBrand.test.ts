@@ -35,3 +35,16 @@ describe("billing email branding", () => {
     expect(out.endsWith("<p>Hi</p>")).toBe(true);
   });
 });
+
+import { ledgerStatementBody } from "../../supabase/functions/_shared/emailBrand";
+describe("ledgerStatementBody", () => {
+  it("escapes values and keeps the message's line breaks", () => {
+    const html = ledgerStatementBody({ clientName: "A & B <Ltd>", customMessage: "Line1\n\nLine2 <b>" });
+    expect(html).toContain("Dear A &amp; B &lt;Ltd&gt;,");
+    expect(html).toContain("Line1<br><br>Line2 &lt;b&gt;");
+    expect(html).toContain("V J Desai &amp; Co. LLP");
+  });
+  it("omits the message paragraph when there is none", () => {
+    expect(ledgerStatementBody({ clientName: "X" })).not.toContain("<br><br>");
+  });
+});
