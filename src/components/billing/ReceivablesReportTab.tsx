@@ -8,6 +8,7 @@
  *  3. Ledger sheet shows OB as first row, matching the Ledger tab
  */
 import { downloadBlob } from "@/lib/downloadBlob";
+import { buildClientLedgerPdf } from "@/lib/clientLedgerPdf";
 import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
@@ -55,6 +56,15 @@ async function fetchAllRows<T = any>(makeQuery: () => any): Promise<T[]> {
     if (data.length < PAGE) break;
   }
   return out;
+}
+
+/** Readable reason for a failed download — including query errors (plain objects) and a stale app bundle. */
+function describeDownloadError(e: any): string {
+  const msg = [e?.message, e?.details, e?.hint].filter(Boolean).join(" — ") || (typeof e === "string" ? e : "") || "unknown error";
+  if (/dynamically imported module|Loading chunk|Importing a module script failed/i.test(msg)) {
+    return "the app was updated while this page was open. Refresh the page (Ctrl+F5) and try again.";
+  }
+  return msg;
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -410,17 +420,17 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   const firmTagFor = (multiFirm: boolean) => (fid: string) =>
     multiFirm ? `[${firms.find(f => f.id === fid)?.name ?? "Firm"}] ` : "";
 
-  async function openLedger(client: DisplayRow): Promise<LedgerEntry[]> {
+  async function openLedger(client: DisplayRow, opts: { throwOnError?: boolean } = {}): Promise<LedgerEntry[]> {
     const ledgerFirms = client.firmIds;
     setSheetClient(client);
     setSheetEntries([]);
     setSheetLoading(true);
     try {
       const [
-        { data: invData },
-        { data: recData },
+        invRes,
+        recRes,
         obResult,
-        { data: kasarData },
+        kasarRes,
       ] = await Promise.all([
         supabase.from("invoices")
           .select("id, firm_id, invoice_no, invoice_date, total_amount, document_type")
@@ -452,7 +462,13 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           .order("kasar_date"),
       ]);
 
+      if (opts.throwOnError) {
+        const failed = [invRes.error, recRes.error, obResult?.error, kasarRes.error].find(Boolean);
+        if (failed) throw failed;
+      }
+
       // One opening-balance row per firm; several when the view spans firms.
+      const invData = invRes.data, recData = recRes.data, kasarData = kasarRes.data;
       const obRows: any[] = obResult?.data || [];
       const entries = composeLedgerEntries({
         // opening = manual OB + pre-period invoices − pre-period receipts
@@ -468,6 +484,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       setSheetEntries(entries);
       return entries;
     } catch (e: any) {
+      if (opts.throwOnError) throw e;
       toast.error("Could not load ledger: " + e.message);
       return [];
     } finally {
@@ -586,7 +603,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       let blob: Blob;
       let filename: string;
       if (r.kind === "client") {
-        const entries = await openLedger(r);
+        const entries = await openLedger(r, { throwOnError: true });
         setSheetClient(null);
         ({ blob } = await generateClientLedgerPdf(r, entries));
         filename = `Statement_of_Account_${r.name.replace(/\s+/g, "_")}_${toDate}.pdf`;
@@ -598,7 +615,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       }
       downloadBlob(blob, filename);
     } catch (e: any) {
-      toast.error("Download failed: " + (e?.message || "unknown error"));
+      toast.error("Download failed: " + describeDownloadError(e));
     } finally {
       setDownloadingKey(null);
     }
@@ -905,72 +922,11 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   // ── Client ledger PDF ─────────────────────────────────────────────────────
 
   async function generateClientLedgerPdf(client: DisplayRow, entries: LedgerEntry[]): Promise<{ base64: string; blob: Blob }> {
-    const jsPDF   = (await import("jspdf")).default;
-    const autoTable = (await import("jspdf-autotable")).default;
-    const DARK_BLUE: [number, number, number] = [26, 58, 92];
-
-    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-    await ensurePdfUnicodeFont(doc);
-    const logo = firmLogoUrl ? await loadLogoBase64(firmLogoUrl) : null;
-
-    doc.setFillColor(...DARK_BLUE); doc.rect(0, 0, 210, 24, "F");
-    let textX = 14;
-    if (logo) { try { doc.addImage(logo, logo.includes("image/png") ? "PNG" : "JPEG", 12, 2, 30, 20); textX = 48; } catch { /**/ } }
-
-    doc.setTextColor(255, 255, 255);
-    setPdfUnicodeFont(doc, "bold"); doc.setFontSize(13);
-    doc.text("STATEMENT OF ACCOUNT", textX, 10);
-    setPdfUnicodeFont(doc, "normal"); doc.setFontSize(8);
-    doc.text(`${selectedFirmName}   |   Client: ${client.name}`, textX, 16);
-    doc.text(`Period: ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}   |   Generated: ${format(new Date(), "d MMM yyyy HH:mm")}`, textX, 21);
-
-    // Footer totals the rows actually printed, so Dr − Cr = closing balance.
-    const totDr = entries.reduce((s, e) => s + e.debit, 0);
-    const totCr = entries.reduce((s, e) => s + e.credit, 0);
-    const close = entries.length ? entries[entries.length - 1].balance : netClosing(client);
-    const tableRows = entries.map(e => [
-      e.entry_date ? format(parseISO(e.entry_date), "dd/MM/yyyy") : "",
-      e.doc_no, e.narration,
-      e.debit  > 0 ? formatPdfCurrency(e.debit)  : "—",
-      e.credit > 0 ? formatPdfCurrency(e.credit) : "—",
-      formatPdfCurrency(e.balance),
-    ]);
-
-    const { abs: ca, label: cl } = drCr(close);
-    tableRows.push([
-      { content: "CLOSING BALANCE", colSpan: 3, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number] } },
-      { content: formatPdfCurrency(totDr),  styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
-      { content: formatPdfCurrency(totCr), styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
-      { content: `${formatPdfCurrency(ca)} ${cl}`, styles: { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: [255,255,255] as [number,number,number], halign: "right" as const } },
-    ]);
-
-    autoTable(doc, {
-      startY: 28,
-      head: [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance (₹)"]],
-      body: tableRows,
-      styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.5, lineColor: [200,210,225], lineWidth: 0.3 },
-      headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: [255,255,255], fontStyle: "bold" },
-      alternateRowStyles: { fillColor: [248,251,255] },
-      columnStyles: {
-        0: { cellWidth: 22, halign: "center" as const },
-        1: { cellWidth: 22, halign: "center" as const },
-        2: { cellWidth: 82 },
-        3: { cellWidth: 24, halign: "right" as const },
-        4: { cellWidth: 24, halign: "right" as const },
-        5: { cellWidth: 24, halign: "right" as const },
-      },
-      margin: { left: 10, right: 10 },
-      didDrawPage: (hookData: any) => {
-        const pc = (doc as any).internal.getNumberOfPages();
-        doc.setFontSize(7); setPdfUnicodeFont(doc, "normal"); doc.setTextColor(120,130,145);
-        doc.text(`Page ${hookData.pageNumber} of ${pc}   |   CAFlow — Confidential`, 105, 290, { align: "center" });
-        doc.setDrawColor(...DARK_BLUE); doc.setLineWidth(0.4); doc.line(10, 287, 200, 287);
-      },
+    return buildClientLedgerPdf({
+      clientName: client.name, firmLabel: selectedFirmName,
+      logoDataUrl: firmLogoUrl ? await loadLogoBase64(firmLogoUrl) : null,
+      fromDate, toDate, entries, fallbackClosing: netClosing(client),
     });
-
-    const blob = doc.output("blob");
-    const base64 = doc.output("datauristring").split(",")[1];
-    return { base64, blob };
   }
 
   async function handleDownloadClientPdf() {
