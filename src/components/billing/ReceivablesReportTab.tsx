@@ -633,6 +633,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           sent.push(addr);
         }
       }
+      // Refresh so every client of the group shows the new "Last email sent on" date.
+      if (sent.length > 0) void fetchReport();
       if (failed.length === 0) {
         toast.success(`Statement of account for ${groupEmail.name} sent to ${sent.join(", ")}${cc.length ? ` + ${cc.length} CC` : ""}`);
         setGroupEmail(null);
