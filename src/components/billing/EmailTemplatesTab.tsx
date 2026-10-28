@@ -24,6 +24,7 @@ import {
   Mail, Edit2, Eye, Save, X, CheckCircle2, AlertCircle, Code, Trash2, Wand2, Palette,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { BRAND_LOGO_URL, HEAD_FIRM_NAME, isBillingEmailType } from "../../../supabase/functions/_shared/emailBrand";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -282,7 +283,11 @@ function buildTemplateHTML(
 <table width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="${base.bodyBg}">
 <tr><td align="center" style="padding:24px 16px;">
 <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
-  <tr>
+  ${isBillingEmailType(type) ? `<tr>
+    <td style="background-color:#ffffff;border-radius:8px 8px 0 0;border-bottom:3px solid #c8960c;padding:22px 36px;">
+      <img src="${BRAND_LOGO_URL}" alt="${HEAD_FIRM_NAME}" width="190" style="display:block;border:0;height:auto;max-width:190px;">
+    </td>
+  </tr>` : `<tr>
     <td style="background-color:${headerBg};border-radius:8px 8px 0 0;padding:28px 36px;">
       <table width="100%" cellpadding="0" cellspacing="0" border="0">
         <tr>
@@ -299,7 +304,7 @@ function buildTemplateHTML(
       </table>
     </td>
   </tr>
-  <tr><td style="background-color:${accentColor};height:4px;"></td></tr>
+  <tr><td style="background-color:${accentColor};height:4px;"></td></tr>`}
   <tr>
     <td style="background-color:#ffffff;padding:36px;border:1px solid #e5e7eb;border-top:none;">
       <p style="margin:0 0 20px;color:#111827;font-size:15px;line-height:1.6;font-family:${font};">Dear {{client_name}},</p>
@@ -469,6 +474,35 @@ export default function EmailTemplatesTab({ firmId }: { firmId: string | null })
     }
   };
 
+  // Rewrite the six billing templates in the standard V J Desai design (logo, head-firm name).
+  const [applyingAll, setApplyingAll] = useState(false);
+  const handleApplyStandard = async () => {
+    if (!resolvedFirmId) return;
+    setApplyingAll(true);
+    try {
+      for (const type of TEMPLATE_TYPES.filter(isBillingEmailType)) {
+        const existing = templates.find(t => t.type === type);
+        const row: any = {
+          firm_id: resolvedFirmId, type,
+          name: existing?.name || TEMPLATE_LABELS[type],
+          subject: existing?.subject || DEFAULT_SUBJECTS[type],
+          body_html: buildTemplateHTML("professional", type),
+          is_active: true, updated_at: new Date().toISOString(),
+        };
+        const { error } = existing
+          ? await (supabase.from("email_templates") as any).update(row).eq("id", existing.id)
+          : await (supabase.from("email_templates") as any).insert(row);
+        if (error) throw error;
+      }
+      toast({ title: "Billing templates updated", description: "All six billing templates now use the V J Desai & Co. LLP logo and design." });
+      fetchTemplates();
+    } catch (err: any) {
+      toast({ title: "Could not update templates", description: err.message, variant: "destructive" });
+    } finally {
+      setApplyingAll(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     const { error } = await (supabase.from("email_templates") as any)
@@ -520,8 +554,12 @@ export default function EmailTemplatesTab({ firmId }: { firmId: string | null })
           <h2 className="text-lg font-semibold">Email Templates</h2>
           <p className="text-sm text-muted-foreground">
             Customise the email content sent to clients. Click a template to edit its theme, design, colours, and content.
+            Billing emails (invoice, quotation, proforma, credit note, reminder, statement) always go out as {HEAD_FIRM_NAME} with its logo.
           </p>
         </div>
+        <Button variant="outline" size="sm" onClick={handleApplyStandard} disabled={applyingAll || !resolvedFirmId}>
+          <Wand2 size={14} className="mr-1.5" /> {applyingAll ? "Applying…" : "Apply standard design to all billing templates"}
+        </Button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
