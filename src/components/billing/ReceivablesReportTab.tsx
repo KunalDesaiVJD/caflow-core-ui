@@ -711,8 +711,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     return out;
   }, [rows]);
 
-  const hasActivity = (c: Balances) =>
-    Math.abs(netClosing(c)) > 0.005 || c.debit > 0 || c.credit > 0 || Math.abs(netOpening(c)) > 0.005;
+  // "Hide nil balance" hides rows whose closing balance is nil, even if they had
+  // opening balance or transactions in the period that netted to zero.
+  const hasActivity = (c: Balances) => Math.abs(netClosing(c)) > 0.005;
 
   function clientsOfGroup(groupId: string): DisplayRow[] {
     const out: DisplayRow[] = [];
