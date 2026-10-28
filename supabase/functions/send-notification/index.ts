@@ -10,6 +10,9 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  HEAD_FIRM_NAME, HEAD_FIRM_NAME_PATTERN, brandedShell, ensureLogoHeader, isBillingEmailType,
+} from "../_shared/emailBrand.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -151,7 +154,8 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
   const email         = escapeHtml(payload.email || "N/A");
   const password      = escapeHtml(payload.password || "N/A");
 
-  const wrapper = (body: string) => `<!DOCTYPE html>
+  // Billing emails always carry the head firm's logo and professional layout.
+  const wrapper = (body: string) => isBillingEmailType(type) ? brandedShell(body) : `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   body{font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:0;color:#333}
   .hdr{background:#1a3a5c;color:#fff;padding:18px 24px}
@@ -520,10 +524,12 @@ async function sendEmail(
   let html        = buildEmailHTML(type, payload);
 
   // Use the firm's active saved template when present (skip for custom_html relays).
-  if (payload.firm_id && !payload.custom_html) {
-    const tpl = await renderFromTemplate(payload.firm_id, type, payload);
+  // Billing emails use the head firm's templates, whichever firm is selected.
+  const templateFirmId = isBillingEmailType(type) ? (payload.template_firm_id || payload.firm_id) : payload.firm_id;
+  if (templateFirmId && !payload.custom_html) {
+    const tpl = await renderFromTemplate(templateFirmId, type, payload);
     if (tpl) {
-      html = tpl.html;
+      html = isBillingEmailType(type) ? ensureLogoHeader(tpl.html) : tpl.html;
       if (!customSubject && tpl.subject) subject = tpl.subject;
     }
   }
@@ -864,12 +870,23 @@ Deno.serve(async (req) => {
     const firmSender  = validEmail(firmSettings.sender_email);
     const firmReplyTo = validEmail(firmSettings.reply_to_email);
     // A caller must never choose the sending mailbox — drop any supplied value.
-    const { firm_sender_email: _ignored, firm_reply_to: _ignored2, ...callerPayload } = (payload || {}) as Record<string, any>;
+    const { firm_sender_email: _ignored, firm_reply_to: _ignored2, template_firm_id: _ignored3, ...callerPayload } = (payload || {}) as Record<string, any>;
+    // Billing emails are always sent as the head firm (V J Desai & Co. LLP) from the
+    // default mailbox, regardless of which firm the user selected. The log row still
+    // records the selected firm so the Email Log filters keep working.
+    const asHeadFirm = isBillingEmailType(type);
+    let headFirmId: string | null = null;
+    if (asHeadFirm) {
+      const { data: head } = await adminClient.from("firms").select("id")
+        .ilike("name", HEAD_FIRM_NAME_PATTERN).limit(1).maybeSingle();
+      headFirmId = head?.id ?? null;
+    }
     const enrichedPayload: Record<string, any> = {
       ...callerPayload,
-      firm_name: firmData?.name || "V J Desai & Co. LLP",
-      ...(firmSender  ? { firm_sender_email: firmSender } : {}),
-      ...(firmReplyTo ? { firm_reply_to: firmReplyTo }    : {}),
+      firm_name: asHeadFirm ? HEAD_FIRM_NAME : (firmData?.name || "V J Desai & Co. LLP"),
+      ...(asHeadFirm && headFirmId ? { template_firm_id: headFirmId } : {}),
+      ...(!asHeadFirm && firmSender  ? { firm_sender_email: firmSender } : {}),
+      ...(!asHeadFirm && firmReplyTo ? { firm_reply_to: firmReplyTo }    : {}),
     };
 
     // ── Smart-batched portal activity digest ─────────────────────────────
