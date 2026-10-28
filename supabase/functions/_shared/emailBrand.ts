@@ -74,3 +74,20 @@ export function brandedShell(body: string, opts: { footerNote?: string; contactE
 </div>
 </body></html>`;
 }
+
+const esc = (v: unknown) => String(v ?? "")
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+/**
+ * Body of the "statement of account" email (PDF attached). Shared by the sender and by the
+ * Report tab's preview so what is previewed is what is sent. Values are escaped here; the
+ * message keeps its line breaks.
+ */
+export function ledgerStatementBody(o: { clientName?: string; customMessage?: string; firmName?: string }): string {
+  const msg = o.customMessage ? `<p>${esc(o.customMessage).replace(/\r?\n/g, "<br>")}</p>` : "";
+  return `
+        <p>Dear ${esc(o.clientName || "Client")},</p>
+        <p>Please find your statement of account for your review. Kindly confirm the balances at your earliest.</p>
+        ${msg}
+        <p>Regards,<br><strong>${esc(o.firmName || HEAD_FIRM_NAME)}</strong></p>`;
+}
