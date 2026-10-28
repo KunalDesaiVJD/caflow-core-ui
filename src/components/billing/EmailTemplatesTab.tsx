@@ -285,7 +285,7 @@ function buildTemplateHTML(
 <table width="600" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;width:100%;">
   ${isBillingEmailType(type) ? `<tr>
     <td style="background-color:#ffffff;border-radius:8px 8px 0 0;border-bottom:3px solid #c8960c;padding:22px 36px;">
-      <img src="${BRAND_LOGO_URL}" alt="${HEAD_FIRM_NAME}" width="190" style="display:block;border:0;height:auto;max-width:190px;">
+      <img src="${BRAND_LOGO_URL}" alt="${HEAD_FIRM_NAME}" width="230" style="display:block;border:0;height:auto;max-width:230px;">
     </td>
   </tr>` : `<tr>
     <td style="background-color:${headerBg};border-radius:8px 8px 0 0;padding:28px 36px;">
