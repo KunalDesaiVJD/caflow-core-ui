@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { downloadBlob } from "@/lib/downloadBlob";
 import DocLink from "@/components/billing/DocLink";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
@@ -485,13 +486,12 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
 
   // Emailing a statement of account lives in the Report tab; this view only downloads.
   const handleDownloadPdf = async () => {
-    const { blob, filename } = await buildClientLedgerPdfBlob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const { blob, filename } = await buildClientLedgerPdfBlob();
+      downloadBlob(blob, filename);
+    } catch (err: any) {
+      toast({ title: "Statement could not be downloaded", description: err?.message || "Unknown error", variant: "destructive" });
+    }
   };
 
   // ── Build the statement of account PDF ─────────────────────────────────
@@ -1193,13 +1193,12 @@ function GroupLedgerView() {
   // (the old standalone copy here had drifted and dropped opening balances).
   const handleDownloadPdf = async () => {
     const groupName = groups.find(g => g.id === groupId)?.name || "Group";
-    const blob = await buildGroupLedgerPdfBlob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `Group_Statement_of_Account_${groupName}_${fromDate}_${toDate}.pdf`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const blob = await buildGroupLedgerPdfBlob();
+      downloadBlob(blob, `Group_Statement_of_Account_${groupName}_${fromDate}_${toDate}.pdf`);
+    } catch (err: any) {
+      toast({ title: "Statement could not be downloaded", description: err?.message || "Unknown error", variant: "destructive" });
+    }
   };
 
   const handleDownloadZip = async () => {
@@ -1230,9 +1229,7 @@ function GroupLedgerView() {
       zip.file(fileName, `Invoice: ${inv.invoice_no}\nClient: ${cMap[inv.client_id!]}\nID: ${inv.id}`);
     });
     const blob = await zip.generateAsync({ type: "blob" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = `Invoices_Group_${fy}.zip`; a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(blob, `Invoices_Group_${fy}.zip`);
     toast({ title: `ZIP with ${invoices.length} invoices downloaded` });
   };
 
@@ -1624,13 +1621,12 @@ function FirmRevenueLedgerView() {
 
   const handleDownloadPdf = async () => {
     const fName = firms.find(f => f.id === firmId)?.name || "Firm";
-    const blob = await buildFirmLedgerPdfBlob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `FirmRevenue_${fName}_${fromDate}_${toDate}.pdf`;
-    a.click();
-    URL.revokeObjectURL(url);
+    try {
+      const blob = await buildFirmLedgerPdfBlob();
+      downloadBlob(blob, `FirmRevenue_${fName}_${fromDate}_${toDate}.pdf`);
+    } catch (err: any) {
+      toast({ title: "Ledger could not be downloaded", description: err?.message || "Unknown error", variant: "destructive" });
+    }
   };
 
   return (

@@ -29,11 +29,11 @@ const subjects: Record<string, string> = {
   invoice_generated:         "Invoice from V J Desai & Co. LLP",
   scrutiny_complete:         "Scrutiny Complete — Findings Summary",
   new_user_welcome:          "Welcome to CAFlow",
-  credit_note_issued:        "Credit Note Issued",
-  quotation_sent:            "Quotation for Your Review",
-  proforma_sent:             "Proforma Invoice",
-  ledger_statement:          "Statement of Account",
-  payment_reminder:          "Payment Reminder",
+  credit_note_issued:        "Credit Note from V J Desai & Co. LLP",
+  quotation_sent:            "Quotation from V J Desai & Co. LLP",
+  proforma_sent:             "Proforma Invoice from V J Desai & Co. LLP",
+  ledger_statement:          "Statement of Account — V J Desai & Co. LLP",
+  payment_reminder:          "Payment Reminder — V J Desai & Co. LLP",
   internal_filing_reminder:  "Filing Reminder",
   // Audit communication templates
   audit_commencement:        "Commencement of Statutory Audit",
@@ -136,6 +136,19 @@ function buildInvoiceLinesTable(payload: Record<string, any>): string {
   </table>`;
 }
 
+// Single-invoice fallback for the {{invoice_table}} variable (reminders sent for one invoice).
+function buildSingleInvoiceTable(payload: Record<string, any>): string {
+  if (!payload.invoice_no) return "";
+  const td1 = "padding:10px 16px;border:1px solid #fecaca;font-size:13px;color:#6b7280;font-weight:500;width:42%";
+  const td2 = "padding:10px 16px;border:1px solid #fecaca;font-size:13px;color:#111827;font-weight:600";
+  const amt = payload.amount ? fmtInr(payload.amount) : "";
+  return `<table style="width:100%;border-collapse:collapse;margin:0 0 20px">
+    <tr><td style="${td1}">Invoice No.</td><td style="${td2}">${escapeHtml(payload.invoice_no)}</td></tr>
+    ${amt ? `<tr><td style="${td1}">Outstanding Amount</td><td style="${td2};color:#b91c1c">${amt}</td></tr>` : ""}
+    ${payload.due_date ? `<tr><td style="${td1}">Due Date</td><td style="${td2}">${escapeHtml(payload.due_date)}</td></tr>` : ""}
+  </table>`;
+}
+
 // ── Email HTML builder ───────────────────────────────────────────────
 
 function buildEmailHTML(type: string, payload: Record<string, any>): string {
@@ -213,64 +226,65 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
     case "invoice_generated":
       return wrapper(`
         <p>Dear ${clientName},</p>
-        <p>Please find below the details of your invoice:</p>
+        <p>Thank you for choosing ${firmName}. ${payload.pdf_base64 ? "Please find attached our invoice for the services rendered." : "Please find the details of our invoice for the services rendered below."} A summary is given below.</p>
         <table class="info">
           <tr><td>Invoice No.</td><td>${invoiceNo}</td></tr>
-          <tr><td>Amount</td><td>${amt}</td></tr>
-          ${dueDate ? `<tr><td>Due Date</td><td>${dueDate}</td></tr>` : ""}
-          ${documentType ? `<tr><td>Type</td><td>${documentType}</td></tr>` : ""}
+          <tr><td>Invoice Amount</td><td>${amt}</td></tr>
+          ${dueDate ? `<tr><td>Payment Due Date</td><td>${dueDate}</td></tr>` : ""}
         </table>
-        ${customMessage ? `<p style="margin-top:12px">${customMessage}</p>` : ""}
-        <p>Kindly arrange payment at the earliest convenience.</p>
-        <p>Thank you for your continued trust in our services.</p>
-        <p>Regards,<br><strong>${firmName}</strong></p>`);
+        ${customMessage ? `<p>${customMessage}</p>` : ""}
+        <p>We request you to arrange payment on or before the due date. Our bank details for remittance are printed on the invoice; please quote the invoice number in your payment reference.</p>
+        <p>Should you have any question about this invoice, simply reply to this email and we will be glad to assist.</p>
+        <p>Warm regards,<br><strong>${firmName}</strong><br><span style="color:#6b7280">Chartered Accountants</span></p>`);
 
     case "quotation_sent":
       return wrapper(`
         <p>Dear ${clientName},</p>
-        <p>Please find our quotation for your reference:</p>
+        <p>Thank you for giving us the opportunity to be of service. ${payload.pdf_base64 ? "Please find attached our quotation for your consideration." : "Our quotation is summarised below for your consideration."}</p>
         <table class="info">
-          <tr><td>Document No.</td><td>${invoiceNo}</td></tr>
-          <tr><td>Amount</td><td>${amt}</td></tr>
+          <tr><td>Quotation No.</td><td>${invoiceNo}</td></tr>
+          <tr><td>Quoted Amount</td><td>${amt}</td></tr>
         </table>
         ${customMessage ? `<p>${customMessage}</p>` : ""}
-        <p>Please review and revert with your confirmation.</p>
-        <p>Regards,<br><strong>${firmName}</strong></p>`);
+        <p>Kindly review the scope and fees and let us know if you would like to proceed, or if you would like any change. We shall commence the engagement on receipt of your confirmation.</p>
+        <p>Warm regards,<br><strong>${firmName}</strong><br><span style="color:#6b7280">Chartered Accountants</span></p>`);
 
     case "proforma_sent":
       return wrapper(`
         <p>Dear ${clientName},</p>
-        <p>Please find the proforma invoice below:</p>
+        <p>${payload.pdf_base64 ? "Please find attached the proforma invoice" : "Please find below the details of the proforma invoice"} for the services proposed to be rendered to you.</p>
         <table class="info">
-          <tr><td>Document No.</td><td>${invoiceNo}</td></tr>
+          <tr><td>Proforma No.</td><td>${invoiceNo}</td></tr>
           <tr><td>Amount</td><td>${amt}</td></tr>
         </table>
         ${customMessage ? `<p>${customMessage}</p>` : ""}
-        <p>Regards,<br><strong>${firmName}</strong></p>`);
+        <p>Please note that a proforma invoice is issued for your approval and payment planning; it is not a tax invoice. The tax invoice will be issued as per our engagement terms.</p>
+        <p>Warm regards,<br><strong>${firmName}</strong><br><span style="color:#6b7280">Chartered Accountants</span></p>`);
 
     case "credit_note_issued":
       return wrapper(`
         <p>Dear ${clientName},</p>
-        <p>A credit note has been issued against your account:</p>
+        <p>We have issued a credit note in your favour.${payload.pdf_base64 ? " A copy is attached for your records." : ""}</p>
         <table class="info">
           <tr><td>Credit Note No.</td><td>${invoiceNo}</td></tr>
-          <tr><td>Amount</td><td>${amt}</td></tr>
+          <tr><td>Credit Amount</td><td>${amt}</td></tr>
         </table>
         ${customMessage ? `<p>${customMessage}</p>` : ""}
-        <p>Regards,<br><strong>${firmName}</strong></p>`);
+        <p>The amount will be adjusted against your outstanding balance or future invoices and will be reflected in your next statement of account. Please get in touch if you would like to discuss it.</p>
+        <p>Warm regards,<br><strong>${firmName}</strong><br><span style="color:#6b7280">Chartered Accountants</span></p>`);
 
     case "payment_reminder":
       return wrapper(`
         <p>Dear ${clientName},</p>
-        <p>This is a friendly reminder for the outstanding payment:</p>
+        <p>We trust you are well. Our records show that the payment below is outstanding as on the date of this email.</p>
         ${buildInvoiceLinesTable(payload) || `<table class="info">
           <tr><td>Invoice No.</td><td>${invoiceNo}</td></tr>
           ${dueDate ? `<tr><td>Due Date</td><td>${dueDate}</td></tr>` : ""}
-          <tr><td>Outstanding Amount</td><td style="color:#dc2626">${amt}</td></tr>
+          <tr><td>Outstanding Amount</td><td style="color:#b91c1c">${amt}</td></tr>
         </table>`}
-        <p>Please process the payment at your earliest convenience to avoid any inconvenience.
-        If you have already paid, kindly ignore this reminder and share the payment details with us.</p>
-        <p>Regards,<br><strong>${firmName}</strong></p>`);
+        ${customMessage ? `<p>${customMessage}</p>` : ""}
+        <p>We would appreciate your arranging payment at the earliest. If you have already paid, please accept our thanks and share the payment date and UTR / reference so that we can update our books.</p>
+        <p>Warm regards,<br><strong>${firmName}</strong><br><span style="color:#6b7280">Chartered Accountants</span></p>`);
 
     case "tds_due_7_days":
       return wrapper(`
@@ -299,11 +313,11 @@ function buildEmailHTML(type: string, payload: Record<string, any>): string {
       return wrapper(`
         <p>Dear ${clientName},</p>
         ${payload.invoice_lines
-          ? `<p>Please find below your statement of account (invoices outstanding) as on ${escapeHtml(payload.statement_date || "")}. Kindly review and arrange payment, or let us know if any of these have already been settled.</p>
+          ? `<p>Please find below the invoices outstanding in your account as on ${escapeHtml(payload.statement_date || "")}. Kindly review them and arrange payment, or let us know if any item needs clarification.</p>
              ${buildInvoiceLinesTable(payload)}`
           : `<p>Please find your statement of account for your review. Kindly confirm the balances at your earliest.</p>`}
         ${customMessage ? `<p>${customMessage}</p>` : ""}
-        <p>Regards,<br><strong>${firmName}</strong></p>`);
+        <p>Warm regards,<br><strong>${firmName}</strong><br><span style="color:#6b7280">Chartered Accountants</span></p>`);
 
     case "audit_report_ready":
       return wrapper(`
@@ -496,7 +510,7 @@ async function renderFromTemplate(
       document_type:  payload.document_type || "",
       custom_message: payload.custom_message || "",
       // Billing reminders / statement of account
-      invoice_table:  buildInvoiceLinesTable(payload),
+      invoice_table:  buildInvoiceLinesTable(payload) || buildSingleInvoiceTable(payload),
       days_overdue:   payload.days_overdue != null ? String(payload.days_overdue) : "",
       statement_date: payload.statement_date || "",
     };
