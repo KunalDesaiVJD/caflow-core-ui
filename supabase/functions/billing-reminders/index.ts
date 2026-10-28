@@ -229,7 +229,7 @@ async function buildPlan(admin: any, firmIds: string[]) {
 
   // Open invoices (outstanding), all firms.
   const invoices = await fetchAll(() => admin.from("invoices")
-    .select("id, invoice_no, client_id, firm_id, amount_due, total_amount, invoice_date, due_date, last_reminded_at, status, payment_status")
+    .select("id, invoice_no, client_id, firm_id, amount_due, total_amount, invoice_date, due_date, payment_due_days, last_reminded_at, status, payment_status")
     .in("firm_id", firmIds)
     .eq("document_type", "invoice")
     .not("client_id", "is", null)
@@ -237,6 +237,13 @@ async function buildPlan(admin: any, firmIds: string[]) {
     .or("payment_status.is.null,payment_status.neq.paid")
     .order("due_date", { ascending: true }));
   const outstandingOf = (i: any) => Number(i.amount_due ?? i.total_amount ?? 0);
+  // Invoices saved before due dates were stored carry only their payment terms:
+  // derive the due date (invoice date + terms) so they are not silently skipped.
+  for (const i of invoices as any[]) {
+    if (!i.due_date && i.invoice_date && i.payment_due_days != null && Number(i.payment_due_days) >= 0) {
+      i.due_date = addDays(String(i.invoice_date).slice(0, 10), Math.floor(Number(i.payment_due_days)));
+    }
+  }
   const openInvoices = invoices.filter((i: any) => outstandingOf(i) > 0);
 
   // Reminder history per invoice.

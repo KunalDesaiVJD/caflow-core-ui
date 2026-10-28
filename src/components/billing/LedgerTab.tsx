@@ -1199,7 +1199,7 @@ function GroupLedgerView() {
 
     const resolvedFirmIds = (firmIds.length === 0 || firmIds[0] === "all") ? [] : firmIds;
     let zipInvQuery = supabase.from("invoices").select("id, invoice_no, client_id")
-      .in("client_id", clientIds).eq("financial_year", fy);
+      .in("client_id", clientIds).eq("financial_year", fy).neq("status", "voided");
     if (resolvedFirmIds.length > 0) zipInvQuery = zipInvQuery.in("firm_id", resolvedFirmIds);
     const { data: invoices } = await zipInvQuery;
     if (!invoices?.length) { toast({ title: "No invoices found" }); return; }

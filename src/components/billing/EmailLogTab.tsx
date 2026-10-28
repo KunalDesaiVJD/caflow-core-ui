@@ -16,6 +16,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { format } from "date-fns";
+import { BILLING_LOG_TYPES } from "@/lib/billingLogTypes";
 import {
   Mail, MessageSquare, CheckCircle2, XCircle, ChevronDown, ChevronRight,
   Download, Inbox, Filter,
@@ -81,11 +82,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
   const [dateTo, setDateTo] = useState("");
   const [search, setSearch] = useState("");
 
-  const allTypes = [
-    "invoice_generated", "quotation_sent", "proforma_sent", "credit_note_issued",
-    "payment_reminder", "ledger_statement", "tds_due_7_days", "tds_due_1_day",
-    "audit_report_ready", "new_user_welcome",
-  ];
+  const allTypes = [...BILLING_LOG_TYPES];
 
   // Same filters for the on-screen page and the CSV export. Search runs server-side
   // so the count / pagination reflect it; dates are local-day bounds converted to UTC.
@@ -99,7 +96,7 @@ export default function EmailLogTab({ firmId }: { firmId: string | null }) {
 
     if (statusFilter !== "all") q = q.eq("status", statusFilter);
     if (channelFilter !== "all") q = q.eq("channel", channelFilter);
-    if (typeFilter !== "all") q = q.eq("type", typeFilter);
+    q = typeFilter !== "all" ? q.eq("type", typeFilter) : q.in("type", [...BILLING_LOG_TYPES]);
     if (dateFrom) q = q.gte("sent_at", new Date(`${dateFrom}T00:00:00`).toISOString());
     if (dateTo) {
       const end = new Date(`${dateTo}T00:00:00`);

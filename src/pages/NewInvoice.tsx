@@ -36,12 +36,13 @@ import { format, addDays } from "date-fns";
 import { cn } from "@/lib/utils";
 import {
   ArrowLeft, Plus, Trash2, Save, Lock, Download,
-  FileText, Info, Check, ChevronsUpDown, ChevronDown, Copy, RefreshCw, Pencil, AlertTriangle,
+  FileText, Info, Check, ChevronsUpDown, ChevronDown, Copy, RefreshCw, Pencil, AlertTriangle, Ban,
 } from "lucide-react";
 import { buildInvoiceHtml, downloadPdfFromHtml } from "@/lib/invoicePdfGenerator";
 import { resolveFirmNameForDate } from "@/lib/firmName";
 import { BILLING_ATOMIC_NUMBERING } from "@/lib/billingFlags";
 import { isValidGstin } from "@/lib/gstinUtils";
+import { dueDateFromTerms } from "@/lib/invoiceDueDate";
 import { LOCKABLE_DOC_TYPES, firmLockDay, isPeriodLocked, lockMessage } from "@/lib/invoiceLock";
 
 // ─── Export Invoice Currencies ───
@@ -363,6 +364,7 @@ const NewInvoice = () => {
   const [docNoEditable, setDocNoEditable] = useState(false);
   const [docNoManual, setDocNoManual] = useState(false);
   const [duplicateWarning, setDuplicateWarning] = useState("");
+  const [voidInfo, setVoidInfo] = useState<{ reason: string; at: string | null; by: string | null } | null>(null);
 
   // Client fields — ROOT CAUSE B FIX: set toName immediately from prefill
   // so the name shows even before the async clients-list fetch completes
@@ -612,6 +614,7 @@ const NewInvoice = () => {
         setInvoiceDate(inv.invoice_date || "");
         setSavedDate(inv.invoice_date || null);
         setSavedStatus(inv.status || "draft");
+        setVoidInfo(inv.status === "voided" ? { reason: (inv as any).voided_reason || "", at: (inv as any).voided_at || null, by: (inv as any).voided_by || null } : null);
         setReferenceNo((inv as any).reference_no || "");
         setStatus(inv.status || "draft");
         setShowLogo(inv.show_logo ?? true);
@@ -968,6 +971,7 @@ const NewInvoice = () => {
         to_gstin: toGstin,
         bank_details_snapshot: bankDetails,
         payment_due_days: paymentDueDays,
+        due_date: docType === "invoice" ? dueDateFromTerms(invoiceDate, paymentDueDays) : null,
         payment_terms: `PAYMENT IS DUE WITHIN ${paymentDueDays} DAYS FROM THE INVOICE DATE`,
         line_items: items.map(li => ({
           description: li.description,
@@ -1137,8 +1141,9 @@ const NewInvoice = () => {
   // Period lock: an issued invoice / credit note in a closed month is read-only
   // for everyone except a superadmin (enforced again by a DB trigger).
   const lockDay = firmLockDay(firm?.settings);
-  const isLocked = isEdit && !isSuperadmin && LOCKABLE_DOC_TYPES.includes(docType)
-    && savedStatus !== null && savedStatus !== "draft" && isPeriodLocked(savedDate, lockDay);
+  const isCancelled = isEdit && savedStatus === "voided";
+  const isLocked = isCancelled || (isEdit && !isSuperadmin && LOCKABLE_DOC_TYPES.includes(docType)
+    && savedStatus !== null && savedStatus !== "draft" && isPeriodLocked(savedDate, lockDay));
   const canConvert = isEdit && (docType === "quotation" || docType === "proforma") && status === "finalized";
 
   // Generate invoice HTML
@@ -1193,11 +1198,11 @@ const NewInvoice = () => {
         <Button variant="ghost" size="icon" onClick={() => navigate("/billing")}><ArrowLeft size={18} /></Button>
         <div className="flex-1">
           <h1 className="text-lg font-bold text-foreground">{isLocked ? `View ${DOC_TYPE_LABELS[docType]}` : isEdit ? `Edit ${DOC_TYPE_LABELS[docType]}` : `New ${DOC_TYPE_LABELS[docType]}`}</h1>
-          {status !== "draft" && <Badge className={cn("text-xs capitalize ml-2", status === "finalized" ? "bg-blue-100 text-blue-700" : "")}>{status}</Badge>}
+          {status !== "draft" && <Badge className={cn("text-xs capitalize ml-2", status === "finalized" ? "bg-blue-100 text-blue-700" : status === "voided" ? "bg-red-100 text-red-700" : "")}>{status === "voided" ? "cancelled" : status}</Badge>}
         </div>
         <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"
-            title={status === "draft" ? "Finalize this document before downloading PDF" : "Download PDF"}>
+          <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1" disabled={isCancelled}
+            title={isCancelled ? "Cancelled documents cannot be downloaded" : status === "draft" ? "Finalize this document before downloading PDF" : "Download PDF"}>
             <Download size={14} /> PDF
             {status === "draft" && <span className="ml-1 text-[10px] text-muted-foreground">(finalize first)</span>}
           </Button>
@@ -1234,7 +1239,17 @@ const NewInvoice = () => {
             </div>
           )}
 
-          {isLocked && savedDate && lockDay && (
+          {isCancelled && (
+            <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2.5 text-xs text-red-800">
+              <Ban size={14} className="shrink-0 mt-0.5" />
+              <span>
+                <span className="font-semibold">Cancelled — read-only.</span> This document is excluded from all ledgers and reports and its number will never be reused.
+                {voidInfo?.at && <> Cancelled on {new Date(voidInfo.at).toLocaleDateString("en-IN")}.</>}
+                {voidInfo?.reason && <> Reason: {voidInfo.reason}</>}
+              </span>
+            </div>
+          )}
+          {!isCancelled && isLocked && savedDate && lockDay && (
             <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
               <Lock size={14} className="shrink-0 mt-0.5" />
               <span><span className="font-semibold">Read-only — period closed.</span> {lockMessage(savedDate, lockDay)}</span>

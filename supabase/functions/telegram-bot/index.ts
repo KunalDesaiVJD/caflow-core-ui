@@ -573,7 +573,8 @@ async function handleSummary(chatId: number) {
 
   const { data: invoices, error } = await supabase
     .from("invoices")
-    .select("id,status,amount,total_amount,due_date,invoice_date,paid_at,document_type");
+    .select("id,status,amount,total_amount,due_date,invoice_date,paid_at,document_type")
+    .neq("status", "voided");
 
   if (error || !invoices) {
     await sendMsg(chatId, "❌ Could not load billing data\\.");
@@ -713,6 +714,7 @@ async function handleGetInvoice(chatId: number, intent: Intent, userId?: number)
   let query = supabase
     .from("invoices")
     .select("id,invoice_no,client_id,to_name,from_firm_name,document_type,status,invoice_date,due_date,paid_at,sent_at,amount,gst_amount,total_amount,tds_amount,subject")
+    .neq("status", "voided")
     .order("invoice_date", { ascending: false });
 
   if (intent.invoice_no) {
@@ -992,6 +994,7 @@ async function handleSendEmail(chatId: number, intent: Intent) {
   const invoiceQuery = supabase
     .from("invoices")
     .select("*")
+    .neq("status", "voided")
     .neq("status", "draft")
     .order("invoice_date", { ascending: false })
     .limit(1);
@@ -1174,6 +1177,7 @@ async function searchInvoices(input: Record<string, any>): Promise<any> {
   let query = supabase
     .from("invoices")
     .select("id,invoice_no,client_id,to_name,document_type,status,invoice_date,due_date,paid_at,amount,gst_amount,total_amount,subject")
+    .neq("status", "voided")
     .order("invoice_date", { ascending: false });
 
   if (input.client_name) {
@@ -1376,7 +1380,8 @@ async function getSummary(input: Record<string, any>): Promise<any> {
 
   let query = supabase
     .from("invoices")
-    .select("id,status,amount,total_amount,due_date,invoice_date,paid_at,document_type");
+    .select("id,status,amount,total_amount,due_date,invoice_date,paid_at,document_type")
+    .neq("status", "voided");
   if (dateFrom) query = query.gte("invoice_date", dateFrom);
   if (dateTo)   query = query.lte("invoice_date", dateTo);
 
@@ -1556,6 +1561,7 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
       const { data: invoices } = await supabase
         .from("invoices")
         .select("invoice_no,invoice_date,to_name,total_amount,gst_amount,amount,status")
+        .neq("status", "voided")
         .neq("status", "draft")
         .gte("invoice_date", fyStart)
         .lte("invoice_date", fyEnd)
@@ -1653,7 +1659,7 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
   // ── 2. Resolve invoice (best-effort — skipped if not found) ───────────────
   let inv: any = null;
   if (includeInvoice) {
-    const invQ = supabase.from("invoices").select("*")
+    const invQ = supabase.from("invoices").select("*").neq("status", "voided")
       .neq("status", "draft").order("invoice_date", { ascending: false }).limit(1);
     const { data: invData } = await (input.invoice_doc_no
       ? invQ.ilike("invoice_no", `%${input.invoice_doc_no}%`)
@@ -1818,6 +1824,7 @@ async function getClientDetails(input: Record<string, any>): Promise<any> {
   const { data: invoices } = await supabase
     .from("invoices")
     .select("id,invoice_no,status,amount,total_amount,invoice_date,due_date,paid_at")
+    .neq("status", "voided")
     .eq("client_id", client.id)
     .order("invoice_date", { ascending: false })
     .limit(5);
