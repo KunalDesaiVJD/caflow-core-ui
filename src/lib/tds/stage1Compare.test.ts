@@ -35,7 +35,7 @@ interface RawRow {
 }
 type Fn = (...args: any[]) => any;
 let mod: {
-  toRec: Fn; makeIsoNormaliser: Fn; pairRecords: Fn; comparePair: Fn;
+  toRec: Fn; makeIsoNormaliser: Fn; pairRecords: Fn; comparePair: Fn; reconMemoryKey: Fn;
   resolveSection: Fn; namesEquivalent: Fn; DEFAULT_SECTION_ALIASES: any[];
   filterImportedRows: Fn; fyStartYear: Fn; normQuarter: Fn;
 };
@@ -60,7 +60,7 @@ const SRC = ${JSON.stringify(SRC)};
 const OUT = ${JSON.stringify(outfile)};
 const RESOLVE_DIR = ${JSON.stringify(dirname(SRC))};
 const source = fs.readFileSync(SRC, "utf8") +
-  "\\nexport { toRec, makeIsoNormaliser, pairRecords, comparePair, resolveSection, namesEquivalent, DEFAULT_SECTION_ALIASES, filterImportedRows, fyStartYear, normQuarter };\\n";
+  "\\nexport { toRec, makeIsoNormaliser, pairRecords, comparePair, resolveSection, namesEquivalent, DEFAULT_SECTION_ALIASES, filterImportedRows, fyStartYear, normQuarter, reconMemoryKey };\\n";
 const stubRemote = {
   name: "stub-remote",
   setup(b) {
@@ -317,5 +317,27 @@ describe("filterImportedRows — a same-PAN client row must never vanish before 
     expect(paired[0].status).toBe("matched");
     expect(officeOnly).toEqual([]);
     expect(importedOnly).toEqual([]);
+  });
+});
+
+describe("Stage 1 — override memory key survives the id churn of a re-import", () => {
+  const rec = (id: string, r: RawRow) => {
+    const x = mod.toRec(id, { name: r.name ?? null, pan: r.pan ?? null, section: r.section ?? null, amount: r.amount ?? null, tds: r.tds ?? null, interest: null, date: r.date ?? null });
+    x.iso = mod.makeIsoNormaliser([r.date ?? null])(r.date) ?? x.iso;
+    return x;
+  };
+  const office: RawRow = { name: "SAVITAR SERVICES PVT LTD", pan: "aaacs1234k", amount: 39600, tds: 792, date: "2026-07-13" };
+  const imported: RawRow = { name: "Savitar Services", pan: "AAACS1234K", amount: "39,600.00" as any, tds: "792" as any, date: "13/07/2026" };
+
+  it("gives the same key to the same record after both sides are re-imported with new ids", () => {
+    const before = mod.reconMemoryKey(rec("o-old", office), rec("i-old", imported));
+    const after = mod.reconMemoryKey(rec("o-new", office), rec("i-new", imported));
+    expect(after).toBe(before);
+    expect(before).toBe("AAACS1234K|2026-07-13|39600|792#AAACS1234K|2026-07-13|39600|792");
+  });
+
+  it("distinguishes a one-sided record from a paired one, and a changed amount", () => {
+    expect(mod.reconMemoryKey(rec("o", office), null)).toBe("AAACS1234K|2026-07-13|39600|792#-");
+    expect(mod.reconMemoryKey(rec("o", { ...office, tds: 800 }), null)).not.toBe(mod.reconMemoryKey(rec("o", office), null));
   });
 });
