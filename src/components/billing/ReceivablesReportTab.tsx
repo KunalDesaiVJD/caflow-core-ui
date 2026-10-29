@@ -336,20 +336,31 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         for (const c of cData || []) clientMap.set(c.id, { name: c.name || "—", email: c.email ?? null });
       }
 
-      // Client groups (for the group-wise view).
-      const { data: gData } = await (supabase as any).from("client_groups")
-        .select("id, name, firm_id")
-        .or(`firm_id.in.(${firmIds.join(",")}),firm_id.is.null`)
-        .order("name");
+      // Client groups (for the group-wise view). Membership belongs to the client, not to the
+      // invoicing firm: a group created under one firm still holds that client's balances with
+      // every other firm. So read memberships by client, then the names of those groups — not
+      // only groups owned by the selected firm(s), which left such clients "Not in any group".
+      // Pages are ordered so a membership list over 1,000 rows is read completely.
+      const members: { client_id: string; group_id: string }[] = [];
+      for (let i = 0; i < ids.length; i += 150) {
+        const chunk = ids.slice(i, i + 150);
+        members.push(...await fetchAllRows<any>(() => (supabase as any).from("client_group_memberships")
+          .select("client_id, group_id").in("client_id", chunk).order("client_id").order("group_id")));
+      }
       const gNames: Record<string, string> = {};
-      for (const g of gData || []) gNames[g.id] = g.name;
-      const gIds = Object.keys(gNames);
-      const members = gIds.length
-        ? await fetchAllRows<any>(() => (supabase as any).from("client_group_memberships")
-            .select("client_id, group_id").in("group_id", gIds))
-        : [];
+      const memberGroupIds = Array.from(new Set(members.map(m => m.group_id)));
+      for (let i = 0; i < memberGroupIds.length; i += 150) {
+        const { data: gData, error: gErr } = await (supabase as any).from("client_groups")
+          .select("id, name").in("id", memberGroupIds.slice(i, i + 150));
+        if (gErr) throw gErr;
+        for (const g of gData || []) gNames[g.id] = g.name;
+      }
       const gOf: Record<string, string[]> = {};
-      for (const m of members) (gOf[m.client_id] ||= []).push(m.group_id);
+      for (const m of members) {
+        if (!gNames[m.group_id]) continue;   // group not visible to this user
+        const list = (gOf[m.client_id] ||= []);
+        if (!list.includes(m.group_id)) list.push(m.group_id);
+      }
       setGroupNames(gNames);
       setGroupsOfClient(gOf);
 
