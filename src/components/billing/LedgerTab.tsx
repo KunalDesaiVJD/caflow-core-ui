@@ -33,7 +33,8 @@ import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/li
 import type { LegalNameChange } from "@/lib/firmName";
 import { ledgerEntryKind, receiptDocNo, kasarDocNo, LEDGER_KIND_LABEL } from "@/lib/ledgerEntryKinds";
 import { drawClientSummaryTable, drawPaymentAdvice, loadFirmBankDetails, type PaymentAdviceRow, startBreakdownPage, stampPageFooters } from "@/lib/multiClientLedgerPdf";
-import { reserveBillingWhatsAppTab, releaseBillingWhatsAppTab, sendBillingWhatsApp } from "@/lib/billingWhatsApp";
+import { sendBillingWhatsApp } from "@/lib/billingWhatsApp";
+import { normalisePhone } from "@/lib/groupContacts";
 
 const fmtINR = (n: number) => "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -213,7 +214,7 @@ async function loadLogoBase64(url: string): Promise<string | null> {
 function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; compliance_flags?: Record<string, any> | null; gstin_states?: Record<string, string> | null; gstin?: string[] | null }[]>([]);
+  const [clients, setClients] = useState<{ id: string; name: string; email?: string | null; mobile?: string | null; compliance_flags?: Record<string, any> | null; gstin_states?: Record<string, string> | null; gstin?: string[] | null }[]>([]);
   const [firms, setFirms] = useState<{ id: string; name: string; logo_url?: string; legal_name_changes?: LegalNameChange[] | null }[]>([]);
   const [clientId, setClientId] = useState("");
   const [firmId, setFirmId] = useState(defaultFirmId ?? "");
@@ -253,7 +254,7 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
   useEffect(() => {
     (async () => {
       const [{ data: c }, { data: f }] = await Promise.all([
-        supabase.from("clients").select("id, name, email, compliance_flags, gstin_states, gstin").eq("is_draft", false).is("deleted_at", null).order("name"),
+        supabase.from("clients").select("id, name, email, mobile, compliance_flags, gstin_states, gstin").eq("is_draft", false).is("deleted_at", null).order("name"),
         supabase.from("firms").select("id, name, logo_url, legal_name_changes").order("name"),
       ]);
       setClients(c || []);
@@ -757,11 +758,12 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
               <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
               <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
               <Button variant="outline" size="sm" className="gap-1" onClick={async () => {
-                const tab = reserveBillingWhatsAppTab();
+                // Recipient: the selected client's registered mobile.
+                const phone = normalisePhone(clients.find(c => c.id === clientId)?.mobile);
+                if (!phone) { toast({ title: "No WhatsApp number saved for this client", description: "Add the client's mobile number in Clients first.", variant: "destructive" }); return; }
                 try {
-                  await sendBillingWhatsApp({ tab, text: `Dear Client,\n\nPlease find your statement of account for FY ${fy}.\n\nRegards`, pdf: await buildClientLedgerPdfBlob() });
+                  await sendBillingWhatsApp({ phone, text: `Dear Client,\n\nPlease find your statement of account for FY ${fy}.\n\nRegards`, pdf: await buildClientLedgerPdfBlob() });
                 } catch (err: any) {
-                  releaseBillingWhatsAppTab(tab);
                   toast({ title: "WhatsApp failed", description: err?.message || "Unknown error", variant: "destructive" });
                 }
               }}>
@@ -1754,12 +1756,15 @@ function FirmRevenueLedgerView() {
             <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
             <Button variant="outline" size="sm" className="gap-1" onClick={() => {
               const fName = firms.find(f => f.id === firmId)?.name || "Firm";
-              const tab = reserveBillingWhatsAppTab();
+              // Firm ledger has no client: ask who it goes to.
+              const raw = prompt("Send the firm revenue ledger to which WhatsApp number? (e.g. 9876543210)");
+              if (!raw) return;
+              const phone = normalisePhone(raw);
+              if (!phone) { toast({ title: "Not a valid WhatsApp number", variant: "destructive" }); return; }
               buildFirmLedgerPdfBlob()
-                .then(blob => sendBillingWhatsApp({ tab, text: `Dear Team,\n\nPlease find the Firm Revenue Ledger for ${fName} — FY ${fy}.\n\nRegards`,
+                .then(blob => sendBillingWhatsApp({ phone, text: `Dear Team,\n\nPlease find the Firm Revenue Ledger for ${fName} — FY ${fy}.\n\nRegards`,
                   pdf: { blob, filename: `FirmRevenue_${fName}_${fromDate}_${toDate}.pdf` } }))
                 .catch((err: any) => {
-                  releaseBillingWhatsAppTab(tab);
                   toast({ title: "WhatsApp failed", description: err?.message || "Unknown error", variant: "destructive" });
                 });
             }}>

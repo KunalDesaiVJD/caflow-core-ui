@@ -37,7 +37,7 @@ import { composeLedgerEntries, type LedgerEntry, type RawInvoice, type RawReceip
 import { buildGroupStatementPdf } from "@/lib/groupStatementPdf";
 import { loadFirmBankDetails, type PaymentAdviceRow } from "@/lib/multiClientLedgerPdf";
 import { renderStatementEmailPreview } from "@/lib/billingEmailPreview";
-import { BILLING_WHATSAPP_DISPLAY, BILLING_WHATSAPP_NUMBER, hasWhatsAppExtension, reserveBillingWhatsAppTab, releaseBillingWhatsAppTab, sendBillingWhatsApp } from "@/lib/billingWhatsApp";
+import { BILLING_WHATSAPP_DISPLAY, hasWhatsAppExtension, sendBillingWhatsApp } from "@/lib/billingWhatsApp";
 import { formatPhone, normalisePhone, savedEmails, savedPhones, type GroupContacts } from "@/lib/groupContacts";
 import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
@@ -203,7 +203,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   // WhatsApp (client or group statement via WhatsApp Web)
   const [waTarget,     setWaTarget]     = useState<DisplayRow | null>(null);
   const [waMsg,        setWaMsg]        = useState("");
-  const [waPhone,      setWaPhone]      = useState("");
+  const [waPhone,      setWaPhone]      = useState("");   // recipient, digits with country code
+  // Registered mobile of each client (WhatsApp recipient), by client id.
+  const [clientMobiles, setClientMobiles] = useState<Record<string, string>>({});
   const [waSending,    setWaSending]    = useState(false);
   // The statement PDF, built when the dialog opens so it can be previewed before sending.
   const [waPdf,        setWaPdf]        = useState<{ blob: Blob; filename: string } | "loading" | "empty" | "error">("loading");
@@ -308,12 +310,18 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       // Fetch only the clients with activity, in chunks (URL length).
       const ids = Array.from(new Set(Array.from(atoms.values()).map(a => a.clientId)));
       const clientMap = new Map<string, { name: string; email: string | null }>();
+      const mobiles: Record<string, string> = {};
       for (let i = 0; i < ids.length; i += 150) {
         const { data: cData, error: cErr } = await supabase
-          .from("clients").select("id, name, email").in("id", ids.slice(i, i + 150));
+          .from("clients").select("id, name, email, mobile").in("id", ids.slice(i, i + 150));
         if (cErr) throw cErr;
-        for (const c of cData || []) clientMap.set(c.id, { name: c.name || "—", email: c.email ?? null });
+        for (const c of cData || []) {
+          clientMap.set(c.id, { name: c.name || "—", email: c.email ?? null });
+          const m = normalisePhone(c.mobile);
+          if (m) mobiles[c.id] = m;
+        }
       }
+      setClientMobiles(mobiles);
 
       // Client groups (for the group-wise view). Membership belongs to the client, not to the
       // invoicing firm: a group created under one firm still holds that client's balances with
@@ -678,12 +686,22 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   // WhatsApp Web cannot take a file through a link, so the PDF is downloaded and
   // the chat opens with the message typed in; the user drops the PDF into it.
 
+  /**
+   * WhatsApp numbers this row may be sent to, from the database: a client's
+   * registered mobile; for a group, its saved numbers (master first), then its
+   * clients' mobiles.
+   */
+  function waRecipients(r: DisplayRow): string[] {
+    if (r.kind === "client") return clientMobiles[r.id] ? [clientMobiles[r.id]] : [];
+    const members = Array.from(new Set(r.atomKeys.map(k => k.split("|")[0])));
+    const list = [...savedPhones(groupContacts[r.id]), ...members.map(id => clientMobiles[id]).filter(Boolean)];
+    return list.filter((p, i) => list.indexOf(p) === i);
+  }
+
   function openWhatsApp(r: DisplayRow) {
     setGExcluded(new Set());
     setWaTarget(r);
-    // A group's saved master phone is used when there is one; otherwise the billing number.
-    const groupPhone = r.kind === "group" ? savedPhones(groupContacts[r.id])[0] : undefined;
-    setWaPhone(formatPhone(groupPhone || BILLING_WHATSAPP_NUMBER));
+    setWaPhone(waRecipients(r)[0] ?? "");
     prepareWhatsApp(r, true);
   }
 
@@ -723,21 +741,15 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   async function handleSendWhatsApp() {
     if (!waTarget || typeof waPdf !== "object") return;
     if (waTarget.kind === "group" && narrowRow(waTarget, gExcluded).clientCount === 0) { toast.error("Tick at least one client"); return; }
-    const phone = normalisePhone(waPhone);
-    if (!phone) { toast.error("Enter a valid WhatsApp number"); return; }
-    // Reserve the tab inside the click (popup blocker); reuses the WhatsApp tab already open.
-    const tab = reserveBillingWhatsAppTab();
+    const phone = waPhone;
+    if (!waRecipients(waTarget).includes(phone)) { toast.error("No WhatsApp number saved for this client"); return; }
     setWaSending(true);
     try {
-      const { attached } = await sendBillingWhatsApp({ tab, text: waMsg, pdf: waPdf, phone });
-      toast.success(attached
-        ? `WhatsApp opened for ${formatPhone(phone)} — the message and ${waPdf.filename} are being added to the chat. Review and press Send.`
-        : `WhatsApp opened for ${formatPhone(phone)}. Attach the downloaded ${waPdf.filename} (drag it in or use 📎), then press Send.`,
-        { duration: 10000 });
+      await sendBillingWhatsApp({ phone, text: waMsg, pdf: waPdf });
+      toast.success(`WhatsApp opened from ${BILLING_WHATSAPP_DISPLAY} to ${formatPhone(phone)} — the message and ${waPdf.filename} are being added to the chat. Review and press Send.`, { duration: 10000 });
       setWaTarget(null);
     } catch (e: any) {
-      releaseBillingWhatsAppTab(tab);
-      toast.error("WhatsApp failed: " + describeDownloadError(e));
+      toast.error("WhatsApp: " + describeDownloadError(e), { duration: 12000 });
     } finally {
       setWaSending(false);
     }
@@ -1221,7 +1233,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
             </button>
           )}
           {(r.kind === "client" || (r.kind === "group" && r.id !== NO_GROUP)) && (
-            <button title={`WhatsApp ${r.kind === "group" ? `the whole ${r.name} group ` : ""}statement of account to ${BILLING_WHATSAPP_DISPLAY}`}
+            <button title={`WhatsApp ${r.kind === "group" ? `the whole ${r.name} group ` : ""}statement of account${waRecipients(r)[0] ? ` to ${formatPhone(waRecipients(r)[0])}` : ""}`}
               className="p-1 rounded text-muted-foreground hover:text-[#25D366] hover:bg-green-50" onClick={() => openWhatsApp(r)}>
               <WhatsAppIcon size={12} />
             </button>
@@ -1642,35 +1654,31 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               <p className="text-xs text-muted-foreground">
                 <span className="font-semibold text-foreground">{waTarget.name}</span>
                 {waTarget.kind === "group" ? ` — ${waTarget.clientCount} client${waTarget.clientCount !== 1 ? "s" : ""}` : ""} · {format(parseISO(fromDate), "d MMM yyyy")} → {format(parseISO(toDate), "d MMM yyyy")}.
-                {hasWhatsAppExtension()
-                  ? "Your open WhatsApp Web tab is reused: the message is typed in and the PDF attached for you to review, then press Send."
-                  : <>WhatsApp Web opens with this message typed in and the PDF downloads — attach it in the chat and press Send. Install the <a href="/caflow-whatsapp-extension.zip" className="text-primary underline">CAFlow WhatsApp extension</a> to reuse your open WhatsApp tab and attach the PDF automatically.</>}
+                {" "}Your open WhatsApp Web tab is reused: the client's chat opens with the message typed in and the PDF attached for you to review, then press Send.
               </p>
               {waTarget.kind === "group" && (
                 <GroupClientPicker clients={clientsOfRow(waTarget)} excluded={gExcluded} onChange={setGExcluded} />
               )}
               <div className="space-y-1">
-                <Label htmlFor="wa-phone" className="text-xs">WhatsApp number</Label>
-                {waTarget.kind === "group" ? (
-                  <>
-                    <Input id="wa-phone" value={waPhone} onChange={e => setWaPhone(e.target.value)} className="h-8 text-xs font-mono" />
-                    <div className="flex flex-wrap gap-1.5 pt-1">
-                      {[...savedPhones(groupContacts[waTarget.id]), BILLING_WHATSAPP_NUMBER]
-                        .filter((p, i, a) => a.indexOf(p) === i)
-                        .map((p, i) => {
-                          const picked = normalisePhone(waPhone) === p;
-                          const label = p === BILLING_WHATSAPP_NUMBER ? `Billing ${formatPhone(p)}` : `${i === 0 ? "★ " : ""}${formatPhone(p)}`;
-                          return (
-                            <button key={p} type="button" onClick={() => setWaPhone(formatPhone(p))}
-                              className={cn("px-2 py-0.5 rounded-full text-[11px] border", picked ? "bg-emerald-600 text-white border-emerald-600" : "bg-muted hover:bg-muted/70")}>
-                              {label}
-                            </button>
-                          );
-                        })}
-                    </div>
-                  </>
+                <Label className="text-xs">From</Label>
+                <div className="h-8 px-3 flex items-center rounded-md border bg-muted text-xs font-mono">{BILLING_WHATSAPP_DISPLAY}</div>
+                <p className="text-[11px] text-muted-foreground">Checked before the chat opens — WhatsApp Web must be logged in with this number.</p>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">To</Label>
+                {waRecipients(waTarget).length === 0 ? (
+                  <p className="text-xs text-destructive">No WhatsApp number saved for {waTarget.kind === "group" ? "this group or its clients" : "this client"} — add the mobile number in Clients first.</p>
+                ) : waTarget.kind === "client" ? (
+                  <div className="h-8 px-3 flex items-center rounded-md border bg-muted text-xs font-mono">{formatPhone(waPhone)} <span className="ml-2 font-sans text-muted-foreground">({waTarget.name})</span></div>
                 ) : (
-                  <div className="h-8 px-3 flex items-center rounded-md border bg-muted text-xs font-mono">{BILLING_WHATSAPP_DISPLAY}</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {waRecipients(waTarget).map((p, i) => (
+                      <button key={p} type="button" onClick={() => setWaPhone(p)}
+                        className={cn("px-2 py-0.5 rounded-full text-[11px] border font-mono", waPhone === p ? "bg-emerald-600 text-white border-emerald-600" : "bg-muted hover:bg-muted/70")}>
+                        {i === 0 && savedPhones(groupContacts[waTarget.id])[0] === p ? "★ " : ""}{formatPhone(p)}
+                      </button>
+                    ))}
+                  </div>
                 )}
                 {waTarget.kind === "group" && (
                   <p className="text-[11px] text-amber-700">The statement lists every client in the group with their balances — send it only to someone entitled to see all of them.</p>
@@ -1699,7 +1707,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           )}
           <DialogFooter>
             <Button variant="outline" size="sm" disabled={waSending} onClick={() => setWaTarget(null)}>Cancel</Button>
-            <Button size="sm" disabled={waSending || typeof waPdf !== "object"} onClick={handleSendWhatsApp} className="gap-1.5 bg-[#25D366] hover:bg-[#1ebe5b] text-white">
+            {!hasWhatsAppExtension() && (
+              <p className="text-[11px] text-amber-700 mr-auto self-center">
+                Install the <a href="/caflow-whatsapp-extension.zip" className="underline">CAFlow WhatsApp extension</a> to send — it checks the sender and attaches the PDF.
+              </p>
+            )}
+            <Button size="sm" disabled={waSending || typeof waPdf !== "object" || !waPhone || !hasWhatsAppExtension()} onClick={handleSendWhatsApp} className="gap-1.5 bg-[#25D366] hover:bg-[#1ebe5b] text-white">
               {waSending ? <Loader2 size={13} className="animate-spin" /> : <WhatsAppIcon size={13} />}
               {waSending ? "Opening…" : "Open WhatsApp"}
             </Button>
