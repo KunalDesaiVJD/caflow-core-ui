@@ -136,6 +136,9 @@ function currentFYStart(): string {
   return `${y}-04-01`;
 }
 
+/** Number every WhatsApp statement opens with; the dialog lets the user change it per send. */
+const WA_DEFAULT_NUMBER = "+91 97271 72515";
+
 /** WhatsApp glyph (lucide has no brand icons). */
 function WhatsAppIcon({ size = 12, className }: { size?: number; className?: string }) {
   return (
@@ -693,12 +696,17 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   function openWhatsApp(r: DisplayRow) {
     const period = `${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`;
     const closing = netClosing(r);
-    const balance = Math.abs(closing) < 0.005 ? "Nil" : `₹${fmtINR(Math.abs(closing))} ${closing > 0 ? "Dr (payable by you)" : "Cr (advance with us)"}`;
+    const drCr = (n: number) => Math.abs(n) < 0.005 ? "Nil" : `₹${fmtINR(Math.abs(n))} ${n > 0 ? "Dr" : "Cr"}`;
+    const balance = Math.abs(closing) < 0.005 ? "Nil" : `${drCr(closing)} ${closing > 0 ? "(payable by you)" : "(advance with us)"}`;
     const firmName = r.firmIds.length === 1 ? firms.find(f => f.id === r.firmIds[0])?.name : undefined;
     setWaTarget(r);
-    setWaPhone(mobilesOf(r)[0] ?? "");
+    setWaPhone(WA_DEFAULT_NUMBER);
     setWaMsg(
       `Dear Sir/Madam,\n\nPlease find attached the statement of account${r.kind === "group" ? ` for ${r.name} group` : ` of ${r.name}`} for the period ${period}.\n\n` +
+      `${r.kind === "group" ? "Group" : "Client"}: ${r.name}\n` +
+      `Opening balance: ${drCr(netOpening(r))}\n` +
+      `Billed in period: ₹${fmtINR(r.debit)}\n` +
+      `Received / credited: ₹${fmtINR(r.credit)}\n` +
       `Closing balance as on ${format(parseISO(toDate), "d MMM yyyy")}: ${balance}\n\n` +
       (closing > 0.005 ? `Kindly arrange payment of the outstanding amount at the earliest. ` : "") +
       `Kindly review and revert if any discrepancies are noticed.\n\nRegards${firmName ? `,\n${firmName}` : ""}`);
@@ -1573,7 +1581,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               <div className="space-y-1">
                 <Label htmlFor="wa-phone" className="text-xs">Mobile number <span className="text-destructive">*</span></Label>
                 <Input id="wa-phone" value={waPhone} onChange={e => setWaPhone(e.target.value)} placeholder="9876543210 or +971 50 123 4567" className="h-8 text-xs" />
-                {mobilesOf(waTarget).length > 1 && (
+                {mobilesOf(waTarget).length > 0 && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     <span className="text-[11px] text-muted-foreground">Client mobiles:</span>
                     {mobilesOf(waTarget).map(m => (
@@ -1584,8 +1592,10 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                     ))}
                   </div>
                 )}
-                {mobilesOf(waTarget).length === 0 && (
-                  <p className="text-[11px] text-muted-foreground">No mobile number saved for {waTarget.kind === "group" ? "this group's clients" : "this client"} — enter one.</p>
+                {waPhone !== WA_DEFAULT_NUMBER && (
+                  <button type="button" onClick={() => setWaPhone(WA_DEFAULT_NUMBER)} className="text-[11px] text-primary hover:underline">
+                    Reset to {WA_DEFAULT_NUMBER}
+                  </button>
                 )}
                 {waTarget.kind === "group" && (
                   <p className="text-[11px] text-amber-700">The statement lists every client in the group with their balances — send it only to someone entitled to see all of them.</p>
