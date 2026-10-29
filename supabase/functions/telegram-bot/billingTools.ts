@@ -87,8 +87,8 @@ export function createBillingTools(sb: any) {
     return Object.fromEntries((data || []).map((f: any) => [f.id, f.name]));
   };
   const findClients = async (name: string) => {
-    const { data } = await sb.from("clients").select("id, name, email, phone").ilike("name", `%${name.trim()}%`).limit(25);
-    return (data || []) as { id: string; name: string; email: string | null; phone: string | null }[];
+    const { data } = await sb.from("clients").select("id, name, email, mobile").ilike("name", `%${name.trim()}%`).is("deleted_at", null).limit(25);
+    return (data || []) as { id: string; name: string; email: string | null; mobile: string | null }[];
   };
   const balancesFor = async (clientIds?: string[]) => {
     const rows: any[] = [];
@@ -179,7 +179,7 @@ export function createBillingTools(sb: any) {
         const mine = bal.filter(b => b.client_id === c.id && Math.abs(b.closing) >= 0.005);
         const r = (lastRcpts || []).find((x: any) => x.client_id === c.id);
         return {
-          client: c.name, email: c.email, phone: c.phone,
+          client: c.name, email: c.email, phone: c.mobile,
           groups: mem.filter(m => m.client_id === c.id).map(m => m.client_groups?.name).filter(Boolean),
           by_firm: mine.map(b => ({ firm: firms[b.firm_id] || "—", closing: b.closing, nature: b.closing > 0 ? "receivable (Dr)" : "advance (Cr)" })),
           total_closing: round2(mine.reduce((s, b) => s + b.closing, 0)),
@@ -306,11 +306,11 @@ export function createBillingTools(sb: any) {
 
   async function getCancelled(input: Record<string, any>) {
     const since = isoDaysAgo(Number(input.days) || 90);
-    const { data, error } = await sb.from("invoices").select("invoice_no, document_type, client_id, to_name, total_amount, invoice_date, voided_reason, voided_at")
+    const { data, error } = await sb.from("invoices").select("invoice_no, document_type, client_id, to_name, total_amount, invoice_date, voided_reason, cancelled_at")
       .eq("status", "voided").gte("invoice_date", since).order("invoice_date", { ascending: false }).limit(Math.min(Number(input.limit) || 20, 100));
     if (error) return { error: error.message };
     const names = await clientNameMap((data || []).map((r: any) => r.client_id));
-    return { since, count: (data || []).length, documents: (data || []).map((r: any) => ({ no: r.invoice_no, type: r.document_type, client: names[r.client_id] || r.to_name, amount: round2(Number(r.total_amount)), date: r.invoice_date, reason: r.voided_reason, cancelled_at: r.voided_at })) };
+    return { since, count: (data || []).length, documents: (data || []).map((r: any) => ({ no: r.invoice_no, type: r.document_type, client: names[r.client_id] || r.to_name, amount: round2(Number(r.total_amount)), date: r.invoice_date, reason: r.voided_reason, cancelled_at: r.cancelled_at })) };
   }
 
   async function run(name: string, input: Record<string, any>): Promise<any | undefined> {

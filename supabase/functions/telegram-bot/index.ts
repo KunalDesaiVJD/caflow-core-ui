@@ -27,6 +27,8 @@ import { callClaudeCliText, isProviderError } from "../_shared/aiProvider.ts";
 import { agentProtocol, chunkMessage, parseAgentAction, parseCommand } from "../_shared/botAgent.ts";
 import { createBillingTools, NEW_BILLING_TOOLS } from "./billingTools.ts";
 import { buildDigest, runCommand } from "./commands.ts";
+import { createReportTools, REPORT_TOOLS } from "./reportTools.ts";
+import { buildReportStatementPdf, defaultPeriod } from "./statementPdf.ts";
 
 // ─── Environment ──────────────────────────────────────────────────────────────
 const BOT_TOKEN           = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
@@ -41,41 +43,62 @@ const FIRM_DISPLAY_NAME   = "V J Desai & Co. LLP";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 const billingTools = createBillingTools(supabase);
+// Billing → Reports through Telegram: statements (PDF / email / text), the report table, totals, groups.
+const reportTools = createReportTools(supabase, {
+  sendPdf: (chatId, bytes, filename, caption) => sendTelegramDocumentBytes(chatId, bytes, filename, caption),
+  notify: (chatId, text) => sendTelegram(chatId, text),
+  supabaseUrl: SUPABASE_URL,
+  serviceKey: SUPABASE_SERVICE_KEY,
+});
 
 // ─── Claude system prompt ─────────────────────────────────────────────────────
-const SYSTEM_PROMPT = `You are CAFlow Billing Agent, an AI assistant for \
-Indian CA firms. You help users query and manage billing data (invoices, \
-ledgers, clients, payments, receipts) via natural language.
+const SYSTEM_PROMPT = `You are CAFlow Billing Agent for V J Desai & Co. LLP (a CA firm) and its \
+associate firms. You answer on Telegram for the firm's own staff.
 
-CAPABILITIES:
-- Search invoices by client name, doc number, date range, status
-- Fetch client ledgers with running balance
-- List all clients or search clients by name/PAN
-- Get outstanding/overdue invoices across all firms (or one client / group / firm)
-- Client balance with each firm, client-group balances with the amount payable per firm
-- Receivables by firm, ageing (0-30/31-60/61-90/90+), receipts incl. TDS
-- Payment-reminder runs, billing email log, cancelled invoices / credit notes
-- Calculate totals, summaries, aging reports
-- Send invoice/ledger PDFs via Telegram (use send_pdf_to_telegram tool)
-- Email invoices/ledgers to clients with PDF attachments
-- Understand context — if user says 'above invoices', 'that client', \
-'same as before', use conversation history
+CONTEXT — read EVERY message as a question about the CAFlow Billing module first: clients, client \
+groups, firms, invoices, credit notes, quotations / proformas, receipts, TDS / GST TDS, kasar, \
+opening balances, outstanding, overdue, ageing, statements of account (ledger / khata), payment \
+advice, reminders, billing emails and the Billing → Reports section. A bare name ("Ramani", \
+"Nirali group") means that client or group; "balance", "dues", "baki", "pending", "khata", \
+"hisab", "account copy", "confirmation" all mean the billing account. Hindi / Gujarati / \
+Hinglish words are fine — answer in English unless the user writes otherwise. Only if a \
+question truly has nothing to do with billing, say briefly that you handle CAFlow billing.
 
-RULES:
-- All firms are treated as ONE unit (no firm filter)
-- Always use tools to fetch real data — never make up information
-- When user asks for PDF, USE the send_pdf_to_telegram tool
-  • If user says "ledger PDF" / "download ledger" without specifying type, ask:
-    "Which ledger would you like?\n1️⃣ Client Ledger\n2️⃣ Group Ledger\n3️⃣ Firm Revenue Ledger\nReply 1, 2, or 3."
-    Then call send_pdf_to_telegram with ledger_type = client/group/firm_revenue accordingly
-- When user asks to EMAIL/MAIL: ALWAYS USE the send_email_with_attachments tool
-  • "mail ledger" / "send khata by email" / "account statement bhejo" → include_invoice=false, include_ledger=true
-  • "mail invoice" / "bill email karo" → include_invoice=true, include_ledger=false
-  • "mail both" / "send everything" → both defaults true
-- Respond in friendly, concise format with emojis
-- Use Markdown formatting for lists and tables
-- If a client name is ambiguous, show top matches and ask user to clarify
-- NEVER say 'I did not understand' — always try to help`;
+WHICH TOOL
+- Statement / ledger / khata / account copy as a PDF → send_statement (client_name or \
+group_name). It is the exact Billing → Reports statement: each client's ledger, then the \
+amount payable to each firm with bank details, never a group total. Use only_clients / \
+exclude_clients when the user names some clients of a group.
+- Email a statement → email_statement: first call without confirm, show the To / CC and the \
+amounts, and send (confirm=true) once the user agrees — or straight away if they already \
+said "send it now". Group statements go to the group's saved master email (To) + additional \
+emails (CC).
+- Statement lines as text ("what entries in Ramani's account", "when did X last pay") → get_statement.
+- Sundry debtors / top debtors / group-wise or firm-wise receivable / advances / nil balances / \
+"report" → get_report (view_by client | group | firm, any period).
+- Billed / collected / TDS / kasar totals, month-wise or firm/client/group-wise → get_billing_totals.
+- Groups, who is in a group, saved group email / phone, clients not in any group → get_groups.
+- One client's balance with each firm → get_client_balance; open / overdue invoices → \
+get_outstanding_invoices; ageing → get_ageing; receipts list → get_receipts; reminders → \
+get_reminder_status; email log → get_email_log; cancelled documents → get_cancelled_documents; \
+firm totals → get_firm_summary; find invoices → search_invoices; client master data → \
+get_client_details; invoice PDF → send_pdf_to_telegram (document_type "invoice"); email an \
+invoice → send_email_with_attachments.
+
+PERIODS: default is the current financial year (1 April) to today. "last year" / "FY 25-26" → \
+financial_year 2025-26; "September" → that month of the current FY; "as on 30 June" → to_date. \
+Indian FY runs 1 April – 31 March.
+
+RULES
+- All firms together unless the user names a firm (firm_name).
+- Always fetch real data with tools — never invent or estimate a figure. Several tool calls \
+are fine; combine them to answer compound questions.
+- Dr / positive = receivable from the client; Cr / negative = advance from the client.
+- If a name matches several clients / groups, list the matches and ask which one.
+- Use conversation history for "same client", "that group", "above", "send it", "email it too".
+- Answer briefly with ₹ amounts in Indian format (₹1,23,456.00); use short lists, not long tables.
+- Never say "I did not understand" — make your best billing interpretation, and ask one short \
+question only when you really cannot tell what is wanted.`;
 
 // ─── Claude tool definitions (function calling) ───────────────────────────────
 const BILLING_TOOLS = [
@@ -93,19 +116,6 @@ const BILLING_TOOLS = [
         limit:       { type: "number", description: "Max results (default 20)" },
       },
       required: [],
-    },
-  },
-  {
-    name: "get_ledger",
-    description: "Get client ledger with all entries and running balance.",
-    input_schema: {
-      type: "object",
-      properties: {
-        client_name: { type: "string", description: "Client name (partial match ok)" },
-        date_from:   { type: "string", description: "Start date YYYY-MM-DD (optional)" },
-        date_to:     { type: "string", description: "End date YYYY-MM-DD (optional)" },
-      },
-      required: ["client_name"],
     },
   },
   {
@@ -151,12 +161,7 @@ const BILLING_TOOLS = [
   },
   {
     name: "send_pdf_to_telegram",
-    description: `Generate and send PDF files directly to the Telegram chat. Use when user asks for PDF.
-For ledger PDFs, ledger_type specifies which ledger to generate:
-  - "client"       → client account statement (requires client_name)
-  - "group"        → group/consolidated ledger across clients in a group (requires group_name or client_name)
-  - "firm_revenue" → firm-wide income/revenue summary for the FY
-If user says "download ledger" / "ledger PDF" without specifying type, ask: "Which ledger type?\\n1. Client Ledger\\n2. Group Ledger\\n3. Firm Revenue Ledger\\nReply 1, 2, or 3."`,
+    description: `Send INVOICE PDFs to this chat (document_type "invoice"; by invoice_ids, doc_no or client_name). For a client's or group's statement of account / ledger use send_statement instead.`,
     input_schema: {
       type: "object",
       properties: {
@@ -174,7 +179,7 @@ If user says "download ledger" / "ledger PDF" without specifying type, ask: "Whi
   },
   {
     name: "send_email_with_attachments",
-    description: `Send email to client with invoice PDF and/or ledger (account statement) PDF attached.
+    description: `Email an INVOICE PDF to the client (optionally with the client's Billing → Reports statement of account attached too). For a statement alone, or any group statement, use email_statement.
 USAGE RULES:
 - User says "mail ledger / send ledger / email khata / account statement bhejo" → set include_invoice=false, include_ledger=true
 - User says "mail invoice / send invoice / email bill" → set include_invoice=true, include_ledger=false
@@ -204,6 +209,7 @@ USAGE RULES:
     },
   },
   ...NEW_BILLING_TOOLS,
+  ...REPORT_TOOLS,
 ];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -394,7 +400,7 @@ Deno.serve(async (req: Request) => {
   // Slash commands answer instantly from the database — no AI needed.
   if (command) {
     try {
-      const reply = await runCommand(command.cmd, command.arg, billingTools);
+      const reply = await runCommand(command.cmd, command.arg, billingTools, { report: reportTools, chatId });
       if (reply !== null) {
         for (const part of chunkMessage(reply)) await sendTelegram(chatId, part);
         return new Response("ok");
@@ -926,101 +932,6 @@ async function handleGetInvoice(chatId: number, intent: Intent, userId?: number)
   }
 }
 
-// ─── /ledger <client> ─────────────────────────────────────────────────────────
-async function handleGetLedger(chatId: number, intent: Intent) {
-  if (!intent.client_name) {
-    await sendTelegram(chatId,
-      "❌ Please specify a client name.\nExample: `/ledger Gujarat Water`\nOr: \"ledger statement for NIRALI\""
-    );
-    return;
-  }
-
-  // No firm filter — all firms treated as one unit
-  const { data: clients } = await supabase
-    .from("clients")
-    .select("id,name,email")
-    .ilike("name", `%${intent.client_name}%`)
-    .eq("is_draft", false)
-    .is("deleted_at", null)
-    .limit(3);
-
-  if (!clients?.length) {
-    await sendTelegram(chatId, `❌ Client '${intent.client_name}' not found.`);
-    return;
-  }
-
-  const client     = clients[0];
-  const clientName = client.name ?? "Unknown";
-
-  let ledgerQuery = supabase
-    .from("client_ledger_entries")
-    .select("*")
-    .eq("client_id", client.id)
-    .order("entry_date", { ascending: true });
-
-  if (intent.financial_year) {
-    ledgerQuery = ledgerQuery.eq("financial_year", intent.financial_year);
-  }
-
-  const { data: entries } = await ledgerQuery;
-
-  if (!entries?.length) {
-    await sendTelegram(chatId, `📒 No ledger entries for '${clientName}'.` +
-      (intent.financial_year ? ` (FY ${intent.financial_year})` : ""));
-    return;
-  }
-
-  // Running balance (debit increases, credit decreases balance)
-  let runningBalance = 0;
-  const shownEntries = entries.slice(-15); // last 15 entries
-  const totalDebit   = entries.reduce((s, e) => s + (e.debit_amount ?? 0), 0);
-  const totalCredit  = entries.reduce((s, e) => s + (e.credit_amount ?? 0), 0);
-  // Use stored balance from last entry if available, else compute
-  const closingBal = entries[entries.length - 1].balance
-    ?? entries.reduce((s, e) => s + (e.debit_amount ?? 0) - (e.credit_amount ?? 0), 0);
-
-  let msg =
-    `📒 *Ledger: ${escMd(clientName)}*\n` +
-    (intent.financial_year ? `_FY ${escMd(intent.financial_year)}_\n` : "") +
-    `_Showing last ${shownEntries.length} of ${entries.length} entries_\n\n`;
-
-  shownEntries.forEach(e => {
-    const debit  = e.debit_amount ?? 0;
-    const credit = e.credit_amount ?? 0;
-    runningBalance += debit - credit;
-    msg += `${escMd(fmtDate(e.entry_date))} | ${escMd(trunc(e.narration ?? e.entry_type ?? "-", 35))} | `;
-    msg += `Dr: ₹${escMd(fmtNum(debit))} | Cr: ₹${escMd(fmtNum(credit))}\n`;
-  });
-
-  msg +=
-    `\n*Running Balance: ₹${escMd(fmtNum(closingBal))}*\n` +
-    `_Showing last ${Math.min(15, entries.length)} of ${entries.length}_`;
-
-  if (clients.length > 1) {
-    msg += `\n\n_Note: Found ${clients.length} clients matching "${escMd(intent.client_name ?? "")}" — showing first result_`;
-  }
-
-  await sendMsg(chatId, msg);
-
-  // ── Also deliver the full ledger as a PDF file ───────────────────────────────
-  try {
-    await sendTelegram(chatId, "⏳ Generating ledger PDF…");
-    const now    = new Date();
-    const fyYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-    const fyLabel = intent.financial_year ?? `${fyYear}-${String(fyYear + 1).slice(2)}`;
-    const firmName = FIRM_DISPLAY_NAME;
-    const pdfBytes = await generateLedgerPdf(clientName, firmName, entries, fyLabel);
-    const safeClient = clientName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
-    const caption = `📒 Account Statement: ${clientName}\nFY ${fyLabel} | ${entries.length} transactions`;
-    await sendTelegramDocumentBytes(chatId, pdfBytes, `Ledger_${safeClient}_FY${fyLabel}.pdf`, caption);
-  } catch (pdfErr: unknown) {
-    const msg2 = pdfErr instanceof Error ? pdfErr.message : String(pdfErr);
-    console.error("[Bot] Ledger PDF delivery error:", msg2);
-    // Text was already sent — PDF failure is non-fatal
-    await sendTelegram(chatId, `⚠️ Could not generate PDF: ${msg2.slice(0, 100)}`);
-  }
-}
-
 // ─── /receipts ────────────────────────────────────────────────────────────────
 async function handleReceipts(chatId: number, limit: number) {
   const { data: receipts, error } = await supabase
@@ -1053,195 +964,6 @@ async function handleReceipts(chatId: number, limit: number) {
   await sendMsg(chatId, msg);
 }
 
-// ─── send email ───────────────────────────────────────────────────────────────
-async function handleSendEmail(chatId: number, intent: Intent) {
-  if (!intent.invoice_no && !intent.client_name) {
-    await sendTelegram(chatId,
-      "❌ Please specify an invoice number.\nExample: \"send invoice 29/2026-27 to email\""
-    );
-    return;
-  }
-
-  // ── Find client ─────────────────────────────────────────────────────────────
-  let clientName = "Client";
-  let clientId: string | null = null;
-  let recipientEmail: string | null = intent.email_to ?? null;
-  // Guard: if email_to looks like an email address use it; if it's a role token ignore it
-  if (recipientEmail && !recipientEmail.includes("@")) recipientEmail = null;
-
-  if (intent.client_name) {
-    const { data: clients } = await supabase
-      .from("clients")
-      .select("id,name,email")
-      .ilike("name", `%${intent.client_name}%`)
-      .limit(1);
-
-    if (!clients?.length || !clients[0].email) {
-      await sendTelegram(chatId, `❌ Client not found or no email on file.`);
-      return;
-    }
-    clientId       = clients[0].id;
-    clientName     = clients[0].name ?? "Client";
-    recipientEmail = recipientEmail ?? clients[0].email;
-  }
-
-  // ── Find invoice ─────────────────────────────────────────────────────────────
-  const invoiceQuery = supabase
-    .from("invoices")
-    .select("*")
-    .not("status", "in", "(draft,voided)")
-    .order("invoice_date", { ascending: false })
-    .limit(1);
-
-  const { data: invoice, error: invErr } = await (
-    intent.invoice_no
-      ? invoiceQuery.ilike("invoice_no", `%${intent.invoice_no}%`)
-      : invoiceQuery.ilike("to_name", `%${intent.client_name}%`)
-  ).maybeSingle();
-
-  if (invErr || !invoice) {
-    await sendTelegram(chatId, `❌ Invoice not found or is a draft.`);
-    return;
-  }
-
-  // Resolve email + name from invoice's client if not yet set
-  if ((!recipientEmail || !clientId) && invoice.client_id) {
-    const { data: cl } = await supabase
-      .from("clients").select("id,name,email").eq("id", invoice.client_id).maybeSingle();
-    if (cl) {
-      if (!clientId)       clientId       = cl.id;
-      if (!clientName || clientName === "Client") clientName = cl.name ?? invoice.to_name ?? "Client";
-      if (!recipientEmail) recipientEmail = cl.email;
-    }
-  }
-  if (!recipientEmail) {
-    await sendTelegram(chatId,
-      `❌ No email address on file for this client.\n` +
-      `Please specify: "send invoice ${intent.invoice_no} to client@email.com"`
-    );
-    return;
-  }
-
-  const firmName = invoice.from_firm_name ?? FIRM_DISPLAY_NAME;
-  const subject  = `Invoice ${invoice.invoice_no} & Account Statement — ${firmName}`;
-
-  await sendTelegram(chatId, `⏳ Generating PDFs & sending to ${recipientEmail}… please wait.`);
-
-  try {
-    // ── Current financial year ───────────────────────────────────────────────
-    const now     = new Date();
-    const fyYear  = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
-    const fyStart = `${fyYear}-04-01`;
-    const fyEnd   = `${fyYear + 1}-03-31`;
-    const fyLabel = `${fyYear}-${String(fyYear + 1).slice(2)}`;
-
-    // ── Fetch ledger entries for current FY ──────────────────────────────────
-    let ledgerEntries: any[] = [];
-    if (clientId) {
-      const { data: le } = await supabase
-        .from("client_ledger_entries")
-        .select("*")
-        .eq("client_id", clientId)
-        .gte("entry_date", fyStart)
-        .lte("entry_date", fyEnd)
-        .order("entry_date");
-      ledgerEntries = le ?? [];
-    }
-
-    // ── Fetch firm details for enriched invoice PDF ─────────────────────────
-    const invFirmData = await fetchFirmForInvoice(invoice);
-
-    // ── Generate PDFs in parallel ────────────────────────────────────────────
-    const [invPdfBytes, ledgerPdfBytes] = await Promise.all([
-      generateInvoicePdf(invoice, firmName, clientName, invFirmData ?? undefined),
-      generateLedgerPdf(clientName, firmName, ledgerEntries, fyLabel),
-    ]);
-    const invB64    = uint8ToBase64(invPdfBytes);
-    const ledgerB64 = uint8ToBase64(ledgerPdfBytes);
-
-    const safeInvNo  = (invoice.invoice_no ?? "invoice").replace(/\//g, "-");
-    const safeClient = clientName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
-
-    const attachments = [
-      { filename: `Invoice_${safeInvNo}.pdf`,              content: invB64    },
-      { filename: `Ledger_${safeClient}_FY${fyLabel}.pdf`, content: ledgerB64 },
-    ];
-
-    // ── Build email HTML ─────────────────────────────────────────────────────
-    const emailHtml = buildInvoiceEmailHtml({
-      firmName,
-      clientName,
-      invoiceNo:   invoice.invoice_no ?? "",
-      amount:      fmtNum(invoice.total_amount ?? invoice.amount ?? 0),
-      dueDate:     fmtDate(invoice.due_date),
-      invoiceDate: fmtDate(invoice.invoice_date),
-      status:      invoice.status ?? "finalized",
-      hasLedger:   ledgerEntries.length > 0,
-      fyLabel,
-    });
-
-    // ── Send via Resend (primary) or Graph (fallback) ────────────────────────
-    const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
-    if (RESEND_API_KEY) {
-      const resendRes = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          from:        `${firmName} <accounts@vjdesai.com>`,
-          to:          recipientEmail,
-          subject,
-          html:        emailHtml,
-          attachments,            // Resend: [{ filename, content: base64 }]
-        }),
-      });
-      if (!resendRes.ok) {
-        const errText = await resendRes.text();
-        throw new Error(`Resend API failed (${resendRes.status}): ${errText.slice(0, 200)}`);
-      }
-    } else {
-      // Graph API: attachments use contentBytes field
-      const graphAttachments = attachments.map(a => ({
-        "@odata.type": "#microsoft.graph.fileAttachment" as const,
-        name:          a.filename,
-        contentType:   "application/pdf",
-        contentBytes:  a.content,
-      }));
-      await sendEmailViaGraph(recipientEmail, subject, emailHtml, graphAttachments);
-    }
-
-    // ── Update invoice status ────────────────────────────────────────────────
-    if (invoice.status === "finalized") {
-      await supabase.from("invoices")
-        .update({ status: "sent", sent_at: new Date().toISOString() })
-        .eq("id", invoice.id);
-    }
-
-    // ── Log notification ─────────────────────────────────────────────────────
-    await supabase.from("notification_log").insert({
-      recipient_id: invoice.client_id,
-      channel:      "email",
-      type:         "invoice_generated",
-      status:       "sent",
-      sent_at:      new Date().toISOString(),
-      content: {
-        subject, to: recipientEmail, invoice_id: invoice.id,
-        source: "telegram_bot",
-        attachments: attachments.map(a => a.filename),
-      },
-    });
-
-    await sendTelegram(chatId,
-      `✅ Email sent to ${clientName} (${recipientEmail})\n` +
-      `📄 Invoice: ${invoice.invoice_no} | Rs.${fmtNum(invoice.total_amount ?? invoice.amount ?? 0)}\n` +
-      `📎 2 attachments: Invoice PDF + Ledger FY ${fyLabel}`
-    );
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[Bot] Email send error:", msg);
-    await sendTelegram(chatId, `❌ Email failed. Check logs.\n${msg.slice(0, 120)}`);
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // TOOL EXECUTOR — thin dispatcher → named implementation functions
 // All functions return structured JSON; no Telegram messages sent (except
@@ -1258,9 +980,21 @@ async function executeTool(
   // invoices and part payments (amount_due).
   const fromBillingTools = await billingTools.run(name, input);
   if (fromBillingTools !== undefined) return fromBillingTools;
+  // Billing → Reports: every statement is the Report tab's statement of account.
+  const fromReport = await reportTools.run(name, input, chatId);
+  if (fromReport !== undefined) return fromReport;
+  // Older tool names (still in conversation history) go to the Report statement too.
+  if (name === "get_ledger") return await reportTools.getStatement({ client_name: input.client_name, from_date: input.date_from, to_date: input.date_to });
+  if (name === "send_pdf_to_telegram" && input.document_type === "ledger" && input.ledger_type !== "firm_revenue") {
+    return await reportTools.sendStatement(chatId, input.ledger_type === "group"
+      ? { group_name: input.group_name ?? input.client_name, financial_year: input.financial_year }
+      : { client_name: input.client_name, financial_year: input.financial_year });
+  }
+  if (name === "send_email_with_attachments" && input.include_invoice === false) {
+    return await reportTools.emailStatement(chatId, { client_name: input.client_name, email_to: input.email_to, confirm: true });
+  }
   switch (name) {
     case "search_invoices":           return await searchInvoices(input);
-    case "get_ledger":                return await getLedger(input);
     case "list_clients":              return await listClients(input);
     case "get_outstanding_invoices":  return await getOutstanding(input);
     case "get_billing_summary":       return await getSummary(input);
@@ -1375,7 +1109,7 @@ async function getLedger(input: Record<string, any>): Promise<any> {
 // ─── listClients ──────────────────────────────────────────────────────────────
 async function listClients(input: Record<string, any>): Promise<any> {
   let query = supabase
-    .from("clients").select("id,name,email,pan,gstin,phone")
+    .from("clients").select("id,name,email,pan,gstin,mobile")
     .eq("is_draft", false).is("deleted_at", null)
     .order("name", { ascending: true });
 
@@ -1388,7 +1122,7 @@ async function listClients(input: Record<string, any>): Promise<any> {
   return {
     count:   data?.length ?? 0,
     clients: (data ?? []).map(c => ({
-      id: c.id, name: c.name, email: c.email, pan: c.pan, gstin: c.gstin, phone: c.phone,
+      id: c.id, name: c.name, email: c.email, pan: c.pan, gstin: c.gstin, phone: c.mobile,
     })),
   };
 }
@@ -1578,80 +1312,11 @@ async function sendPdfToTelegram(chatId: number, input: Record<string, any>): Pr
     const fyEnd    = `${fyYear + 1}-03-31`;
     const ledgerType = input.ledger_type ?? "client";
 
-    // ── CLIENT LEDGER ──────────────────────────────────────────────────────
-    if (ledgerType === "client") {
-      if (!input.client_name) return { error: "client_name is required for client ledger PDF" };
-
-      // Find client
-      const { data: clients } = await supabase.from("clients")
-        .select("id,name").ilike("name", `%${input.client_name}%`)
-        .eq("is_draft", false).is("deleted_at", null).limit(1);
-      if (!clients?.length)
-        return { error: `Client '${input.client_name}' not found.` };
-
-      const client = clients[0];
-      // Fetch ALL ledger entries for the FY (not capped at 15)
-      const { data: allEntries } = await supabase
-        .from("client_ledger_entries")
-        .select("*")
-        .eq("client_id", client.id)
-        .gte("entry_date", fyStart)
-        .lte("entry_date", fyEnd)
-        .order("entry_date", { ascending: true });
-
-      const entries = allEntries ?? [];
-      const safeClient = client.name.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
-
-      let closing = 0;
-      for (const e of entries) closing += (Number(e.debit_amount) || 0) - (Number(e.credit_amount) || 0);
-      const caption = `📒 Client Ledger: ${client.name}\nFY ${fyLabel} | ${entries.length} entries | Balance: Rs.${fmtNum(Math.abs(closing))} ${closing >= 0 ? "Dr" : "Cr"}`;
-
-      await sendTelegram(chatId, `⏳ Generating client ledger PDF for ${client.name} (FY ${fyLabel}, ${entries.length} entries)…`);
-      const pdfBytes = await generateLedgerPdf(client.name, FIRM_DISPLAY_NAME, entries, fyLabel);
-      await deliverPdf(pdfBytes, `ClientLedger_${safeClient}_FY${fyLabel}.pdf`, caption);
-      return { ok: true, ledger_type: "client", client_name: client.name, fy_label: fyLabel, entry_count: entries.length };
-    }
-
-    // ── GROUP LEDGER ───────────────────────────────────────────────────────
-    if (ledgerType === "group") {
-      const groupName = input.group_name ?? input.client_name ?? null;
-      if (!groupName) return { error: "group_name is required for group ledger PDF" };
-
-      // Find all clients matching the group name (by client_group table or name pattern)
-      const { data: groupRows } = await supabase
-        .from("client_groups").select("id,name,client_ids")
-        .ilike("name", `%${groupName}%`).limit(1);
-
-      let clientIds: string[] = [];
-      let resolvedGroupName = groupName;
-      if (groupRows?.length) {
-        resolvedGroupName = groupRows[0].name;
-        clientIds = Array.isArray(groupRows[0].client_ids) ? groupRows[0].client_ids : [];
-      }
-      // Fallback: find clients whose name matches
-      if (!clientIds.length) {
-        const { data: matchedClients } = await supabase.from("clients")
-          .select("id,name").ilike("name", `%${groupName}%`)
-          .eq("is_draft", false).is("deleted_at", null).limit(10);
-        clientIds = (matchedClients ?? []).map((c: any) => c.id);
-      }
-      if (!clientIds.length) return { error: `No clients found for group '${groupName}'.` };
-
-      const { data: allEntries } = await supabase
-        .from("client_ledger_entries")
-        .select("*")
-        .in("client_id", clientIds)
-        .gte("entry_date", fyStart)
-        .lte("entry_date", fyEnd)
-        .order("entry_date", { ascending: true });
-
-      const entries = allEntries ?? [];
-      await sendTelegram(chatId, `⏳ Generating group ledger PDF for ${resolvedGroupName} (${clientIds.length} clients, ${entries.length} entries, FY ${fyLabel})…`);
-      const pdfBytes = await generateLedgerPdf(resolvedGroupName, FIRM_DISPLAY_NAME, entries, fyLabel);
-      const safeGrp  = resolvedGroupName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
-      const caption  = `📒 Group Ledger: ${resolvedGroupName}\nFY ${fyLabel} | ${clientIds.length} clients | ${entries.length} entries`;
-      await deliverPdf(pdfBytes, `GroupLedger_${safeGrp}_FY${fyLabel}.pdf`, caption);
-      return { ok: true, ledger_type: "group", group_name: resolvedGroupName, fy_label: fyLabel, entry_count: entries.length };
+    // Client and group statements are the Billing → Reports statement of account.
+    if (ledgerType === "client" || ledgerType === "group") {
+      return await reportTools.sendStatement(chatId, ledgerType === "group"
+        ? { group_name: input.group_name ?? input.client_name, financial_year: input.financial_year }
+        : { client_name: input.client_name, financial_year: input.financial_year });
     }
 
     // ── FIRM REVENUE LEDGER ─────────────────────────────────────────────────
@@ -1774,14 +1439,13 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
   const fyLabel = `${fyYear}-${String(fyYear + 1).slice(2)}`;
   const firmName = inv?.from_firm_name ?? FIRM_DISPLAY_NAME;
 
-  // ── 3. Fetch ALL ledger entries (complete account statement) ───────────────
-  let ledgerEntries: any[] = [];
+  // ── 3. Statement of account — the Billing → Reports statement, current FY to date ─
+  let statement: Awaited<ReturnType<typeof buildReportStatementPdf>> = null;
   if (includeLedger) {
-    const { data: le } = await supabase.from("client_ledger_entries").select("*")
-      .eq("client_id", clientId)
-      .order("entry_date", { ascending: true });
-    ledgerEntries = le ?? [];
+    const p = defaultPeriod(new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }));
+    statement = await buildReportStatementPdf(supabase, { kind: "client", name: clientName, clientIds: [clientId], fromDate: p.from, toDate: p.to });
   }
+  const ledgerEntries: any[] = statement ? [statement] : [];
 
   // ── 4. Build attachments conditionally ────────────────────────────────────
   const attachments: { filename: string; content: string }[] = [];
@@ -1792,22 +1456,12 @@ async function sendEmailWithAttachments(chatId: number, input: Record<string, an
     const safeInvNo = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
     attachments.push({ filename: `Invoice_${safeInvNo}.pdf`, content: uint8ToBase64(pdfBytes) });
   }
-  if (includeLedger && ledgerEntries.length > 0) {
-    const pdfBytes   = await generateLedgerPdf(clientName, firmName, ledgerEntries, fyLabel);
-    const safeClient = clientName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
-    attachments.push({ filename: `Ledger_${safeClient}.pdf`, content: uint8ToBase64(pdfBytes) });
+  if (statement) {
+    attachments.push({ filename: statement.filename, content: uint8ToBase64(statement.bytes) });
   }
 
-  // If no invoice attached but ledger was requested and has no entries, still
-  // generate a blank ledger PDF so the user gets something actionable.
-  if (!attachments.length && includeLedger) {
-    const pdfBytes   = await generateLedgerPdf(clientName, firmName, [], fyLabel);
-    const safeClient = clientName.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 30);
-    attachments.push({ filename: `Ledger_${safeClient}_FY${fyLabel}.pdf`, content: uint8ToBase64(pdfBytes) });
-    await sendTelegram(chatId, `ℹ️ No ledger entries found for ${clientName} — sending blank statement.`);
-  }
   if (!attachments.length)
-    return { error: "Nothing to send — no invoice found and ledger is empty. Please check the client name or create entries in the portal." };
+    return { error: "Nothing to send — no invoice found, and the statement of account has no balance or entries this financial year." };
 
   // ── 5. Build email ─────────────────────────────────────────────────────────
   const subject = inv
@@ -1909,7 +1563,7 @@ async function getClientDetails(input: Record<string, any>): Promise<any> {
 
   const { data: clients } = await supabase
     .from("clients")
-    .select("id,name,email,phone,pan,gstin,address,city,state,pincode,contact_person,notes,created_at")
+    .select("*")   // only existing columns — a missing one makes PostgREST return nothing
     .ilike("name", `%${input.client_name}%`)
     .eq("is_draft", false).is("deleted_at", null).limit(3);
 
@@ -1936,7 +1590,7 @@ async function getClientDetails(input: Record<string, any>): Promise<any> {
     id:             client.id,
     name:           client.name,
     email:          client.email,
-    phone:          client.phone,
+    phone:          client.mobile ?? client.phone ?? null,
     pan:            client.pan,
     gstin:          client.gstin,
     address:        [client.address, client.city, client.state, client.pincode].filter(Boolean).join(", "),
@@ -2183,84 +1837,6 @@ function intentFallback(_text: string): Intent {
 
 // ─── send_pdf ─────────────────────────────────────────────────────────────────
 // Generates invoice PDFs and sends them as Telegram documents (file attachments)
-async function handleSendPdf(chatId: number, intent: Intent, ctx: TgContext | null) {
-  // Resolve invoice list: from explicit IDs (context), client name, or invoice_no
-  let invoices: any[] = [];
-
-  const idsToFetch: string[] = intent.invoice_ids?.length
-    ? intent.invoice_ids
-    : ctx?.last_invoice_ids ?? [];
-
-  if (idsToFetch.length > 0) {
-    const { data } = await supabase
-      .from("invoices").select("*").in("id", idsToFetch);
-    invoices = data ?? [];
-  } else if (intent.client_name) {
-    const { data: clients } = await supabase
-      .from("clients").select("id,name").ilike("name", `%${intent.client_name}%`).limit(5);
-    if (clients?.length) {
-      const { data } = await supabase
-        .from("invoices").select("*")
-        .in("client_id", clients.map(c => c.id))
-        .not("status", "in", "(draft,voided)")
-        .order("invoice_date", { ascending: false }).limit(5);
-      invoices = data ?? [];
-    }
-  } else if (intent.invoice_no) {
-    const { data } = await supabase
-      .from("invoices").select("*")
-      .ilike("invoice_no", `%${intent.invoice_no}%`)
-      .limit(3);
-    invoices = data ?? [];
-  }
-
-  if (!invoices.length) {
-    await sendTelegram(chatId,
-      "❌ No invoices found to send as PDF.\n" +
-      "Try: \"Send PDF of invoice 29/2026-27\" or \"Show invoices for [client]\" first."
-    );
-    return;
-  }
-
-  await sendTelegram(chatId, `⏳ Generating ${invoices.length} PDF${invoices.length > 1 ? "s" : ""}…`);
-
-  let sentCount = 0;
-  for (const inv of invoices) {
-    try {
-      // Resolve client name
-      let clientName = inv.to_name ?? "Client";
-      if (inv.client_id) {
-        const { data: cl } = await supabase
-          .from("clients").select("name").eq("id", inv.client_id).maybeSingle();
-        if (cl?.name) clientName = cl.name;
-      }
-
-      const firmName   = inv.from_firm_name ?? FIRM_DISPLAY_NAME;
-      const invFirmDat = await fetchFirmForInvoice(inv);
-
-      // Generate PDF bytes directly — no Storage upload needed
-      const pdfBytes = await generateInvoicePdf(inv, firmName, clientName, invFirmDat ?? undefined);
-
-      const safeInvNo = (inv.invoice_no ?? "invoice").replace(/\//g, "-");
-      const caption   =
-        `📄 Invoice ${inv.invoice_no ?? "—"} | ${clientName}\n` +
-        `Rs.${fmtNum(inv.total_amount ?? inv.amount ?? 0)} | ${fmtDate(inv.invoice_date)}`;
-
-      // Send raw bytes via multipart/form-data — works without any public bucket
-      await sendTelegramDocumentBytes(chatId, pdfBytes, `Invoice_${safeInvNo}.pdf`, caption);
-      sentCount++;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error("[Bot] PDF send error:", msg);
-      await sendTelegram(chatId, `⚠️ Failed for invoice ${inv.invoice_no}: ${msg.slice(0, 80)}`);
-    }
-  }
-
-  if (sentCount > 0) {
-    await sendTelegram(chatId, `✅ Sent ${sentCount} PDF${sentCount > 1 ? "s" : ""} to your chat.`);
-  }
-}
-
 // ─── sendTelegramDocumentBytes — sends PDF via multipart (no Storage needed) ──
 // Uses raw bytes + FormData so Telegram receives the file directly.
 // This works regardless of whether any Supabase Storage bucket exists or is public.
@@ -2307,7 +1883,7 @@ async function fetchFirmForInvoice(invoice: any): Promise<any> {
   const firmId = invoice?.firm_id ?? null;
   if (!firmId) return null;
   const { data } = await supabase.from("firms")
-    .select("id,name,gstin,pan,address,city,state,pincode,phone,email,registration_no")
+    .select("*")   // firms has no city / registration_no columns; "*" keeps the lookup working
     .eq("id", firmId).maybeSingle();
   return data ?? null;
 }

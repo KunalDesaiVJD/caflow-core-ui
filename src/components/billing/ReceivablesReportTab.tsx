@@ -8,6 +8,7 @@
  *  3. Ledger sheet shows OB as first row, matching the Ledger tab
  */
 import { downloadBlob } from "@/lib/downloadBlob";
+import { accumulateBalances, BILLABLE_STATUSES, emptyBalances, netClosing, netOpening, type Balances } from "../../../supabase/functions/_shared/statement/report";
 import { GroupClientPicker, type PickableClient } from "@/components/billing/GroupClientPicker";
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
@@ -43,7 +44,6 @@ import {
 } from "@/lib/jspdfUnicodeFont";
 
 /** Invoice statuses that count as receivable (matches v_billing_reconciliation). */
-const BILLABLE_STATUSES = ["finalized", "sent", "overdue", "paid"];
 
 // Fetch ALL rows for a query, paging past PostgREST's 1000-row default cap.
 // Used wherever a result set feeds a SUM, so totals never silently truncate.
@@ -73,13 +73,6 @@ function describeDownloadError(e: any): string {
 
 interface Firm { id: string; name: string; logo_url?: string | null; }
 
-interface Balances {
-  ob: number;          // manual opening balance from client_billing_opening_balances
-  openingDr: number;   // invoices before period
-  openingCr: number;   // receipts before period
-  debit: number;       // invoices in period
-  credit: number;      // receipts in period
-}
 
 /** One client's balances in ONE firm — the atom every view aggregates. */
 interface ClientRow extends Balances {
@@ -114,7 +107,6 @@ const CLIENT_EMAIL_TYPES = [
 
 const ALL_FIRMS = "__all__";
 const NO_GROUP = "__none__";
-const emptyBalances = (): Balances => ({ ob: 0, openingDr: 0, openingCr: 0, debit: 0, credit: 0 });
 function addBalances(into: Balances, b: Balances) {
   into.ob += b.ob; into.openingDr += b.openingDr; into.openingCr += b.openingCr;
   into.debit += b.debit; into.credit += b.credit;
@@ -310,49 +302,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
             .in("firm_id", firmIds)),
       ]);
 
-      // One atom per (client, firm) with any activity.
-      const atoms = new Map<string, Balances & { clientId: string; firmId: string }>();
-      const atom = (clientId: string, firmId: string) => {
-        const k = `${clientId}|${firmId}`;
-        let a = atoms.get(k);
-        if (!a) { a = { clientId, firmId, ...emptyBalances() }; atoms.set(k, a); }
-        return a;
-      };
-
-      for (const ob of obRows || []) {
-        if (!ob.client_id) continue;
-        atom(ob.client_id, ob.firm_id).ob += Number(ob.amount || 0);
-      }
-      for (const inv of invoices || []) {
-        if (!inv.client_id) continue;
-        const a = atom(inv.client_id, inv.firm_id);
-        const amt = Number(inv.total_amount || 0);
-        if (!amt) continue;
-        // Credit notes reduce the debtor (Cr), same as the ledger sheet below.
-        const isCN = inv.document_type === "credit_note";
-        // An undated document is treated as in-period (the ledger sheet does the same)
-        // rather than silently dropped from both opening and period figures.
-        if (inv.invoice_date && inv.invoice_date < fromDate) { if (isCN) a.openingCr += amt; else a.openingDr += amt; }
-        else if (!inv.invoice_date || inv.invoice_date <= toDate) { if (isCN) a.credit += amt; else a.debit += amt; }
-      }
-      for (const rec of receipts || []) {
-        if (!rec.client_id) continue;
-        const a = atom(rec.client_id, rec.firm_id);
-        // Q2: GST-TDS deducted by the client also settles the invoice.
-        const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0) + Number(rec.gst_tds_amount || 0);
-        if (!amt) continue;
-        if (rec.receipt_date && rec.receipt_date < fromDate) a.openingCr += amt;
-        else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) a.credit += amt;
-      }
-      // Kasar (write-off / discount) — treated as credit reducing outstanding balance
-      for (const k of kasars || []) {
-        if (!k.client_id) continue;
-        const a = atom(k.client_id, k.firm_id);
-        const amt = Number(k.amount || 0);
-        if (!amt) continue;
-        if (k.kasar_date && k.kasar_date < fromDate) a.openingCr += amt;
-        else if (k.kasar_date && k.kasar_date >= fromDate && k.kasar_date <= toDate) a.credit += amt;
-      }
+      // One atom per (client, firm) with any activity — shared with the Telegram bot's statements.
+      const atoms = accumulateBalances({ fromDate, toDate, obRows: obRows || [], invoices: invoices || [], receipts: receipts || [], kasars: kasars || [] });
 
       // Fetch only the clients with activity, in chunks (URL length).
       const ids = Array.from(new Set(Array.from(atoms.values()).map(a => a.clientId)));
@@ -453,12 +404,6 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   // ── Net opening = manual OB + pre-period invoices − pre-period receipts ──
 
-  function netOpening(r: Balances) {
-    return r.ob + r.openingDr - r.openingCr;
-  }
-  function netClosing(r: Balances) {
-    return netOpening(r) + r.debit - r.credit;
-  }
 
   // ── Fetch ledger for sheet ────────────────────────────────────────────────
 

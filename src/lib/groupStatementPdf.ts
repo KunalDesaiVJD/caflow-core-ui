@@ -1,121 +1,19 @@
 /**
- * Statement of account PDF — one layout for every statement the Report tab downloads or emails.
- *
- * Group: page 1 is a summary by client (Opening, Debit, Credit, Closing — no group total, so
- * each client sees only their own balance); from page 2 each client's ledger with every
- * receipt, TDS and kasar on its own line; then the payment advice.
- * Single client (`single: true`): the same ledger table and payment advice, without the
- * summary page.
- * Payment advice: the amount each client owes each firm with that firm's bank details, so
- * every line is one cheque / transfer.
+ * Statement of account PDF for the app. The layout itself is shared with the Telegram bot
+ * (supabase/functions/_shared/statement/pdf.ts), so every channel sends the same document.
  */
-import { format, parseISO } from "date-fns";
-import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/lib/jspdfUnicodeFont";
-import type { LedgerEntryKind } from "@/lib/ledgerEntryKinds";
-import type { LedgerEntry } from "@/lib/statementOfAccount";
-import {
-  drawClientSummaryTable, drawFirmBankDetails, drawPaymentAdvice, pdfBalance, startBreakdownPage, stampPageFooters,
-  type FirmBankDetails, type PaymentAdviceRow,
-} from "@/lib/multiClientLedgerPdf";
+import { loadPdfFontFiles } from "@/lib/jspdfUnicodeFont";
+import { renderStatementPdf, type StatementPdfInput } from "../../supabase/functions/_shared/statement/pdf";
 
-export interface GroupStatementClient { clientId: string; name: string; entries: LedgerEntry[] }
+export { summariseEntries, type GroupStatementClient, type StatementPdfInput } from "../../supabase/functions/_shared/statement/pdf";
 
-/** Period figures for one client's statement, with credits split by kind. */
-export function summariseEntries(entries: LedgerEntry[]) {
-  const opening = entries.filter(e => !e.kind).reduce((sum, e) => sum + e.debit - e.credit, 0);
-  const credit = (...kinds: LedgerEntryKind[]) =>
-    entries.filter(e => e.kind && kinds.includes(e.kind)).reduce((sum, e) => sum + e.credit, 0);
-  const debit = entries.filter(e => e.kind).reduce((sum, e) => sum + e.debit, 0);
-  const receipts = credit("receipt"), tds = credit("tds", "gst_tds"), kasar = credit("kasar"), creditNotes = credit("credit_note");
-  return { opening, debit, receipts, tds, kasar, creditNotes, closing: opening + debit - receipts - tds - kasar - creditNotes };
-}
-
-export async function buildGroupStatementPdf(o: {
-  groupName: string; firmLabel: string; logoDataUrl: string | null;
-  fromDate: string; toDate: string; perClient: GroupStatementClient[];
-  /** Bank details of the firms in the statement, printed at the end. */
-  bankDetails?: FirmBankDetails[];
-  /** Closing balance of each client with each firm — printed as the payment advice. */
-  payments?: PaymentAdviceRow[];
-  /** One client's statement: no summary page, title "Statement of Account". */
-  single?: boolean;
-}): Promise<{ base64: string; blob: Blob }> {
-  const jsPDF = (await import("jspdf")).default;
-  const autoTable = (await import("jspdf-autotable")).default;
-  const DARK_BLUE: [number, number, number] = [26, 58, 92];
-  const WHITE: [number, number, number] = [255, 255, 255];
-  const { groupName, firmLabel, logoDataUrl: logo, fromDate, toDate, perClient } = o;
-
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-  await ensurePdfUnicodeFont(doc);
-
-  doc.setFillColor(...DARK_BLUE); doc.rect(0, 0, 297, 24, "F");
-  let textX = 14;
-  if (logo) { try { doc.addImage(logo, logo.includes("image/png") ? "PNG" : "JPEG", 12, 2, 32, 20); textX = 50; } catch { /* ignore */ } }
-  doc.setTextColor(...WHITE);
-  setPdfUnicodeFont(doc, "bold"); doc.setFontSize(14);
-  const single = !!o.single;
-  doc.text(single ? "STATEMENT OF ACCOUNT" : "GROUP STATEMENT OF ACCOUNT", textX, 10);
-  setPdfUnicodeFont(doc, "normal"); doc.setFontSize(8);
-  doc.text(`${groupName}   |   ${firmLabel}`, textX, 16);
-  doc.text(`Period: ${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}   |   Generated: ${format(new Date(), "d MMM yyyy, HH:mm")}`, textX, 21);
-
-  const sums = perClient.map(c => ({ ...c, s: summariseEntries(c.entries) }));
-  const hdr = { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: WHITE };
-
-  // Page 1 — summary by client: Opening, Debit, Credit, Closing only. No group total: the
-  // statement goes to the clients, and each should see only their own balance.
-  if (!single) {
-    drawClientSummaryTable(doc, autoTable, {
-      startY: 28,
-      rows: sums.map(c => ({
-        name: c.name, opening: c.s.opening, debit: c.s.debit,
-        credit: c.s.receipts + c.s.tds + c.s.kasar + c.s.creditNotes, closing: c.s.closing,
-      })),
-    });
-  }
-
-  // Page 2 onwards — each client's ledger, receipts, TDS and kasar on their own lines
-  const detail: any[][] = [];
-  for (const c of sums) {
-    detail.push([{ content: c.name, colSpan: 6, styles: { fontStyle: "bold" as const, fillColor: [225, 233, 245] as [number, number, number], textColor: DARK_BLUE } }]);
-    for (const e of c.entries) {
-      detail.push([
-        e.entry_date ? format(parseISO(e.entry_date), "dd/MM/yyyy") : "",
-        e.doc_no, e.narration,
-        e.debit  > 0 ? formatPdfCurrency(e.debit)  : "—",
-        e.credit > 0 ? formatPdfCurrency(e.credit) : "—",
-        pdfBalance(e.balance),
-      ]);
-    }
-    const totDr = c.entries.reduce((x, e) => x + e.debit, 0);
-    const totCr = c.entries.reduce((x, e) => x + e.credit, 0);
-    const sub = { fontStyle: "bold" as const, fillColor: [240, 244, 250] as [number, number, number] };
-    detail.push([
-      { content: `Closing balance — ${c.name}`, colSpan: 3, styles: sub },
-      { content: formatPdfCurrency(totDr), styles: { ...sub, halign: "right" as const } },
-      { content: formatPdfCurrency(totCr), styles: { ...sub, halign: "right" as const } },
-      { content: pdfBalance(c.entries[c.entries.length - 1].balance), styles: { ...sub, halign: "right" as const } },
-    ]);
-  }
-  autoTable(doc, {
-    startY: single ? 30 : startBreakdownPage(doc, `Client-wise Ledger — ${groupName}`),
-    head: [["Date", "Doc No", "Narration", "Debit (₹)", "Credit (₹)", "Balance"]],
-    body: detail,
-    styles: { font: "NotoSans", fontSize: 8, cellPadding: 2.2, lineColor: [200, 210, 225], lineWidth: 0.3 },
-    headStyles: { ...hdr, font: "NotoSans" },
-    columnStyles: {
-      0: { cellWidth: 24, halign: "center" }, 1: { cellWidth: 28, halign: "center" }, 2: { cellWidth: 111 },
-      3: { cellWidth: 38, halign: "right" }, 4: { cellWidth: 38, halign: "right" }, 5: { cellWidth: 38, halign: "right" },
-    },
-    margin: { left: 10, right: 10, bottom: 16 },
-  });
-
-  // End of the ledger — what to pay each firm (with its bank details), or just the bank details
-  if (o.payments) drawPaymentAdvice(doc, autoTable, o.payments, o.bankDetails ?? []);
-  else drawFirmBankDetails(doc, autoTable, o.bankDetails ?? []);
-  stampPageFooters(doc, `${groupName}   |   Confidential`);
-
+export async function buildGroupStatementPdf(o: StatementPdfInput): Promise<{ base64: string; blob: Blob }> {
+  const [jsPDF, autoTable, fonts] = await Promise.all([
+    import("jspdf").then(m => m.default),
+    import("jspdf-autotable").then(m => m.default),
+    loadPdfFontFiles(),
+  ]);
+  const doc = renderStatementPdf({ jsPDF, autoTable, fonts }, o);
   const blob = doc.output("blob");
   const base64 = doc.output("datauristring").split(",")[1];
   return { base64, blob };

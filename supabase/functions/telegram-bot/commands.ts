@@ -5,12 +5,16 @@
  */
 import { drCr, inr } from "../_shared/botAgent.ts";
 import type { createBillingTools } from "./billingTools.ts";
+import type { createReportTools } from "./reportTools.ts";
 
 type Tools = ReturnType<typeof createBillingTools>;
+type Report = { report: ReturnType<typeof createReportTools>; chatId: number };
 
 export const HELP_TEXT = [
   "CAFlow Billing — commands",
   "",
+  "/statement <client or group> — statement of account PDF (as in Billing → Reports)",
+  "/report [group | firm] — sundry debtors: top balances by client, group or firm",
   "/summary — receivables by firm, overdue, today's receipts",
   "/outstanding [client] — open invoices (all, or one client)",
   "/overdue [client] — invoices past due date",
@@ -24,13 +28,43 @@ export const HELP_TEXT = [
   "/cancelled — cancelled invoices / credit notes",
   "/myid — your Telegram ID",
   "",
-  "Or just ask in plain words, e.g. \"send me the statement of Nirali group\", \"email invoice 114 to the client\", \"who has not paid for 90 days?\"",
+  "Or just ask in plain words, e.g. \"send me the statement of Nirali group without Nirali Exports\", \"email Ramani group statement\", \"how much did we collect in September?\", \"who has not paid for 90 days?\", \"which clients are not in any group?\"",
 ].join("\n");
 
 const line = (n: number, s: string) => `${n}. ${s}`;
 
-export async function runCommand(cmd: string, arg: string, tools: Tools): Promise<string | null> {
+export async function runCommand(cmd: string, arg: string, tools: Tools, ctx?: Report): Promise<string | null> {
   switch (cmd) {
+    case "statement":
+    case "ledger": {
+      if (!ctx) return null;
+      if (!arg) return "Usage: /statement <client name> or /statement <group name> group";
+      const asGroup = /\bgroup\b/i.test(arg);
+      const name = arg.replace(/\bgroup\b/i, "").trim() || arg;
+      // A name can be a client or a group: try the one it says, then the other.
+      let res: any = await ctx.report.sendStatement(ctx.chatId, asGroup ? { group_name: name } : { client_name: name });
+      if (res.error && /^No (client|client group) matches/.test(res.error)) {
+        const other: any = await ctx.report.sendStatement(ctx.chatId, asGroup ? { client_name: name } : { group_name: name });
+        if (!other.error || !/^No (client|client group) matches/.test(other.error)) res = other;
+      }
+      if (res.error) return res.error;
+      const due = (res.payment_advice || []).filter((p: any) => p.closing > 0);
+      return [`Sent ${res.file}`, ...(res.note ? [res.note] : []), "",
+        ...(due.length ? ["Amount payable:", ...due.slice(0, 30).map((p: any) => `  ${p.client} → ${p.firm}: ${inr(p.closing)}`)] : ["Nothing payable."]),
+      ].join("\n");
+    }
+
+    case "report": {
+      if (!ctx) return null;
+      const view = /group/i.test(arg) ? "group" : /firm/i.test(arg) ? "firm" : "client";
+      const res: any = await ctx.report.getReport({ view_by: view, balance: "receivable", limit: 25 });
+      if (res.error) return res.error;
+      const out = [`Sundry debtors by ${view} — ${res.period}`, `Receivable ${inr(res.totals.gross_receivable)} · advances ${inr(res.totals.advances)}`, ""];
+      res.rows.forEach((r: any, i: number) => out.push(line(i + 1, `${r.name}: ${drCr(r.closing)}${r.clients ? ` (${r.clients} clients)` : ""}`)));
+      if (res.rows_matching > res.rows.length) out.push("", `…${res.rows_matching - res.rows.length} more. Ask in plain words for any other period or filter.`);
+      return out.join("\n");
+    }
+
     case "help":
     case "start":
       return HELP_TEXT;
