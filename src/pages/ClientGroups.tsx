@@ -131,8 +131,8 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
             name: name.trim(),
             description: description.trim() || null,
             color: finalColor,
-            // RLS (firm_scope_insert) requires firm_id = the user's firm; omitting it
-            // inserted NULL and every non-superadmin got "violates row-level security".
+            // Client groups are created global (NULL); work groups belong to the user's firm.
+            // RLS firm_scope_insert allows both (see 20261029151000_client_groups_global).
             firm_id: defaultFirmId,
             created_by: userId || null,
           } as any);
@@ -299,10 +299,11 @@ const ClientGroups = () => {
             tableName="client_groups"
             membershipTable="client_group_memberships"
             title="Client Groups"
-            subtitle="Organize clients into groups for easy filtering."
+            subtitle="Organize clients into groups for easy filtering. A client group applies to every firm."
             icon={Users}
             userId={user?.id}
-            defaultFirmId={user?.firm_id || null}
+            // Client groups are global: one group covers the client's balances with every firm.
+            defaultFirmId={null}
           />
         </TabsContent>
         <TabsContent value="work_groups" className="mt-4">
