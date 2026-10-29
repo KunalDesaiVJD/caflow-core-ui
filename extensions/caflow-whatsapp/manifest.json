@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "CAFlow WhatsApp Sender",
+  "version": "1.0.0",
+  "description": "Sends CAFlow billing reminders through your open WhatsApp Web tab: opens the chat, types the message and attaches the PDF for you to review.",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": ["https://web.whatsapp.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://app.vjdesai.com/*", "http://localhost/*"],
+      "js": ["app-bridge.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://web.whatsapp.com/*"],
+      "js": ["whatsapp.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
