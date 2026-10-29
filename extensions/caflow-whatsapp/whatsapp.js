@@ -1,10 +1,41 @@
-// Runs on WhatsApp Web. After the CAFlow app opens a chat, waits for the
-// message box (with the message typed in) and attaches the PDF as a document.
-// Nothing is sent: the user reviews the preview and presses Send.
+// Runs on WhatsApp Web. Reports which number this tab is logged in as, and
+// after the CAFlow app opens a chat, waits for the message box (with the message
+// typed in) and attaches the PDF as a document. Nothing is sent: the user
+// reviews the preview and presses Send.
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type !== "caflow-wa-account") return;
+  waitForLogin().then(account => sendResponse({ account }));
+  return true;
+});
+
+/** The logged-in account's number (digits), from WhatsApp Web's own storage. */
+function accountNumber() {
+  for (const key of ["last-wid-md", "last-wid"]) {
+    let v = localStorage.getItem(key);
+    if (!v) continue;
+    try { v = JSON.parse(v); } catch { /* stored unquoted */ }
+    const m = String(v).match(/^(\d{8,15})[:@]/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+/** Wait until the chat list (logged in) or the QR code (logged out) shows. */
+async function waitForLogin() {
+  const state = await waitFor(() => {
+    if (document.querySelector("#pane-side")) return "in";
+    if (document.querySelector("canvas[aria-label], div[data-ref]")) return "out";
+    return null;
+  }, 60_000);
+  return state === "in" ? accountNumber() : null;
+}
 
 (async () => {
   const pending = await chrome.runtime.sendMessage({ type: "caflow-wa-take-pending" });
   if (!pending?.pdf) return;
+  // Second check at attach time: never attach from an account other than the sender.
+  if ((await waitForLogin()) !== pending.sender) return notice("CAFlow: this WhatsApp is not logged in as the billing number — PDF not attached.", null);
 
   const box = await waitFor(() => document.querySelector('footer div[contenteditable="true"]'), 90_000);
   if (!box) return notice("CAFlow: WhatsApp did not open the chat in time.", pending.pdf);
