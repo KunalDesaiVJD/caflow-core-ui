@@ -35,7 +35,8 @@ import { composeLedgerEntries, type LedgerEntry, type RawInvoice, type RawReceip
 import { buildGroupStatementPdf } from "@/lib/groupStatementPdf";
 import { loadFirmBankDetails, type PaymentAdviceRow } from "@/lib/multiClientLedgerPdf";
 import { renderStatementEmailPreview } from "@/lib/billingEmailPreview";
-import { BILLING_WHATSAPP_DISPLAY, hasWhatsAppExtension, reserveBillingWhatsAppTab, releaseBillingWhatsAppTab, sendBillingWhatsApp } from "@/lib/billingWhatsApp";
+import { BILLING_WHATSAPP_DISPLAY, BILLING_WHATSAPP_NUMBER, hasWhatsAppExtension, reserveBillingWhatsAppTab, releaseBillingWhatsAppTab, sendBillingWhatsApp } from "@/lib/billingWhatsApp";
+import { formatPhone, normalisePhone, savedEmails, savedPhones, type GroupContacts } from "@/lib/groupContacts";
 import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
 } from "@/lib/jspdfUnicodeFont";
@@ -178,6 +179,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   // Group view: groups expanded inline to list their clients.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [groupNames,  setGroupNames]  = useState<Record<string, string>>({});
+  // Master / additional email and phone saved on each client group (Clients → Groups).
+  const [groupContacts, setGroupContacts] = useState<Record<string, GroupContacts>>({});
   const [groupsOfClient, setGroupsOfClient] = useState<Record<string, string[]>>({});
   const [firmLogoUrl, setFirmLogoUrl] = useState<string | null>(null);
   const [search,      setSearch]      = useState("");
@@ -207,6 +210,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   // WhatsApp (client or group statement via WhatsApp Web)
   const [waTarget,     setWaTarget]     = useState<DisplayRow | null>(null);
   const [waMsg,        setWaMsg]        = useState("");
+  const [waPhone,      setWaPhone]      = useState("");
   const [waSending,    setWaSending]    = useState(false);
   // The statement PDF, built when the dialog opens so it can be previewed before sending.
   const [waPdf,        setWaPdf]        = useState<{ blob: Blob; filename: string } | "loading" | "empty" | "error">("loading");
@@ -366,12 +370,16 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           .select("client_id, group_id").in("client_id", chunk).order("client_id").order("group_id")));
       }
       const gNames: Record<string, string> = {};
+      const gContacts: Record<string, GroupContacts> = {};
       const memberGroupIds = Array.from(new Set(members.map(m => m.group_id)));
       for (let i = 0; i < memberGroupIds.length; i += 150) {
         const { data: gData, error: gErr } = await (supabase as any).from("client_groups")
-          .select("id, name").in("id", memberGroupIds.slice(i, i + 150));
+          .select("id, name, contact_email, contact_phone, extra_emails, extra_phones").in("id", memberGroupIds.slice(i, i + 150));
         if (gErr) throw gErr;
-        for (const g of gData || []) gNames[g.id] = g.name;
+        for (const g of gData || []) {
+          gNames[g.id] = g.name;
+          gContacts[g.id] = { contact_email: g.contact_email ?? null, contact_phone: g.contact_phone ?? null, extra_emails: g.extra_emails ?? [], extra_phones: g.extra_phones ?? [] };
+        }
       }
       const gOf: Record<string, string[]> = {};
       for (const m of members) {
@@ -380,6 +388,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         if (!list.includes(m.group_id)) list.push(m.group_id);
       }
       setGroupNames(gNames);
+      setGroupContacts(gContacts);
       setGroupsOfClient(gOf);
 
       // Last billing email per client. Each log row carries client_id (single-
@@ -680,6 +689,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     const balance = Math.abs(closing) < 0.005 ? "Nil" : `${drCr(closing)} ${closing > 0 ? "(payable by you)" : "(advance with us)"}`;
     const firmName = r.firmIds.length === 1 ? firms.find(f => f.id === r.firmIds[0])?.name : undefined;
     setWaTarget(r);
+    // A group's saved master phone is used when there is one; otherwise the billing number.
+    const groupPhone = r.kind === "group" ? savedPhones(groupContacts[r.id])[0] : undefined;
+    setWaPhone(formatPhone(groupPhone || BILLING_WHATSAPP_NUMBER));
     setWaPdf("loading");
     waPdfFor.current = r.key;
     buildRowStatement(r)
@@ -698,14 +710,16 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   async function handleSendWhatsApp() {
     if (!waTarget || typeof waPdf !== "object") return;
+    const phone = normalisePhone(waPhone);
+    if (!phone) { toast.error("Enter a valid WhatsApp number"); return; }
     // Reserve the tab inside the click (popup blocker); reuses the WhatsApp tab already open.
     const tab = reserveBillingWhatsAppTab();
     setWaSending(true);
     try {
-      const { attached } = await sendBillingWhatsApp({ tab, text: waMsg, pdf: waPdf });
+      const { attached } = await sendBillingWhatsApp({ tab, text: waMsg, pdf: waPdf, phone });
       toast.success(attached
-        ? `WhatsApp opened for ${BILLING_WHATSAPP_DISPLAY} — the message and ${waPdf.filename} are being added to the chat. Review and press Send.`
-        : `WhatsApp opened for ${BILLING_WHATSAPP_DISPLAY}. Attach the downloaded ${waPdf.filename} (drag it in or use 📎), then press Send.`,
+        ? `WhatsApp opened for ${formatPhone(phone)} — the message and ${waPdf.filename} are being added to the chat. Review and press Send.`
+        : `WhatsApp opened for ${formatPhone(phone)}. Attach the downloaded ${waPdf.filename} (drag it in or use 📎), then press Send.`,
         { duration: 10000 });
       setWaTarget(null);
     } catch (e: any) {
@@ -728,7 +742,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   function openGroupEmail(group: DisplayRow) {
     const period = `${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`;
     setGroupEmail(group);
-    setGTo(""); setGCc("");
+    // Pre-fill from the group's saved contacts: master email in To, additional ones in CC.
+    const saved = savedEmails(groupContacts[group.id]);
+    setGTo(saved[0] ?? ""); setGCc(saved.slice(1).join(", "));
     setGSubject(`Statement of Account — ${group.name} — ${period}`);
     setGMsg(`Dear Sir/Madam,\n\nPlease find attached the statement of account for ${group.name} for the period ${period}.\n\nKindly review and revert if any discrepancies are noticed.\n\nRegards`);
   }
@@ -737,10 +753,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   const groupEmailSuggestions = useMemo(() => {
     if (!groupEmail) return [] as string[];
     const keys = new Set(groupEmail.atomKeys);
+    const saved = new Set(savedEmails(groupContacts[groupEmail.id]).map(e => e.toLowerCase()));
     const set = new Set<string>();
-    for (const a of rows) if (a.email && keys.has(`${a.id}|${a.firmId}`)) set.add(a.email.trim());
+    for (const a of rows) if (a.email && keys.has(`${a.id}|${a.firmId}`) && !saved.has(a.email.trim().toLowerCase())) set.add(a.email.trim());
     return Array.from(set).sort();
-  }, [groupEmail, rows]);
+  }, [groupEmail, rows, groupContacts]);
+  const groupSavedEmails = groupEmail ? savedEmails(groupContacts[groupEmail.id]) : [];
 
   async function handleSendGroupEmail() {
     if (!groupEmail) return;
@@ -840,12 +858,15 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       }
     }
     return Array.from(out.values()).map(({ _clients, _firms, _emails, ...d }) => {
-      // Group's default email: the address used by the most of its clients.
-      const emails = Array.from(_emails.entries()).sort((x, y) => y[1].size - x[1].size).map(([e]) => e);
+      // Group's email: the master email saved on the group, then additional saved ones, then
+      // the address used by the most of its clients.
+      const clientEmails = Array.from(_emails.entries()).sort((x, y) => y[1].size - x[1].size).map(([e]) => e);
+      const saved = d.kind === "group" ? savedEmails(groupContacts[d.id]) : [];
+      const emails = Array.from(new Set([...saved, ...clientEmails]));
       return { ...d, clientCount: _clients.size, firmIds: Array.from(_firms),
                ...(d.kind === "group" ? { email: emails[0] ?? null, emails } : {}) };
     });
-  }, [rows, viewBy, groupFilter, groupsOfClient, groupNames, firms]);
+  }, [rows, viewBy, groupFilter, groupsOfClient, groupNames, groupContacts, firms]);
 
   // Client-level rows (all firms summed), for groups expanded inline.
   const clientRowsById = useMemo(() => {
@@ -1478,6 +1499,21 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               <div className="space-y-1">
                 <Label htmlFor="g-email-to" className="text-xs">To <span className="text-destructive">*</span></Label>
                 <Input id="g-email-to" value={gTo} onChange={e => setGTo(e.target.value)} placeholder="email@example.com, another@example.com" className="h-8 text-xs" />
+                {groupSavedEmails.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    <span className="text-[11px] text-muted-foreground">Saved for this group:</span>
+                    {groupSavedEmails.map((em, i) => {
+                      const picked = [...splitEmails(gTo), ...splitEmails(gCc)].includes(em);
+                      return (
+                        <button key={em} type="button" title={i === 0 ? "Master email" : "Additional email"}
+                          onClick={() => setGTo(picked ? splitEmails(gTo).filter(x => x !== em).join(", ") : [...splitEmails(gTo), em].join(", "))}
+                          className={cn("px-2 py-0.5 rounded-full text-[11px] border", picked ? "bg-emerald-600 text-white border-emerald-600" : "bg-emerald-50 border-emerald-200 hover:bg-emerald-100")}>
+                          {i === 0 ? "★ " : ""}{em}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {groupEmailSuggestions.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 pt-1">
                     <span className="text-[11px] text-muted-foreground">Client emails:</span>
@@ -1567,8 +1603,28 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                   : <>WhatsApp Web opens with this message typed in and the PDF downloads — attach it in the chat and press Send. Install the <a href="/caflow-whatsapp-extension.zip" className="text-primary underline">CAFlow WhatsApp extension</a> to reuse your open WhatsApp tab and attach the PDF automatically.</>}
               </p>
               <div className="space-y-1">
-                <Label className="text-xs">WhatsApp number</Label>
-                <div className="h-8 px-3 flex items-center rounded-md border bg-muted text-xs font-mono">{BILLING_WHATSAPP_DISPLAY}</div>
+                <Label htmlFor="wa-phone" className="text-xs">WhatsApp number</Label>
+                {waTarget.kind === "group" ? (
+                  <>
+                    <Input id="wa-phone" value={waPhone} onChange={e => setWaPhone(e.target.value)} className="h-8 text-xs font-mono" />
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {[...savedPhones(groupContacts[waTarget.id]), BILLING_WHATSAPP_NUMBER]
+                        .filter((p, i, a) => a.indexOf(p) === i)
+                        .map((p, i) => {
+                          const picked = normalisePhone(waPhone) === p;
+                          const label = p === BILLING_WHATSAPP_NUMBER ? `Billing ${formatPhone(p)}` : `${i === 0 ? "★ " : ""}${formatPhone(p)}`;
+                          return (
+                            <button key={p} type="button" onClick={() => setWaPhone(formatPhone(p))}
+                              className={cn("px-2 py-0.5 rounded-full text-[11px] border", picked ? "bg-emerald-600 text-white border-emerald-600" : "bg-muted hover:bg-muted/70")}>
+                              {label}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  </>
+                ) : (
+                  <div className="h-8 px-3 flex items-center rounded-md border bg-muted text-xs font-mono">{BILLING_WHATSAPP_DISPLAY}</div>
+                )}
                 {waTarget.kind === "group" && (
                   <p className="text-[11px] text-amber-700">The statement lists every client in the group with their balances — send it only to someone entitled to see all of them.</p>
                 )}

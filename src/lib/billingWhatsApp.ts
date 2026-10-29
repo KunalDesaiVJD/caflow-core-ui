@@ -2,14 +2,18 @@ import { downloadBlob } from "@/lib/downloadBlob";
 
 /**
  * Every WhatsApp action on the Billing page opens this one number — never a
- * client's registered mobile. Change it here to change it everywhere.
+ * client's registered mobile — except a client group's statement, which uses the
+ * number saved on the group (Clients → Groups). Change it here to change it everywhere.
  */
 export const BILLING_WHATSAPP_NUMBER = "919727172515";
 export const BILLING_WHATSAPP_DISPLAY = "+91 97271 72515";
 
-/** WhatsApp Web chat with the billing number, message pre-filled for review. */
-export function billingWhatsAppUrl(text: string): string {
-  return `https://web.whatsapp.com/send?phone=${BILLING_WHATSAPP_NUMBER}&text=${encodeURIComponent(text)}`;
+/**
+ * WhatsApp Web chat, message pre-filled for review — the billing number unless a
+ * client group's saved number is passed (digits with country code).
+ */
+export function billingWhatsAppUrl(text: string, phone: string = BILLING_WHATSAPP_NUMBER): string {
+  return `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(text)}`;
 }
 
 // The WhatsApp Web tab this app opened. Chrome clears a tab's window name when it
@@ -51,7 +55,7 @@ function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /** Hand the send to the extension: it reuses the open WhatsApp Web tab and attaches the PDF there. */
-async function sendViaExtension(text: string, pdf: { blob: Blob; filename: string } | null | undefined): Promise<void> {
+async function sendViaExtension(phone: string, text: string, pdf: { blob: Blob; filename: string } | null | undefined): Promise<void> {
   const id = crypto.randomUUID();
   const payload = pdf ? { base64: await blobToBase64(pdf.blob), filename: pdf.filename } : null;
   await new Promise<void>((resolve, reject) => {
@@ -63,7 +67,7 @@ async function sendViaExtension(text: string, pdf: { blob: Blob; filename: strin
       if (e.data.ok) resolve(); else reject(new Error(e.data.error || "WhatsApp extension failed"));
     }
     window.addEventListener("message", onResult);
-    window.postMessage({ type: "CAFLOW_WA_SEND", id, phone: BILLING_WHATSAPP_NUMBER, text, pdf: payload }, window.location.origin);
+    window.postMessage({ type: "CAFLOW_WA_SEND", id, phone, text, pdf: payload }, window.location.origin);
   });
 }
 
@@ -77,17 +81,19 @@ export async function sendBillingWhatsApp(opts: {
   tab: Window | null;
   text: string;
   pdf?: { blob: Blob; filename: string } | null;
+  /** WhatsApp digits with country code; defaults to the billing number. */
+  phone?: string;
 }): Promise<{ attached: boolean }> {
   if (hasWhatsAppExtension()) {
     try {
-      await sendViaExtension(opts.text, opts.pdf);
+      await sendViaExtension(opts.phone || BILLING_WHATSAPP_NUMBER, opts.text, opts.pdf);
       return { attached: !!opts.pdf };
     } catch (e) {
       console.error("[BillingWhatsApp] extension send failed, falling back:", e);
     }
   }
   if (opts.pdf) downloadBlob(opts.pdf.blob, opts.pdf.filename);
-  const url = billingWhatsAppUrl(opts.text);
+  const url = billingWhatsAppUrl(opts.text, opts.phone);
   const tab = opts.tab && !opts.tab.closed ? opts.tab : reserveBillingWhatsAppTab(true);
   if (tab) { tab.location.href = url; tab.focus(); }
   else window.open(url, "_blank");

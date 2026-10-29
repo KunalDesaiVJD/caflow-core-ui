@@ -28,7 +28,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Plus, Pencil, Trash2, Users, Briefcase } from "lucide-react";
+import { ArrowLeft, Plus, Pencil, Trash2, Users, Briefcase, Mail, Phone } from "lucide-react";
+import { formatPhone, parseGroupContacts, savedEmails, savedPhones } from "@/lib/groupContacts";
 
 const PRESET_COLORS = [
   "#6B7280", "#EF4444", "#F59E0B", "#10B981",
@@ -43,6 +44,11 @@ interface GroupItem {
   firm_id: string;
   created_at: string | null;
   member_count?: number;
+  // Client groups only — master contact + additional ones used for group communication
+  contact_email?: string | null;
+  contact_phone?: string | null;
+  extra_emails?: string[] | null;
+  extra_phones?: string[] | null;
 }
 
 // Reusable group grid + CRUD component
@@ -66,6 +72,11 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
   const [description, setDescription] = useState("");
   const [color, setColor] = useState(PRESET_COLORS[0]);
   const [customColor, setCustomColor] = useState("");
+  const hasContacts = tableName === "client_groups";
+  const [cEmail, setCEmail] = useState("");
+  const [cPhone, setCPhone] = useState("");
+  const [cExtraEmails, setCExtraEmails] = useState("");
+  const [cExtraPhones, setCExtraPhones] = useState("");
 
   const fetchGroups = async () => {
     const { data: groupsData } = await supabase
@@ -99,6 +110,7 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
     setDescription("");
     setColor(PRESET_COLORS[0]);
     setCustomColor("");
+    setCEmail(""); setCPhone(""); setCExtraEmails(""); setCExtraPhones("");
     setModalOpen(true);
   };
 
@@ -109,18 +121,28 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
     const c = g.color || PRESET_COLORS[0];
     if (PRESET_COLORS.includes(c)) { setColor(c); setCustomColor(""); }
     else { setColor(""); setCustomColor(c); }
+    setCEmail(g.contact_email || "");
+    setCPhone(g.contact_phone ? formatPhone(g.contact_phone) : "");
+    setCExtraEmails((g.extra_emails || []).join(", "));
+    setCExtraPhones((g.extra_phones || []).map(formatPhone).join(", "));
     setModalOpen(true);
   };
 
   const handleSave = async () => {
     if (!name.trim()) { toast({ title: "Name is required", variant: "destructive" }); return; }
+    let contacts: Record<string, unknown> = {};
+    if (hasContacts) {
+      const parsed = parseGroupContacts({ email: cEmail, phone: cPhone, extraEmails: cExtraEmails, extraPhones: cExtraPhones });
+      if (parsed.errors.length) { toast({ title: "Check the contact details", description: parsed.errors.join("; "), variant: "destructive" }); return; }
+      contacts = { ...parsed.value };
+    }
     setSaving(true);
     const finalColor = customColor || color || PRESET_COLORS[0];
     try {
       if (editGroup) {
         const { error } = await supabase
           .from(tableName)
-          .update({ name: name.trim(), description: description.trim() || null, color: finalColor } as any)
+          .update({ name: name.trim(), description: description.trim() || null, color: finalColor, ...contacts } as any)
           .eq("id", editGroup.id);
         if (error) throw error;
         toast({ title: "Group updated" });
@@ -131,6 +153,7 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
             name: name.trim(),
             description: description.trim() || null,
             color: finalColor,
+            ...contacts,
             // Client groups are created global (NULL); work groups belong to the user's firm.
             // RLS firm_scope_insert allows both (see 20261029151000_client_groups_global).
             firm_id: defaultFirmId,
@@ -195,6 +218,20 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
                   <Badge variant="secondary" className="text-[10px]">{g.member_count} clients</Badge>
                 </div>
                 {g.description && <p className="text-sm text-muted-foreground line-clamp-2">{g.description}</p>}
+                {hasContacts && (savedEmails(g).length > 0 || savedPhones(g).length > 0) && (
+                  <div className="text-xs text-muted-foreground space-y-0.5">
+                    {savedEmails(g).length > 0 && (
+                      <p className="flex items-center gap-1.5 truncate" title={savedEmails(g).join(", ")}>
+                        <Mail className="h-3 w-3 shrink-0" /> {savedEmails(g)[0]}{savedEmails(g).length > 1 ? ` +${savedEmails(g).length - 1}` : ""}
+                      </p>
+                    )}
+                    {savedPhones(g).length > 0 && (
+                      <p className="flex items-center gap-1.5 truncate" title={savedPhones(g).map(formatPhone).join(", ")}>
+                        <Phone className="h-3 w-3 shrink-0" /> {formatPhone(savedPhones(g)[0])}{savedPhones(g).length > 1 ? ` +${savedPhones(g).length - 1}` : ""}
+                      </p>
+                    )}
+                  </div>
+                )}
                 <div className="flex items-center gap-1 pt-1">
                   <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => openEdit(g)} title="Edit">
                     <Pencil className="h-4 w-4" />
@@ -211,7 +248,7 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
 
       {/* Create/Edit Modal */}
       <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-        <DialogContent>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editGroup ? "Edit Group" : "New Group"}</DialogTitle>
           </DialogHeader>
@@ -243,6 +280,32 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
                 />
               </div>
             </div>
+            {hasContacts && (
+              <div className="space-y-3 rounded-md border p-3">
+                <div>
+                  <p className="text-sm font-medium">Communication</p>
+                  <p className="text-xs text-muted-foreground">Used for this group's statements by email and WhatsApp. You can still change them while sending.</p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs">Master email</Label>
+                    <Input value={cEmail} onChange={(e) => setCEmail(e.target.value)} placeholder="accounts@client.com" />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Master phone (WhatsApp)</Label>
+                    <Input value={cPhone} onChange={(e) => setCPhone(e.target.value)} placeholder="+91 98250 12345" />
+                  </div>
+                </div>
+                <div>
+                  <Label className="text-xs">Additional emails</Label>
+                  <Textarea value={cExtraEmails} onChange={(e) => setCExtraEmails(e.target.value)} rows={2} placeholder="Separate with commas or new lines — sent as CC" />
+                </div>
+                <div>
+                  <Label className="text-xs">Additional phone numbers</Label>
+                  <Textarea value={cExtraPhones} onChange={(e) => setCExtraPhones(e.target.value)} rows={2} placeholder="Separate with commas or new lines" />
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setModalOpen(false)}>Cancel</Button>
