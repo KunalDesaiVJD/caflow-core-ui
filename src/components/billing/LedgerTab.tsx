@@ -32,6 +32,7 @@ import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/li
 import type { LegalNameChange } from "@/lib/firmName";
 import { ledgerEntryKind, receiptDocNo, kasarDocNo, LEDGER_KIND_LABEL } from "@/lib/ledgerEntryKinds";
 import { drawClientSummaryTable, drawPaymentAdvice, loadFirmBankDetails, type PaymentAdviceRow, startBreakdownPage, stampPageFooters } from "@/lib/multiClientLedgerPdf";
+import { billingWhatsAppUrl } from "@/lib/billingWhatsApp";
 
 const fmtINR = (n: number) => "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -755,15 +756,9 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
               <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
               <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
               <Button variant="outline" size="sm" className="gap-1" onClick={() => {
-                const phone = prompt("Enter WhatsApp number (e.g. 9876543210):");
-                if (phone) {
-                  const cleanPhone = phone.replace(/\D/g, "");
-                  const fullPhone = cleanPhone.startsWith("91") ? cleanPhone : `91${cleanPhone}`;
-                  const msg = encodeURIComponent(`Dear Client,\n\nPlease find your statement of account for FY ${fy}.\n\nRegards`);
-                  window.open(`https://wa.me/${fullPhone}?text=${msg}`, "_blank");
-                  // Also trigger PDF download
-                  handleDownloadPdf();
-                }
+                window.open(billingWhatsAppUrl(`Dear Client,\n\nPlease find your statement of account for FY ${fy}.\n\nRegards`), "caflow_whatsapp");
+                // Also trigger PDF download
+                handleDownloadPdf();
               }}>
                 <Share2 size={14} /> Send via WhatsApp
               </Button>
@@ -1744,15 +1739,9 @@ function FirmRevenueLedgerView() {
             <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
             <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
             <Button variant="outline" size="sm" className="gap-1" onClick={() => {
-              const phone = prompt("Enter WhatsApp number (e.g. 9876543210):");
-              if (phone) {
-                const cleanPhone = phone.replace(/\D/g, "");
-                const fullPhone = cleanPhone.startsWith("91") ? cleanPhone : `91${cleanPhone}`;
-                const fName = firms.find(f => f.id === firmId)?.name || "Firm";
-                const msg = encodeURIComponent(`Dear Team,\n\nPlease find the Firm Revenue Ledger for ${fName} — FY ${fy}.\n\nRegards`);
-                window.open(`https://wa.me/${fullPhone}?text=${msg}`, "_blank");
-                handleDownloadPdf();
-              }
+              const fName = firms.find(f => f.id === firmId)?.name || "Firm";
+              window.open(billingWhatsAppUrl(`Dear Team,\n\nPlease find the Firm Revenue Ledger for ${fName} — FY ${fy}.\n\nRegards`), "caflow_whatsapp");
+              handleDownloadPdf();
             }}>
               <Share2 size={14} /> Send via WhatsApp
             </Button>

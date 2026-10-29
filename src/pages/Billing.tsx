@@ -58,6 +58,7 @@ import JSZip from "jszip";
 import { generateInvoicePdfBlob, invoicePdfFilename } from "@/lib/invoicePdfGenerator";
 import { LOCKABLE_DOC_TYPES, firmLockDay, isPeriodLocked, lockMessage } from "@/lib/invoiceLock";
 import { cancelBillingDocument, canCancelDocument, isCancelled, statusLabel } from "@/lib/billingCancellation";
+import { BILLING_WHATSAPP_DISPLAY, billingWhatsAppUrl } from "@/lib/billingWhatsApp";
 
 // ─── Types ───
 interface Invoice {
@@ -378,7 +379,6 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
   const [shareEmail, setShareEmail] = useState("");
   const [shareCC, setShareCC] = useState<string[]>([]);
   const [shareCCInput, setShareCCInput] = useState("");
-  const [sharePhone, setSharePhone] = useState("");
   const [shareSubject, setShareSubject] = useState("");
   const [shareMessage, setShareMessage] = useState("");
   const [shareViaEmail, setShareViaEmail] = useState(true);
@@ -601,7 +601,6 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     setShareEmail(allEmails[0] || details?.email || "");
     setShareCC(allEmails.slice(1));
     setShareCCInput("");
-    setSharePhone(details?.mobile || "");
     setShareSubject(`${inv.invoice_no || "Invoice"} from ${fName}`);
     setShareMessage(`Dear ${clientName},\n\nPlease find attached ${inv.invoice_no || "Invoice"} for ₹${(inv.total_amount || inv.amount || 0).toLocaleString("en-IN")}.\n\nRegards,\n${fName}`);
     setShareViaEmail(true);
@@ -690,11 +689,8 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
         await supabase.from("invoices").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", shareInvoice.id);
         toast({ title: pdfBase64 ? "Email sent with PDF attachment" : "Email sent successfully" });
       }
-      if (shareViaWhatsApp && sharePhone) {
-        const phone = sharePhone.replace(/\D/g, "");
-        const fullPhone = phone.startsWith("91") ? phone : `91${phone}`;
-        const msg = encodeURIComponent(shareMessage);
-        window.open(`https://wa.me/${fullPhone}?text=${msg}`, "_blank");
+      if (shareViaWhatsApp) {
+        window.open(billingWhatsAppUrl(shareMessage), "caflow_whatsapp");
         toast({ title: "WhatsApp opened — PDF downloaded for manual attachment" });
         if (pdfBlob) {
           downloadBlob(pdfBlob, pdfFilename);
@@ -1711,10 +1707,7 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
             </div>
             <div>
               <Label>WhatsApp Number</Label>
-              <div className="flex gap-2 items-center">
-                <span className="text-sm text-muted-foreground">+91</span>
-                <Input value={sharePhone} onChange={e => setSharePhone(e.target.value)} placeholder="9876543210" />
-              </div>
+              <div className="h-10 px-3 flex items-center rounded-md border bg-muted text-sm font-mono">{BILLING_WHATSAPP_DISPLAY}</div>
             </div>
             <div>
               <Label>Subject</Label>
