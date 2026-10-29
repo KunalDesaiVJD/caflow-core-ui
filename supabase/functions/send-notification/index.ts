@@ -753,6 +753,8 @@ async function sendToRecipient(
           subject: customSubject || payload.custom_subject || subjects[type],
           ...(ccList.length > 0 ? { cc: ccList.join(", ") } : {}),
           ...(payload.custom_message ? { body: payload.custom_message } : {}),
+          // A group statement for only some of the group's clients: which ones it covered.
+          ...(Array.isArray(payload.statement_client_ids) ? { client_ids: payload.statement_client_ids } : {}),
           ...(r.error ? { error: r.error } : {}),
         },
         status: r.success ? "sent" : "failed",

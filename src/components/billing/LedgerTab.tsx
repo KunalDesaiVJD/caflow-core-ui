@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
+import { GroupClientPicker } from "@/components/billing/GroupClientPicker";
 import { downloadBlob } from "@/lib/downloadBlob";
 import DocLink from "@/components/billing/DocLink";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
@@ -864,7 +865,10 @@ function GroupLedgerView() {
   const [fy, setFy] = useState(getCurrentFY());
   const [fromDate, setFromDate] = useState(() => fyToDateRange(getCurrentFY()).start);
   const [toDate, setToDate] = useState(() => fyToDateRange(getCurrentFY()).end);
-  const [data, setData] = useState<{ clientId: string; clientName: string; entries: any[] }[]>([]);
+  const [allData, setData] = useState<{ clientId: string; clientName: string; entries: any[] }[]>([]);
+  // Clients ticked out of the statement (screen, PDF and Excel). Empty = every client.
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const data = useMemo(() => allData.filter(d => !excluded.has(d.clientId)), [allData, excluded]);
   const [groupObMap, setGroupObMap] = useState<Record<string, { amount: number; date: string; narration: string; firmIds: string[]; byFirm: Record<string, number> }>>({});
   const [invoiceMap, setInvoiceMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
@@ -948,6 +952,7 @@ function GroupLedgerView() {
       .map(cid => ({ clientId: cid, clientName: clientMap[cid] || "Unknown", entries: grouped[cid] || [] }))
       .filter(r => r.entries.length > 0 || newObMap[r.clientId] !== undefined);
     setData(result);
+    setExcluded(new Set());
     setLoading(false);
   }, [groupId, firmIds, fromDate, toDate, toast]);
 
@@ -1284,10 +1289,15 @@ function GroupLedgerView() {
         </CardContent></Card>
       ) : loading ? (
         <Skeleton className="h-40 w-full" />
-      ) : data.length === 0 ? (
+      ) : allData.length === 0 ? (
         <Card><CardContent className="py-8 text-center text-muted-foreground">No entries found for this group</CardContent></Card>
       ) : (
         <>
+          <GroupClientPicker className="max-w-md" excluded={excluded} onChange={setExcluded}
+            clients={allData.map(d => ({
+              id: d.clientId, name: d.clientName,
+              closing: (groupObMap[d.clientId]?.amount || 0) + d.entries.reduce((s: number, e: any) => s + (Number(e.debit_amount) || 0) - (Number(e.credit_amount) || 0), 0),
+            }))} />
           <Table>
             <TableHeader>
               <TableRow>
@@ -1363,8 +1373,8 @@ function GroupLedgerView() {
             </TableFooter>
           </Table>
           <div className="flex gap-2 flex-wrap">
-            <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
-            <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
+            <Button variant="outline" size="sm" disabled={data.length === 0} onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
+            <Button variant="outline" size="sm" disabled={data.length === 0} onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
             <Button variant="outline" size="sm" onClick={handleDownloadZip} className="gap-1"><Archive size={14} /> Download All Invoices (ZIP)</Button>
           </div>
         </>

@@ -8,6 +8,8 @@
  *  3. Ledger sheet shows OB as first row, matching the Ledger tab
  */
 import { downloadBlob } from "@/lib/downloadBlob";
+import { accumulateBalances, BILLABLE_STATUSES, emptyBalances, netClosing, netOpening, type Balances } from "../../../supabase/functions/_shared/statement/report";
+import { GroupClientPicker, type PickableClient } from "@/components/billing/GroupClientPicker";
 import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
@@ -42,7 +44,6 @@ import {
 } from "@/lib/jspdfUnicodeFont";
 
 /** Invoice statuses that count as receivable (matches v_billing_reconciliation). */
-const BILLABLE_STATUSES = ["finalized", "sent", "overdue", "paid"];
 
 // Fetch ALL rows for a query, paging past PostgREST's 1000-row default cap.
 // Used wherever a result set feeds a SUM, so totals never silently truncate.
@@ -72,13 +73,6 @@ function describeDownloadError(e: any): string {
 
 interface Firm { id: string; name: string; logo_url?: string | null; }
 
-interface Balances {
-  ob: number;          // manual opening balance from client_billing_opening_balances
-  openingDr: number;   // invoices before period
-  openingCr: number;   // receipts before period
-  debit: number;       // invoices in period
-  credit: number;      // receipts in period
-}
 
 /** One client's balances in ONE firm — the atom every view aggregates. */
 interface ClientRow extends Balances {
@@ -113,7 +107,6 @@ const CLIENT_EMAIL_TYPES = [
 
 const ALL_FIRMS = "__all__";
 const NO_GROUP = "__none__";
-const emptyBalances = (): Balances => ({ ob: 0, openingDr: 0, openingCr: 0, debit: 0, credit: 0 });
 function addBalances(into: Balances, b: Balances) {
   into.ob += b.ob; into.openingDr += b.openingDr; into.openingCr += b.openingCr;
   into.debit += b.debit; into.credit += b.credit;
@@ -218,6 +211,11 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   const [waPdf,        setWaPdf]        = useState<{ blob: Blob; filename: string } | "loading" | "empty" | "error">("loading");
   const waPdfFor = useRef<string | null>(null);
 
+  // Clients ticked out of a group statement (download / email / WhatsApp). Empty = every client.
+  const [gExcluded,    setGExcluded]    = useState<Set<string>>(new Set());
+  const [groupDownload, setGroupDownload] = useState<DisplayRow | null>(null);
+  const waAutoMsg = useRef("");
+
   // Telegram / PDF
   const [tgSending,    setTgSending]    = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
@@ -306,49 +304,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
             .in("firm_id", firmIds)),
       ]);
 
-      // One atom per (client, firm) with any activity.
-      const atoms = new Map<string, Balances & { clientId: string; firmId: string }>();
-      const atom = (clientId: string, firmId: string) => {
-        const k = `${clientId}|${firmId}`;
-        let a = atoms.get(k);
-        if (!a) { a = { clientId, firmId, ...emptyBalances() }; atoms.set(k, a); }
-        return a;
-      };
-
-      for (const ob of obRows || []) {
-        if (!ob.client_id) continue;
-        atom(ob.client_id, ob.firm_id).ob += Number(ob.amount || 0);
-      }
-      for (const inv of invoices || []) {
-        if (!inv.client_id) continue;
-        const a = atom(inv.client_id, inv.firm_id);
-        const amt = Number(inv.total_amount || 0);
-        if (!amt) continue;
-        // Credit notes reduce the debtor (Cr), same as the ledger sheet below.
-        const isCN = inv.document_type === "credit_note";
-        // An undated document is treated as in-period (the ledger sheet does the same)
-        // rather than silently dropped from both opening and period figures.
-        if (inv.invoice_date && inv.invoice_date < fromDate) { if (isCN) a.openingCr += amt; else a.openingDr += amt; }
-        else if (!inv.invoice_date || inv.invoice_date <= toDate) { if (isCN) a.credit += amt; else a.debit += amt; }
-      }
-      for (const rec of receipts || []) {
-        if (!rec.client_id) continue;
-        const a = atom(rec.client_id, rec.firm_id);
-        // Q2: GST-TDS deducted by the client also settles the invoice.
-        const amt = Number(rec.amount_received || 0) + Number(rec.tds_amount || 0) + Number(rec.gst_tds_amount || 0);
-        if (!amt) continue;
-        if (rec.receipt_date && rec.receipt_date < fromDate) a.openingCr += amt;
-        else if (rec.receipt_date && rec.receipt_date >= fromDate && rec.receipt_date <= toDate) a.credit += amt;
-      }
-      // Kasar (write-off / discount) — treated as credit reducing outstanding balance
-      for (const k of kasars || []) {
-        if (!k.client_id) continue;
-        const a = atom(k.client_id, k.firm_id);
-        const amt = Number(k.amount || 0);
-        if (!amt) continue;
-        if (k.kasar_date && k.kasar_date < fromDate) a.openingCr += amt;
-        else if (k.kasar_date && k.kasar_date >= fromDate && k.kasar_date <= toDate) a.credit += amt;
-      }
+      // One atom per (client, firm) with any activity — shared with the Telegram bot's statements.
+      const atoms = accumulateBalances({ fromDate, toDate, obRows: obRows || [], invoices: invoices || [], receipts: receipts || [], kasars: kasars || [] });
 
       // Fetch only the clients with activity, in chunks (URL length).
       const ids = Array.from(new Set(Array.from(atoms.values()).map(a => a.clientId)));
@@ -402,9 +359,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       // Last billing email per client. Each log row carries client_id (single-
       // client sends) or client_group_id (one row per group statement); a group
       // statement counts as sent to every client in that group.
-      const sentLogs = await fetchAllRows<{ client_id: string | null; client_group_id: string | null; sent_at: string | null }>(() =>
+      const sentLogs = await fetchAllRows<{ client_id: string | null; client_group_id: string | null; sent_at: string | null; client_ids: string[] | null }>(() =>
         (supabase as any).from("notification_log")
-          .select("client_id, client_group_id, sent_at")
+          .select("client_id, client_group_id, sent_at, client_ids:content->client_ids")
           .in("firm_id", firmIds)
           .eq("channel", "email")
           .eq("status", "sent")
@@ -420,7 +377,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       for (const l of sentLogs) {
         if (!l.sent_at) continue;
         if (l.client_id) bump(lastByClient, l.client_id, l.sent_at);
-        if (l.client_group_id) bump(lastByGroup, l.client_group_id, l.sent_at);
+        // A statement for only some of a group's clients counts for those clients only.
+        if (Array.isArray(l.client_ids)) l.client_ids.forEach(id => bump(lastByClient, id, l.sent_at!));
+        else if (l.client_group_id) bump(lastByGroup, l.client_group_id, l.sent_at);
       }
       const lastEmailOf = (clientId: string): string | null => {
         let last = lastByClient.get(clientId) ?? null;
@@ -453,12 +412,6 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   // ── Net opening = manual OB + pre-period invoices − pre-period receipts ──
 
-  function netOpening(r: Balances) {
-    return r.ob + r.openingDr - r.openingCr;
-  }
-  function netClosing(r: Balances) {
-    return netOpening(r) + r.debit - r.credit;
-  }
 
   // ── Fetch ledger for sheet ────────────────────────────────────────────────
 
@@ -624,6 +577,42 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     return out.sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /** The clients behind a row, with their net closing — for the "clients in statement" ticks. */
+  function clientsOfRow(r: DisplayRow): PickableClient[] {
+    const keys = new Set(r.atomKeys);
+    const m = new Map<string, PickableClient>();
+    for (const a of rows) {
+      if (!keys.has(`${a.id}|${a.firmId}`)) continue;
+      const c = m.get(a.id) ?? { id: a.id, name: a.name, closing: 0 };
+      c.closing! += netClosing(a);
+      m.set(a.id, c);
+    }
+    return Array.from(m.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** The row limited to the ticked clients — balances, firms and atoms recomputed. */
+  function narrowRow(r: DisplayRow, excluded: Set<string>): DisplayRow {
+    if (excluded.size === 0) return r;
+    const keys = new Set(r.atomKeys);
+    const out: DisplayRow = { ...r, ...emptyBalances(), atomKeys: [], firmIds: [], clientCount: 0 };
+    const clientSet = new Set<string>(), firmSet = new Set<string>();
+    for (const a of rows) {
+      if (!keys.has(`${a.id}|${a.firmId}`) || excluded.has(a.id)) continue;
+      addBalances(out, a);
+      out.atomKeys.push(`${a.id}|${a.firmId}`);
+      clientSet.add(a.id); firmSet.add(a.firmId);
+    }
+    out.clientCount = clientSet.size;
+    out.firmIds = Array.from(firmSet);
+    return out;
+  }
+
+  /** Ids of the ticked clients when only some are ticked (null = the whole group). */
+  function pickedClientIds(r: DisplayRow, excluded: Set<string>): string[] | null {
+    if (excluded.size === 0) return null;
+    return clientsOfRow(r).map(c => c.id).filter(id => !excluded.has(id));
+  }
+
   /** Closing balance of each client of a row with each firm — the payment advice lines. */
   function paymentsFor(row: DisplayRow): PaymentAdviceRow[] {
     const keys = new Set(row.atomKeys);
@@ -672,15 +661,22 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     return { blob, filename: `Statement_of_Account_${r.name.replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 40)}_${fromDate}_${toDate}.pdf` };
   }
 
-  /** Download a client's or a group's statement of account straight from the table row. */
+  /** Row download: a client's statement downloads at once; a group first asks which clients to include. */
   async function handleDownloadRow(r: DisplayRow) {
+    if (r.kind === "group") { setGExcluded(new Set()); setGroupDownload(r); return; }
+    await downloadRowNow(r);
+  }
+
+  async function downloadRowNow(r: DisplayRow): Promise<boolean> {
     setDownloadingKey(r.key);
     try {
       const built = await buildRowStatement(r);
-      if (!built) { toast.error("Nothing to download — no balances or transactions in the period"); return; }
+      if (!built) { toast.error("Nothing to download — no balances or transactions in the period"); return false; }
       downloadBlob(built.blob, built.filename);
+      return true;
     } catch (e: any) {
       toast.error("Download failed: " + describeDownloadError(e));
+      return false;
     } finally {
       setDownloadingKey(null);
     }
@@ -703,19 +699,26 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   }
 
   function openWhatsApp(r: DisplayRow) {
+    setGExcluded(new Set());
+    setWaTarget(r);
+    setWaPhone(waRecipients(r)[0] ?? "");
+    prepareWhatsApp(r, true);
+  }
+
+  /** Build the WhatsApp PDF and message for the row (a group narrowed to its ticked clients). */
+  function prepareWhatsApp(r: DisplayRow, resetMsg: boolean) {
     const period = `${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`;
     const closing = netClosing(r);
     const drCr = (n: number) => Math.abs(n) < 0.005 ? "Nil" : `₹${fmtINR(Math.abs(n))} ${n > 0 ? "Dr" : "Cr"}`;
     const balance = Math.abs(closing) < 0.005 ? "Nil" : `${drCr(closing)} ${closing > 0 ? "(payable by you)" : "(advance with us)"}`;
     const firmName = r.firmIds.length === 1 ? firms.find(f => f.id === r.firmIds[0])?.name : undefined;
-    setWaTarget(r);
-    setWaPhone(waRecipients(r)[0] ?? "");
     setWaPdf("loading");
-    waPdfFor.current = r.key;
+    const token = `${r.key}|${r.atomKeys.length}|${Date.now()}`;
+    waPdfFor.current = token;
     buildRowStatement(r)
-      .then(built => { if (waPdfFor.current === r.key) setWaPdf(built ?? "empty"); })
-      .catch(() => { if (waPdfFor.current === r.key) setWaPdf("error"); });
-    setWaMsg(
+      .then(built => { if (waPdfFor.current === token) setWaPdf(built ?? "empty"); })
+      .catch(() => { if (waPdfFor.current === token) setWaPdf("error"); });
+    const msg = (
       `Dear Sir/Madam,\n\nPlease find attached the statement of account${r.kind === "group" ? ` for ${r.name} group` : ` of ${r.name}`} for the period ${period}.\n\n` +
       `${r.kind === "group" ? "Group" : "Client"}: ${r.name}\n` +
       `Opening balance: ${drCr(netOpening(r))}\n` +
@@ -724,10 +727,20 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       `Closing balance as on ${format(parseISO(toDate), "d MMM yyyy")}: ${balance}\n\n` +
       (closing > 0.005 ? `Kindly arrange payment of the outstanding amount at the earliest. ` : "") +
       `Kindly review and revert if any discrepancies are noticed.\n\nRegards${firmName ? `,\n${firmName}` : ""}`);
+    // Keep the user's own edits; only refresh a message that is still the generated one.
+    setWaMsg(cur => (resetMsg || cur === waAutoMsg.current ? msg : cur));
+    waAutoMsg.current = msg;
   }
+
+  // Re-tick the group's clients → rebuild the WhatsApp PDF and figures for the new selection.
+  useEffect(() => {
+    if (waTarget?.kind === "group") prepareWhatsApp(narrowRow(waTarget, gExcluded), false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gExcluded]);
 
   async function handleSendWhatsApp() {
     if (!waTarget || typeof waPdf !== "object") return;
+    if (waTarget.kind === "group" && narrowRow(waTarget, gExcluded).clientCount === 0) { toast.error("Tick at least one client"); return; }
     const phone = waPhone;
     if (!waRecipients(waTarget).includes(phone)) { toast.error("No WhatsApp number saved for this client"); return; }
     setWaSending(true);
@@ -754,6 +767,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   function openGroupEmail(group: DisplayRow) {
     const period = `${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`;
     setGroupEmail(group);
+    setGExcluded(new Set());
     // Pre-fill from the group's saved contacts: master email in To, additional ones in CC.
     const saved = savedEmails(groupContacts[group.id]);
     setGTo(saved[0] ?? ""); setGCc(saved.slice(1).join(", "));
@@ -774,15 +788,18 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
   async function handleSendGroupEmail() {
     if (!groupEmail) return;
+    const target = narrowRow(groupEmail, gExcluded);
+    if (target.clientCount === 0) { toast.error("Tick at least one client"); return; }
+    const pickedIds = pickedClientIds(groupEmail, gExcluded);
     const to = splitEmails(gTo);
     if (to.length === 0 || to.some(e => !e.includes("@"))) { toast.error("Enter at least one valid recipient email address"); return; }
     const cc = splitEmails(gCc).filter(e => !to.includes(e));
     setGSending(true);
     try {
-      const perClient = await loadGroupStatement(groupEmail);
-      if (perClient.length === 0) { toast.error("Nothing to send — no balances or transactions for this group in the period"); return; }
-      const { base64 } = await generateGroupStatementPdf(groupEmail, perClient);
-      const firmForSend = groupEmail.firmIds.length === 1 ? groupEmail.firmIds[0] : sendFirmId;
+      const perClient = await loadGroupStatement(target);
+      if (perClient.length === 0) { toast.error("Nothing to send — no balances or transactions for the ticked clients in the period"); return; }
+      const { base64 } = await generateGroupStatementPdf(target, perClient);
+      const firmForSend = target.firmIds.length === 1 ? target.firmIds[0] : sendFirmId;
       const filename = `Statement_of_Account_${groupEmail.name.replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 40)}_${fromDate}_${toDate}.pdf`;
 
       const sent: string[] = [];
@@ -802,6 +819,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               custom_message: gMsg,
               pdf_base64: base64,
               pdf_filename: filename,
+              ...(pickedIds ? { statement_client_ids: pickedIds } : {}),
             },
           },
         });
@@ -1494,7 +1512,32 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         </SheetContent>
       </Sheet>
 
-      {/* ── Email dialog ── */}
+      {/* ── Group statement download: pick the clients ── */}
+      <Dialog open={!!groupDownload} onOpenChange={open => { if (!open && !downloadingKey) setGroupDownload(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base"><Download size={16} className="text-emerald-600" /> Download Group Statement of Account</DialogTitle>
+          </DialogHeader>
+          {groupDownload && (
+            <div className="space-y-3 py-1">
+              <p className="text-xs text-muted-foreground">
+                <span className="font-semibold text-foreground">{groupDownload.name}</span> · {format(parseISO(fromDate), "d MMM yyyy")} → {format(parseISO(toDate), "d MMM yyyy")}.
+                Untick any client to leave them out of the PDF.
+              </p>
+              <GroupClientPicker clients={clientsOfRow(groupDownload)} excluded={gExcluded} onChange={setGExcluded} />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" disabled={!!downloadingKey} onClick={() => setGroupDownload(null)}>Cancel</Button>
+            <Button size="sm" className="gap-1.5"
+              disabled={!!downloadingKey || !groupDownload || narrowRow(groupDownload, gExcluded).clientCount === 0}
+              onClick={async () => { if (groupDownload && await downloadRowNow(narrowRow(groupDownload, gExcluded))) setGroupDownload(null); }}>
+              {downloadingKey ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />} Download PDF
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ── Group statement email dialog ── */}
       <Dialog open={!!groupEmail} onOpenChange={open => { if (!open && !gSending) setGroupEmail(null); }}>
         <DialogContent className="max-w-lg">
@@ -1506,8 +1549,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               <p className="text-xs text-muted-foreground">
                 <span className="font-semibold text-foreground">{groupEmail.name}</span> — {groupEmail.clientCount} client{groupEmail.clientCount !== 1 ? "s" : ""}
                 {groupEmail.firmIds.length > 1 ? ` across ${groupEmail.firmIds.length} firms` : ""} · {format(parseISO(fromDate), "d MMM yyyy")} → {format(parseISO(toDate), "d MMM yyyy")}.
-                One PDF goes to the addresses below: a summary by client, then each client's ledger.
+                One PDF goes to the addresses below: each ticked client's ledger, then the amount each client pays each firm.
               </p>
+              <GroupClientPicker clients={clientsOfRow(groupEmail)} excluded={gExcluded} onChange={setGExcluded} />
               <div className="space-y-1">
                 <Label htmlFor="g-email-to" className="text-xs">To <span className="text-destructive">*</span></Label>
                 <Input id="g-email-to" value={gTo} onChange={e => setGTo(e.target.value)} placeholder="email@example.com, another@example.com" className="h-8 text-xs" />
@@ -1564,7 +1608,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                 [`To: ${gTo || "—"}`, ...(gCc ? [`CC: ${gCc}`] : []), `Subject: ${gSubject}`, "Attachment: group statement PDF"], groupEmail.name, gMsg)}>
               <Eye size={13} /> Preview
             </Button>
-            <Button size="sm" disabled={gSending || !gTo.trim()} onClick={handleSendGroupEmail} className="gap-1.5">
+            <Button size="sm" disabled={gSending || !gTo.trim() || (!!groupEmail && narrowRow(groupEmail, gExcluded).clientCount === 0)} onClick={handleSendGroupEmail} className="gap-1.5">
               {gSending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
               {gSending ? "Preparing & sending…" : "Send Group Statement"}
             </Button>
@@ -1612,6 +1656,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                 {waTarget.kind === "group" ? ` — ${waTarget.clientCount} client${waTarget.clientCount !== 1 ? "s" : ""}` : ""} · {format(parseISO(fromDate), "d MMM yyyy")} → {format(parseISO(toDate), "d MMM yyyy")}.
                 {" "}Your open WhatsApp Web tab is reused: the client's chat opens with the message typed in and the PDF attached for you to review, then press Send.
               </p>
+              {waTarget.kind === "group" && (
+                <GroupClientPicker clients={clientsOfRow(waTarget)} excluded={gExcluded} onChange={setGExcluded} />
+              )}
               <div className="space-y-1">
                 <Label className="text-xs">From</Label>
                 <div className="h-8 px-3 flex items-center rounded-md border bg-muted text-xs font-mono">{BILLING_WHATSAPP_DISPLAY}</div>
