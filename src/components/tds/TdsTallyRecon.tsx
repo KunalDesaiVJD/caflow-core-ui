@@ -26,7 +26,7 @@ import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
   reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, resolveTaxableIncomeReading,
-  SPLIT_FOLD_CONFIDENCE, oneSidedLabel,
+  SPLIT_FOLD_CONFIDENCE, oneSidedLabel, learnLedgerSections, overrideMemoryKey,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
 } from "@/lib/tds/tallyRecon";
 
@@ -142,19 +142,23 @@ async function parseLedgerFile(file: File) {
     throw new Error("Stage 3 reads ledger PDFs only (Tally or Expert). Export the ledger as PDF and import that.");
   }
   const pages = await pdfToTextPages(file);
+  // The ledger's own heading is the primary section source; when it carries none
+  // (a ledger titled "TDS FEES"), the file name the CA saved it under ("194J.pdf",
+  // "TDS on Contractor.pdf") is the next-best evidence. Never overrides a heading.
+  const fileSection = canonicalSection(file.name.replace(/\.[^.]+$/, "").replace(/[_]+/g, " "));
 
   const tally = parseTallyPdfPages(pages);
   const tallyHeaderFound = !tally.issues.some((i) => i.includes("no Tally ledger column header"));
   if (tallyHeaderFound) {
     if (!tally.rows.length) throw new Error(tally.issues[0] || "No deduction (credit) entries found — is this a Tally Ledger Account print?");
-    return { rows: tally.rows, section: tally.section, label: tally.ledgerName || file.name, period: tally.period, issues: tally.issues, skipped: tally.skipped, source: "Tally" as const };
+    return { rows: tally.rows, section: tally.section ?? fileSection, label: tally.ledgerName || file.name, period: tally.period, issues: tally.section || !fileSection ? tally.issues : tally.issues.filter((i) => !i.startsWith("Could not read the TDS section")), skipped: tally.skipped, source: "Tally" as const };
   }
 
   const expert = parseExpertPdfPages(pages);
   const expertHeaderFound = !expert.issues.some((i) => i.includes("no Expert ledger column header"));
   if (expertHeaderFound) {
     if (!expert.rows.length) throw new Error(expert.issues[0] || "No deduction (credit) entries found — is this an Expert ledger print?");
-    return { rows: expert.rows, section: expert.section, label: expert.company || file.name, period: expert.period, issues: expert.issues, skipped: expert.skipped, source: "Expert" as const };
+    return { rows: expert.rows, section: expert.section ?? fileSection, label: expert.company || file.name, period: expert.period, issues: expert.section || !fileSection ? expert.issues : expert.issues.filter((i) => !i.startsWith("Could not read the TDS section")), skipped: expert.skipped, source: "Expert" as const };
   }
 
   throw new Error("Unrecognised ledger format — Stage 3 reads Tally Ledger Account PDFs or Expert ledger PDFs. Export one of those and import it.");
@@ -373,6 +377,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       debit: t.debit != null ? Number(t.debit) : null, credit: t.credit != null ? Number(t.credit) : null,
       vch_no: t.vch_no, vch_type: t.vch_type,
       section: t.section ?? batchSection.get(t.batch_id) ?? null,
+      batch_id: t.batch_id ?? null,
       // Only tallyPdf.ts's compound-Journal rows ever populate this — it
       // rides free inside the `raw` jsonb blob (no migration), stored there
       // by handleImport's `raw: r` below. Display only, see TallyRow's own doc.
@@ -609,7 +614,7 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     // client keeps one per section). Each row carries its own section, so an
     // office 194A record is only ever matched against 194A ledger rows; a batch's
     // section is the fallback for rows imported before per-row section existed.
-    const { data: b } = await supabase.from("tds_tally_batches").select("id, section").eq("filing_id", fId).order("imported_at", { ascending: false });
+    const { data: b } = await supabase.from("tds_tally_batches").select("id, section, file_name").eq("filing_id", fId).order("imported_at", { ascending: false });
     const tally = await fetchTallyRows(fId, b || []);
     const maps = await loadMaps();
     // reconcileTallyFull (not reconcileTally) so a ledger credit no office record
@@ -702,6 +707,18 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const { data: prior } = await supabase.from("tds_tally_results").select("id, office_deductee_id, tally_party, tally_date, tally_credit, result, overridden, override_reason, overridden_by, overridden_at").eq("filing_id", fId);
     const priorOffice = (prior || []).filter((p: any) => p.office_deductee_id);
     const pm = new Map<string, any>(); for (const p of priorOffice) pm.set(p.office_deductee_id ?? "", p);
+    // Remembered override decisions (tds_override_memory), keyed by the record's
+    // VALUES — they survive the ledger/Genius re-imports that wipe the result
+    // rows above and give every deductee a new id. Consumed one per row so two
+    // identical records never both inherit one decision.
+    const { data: memRows } = await supabase.from("tds_override_memory" as any)
+      .select("record_key, result, override_reason, overridden_by, overridden_at").eq("filing_id", fId).eq("stage", "tally");
+    const memory = new Map<string, any[]>();
+    for (const m of (memRows || []) as any[]) {
+      const k = `${m.record_key}|${m.result}`;
+      memory.set(k, [...(memory.get(k) || []), { ...m, overridden: true }]);
+    }
+    const recall = (r: Parameters<typeof overrideMemoryKey>[0], result: string) => memory.get(`${overrideMemoryKey(r)}|${result}`)?.shift() ?? null;
     // Rows where THIS run found a credible suggested mapping (a Party Name
     // Mismatch with a candidate ledger party — see render()'s suggestion gate
     // in tallyRecon.ts) AND the user has not already dismissed this exact
@@ -713,7 +730,9 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     // asked about again on every subsequent Run Validation.
     const mappingCandidates: TallyReconRow[] = [];
     const newRows = audited.map((r) => {
-      const c = pm.get(r.office_deductee_id ?? ""); const keep = !!c?.overridden && c.result === r.result;
+      const prev = pm.get(r.office_deductee_id ?? "");
+      const c = prev?.overridden && prev.result === r.result ? prev : recall(r, r.result);
+      const keep = !!c?.overridden;
       // "Name Mismatch" is the dual-ledger merge's own relabelling of exactly
       // this same suggestion (mergeDualLedgerResults carries suggested_party
       // through unchanged) — both must offer the proactive mapping dialog.
@@ -761,8 +780,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
         : "Office Data Not Found";
       const twins = lm.get(key) || [];
       const at = twins.findIndex((p) => p.overridden && p.result === result);
-      const c = at >= 0 ? twins.splice(at, 1)[0] : twins.shift();
-      const keep = !!c?.overridden && c.result === result;
+      const prevTwin = at >= 0 ? twins.splice(at, 1)[0] : twins.shift();
+      const c = prevTwin?.overridden && prevTwin.result === result
+        ? prevTwin
+        : recall({ office_name: null, office_date: null, office_tds: null, tally_party: t.party, tally_date: t.date, tally_credit: t.credit }, result);
+      const keep = !!c?.overridden;
       return {
         filing_id: fId, batch_id: b?.[0]?.id ?? null, firm_id: firmId, quarter: selQuarter, office_deductee_id: null,
         office_name: null, office_date: null, office_amount: null, office_tds: null, office_section: null,
@@ -786,6 +808,22 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
       p_rows: [...newRows, ...surplusRows],
     });
     if (error) throw new Error(error.message);
+    // Self-learning: a ledger imported with no readable section is tagged with
+    // the one section its matched office records agree on, so coverage hints,
+    // reports and the next run all see it as that section's ledger.
+    const learned = learnLedgerSections(audited, tally);
+    for (const [batchId, sec] of learned) {
+      const { error: lErr } = await supabase.from("tds_tally_batches").update({ section: sec }).eq("id", batchId).is("section", null);
+      if (lErr) continue;
+      await supabase.from("tds_tally_rows").update({ section: sec }).eq("batch_id", batchId).is("section", null);
+      const fileName = (b || []).find((x: any) => x.id === batchId)?.file_name ?? "ledger";
+      await logReconAudit({ filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_SECTION_LEARNED", oldValue: "no section", newValue: sec, remark: `Section ${sec} learned for "${fileName}" from its matched office records.` });
+      toast({ title: `Learned: "${fileName}" is section ${sec}`, description: "Its entries matched only that section's office records. You can change it on the imported file." });
+    }
+    if (learned.size) {
+      const { data: nb } = await supabase.from("tds_tally_batches").select("*").eq("filing_id", fId).order("imported_at", { ascending: false });
+      if (seq === loadSeq.current) setBatches(nb || []);
+    }
     await logReconAudit({ filingId: fId, firmId, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_RECON_RUN", newValue: `${audited.filter((r) => r.result === "Matched").length} matched / ${audited.length}`, remark: `Tally reconciliation over ${tally.length} ledger rows` });
     if (seq !== loadSeq.current) return { audited, mappingCandidates: [] };
     const { data: res } = await supabase.from("tds_tally_results").select("*").eq("filing_id", fId); if (seq !== loadSeq.current) return { audited, mappingCandidates: [] };
@@ -952,6 +990,11 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     const { data: saved, error } = await supabase.from("tds_tally_results").update({ overridden: true, override_reason: reason, overridden_by: user?.id, overridden_at: new Date().toISOString() }).eq("id", ovTarget.id).select("id");
     if (error || !saved?.length) { toast({ title: "Override not saved", description: error?.message || "This record has changed since the page loaded — reload Stage 3 and try again.", variant: "destructive" }); }
     else {
+      // Remember the decision by value so a re-import never asks for it again.
+      if (filing) await supabase.from("tds_override_memory" as any).insert({
+        filing_id: filing.id, firm_id: filing.firm_id, stage: "tally", record_key: overrideMemoryKey(ovTarget),
+        result: ovTarget.result, override_reason: reason, overridden_by: user?.id ?? null,
+      });
       await logReconAudit({ filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""], actionType: "TALLY_OVERRIDE", oldValue: `${ovTarget.office_name} — ${ovTarget.result}`, newValue: "Overridden", remark: reason });
       setResults((p) => p ? p.map((x) => x.id === ovTarget.id ? { ...x, overridden: true, override_reason: reason, overridden_by: user?.id ?? null } : x) : p);
       toast({ title: "Override recorded" }); setOvOpen(false);
@@ -961,6 +1004,12 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
   const undoOverride = async (r: ResultRow) => {
     const { data: saved, error } = await supabase.from("tds_tally_results").update({ overridden: false, override_reason: null, overridden_by: null, overridden_at: null }).eq("id", r.id).select("id");
     if (error || !saved?.length) { toast({ title: "Undo not saved", description: error?.message || "This record has changed since the page loaded — reload Stage 3 and try again.", variant: "destructive" }); return; }
+    if (filing) {
+      const { data: mem } = await supabase.from("tds_override_memory" as any).select("id")
+        .eq("filing_id", filing.id).eq("stage", "tally").eq("record_key", overrideMemoryKey(r)).eq("result", r.result).limit(1);
+      const memId = (mem as any[] | null)?.[0]?.id;
+      if (memId) await supabase.from("tds_override_memory" as any).delete().eq("id", memId);
+    }
     setResults((p) => p ? p.map((x) => x.id === r.id ? { ...x, overridden: false, override_reason: null, overridden_by: null, overridden_at: null } : x) : p);
   };
 

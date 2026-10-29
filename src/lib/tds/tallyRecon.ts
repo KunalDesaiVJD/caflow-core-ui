@@ -44,6 +44,10 @@ export interface TallyRow {
   // own doc on the field for why narration is deliberately NOT a matching
   // signal).
   narration?: string | null;
+  // Which imported ledger file (tds_tally_batches.id) this row came from.
+  // Bookkeeping only — never read by the matching engine; the caller uses it
+  // to learn the section of a ledger whose heading carried none.
+  batch_id?: string | null;
   // The TDS section this row belongs to, taken from ITS OWN sheet/ledger title.
   // Carried PER ROW (not per file) because a client's Tally dataset is normally
   // one ledger PER SECTION — spread across several sheets AND several files — and
@@ -324,9 +328,19 @@ export function reconcileTallyFull(
   // doc: a Tally salary ledger titled just "192" never claimed to be anything
   // other than a lettered sub-code, so it still covers a 192A/192B/192C record.
   const sectionCovered = (s: string) => covered.has(s) || [...covered].some((c) => salaryBareCompatible(c, s));
+  // A ledger whose section could not be read at all (title "TDS FEES", file
+  // "194J.pdf" printed without the code in its heading) is NOT evidence that a
+  // section is missing — it may well BE the missing section. Real case
+  // (Sarkhej Motor Transport, 26Q Q2 FY 2026-27): a 194C ledger plus an
+  // untagged 194J ledger made all eight 194J office records "No Ledger for
+  // Section" while their exact party/date/TDS twins sat in the untagged file as
+  // "Office Data Not Found" — sixteen manual overrides on every re-import. So
+  // while ANY untagged credit exists, an uncovered office section stays
+  // assignable; sectionEq already treats a null ledger section as permissive.
+  const hasUntagged = credits.some(({ t }) => !sectionOf(t));
   const unassignable = (o: OfficeTxn): string | null => {
     const oSec = canonicalSection(o.section);
-    return sectionScoped && oSec && !sectionCovered(oSec) ? oSec : null;
+    return sectionScoped && !hasUntagged && oSec && !sectionCovered(oSec) ? oSec : null;
   };
 
   const asgOffice: AsgOffice[] = office.map((o) => ({
@@ -962,4 +976,68 @@ function render(
         : `Date, amount, party and section all match.`) + twins + panWarn,
     confidence: conf,
   };
+}
+
+/**
+ * LEARN THE SECTION OF AN UNTAGGED LEDGER FROM WHAT IT ACTUALLY MATCHED.
+ *
+ * A ledger whose heading and file name carry no section still reconciles (see
+ * reconcileTallyFull's `hasUntagged`), but left untagged it keeps every later
+ * run, report and coverage hint guessing. Once a run has matched its rows, the
+ * office records they matched ARE the evidence: if they all share one section,
+ * that is the ledger's section. Conservative by design — learned only when at
+ * least two rows matched, at least half the ledger's credits matched, and every
+ * match agrees on a single canonical section. Any disagreement learns nothing.
+ *
+ * Returns batch_id → learned canonical section, for batches that had none.
+ */
+export function learnLedgerSections(audited: TallyReconRow[], tally: TallyRow[]): Map<string, string> {
+  const credits = new Map<string, TallyRow[]>();
+  const tagged = new Set<string>();
+  for (const t of tally) {
+    if (!t.batch_id) continue;
+    if (canonicalSection(t.section)) { tagged.add(t.batch_id); continue; }
+    if (t.credit == null || t.credit === 0) continue;
+    credits.set(t.batch_id, [...(credits.get(t.batch_id) || []), t]);
+  }
+  const votes = new Map<string, { n: number; secs: Set<string> }>();
+  for (const r of audited) {
+    if (r.result !== "Matched" || r.tally_row_index == null) continue;
+    const oSec = canonicalSection(r.office_section);
+    for (const [batchId, rows] of credits) {
+      if (tagged.has(batchId)) continue;
+      const hit = rows.some((t) => t.row_index === r.tally_row_index && t.party === r.tally_party && t.credit === r.tally_credit);
+      if (!hit) continue;
+      const v = votes.get(batchId) || { n: 0, secs: new Set<string>() };
+      v.n++; v.secs.add(oSec ?? "");
+      votes.set(batchId, v);
+    }
+  }
+  const learned = new Map<string, string>();
+  for (const [batchId, v] of votes) {
+    const total = credits.get(batchId)?.length ?? 0;
+    const [only] = [...v.secs];
+    if (v.secs.size === 1 && only && v.n >= 2 && v.n * 2 >= total) learned.set(batchId, only);
+  }
+  return learned;
+}
+
+/**
+ * The value-based identity of a Stage-3 result row, for tds_override_memory.
+ * Built from what the record IS (party, date, amount), never from ids — a
+ * Genius re-import recreates every deductee with a new id and a ledger
+ * re-import recreates every row, so an id-keyed override could never survive
+ * either. Office-side rows key on name/date/TDS, ledger-only rows on
+ * party/date/credit. MUST stay identical to the backfill expression in
+ * supabase/migrations/20261029120000_tds_override_memory.sql.
+ */
+export function overrideMemoryKey(r: {
+  office_deductee_id?: string | null; office_name: string | null; office_date: string | null; office_tds: number | string | null;
+  tally_party: string | null; tally_date: string | null; tally_credit: number | string | null;
+}): string {
+  const n = (s: string | null) => (s ?? "").replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
+  const num = (v: number | string | null) => (v == null || v === "" ? "" : String(Number(v)));
+  return r.office_deductee_id || r.office_name
+    ? `o|${n(r.office_name)}|${r.office_date ?? ""}|${num(r.office_tds)}`
+    : `l|${n(r.tally_party)}|${r.tally_date ?? ""}|${num(r.tally_credit)}`;
 }
