@@ -136,6 +136,15 @@ function currentFYStart(): string {
   return `${y}-04-01`;
 }
 
+/** WhatsApp glyph (lucide has no brand icons). */
+function WhatsAppIcon({ size = 12, className }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M17.47 14.38c-.3-.15-1.76-.87-2.03-.97-.27-.1-.47-.15-.67.15-.2.3-.77.97-.94 1.17-.17.2-.35.22-.64.07-.3-.15-1.26-.46-2.4-1.48-.89-.79-1.49-1.77-1.66-2.07-.17-.3-.02-.46.13-.6.13-.13.3-.35.45-.52.15-.17.2-.3.3-.5.1-.2.05-.37-.03-.52-.07-.15-.67-1.6-.92-2.2-.24-.58-.49-.5-.67-.5h-.57c-.2 0-.52.07-.79.37-.27.3-1.04 1.02-1.04 2.48s1.07 2.88 1.21 3.08c.15.2 2.1 3.2 5.08 4.49.71.31 1.26.49 1.7.63.71.22 1.36.19 1.87.12.57-.09 1.76-.72 2-1.41.25-.7.25-1.29.17-1.41-.07-.13-.27-.2-.57-.35zM12.05 21.8h-.01a9.87 9.87 0 0 1-5.03-1.38l-.36-.21-3.74.98 1-3.65-.24-.37a9.86 9.86 0 0 1-1.51-5.26c0-5.45 4.44-9.88 9.89-9.88 2.64 0 5.12 1.03 6.99 2.9a9.82 9.82 0 0 1 2.89 6.99c0 5.45-4.44 9.88-9.88 9.88zm8.41-18.3A11.82 11.82 0 0 0 12.05 0C5.5 0 .16 5.34.16 11.89c0 2.1.55 4.14 1.59 5.95L.06 24l6.3-1.65a11.88 11.88 0 0 0 5.68 1.45h.01c6.55 0 11.89-5.34 11.89-11.89 0-3.18-1.24-6.16-3.48-8.41z" />
+    </svg>
+  );
+}
+
 function todayStr(): string { return format(new Date(), "yyyy-MM-dd"); }
 
 async function loadLogoBase64(url: string): Promise<string | null> {
@@ -193,6 +202,13 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   const [gSubject,     setGSubject]     = useState("");
   const [gMsg,         setGMsg]         = useState("");
   const [gSending,     setGSending]     = useState(false);
+
+  // WhatsApp (client or group statement via WhatsApp Web)
+  const [clientMobiles, setClientMobiles] = useState<Record<string, string>>({});
+  const [waTarget,     setWaTarget]     = useState<DisplayRow | null>(null);
+  const [waPhone,      setWaPhone]      = useState("");
+  const [waMsg,        setWaMsg]        = useState("");
+  const [waSending,    setWaSending]    = useState(false);
 
   // Telegram / PDF
   const [tgSending,    setTgSending]    = useState(false);
@@ -329,12 +345,17 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       // Fetch only the clients with activity, in chunks (URL length).
       const ids = Array.from(new Set(Array.from(atoms.values()).map(a => a.clientId)));
       const clientMap = new Map<string, { name: string; email: string | null }>();
+      const mobiles: Record<string, string> = {};
       for (let i = 0; i < ids.length; i += 150) {
         const { data: cData, error: cErr } = await supabase
-          .from("clients").select("id, name, email").in("id", ids.slice(i, i + 150));
+          .from("clients").select("id, name, email, mobile").in("id", ids.slice(i, i + 150));
         if (cErr) throw cErr;
-        for (const c of cData || []) clientMap.set(c.id, { name: c.name || "—", email: c.email ?? null });
+        for (const c of cData || []) {
+          clientMap.set(c.id, { name: c.name || "—", email: c.email ?? null });
+          if (c.mobile?.trim()) mobiles[c.id] = c.mobile.trim();
+        }
       }
+      setClientMobiles(mobiles);
 
       // Client groups (for the group-wise view). Membership belongs to the client, not to the
       // invoicing firm: a group created under one firm still holds that client's balances with
@@ -623,28 +644,88 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     setPreview({ title, meta, html });
   }
 
+  /** Build a client's or a group's statement of account PDF; null when a group has nothing in the period. */
+  async function buildRowStatement(r: DisplayRow): Promise<{ blob: Blob; filename: string } | null> {
+    if (r.kind === "client") {
+      const entries = await openLedger(r, { throwOnError: true });
+      setSheetClient(null);
+      const { blob } = await generateClientLedgerPdf(r, entries);
+      return { blob, filename: `Statement_of_Account_${r.name.replace(/\s+/g, "_")}_${toDate}.pdf` };
+    }
+    const perClient = await loadGroupStatement(r);
+    if (perClient.length === 0) return null;
+    const { blob } = await generateGroupStatementPdf(r, perClient);
+    return { blob, filename: `Statement_of_Account_${r.name.replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 40)}_${fromDate}_${toDate}.pdf` };
+  }
+
   /** Download a client's or a group's statement of account straight from the table row. */
   async function handleDownloadRow(r: DisplayRow) {
     setDownloadingKey(r.key);
     try {
-      let blob: Blob;
-      let filename: string;
-      if (r.kind === "client") {
-        const entries = await openLedger(r, { throwOnError: true });
-        setSheetClient(null);
-        ({ blob } = await generateClientLedgerPdf(r, entries));
-        filename = `Statement_of_Account_${r.name.replace(/\s+/g, "_")}_${toDate}.pdf`;
-      } else {
-        const perClient = await loadGroupStatement(r);
-        if (perClient.length === 0) { toast.error("Nothing to download — no balances or transactions in the period"); return; }
-        ({ blob } = await generateGroupStatementPdf(r, perClient));
-        filename = `Statement_of_Account_${r.name.replace(/[^a-zA-Z0-9]+/g, "_").slice(0, 40)}_${fromDate}_${toDate}.pdf`;
-      }
-      downloadBlob(blob, filename);
+      const built = await buildRowStatement(r);
+      if (!built) { toast.error("Nothing to download — no balances or transactions in the period"); return; }
+      downloadBlob(built.blob, built.filename);
     } catch (e: any) {
       toast.error("Download failed: " + describeDownloadError(e));
     } finally {
       setDownloadingKey(null);
+    }
+  }
+
+  // ── WhatsApp ──────────────────────────────────────────────────────────────
+  // WhatsApp Web cannot take a file through a link, so the PDF is downloaded and
+  // the chat opens with the message typed in; the user drops the PDF into it.
+
+  /** Mobile numbers of the row's clients (one for a client, every member's for a group). */
+  function mobilesOf(r: DisplayRow): string[] {
+    const ids = new Set(r.atomKeys.map(k => k.split("|")[0]));
+    if (r.kind === "client") ids.add(r.id);
+    return Array.from(new Set(Array.from(ids).map(id => clientMobiles[id]).filter(Boolean)));
+  }
+
+  /** Digits only, with India's 91 prefixed to a bare 10-digit number; null when not a usable number. */
+  function waNumber(raw: string): string | null {
+    let d = raw.replace(/\D/g, "").replace(/^0+/, "");
+    if (d.length === 10) d = "91" + d;
+    return d.length >= 11 && d.length <= 15 ? d : null;
+  }
+
+  function openWhatsApp(r: DisplayRow) {
+    const period = `${format(parseISO(fromDate), "d MMM yyyy")} to ${format(parseISO(toDate), "d MMM yyyy")}`;
+    const closing = netClosing(r);
+    const balance = Math.abs(closing) < 0.005 ? "Nil" : `₹${fmtINR(Math.abs(closing))} ${closing > 0 ? "Dr (payable by you)" : "Cr (advance with us)"}`;
+    const firmName = r.firmIds.length === 1 ? firms.find(f => f.id === r.firmIds[0])?.name : undefined;
+    setWaTarget(r);
+    setWaPhone(mobilesOf(r)[0] ?? "");
+    setWaMsg(
+      `Dear Sir/Madam,\n\nPlease find attached the statement of account${r.kind === "group" ? ` for ${r.name} group` : ` of ${r.name}`} for the period ${period}.\n\n` +
+      `Closing balance as on ${format(parseISO(toDate), "d MMM yyyy")}: ${balance}\n\n` +
+      (closing > 0.005 ? `Kindly arrange payment of the outstanding amount at the earliest. ` : "") +
+      `Kindly review and revert if any discrepancies are noticed.\n\nRegards${firmName ? `,\n${firmName}` : ""}`);
+  }
+
+  async function handleSendWhatsApp() {
+    if (!waTarget) return;
+    const phone = waNumber(waPhone);
+    if (!phone) { toast.error("Enter a valid mobile number (10 digits, or with country code)"); return; }
+    // Open the tab now, inside the click — a window opened after the PDF is built would be blocked as a popup.
+    const win = window.open("", "caflow_whatsapp");
+    // On failure close the tab only if we just opened it blank, never an existing WhatsApp tab.
+    const closeBlank = () => { try { if (win?.location.href === "about:blank") win.close(); } catch { /* cross-origin: an existing chat tab */ } };
+    setWaSending(true);
+    try {
+      const built = await buildRowStatement(waTarget);
+      if (!built) { closeBlank(); toast.error("Nothing to send — no balances or transactions in the period"); return; }
+      downloadBlob(built.blob, built.filename);
+      const url = `https://web.whatsapp.com/send?phone=${phone}&text=${encodeURIComponent(waMsg)}`;
+      if (win) win.location.href = url; else window.open(url, "caflow_whatsapp");
+      toast.success(`WhatsApp opened for +${phone}. Attach the downloaded ${built.filename} to the chat (drag it in or use 📎), then press Send.`, { duration: 10000 });
+      setWaTarget(null);
+    } catch (e: any) {
+      closeBlank();
+      toast.error("WhatsApp failed: " + describeDownloadError(e));
+    } finally {
+      setWaSending(false);
     }
   }
 
@@ -1106,6 +1187,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               <Mail size={12} />
             </button>
           )}
+          {(r.kind === "client" || (r.kind === "group" && r.id !== NO_GROUP)) && (
+            <button title={`WhatsApp ${r.kind === "group" ? `the whole ${r.name} group ` : ""}statement of account${mobilesOf(r).length ? ` to ${mobilesOf(r).join(", ")}` : ""}`}
+              className="p-1 rounded text-muted-foreground hover:text-[#25D366] hover:bg-green-50" onClick={() => openWhatsApp(r)}>
+              <WhatsAppIcon size={12} />
+            </button>
+          )}
         </div>
       </div>
     );
@@ -1463,6 +1550,58 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
             <Button size="sm" disabled={emailSending} onClick={handleSendEmail} className="gap-1.5">
               {emailSending ? <Loader2 size={13} className="animate-spin" /> : <Send size={13} />}
               {emailSending ? "Sending…" : "Send Now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── WhatsApp dialog ── */}
+      <Dialog open={!!waTarget} onOpenChange={open => { if (!open && !waSending) setWaTarget(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <WhatsAppIcon size={16} className="text-[#25D366]" /> WhatsApp {waTarget?.kind === "group" ? "Group " : ""}Statement of Account
+            </DialogTitle>
+          </DialogHeader>
+          {waTarget && (
+            <div className="space-y-3 py-1">
+              <p className="text-xs text-muted-foreground">
+                <span className="font-semibold text-foreground">{waTarget.name}</span>
+                {waTarget.kind === "group" ? ` — ${waTarget.clientCount} client${waTarget.clientCount !== 1 ? "s" : ""}` : ""} · {format(parseISO(fromDate), "d MMM yyyy")} → {format(parseISO(toDate), "d MMM yyyy")}.
+                The PDF downloads and WhatsApp Web opens with this message typed in — attach the PDF in the chat and press Send.
+              </p>
+              <div className="space-y-1">
+                <Label htmlFor="wa-phone" className="text-xs">Mobile number <span className="text-destructive">*</span></Label>
+                <Input id="wa-phone" value={waPhone} onChange={e => setWaPhone(e.target.value)} placeholder="9876543210 or +971 50 123 4567" className="h-8 text-xs" />
+                {mobilesOf(waTarget).length > 1 && (
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    <span className="text-[11px] text-muted-foreground">Client mobiles:</span>
+                    {mobilesOf(waTarget).map(m => (
+                      <button key={m} type="button" onClick={() => setWaPhone(m)}
+                        className={cn("px-2 py-0.5 rounded-full text-[11px] border", waPhone === m ? "bg-primary text-primary-foreground border-primary" : "bg-muted hover:bg-muted/70")}>
+                        {m}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {mobilesOf(waTarget).length === 0 && (
+                  <p className="text-[11px] text-muted-foreground">No mobile number saved for {waTarget.kind === "group" ? "this group's clients" : "this client"} — enter one.</p>
+                )}
+                {waTarget.kind === "group" && (
+                  <p className="text-[11px] text-amber-700">The statement lists every client in the group with their balances — send it only to someone entitled to see all of them.</p>
+                )}
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="wa-msg" className="text-xs">Message</Label>
+                <Textarea id="wa-msg" rows={8} value={waMsg} onChange={e => setWaMsg(e.target.value)} className="text-xs" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" size="sm" disabled={waSending} onClick={() => setWaTarget(null)}>Cancel</Button>
+            <Button size="sm" disabled={waSending || !waPhone.trim()} onClick={handleSendWhatsApp} className="gap-1.5 bg-[#25D366] hover:bg-[#1ebe5b] text-white">
+              {waSending ? <Loader2 size={13} className="animate-spin" /> : <WhatsAppIcon size={13} />}
+              {waSending ? "Preparing PDF…" : "Open WhatsApp"}
             </Button>
           </DialogFooter>
         </DialogContent>
