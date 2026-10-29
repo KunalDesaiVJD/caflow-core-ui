@@ -24,6 +24,9 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
 import { callClaudeCliText, isProviderError } from "../_shared/aiProvider.ts";
+import { agentProtocol, chunkMessage, parseAgentAction, parseCommand } from "../_shared/botAgent.ts";
+import { createBillingTools, NEW_BILLING_TOOLS } from "./billingTools.ts";
+import { buildDigest, runCommand } from "./commands.ts";
 
 // ─── Environment ──────────────────────────────────────────────────────────────
 const BOT_TOKEN           = Deno.env.get("TELEGRAM_BOT_TOKEN") ?? "";
@@ -37,6 +40,7 @@ const EMAIL_FROM          = "accounts@vjdesai.com";
 const FIRM_DISPLAY_NAME   = "V J Desai & Co. LLP";
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+const billingTools = createBillingTools(supabase);
 
 // ─── Claude system prompt ─────────────────────────────────────────────────────
 const SYSTEM_PROMPT = `You are CAFlow Billing Agent, an AI assistant for \
@@ -47,7 +51,10 @@ CAPABILITIES:
 - Search invoices by client name, doc number, date range, status
 - Fetch client ledgers with running balance
 - List all clients or search clients by name/PAN
-- Get outstanding/overdue invoices across all firms
+- Get outstanding/overdue invoices across all firms (or one client / group / firm)
+- Client balance with each firm, client-group balances with the amount payable per firm
+- Receivables by firm, ageing (0-30/31-60/61-90/90+), receipts incl. TDS
+- Payment-reminder runs, billing email log, cancelled invoices / credit notes
 - Calculate totals, summaries, aging reports
 - Send invoice/ledger PDFs via Telegram (use send_pdf_to_telegram tool)
 - Email invoices/ledgers to clients with PDF attachments
@@ -120,6 +127,8 @@ const BILLING_TOOLS = [
       type: "object",
       properties: {
         client_name:  { type: "string",  description: "Filter to a specific client (optional)" },
+        group_name:   { type: "string",  description: "Filter to a client group (optional)" },
+        firm_name:    { type: "string",  description: "Filter to one firm (optional)" },
         overdue_only: { type: "boolean", description: "If true, only return invoices past due date (default false)" },
         limit:        { type: "number",  description: "Max results (default 20)" },
       },
@@ -194,6 +203,7 @@ USAGE RULES:
       required: ["client_name"],
     },
   },
+  ...NEW_BILLING_TOOLS,
 ];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -266,8 +276,13 @@ const WEBHOOK_SECRET = Deno.env.get("TELEGRAM_WEBHOOK_SECRET");
 // ─── Main Serve ───────────────────────────────────────────────────────────────
 Deno.serve(async (req: Request) => {
   // Health check + webhook status/setup
-  if (req.method === "GET") {
+  if (req.method === "GET" || new URL(req.url).searchParams.get("digest") === "1") {
     const url = new URL(req.url);
+    // Morning digest (pg_cron): sent only when the caller presents the key kept in
+    // telegram_bot_settings, and only to allowed users who receive the digest.
+    if (url.searchParams.get("digest") === "1") {
+      return new Response(JSON.stringify(await sendDailyDigest(req.headers.get("X-Digest-Key") || "")), { headers: { "Content-Type": "application/json" } });
+    }
     const setup = url.searchParams.get("setup");
 
     // Check current webhook
@@ -360,13 +375,35 @@ Deno.serve(async (req: Request) => {
     } catch { /* non-fatal — proceed anyway */ }
   }
 
-  // ONLY /start bypasses Claude — simple welcome, nothing else
-  if (text === "/start") {
-    await sendTelegram(chatId,
-      "Welcome to CAFlow Billing Agent! Ask me anything about invoices, " +
-      "ledgers, clients, payments, or emails. I understand natural language."
-    );
+  const command = parseCommand(text);
+
+  // Anyone may ask for their own Telegram ID (needed to be added as a user).
+  if (command?.cmd === "myid") {
+    await sendTelegram(chatId, `Your Telegram ID is ${userId}`);
     return new Response("ok");
+  }
+
+  // Billing data is confidential: only users added in telegram_allowed_users may use the bot.
+  if (!(await isAllowedUser(userId))) {
+    console.warn(`[Bot] Refused user ${userId}`);
+    await sendTelegram(chatId,
+      `This bot is private to V J Desai & Co. LLP.\nYour Telegram ID is ${userId} — ask the administrator to add it in CAFlow.`);
+    return new Response("ok");
+  }
+
+  // Slash commands answer instantly from the database — no AI needed.
+  if (command) {
+    try {
+      const reply = await runCommand(command.cmd, command.arg, billingTools);
+      if (reply !== null) {
+        for (const part of chunkMessage(reply)) await sendTelegram(chatId, part);
+        return new Response("ok");
+      }
+    } catch (e) {
+      console.error("[Bot] command failed:", e);
+      await sendTelegram(chatId, `Could not run /${command.cmd}: ${(e as Error)?.message || e}`);
+      return new Response("ok");
+    }
   }
 
   // EVERYTHING ELSE → Claude API (no exceptions, no keyword shortcuts)
@@ -450,26 +487,86 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
 
   if (usingCli) {
     try {
-      const conversation = history.map((message) => `${message.role.toUpperCase()}: ${
-        typeof message.content === "string"
-          ? message.content
-          : (message.content as any[]).map((block) => block?.text ?? "").join("\n")
-      }`).join("\n\n");
-      const reply = await callClaudeCliText(SYSTEM_PROMPT, conversation, 180_000, "sonnet");
-      if (isProviderError(reply)) throw new Error(reply.error);
-      await sendTelegram(chatId, reply.text, "Markdown");
-      history.push({ role: "assistant", content: reply.text });
+      const reply = await runTextAgent(chatId, history);
+      await sendLongTelegram(chatId, reply);
+      history.push({ role: "assistant", content: reply });
       await (supabase as any).from("telegram_context").upsert(
         { user_id: userId, history: history.slice(-20), updated_at: new Date().toISOString() },
         { onConflict: "user_id" },
       );
     } catch (error) {
       console.error("[Bot] Claude CLI error:", error);
-      await sendMsg(chatId, "âŒ The AI service could not complete that request\. Please try again\.");
+      // The CLI gateway lives on the office computer; fall back to the API when it is unreachable.
+      if (ANTHROPIC_API_KEY) {
+        console.warn("[Bot] falling back to the Anthropic API");
+        return await handleWithClaudeApi(chatId, userId, history);
+      }
+      await sendTelegram(chatId, `The AI service could not complete that request (${(error as Error)?.message || error}). Slash commands still work — type /help.`);
     }
     return;
   }
+  return await handleWithClaudeApi(chatId, userId, history);
+}
 
+// ─── Text-only agent (Claude CLI): tools driven by one JSON action per turn ─────────
+async function runTextAgent(chatId: number, history: Array<{ role: string; content: any }>): Promise<string> {
+  const toolNames = BILLING_TOOLS.map(t => t.name);
+  const system = SYSTEM_PROMPT + "\n" + agentProtocol(BILLING_TOOLS as any);
+  let transcript = history.map((m) => `${m.role.toUpperCase()}: ${
+    typeof m.content === "string" ? m.content : (m.content as any[]).map((b) => b?.text ?? "").join("\n")
+  }`).join("\n\n");
+  for (let step = 0; step < 7; step++) {
+    const out = await callClaudeCliText(system, transcript, 120_000, "sonnet");
+    if (isProviderError(out)) throw new Error(out.error);
+    const action = parseAgentAction(out.text, toolNames);
+    if (action.type === "reply") return action.text;
+    console.log(`[Bot] CLI tool call: ${action.name}`, JSON.stringify(action.input).slice(0, 200));
+    let result: any;
+    try { result = await executeTool(action.name, action.input, chatId); }
+    catch (e) { result = { error: (e as Error)?.message || String(e) }; }
+    const json = JSON.stringify(result);
+    transcript += `\n\nASSISTANT: ${JSON.stringify({ action: "tool", name: action.name, input: action.input })}` +
+      `\n\nTOOL RESULT ${action.name}: ${json.length > 24_000 ? json.slice(0, 24_000) + "…(truncated)" : json}`;
+  }
+  return "That needed more steps than I can take in one go — please ask a narrower question, or use a command such as /summary or /overdue.";
+}
+
+async function sendLongTelegram(chatId: number, text: string) {
+  for (const part of chunkMessage(text)) {
+    const res = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: part, parse_mode: "Markdown" }),
+    });
+    if (!res.ok) await sendTelegram(chatId, part);   // Markdown rejected — send as plain text
+  }
+}
+
+// ─── Access control ─────────────────────────────────────────────────────────
+async function isAllowedUser(userId: number): Promise<boolean> {
+  const { data, error } = await (supabase as any).from("telegram_allowed_users")
+    .select("telegram_user_id").eq("telegram_user_id", userId).eq("active", true).maybeSingle();
+  if (error) {
+    // Table not created yet (migration pending) — keep the bot usable rather than lock everyone out.
+    console.error("[Bot] allow-list check failed:", error.message);
+    return true;
+  }
+  return !!data;
+}
+
+// ─── Morning digest ─────────────────────────────────────────────────────────
+async function sendDailyDigest(key: string): Promise<Record<string, unknown>> {
+  const { data: cfg } = await (supabase as any).from("telegram_bot_settings").select("digest_key").eq("id", 1).maybeSingle();
+  if (!cfg?.digest_key || key !== cfg.digest_key) return { ok: false, error: "forbidden" };
+  const { data: users } = await (supabase as any).from("telegram_allowed_users")
+    .select("telegram_user_id").eq("active", true).eq("receive_digest", true);
+  if (!users?.length) return { ok: true, sent: 0 };
+  const text = await buildDigest(billingTools);
+  for (const u of users) await sendTelegram(Number(u.telegram_user_id), text);
+  return { ok: true, sent: users.length };
+}
+
+// ─── Anthropic API agent (native tool calling) ──────────────────────────────
+async function handleWithClaudeApi(chatId: number, userId: number, history: Array<{ role: string; content: any }>): Promise<void> {
   const CLAUDE_HEADERS = {
     "Content-Type":      "application/json",
     "x-api-key":         ANTHROPIC_API_KEY,
@@ -477,7 +574,7 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
   };
 
   const makeBody = (msgs: typeof history) => JSON.stringify({
-    model:      "claude-sonnet-4-20250514",
+    model:      Deno.env.get("TELEGRAM_BOT_MODEL") || "claude-sonnet-5-5",
     max_tokens: 2000,
     system:     SYSTEM_PROMPT,
     tools:      BILLING_TOOLS,
@@ -525,7 +622,7 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
     // ── Send Claude's final text reply ─────────────────────────────────────────
     const textBlocks = ((msg.content ?? []) as any[]).filter(b => b.type === "text");
     const finalText  = textBlocks.map((b: any) => b.text).join("\n").trim();
-    if (finalText) await sendTelegram(chatId, finalText, "Markdown");
+    if (finalText) await sendLongTelegram(chatId, finalText);
 
     // ── Persist updated history ────────────────────────────────────────────────
     history.push({ role: "assistant", content: msg.content });
@@ -1156,6 +1253,11 @@ async function executeTool(
   input: Record<string, any>,
   chatId: number,
 ): Promise<any> {
+  // Billing-section tools (balances, groups, firms, receipts, ageing, reminders, email log,
+  // cancelled documents) — and the corrected outstanding list, which counts "overdue"
+  // invoices and part payments (amount_due).
+  const fromBillingTools = await billingTools.run(name, input);
+  if (fromBillingTools !== undefined) return fromBillingTools;
   switch (name) {
     case "search_invoices":           return await searchInvoices(input);
     case "get_ledger":                return await getLedger(input);
