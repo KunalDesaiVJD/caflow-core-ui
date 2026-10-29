@@ -620,10 +620,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   /** Build a client's or a group's statement of account PDF; null when a group has nothing in the period. */
   async function buildRowStatement(r: DisplayRow): Promise<{ blob: Blob; filename: string } | null> {
     if (r.kind === "client") {
-      // Reuse the open ledger sheet's rows (and keep it open); otherwise load them quietly.
-      const fromSheet = sheetClient?.key === r.key && !sheetLoading && sheetEntries.length > 0;
-      const entries = fromSheet ? sheetEntries : await openLedger(r, { throwOnError: true });
-      if (!fromSheet) setSheetClient(null);
+      const entries = await openLedger(r, { throwOnError: true });
+      setSheetClient(null);
       const { blob } = await generateClientLedgerPdf(r, entries);
       return { blob, filename: `Statement_of_Account_${r.name.replace(/\s+/g, "_")}_${toDate}.pdf` };
     }
@@ -675,6 +673,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     setWaMsg(
       `Dear Sir/Madam,\n\nPlease find attached the statement of account${r.kind === "group" ? ` for ${r.name} group` : ` of ${r.name}`} for the period ${period}.\n\n` +
       `Closing balance as on ${format(parseISO(toDate), "d MMM yyyy")}: ${balance}\n\n` +
+      (closing > 0.005 ? `Kindly arrange payment of the outstanding amount at the earliest. ` : "") +
       `Kindly review and revert if any discrepancies are noticed.\n\nRegards${firmName ? `,\n${firmName}` : ""}`);
   }
 
@@ -1100,7 +1099,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       <div
         key={r.key}
         className={cn(
-          "grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_104px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
+          "grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] px-4 py-2.5 text-[12px] hover:bg-blue-50/50 cursor-pointer transition-colors",
           nested ? "bg-blue-50/30" : idx % 2 === 0 ? "bg-white" : "bg-slate-50/50",
         )}
         onClick={() => handleRowClick(r)}
@@ -1245,10 +1244,6 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                   <Mail size={10} /> Email group statement
                 </button>
                 <button className="text-[11px] bg-white/15 hover:bg-white/25 rounded px-2 py-0.5 flex items-center gap-1"
-                  onClick={() => openWhatsApp(buildGroupRow(groupFilter.id, groupFilter.name))}>
-                  <WhatsAppIcon size={10} /> WhatsApp group statement
-                </button>
-                <button className="text-[11px] bg-white/15 hover:bg-white/25 rounded px-2 py-0.5 flex items-center gap-1"
                   onClick={() => { setGroupFilter(null); setViewBy("group"); }}>
                   <X size={10} /> Back to all groups
                 </button>
@@ -1260,7 +1255,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
         <div className="overflow-x-auto"><div className="min-w-[1100px]">
         {/* Column headers */}
-        <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_104px] bg-muted/60 border-b px-4 py-2 text-[11px] font-semibold text-muted-foreground select-none">
+        <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] bg-muted/60 border-b px-4 py-2 text-[11px] font-semibold text-muted-foreground select-none">
           <button className="text-left flex items-center" onClick={() => toggleSort("name")}>{viewBy === "firm" ? "Firm" : viewBy === "group" ? "Client group" : "Particulars"} <SortIcon col="name" /></button>
           <div className="text-right">Opening Balance</div>
           <button className="flex items-center justify-end w-full" onClick={() => toggleSort("debit")}>Debit <SortIcon col="debit" /></button>
@@ -1275,7 +1270,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         <div className="divide-y">
           {loading ? (
             Array.from({ length: 8 }).map((_, i) => (
-              <div key={i} className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_104px] px-4 py-2.5 gap-2">
+              <div key={i} className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] px-4 py-2.5 gap-2">
                 <Skeleton className="h-4 w-3/4" /><Skeleton className="h-4 w-full ml-auto" />
                 <Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" />
                 <Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-full" />
@@ -1301,7 +1296,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
         {/* Grand Total */}
         {!loading && filtered.length > 0 && (
-          <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_104px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
+          <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
             <div className="flex items-center gap-1.5">
               <TrendingUp size={13} className="text-orange-400" /> Grand Total
               <span className="text-[10px] font-normal text-white/60 ml-1">({grandTotal.clients} client{grandTotal.clients !== 1 ? "s" : ""})</span>
@@ -1326,7 +1321,6 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
         <span>{viewBy === "client" ? "Click row → ledger detail" : `Click a ${viewBy === "firm" ? "firm" : "group"} → its clients`}</span>
         {viewBy === "group" && <span>A client in several groups is listed under each; the grand total counts it once</span>}
         <span><Mail size={10} className="inline" /> = email statement of account ({viewBy === "group" ? "whole group" : "client"})</span>
-        <span><WhatsAppIcon size={10} className="inline" /> = WhatsApp it via WhatsApp Web</span>
       </div>
 
       {/* ── Client Ledger Sheet ── */}
@@ -1347,11 +1341,6 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                 {sheetClient?.email && (
                   <Button size="sm" variant="outline" className="h-8 text-[#1A2744] text-xs gap-1 bg-white/90 hover:bg-white" onClick={() => setEmailClient(sheetClient)}>
                     <Mail size={12} /> Email
-                  </Button>
-                )}
-                {sheetClient && (
-                  <Button size="sm" variant="outline" className="h-8 text-[#1A2744] text-xs gap-1 bg-white/90 hover:bg-white" onClick={() => openWhatsApp(sheetClient)}>
-                    <WhatsAppIcon size={12} className="text-[#25D366]" /> WhatsApp
                   </Button>
                 )}
               </div>
