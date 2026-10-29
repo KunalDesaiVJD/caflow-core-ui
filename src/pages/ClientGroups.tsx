@@ -132,7 +132,7 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
             description: description.trim() || null,
             color: finalColor,
             // Client groups are created global (NULL); work groups belong to the user's firm.
-            // RLS firm_scope_insert allows both (see 20261029130000_client_groups_global).
+            // RLS firm_scope_insert allows both (see 20261029151000_client_groups_global).
             firm_id: defaultFirmId,
             created_by: userId || null,
           } as any);
