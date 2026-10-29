@@ -8,7 +8,7 @@
  *  3. Ledger sheet shows OB as first row, matching the Ledger tab
  */
 import { downloadBlob } from "@/lib/downloadBlob";
-import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -35,7 +35,7 @@ import { composeLedgerEntries, type LedgerEntry, type RawInvoice, type RawReceip
 import { buildGroupStatementPdf } from "@/lib/groupStatementPdf";
 import { loadFirmBankDetails, type PaymentAdviceRow } from "@/lib/multiClientLedgerPdf";
 import { renderStatementEmailPreview } from "@/lib/billingEmailPreview";
-import { BILLING_WHATSAPP_DISPLAY, billingWhatsAppUrl } from "@/lib/billingWhatsApp";
+import { BILLING_WHATSAPP_DISPLAY, hasWhatsAppExtension, reserveBillingWhatsAppTab, releaseBillingWhatsAppTab, sendBillingWhatsApp } from "@/lib/billingWhatsApp";
 import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
 } from "@/lib/jspdfUnicodeFont";
@@ -208,6 +208,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   const [waTarget,     setWaTarget]     = useState<DisplayRow | null>(null);
   const [waMsg,        setWaMsg]        = useState("");
   const [waSending,    setWaSending]    = useState(false);
+  // The statement PDF, built when the dialog opens so it can be previewed before sending.
+  const [waPdf,        setWaPdf]        = useState<{ blob: Blob; filename: string } | "loading" | "empty" | "error">("loading");
+  const waPdfFor = useRef<string | null>(null);
 
   // Telegram / PDF
   const [tgSending,    setTgSending]    = useState(false);
@@ -677,6 +680,11 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     const balance = Math.abs(closing) < 0.005 ? "Nil" : `${drCr(closing)} ${closing > 0 ? "(payable by you)" : "(advance with us)"}`;
     const firmName = r.firmIds.length === 1 ? firms.find(f => f.id === r.firmIds[0])?.name : undefined;
     setWaTarget(r);
+    setWaPdf("loading");
+    waPdfFor.current = r.key;
+    buildRowStatement(r)
+      .then(built => { if (waPdfFor.current === r.key) setWaPdf(built ?? "empty"); })
+      .catch(() => { if (waPdfFor.current === r.key) setWaPdf("error"); });
     setWaMsg(
       `Dear Sir/Madam,\n\nPlease find attached the statement of account${r.kind === "group" ? ` for ${r.name} group` : ` of ${r.name}`} for the period ${period}.\n\n` +
       `${r.kind === "group" ? "Group" : "Client"}: ${r.name}\n` +
@@ -689,26 +697,30 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   }
 
   async function handleSendWhatsApp() {
-    if (!waTarget) return;
-    // Open the tab now, inside the click — a window opened after the PDF is built would be blocked as a popup.
-    const win = window.open("", "caflow_whatsapp");
-    // On failure close the tab only if we just opened it blank, never an existing WhatsApp tab.
-    const closeBlank = () => { try { if (win?.location.href === "about:blank") win.close(); } catch { /* cross-origin: an existing chat tab */ } };
+    if (!waTarget || typeof waPdf !== "object") return;
+    // Reserve the tab inside the click (popup blocker); reuses the WhatsApp tab already open.
+    const tab = reserveBillingWhatsAppTab();
     setWaSending(true);
     try {
-      const built = await buildRowStatement(waTarget);
-      if (!built) { closeBlank(); toast.error("Nothing to send — no balances or transactions in the period"); return; }
-      downloadBlob(built.blob, built.filename);
-      const url = billingWhatsAppUrl(waMsg);
-      if (win) win.location.href = url; else window.open(url, "caflow_whatsapp");
-      toast.success(`WhatsApp opened for ${BILLING_WHATSAPP_DISPLAY}. Attach the downloaded ${built.filename} to the chat (drag it in or use 📎), then press Send.`, { duration: 10000 });
+      const { attached } = await sendBillingWhatsApp({ tab, text: waMsg, pdf: waPdf });
+      toast.success(attached
+        ? `WhatsApp opened for ${BILLING_WHATSAPP_DISPLAY} — the message and ${waPdf.filename} are being added to the chat. Review and press Send.`
+        : `WhatsApp opened for ${BILLING_WHATSAPP_DISPLAY}. Attach the downloaded ${waPdf.filename} (drag it in or use 📎), then press Send.`,
+        { duration: 10000 });
       setWaTarget(null);
     } catch (e: any) {
-      closeBlank();
+      releaseBillingWhatsAppTab(tab);
       toast.error("WhatsApp failed: " + describeDownloadError(e));
     } finally {
       setWaSending(false);
     }
+  }
+
+  function previewWaPdf() {
+    if (typeof waPdf !== "object") return;
+    const url = URL.createObjectURL(waPdf.blob);
+    window.open(url, "_blank");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   const splitEmails = (v: string) => v.split(/[,;\s]+/).map(e => e.trim()).filter(Boolean);
@@ -1538,7 +1550,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       </Dialog>
 
       {/* ── WhatsApp dialog ── */}
-      <Dialog open={!!waTarget} onOpenChange={open => { if (!open && !waSending) setWaTarget(null); }}>
+      <Dialog open={!!waTarget} onOpenChange={open => { if (!open && !waSending) { setWaTarget(null); waPdfFor.current = null; } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-base">
@@ -1550,7 +1562,9 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
               <p className="text-xs text-muted-foreground">
                 <span className="font-semibold text-foreground">{waTarget.name}</span>
                 {waTarget.kind === "group" ? ` — ${waTarget.clientCount} client${waTarget.clientCount !== 1 ? "s" : ""}` : ""} · {format(parseISO(fromDate), "d MMM yyyy")} → {format(parseISO(toDate), "d MMM yyyy")}.
-                The PDF downloads and WhatsApp Web opens with this message typed in — attach the PDF in the chat and press Send.
+                {hasWhatsAppExtension()
+                  ? "Your open WhatsApp Web tab is reused: the message is typed in and the PDF attached for you to review, then press Send."
+                  : <>WhatsApp Web opens with this message typed in and the PDF downloads — attach it in the chat and press Send. Install the <a href="/caflow-whatsapp-extension.zip" className="text-primary underline">CAFlow WhatsApp extension</a> to reuse your open WhatsApp tab and attach the PDF automatically.</>}
               </p>
               <div className="space-y-1">
                 <Label className="text-xs">WhatsApp number</Label>
@@ -1563,13 +1577,28 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                 <Label htmlFor="wa-msg" className="text-xs">Message</Label>
                 <Textarea id="wa-msg" rows={8} value={waMsg} onChange={e => setWaMsg(e.target.value)} className="text-xs" />
               </div>
+              <div className="space-y-1">
+                <Label className="text-xs">PDF</Label>
+                <div className="min-h-8 px-3 py-1.5 flex items-center gap-2 rounded-md border text-xs">
+                  {waPdf === "loading" && <><Loader2 size={12} className="animate-spin" /> Preparing statement PDF…</>}
+                  {waPdf === "empty" && <span className="text-destructive">No balances or transactions in the period — nothing to send.</span>}
+                  {waPdf === "error" && <span className="text-destructive">The statement PDF could not be built.</span>}
+                  {typeof waPdf === "object" && (
+                    <>
+                      <FileText size={12} className="text-red-600 shrink-0" />
+                      <span className="truncate flex-1">{waPdf.filename}</span>
+                      <button type="button" onClick={previewWaPdf} className="text-primary hover:underline shrink-0">Preview</button>
+                    </>
+                  )}
+                </div>
+              </div>
             </div>
           )}
           <DialogFooter>
             <Button variant="outline" size="sm" disabled={waSending} onClick={() => setWaTarget(null)}>Cancel</Button>
-            <Button size="sm" disabled={waSending} onClick={handleSendWhatsApp} className="gap-1.5 bg-[#25D366] hover:bg-[#1ebe5b] text-white">
+            <Button size="sm" disabled={waSending || typeof waPdf !== "object"} onClick={handleSendWhatsApp} className="gap-1.5 bg-[#25D366] hover:bg-[#1ebe5b] text-white">
               {waSending ? <Loader2 size={13} className="animate-spin" /> : <WhatsAppIcon size={13} />}
-              {waSending ? "Preparing PDF…" : "Open WhatsApp"}
+              {waSending ? "Opening…" : "Open WhatsApp"}
             </Button>
           </DialogFooter>
         </DialogContent>

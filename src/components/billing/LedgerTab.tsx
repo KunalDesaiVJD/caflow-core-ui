@@ -32,7 +32,7 @@ import { ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont } from "@/li
 import type { LegalNameChange } from "@/lib/firmName";
 import { ledgerEntryKind, receiptDocNo, kasarDocNo, LEDGER_KIND_LABEL } from "@/lib/ledgerEntryKinds";
 import { drawClientSummaryTable, drawPaymentAdvice, loadFirmBankDetails, type PaymentAdviceRow, startBreakdownPage, stampPageFooters } from "@/lib/multiClientLedgerPdf";
-import { billingWhatsAppUrl } from "@/lib/billingWhatsApp";
+import { reserveBillingWhatsAppTab, releaseBillingWhatsAppTab, sendBillingWhatsApp } from "@/lib/billingWhatsApp";
 
 const fmtINR = (n: number) => "₹" + n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -755,10 +755,14 @@ function ClientLedgerView({ defaultFirmId }: { defaultFirmId?: string }) {
             <div className="flex gap-2 flex-wrap">
               <Button variant="outline" size="sm" onClick={handleDownloadXlsx} className="gap-1"><Download size={14} /> Export XLSX</Button>
               <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
-              <Button variant="outline" size="sm" className="gap-1" onClick={() => {
-                window.open(billingWhatsAppUrl(`Dear Client,\n\nPlease find your statement of account for FY ${fy}.\n\nRegards`), "caflow_whatsapp");
-                // Also trigger PDF download
-                handleDownloadPdf();
+              <Button variant="outline" size="sm" className="gap-1" onClick={async () => {
+                const tab = reserveBillingWhatsAppTab();
+                try {
+                  await sendBillingWhatsApp({ tab, text: `Dear Client,\n\nPlease find your statement of account for FY ${fy}.\n\nRegards`, pdf: await buildClientLedgerPdfBlob() });
+                } catch (err: any) {
+                  releaseBillingWhatsAppTab(tab);
+                  toast({ title: "WhatsApp failed", description: err?.message || "Unknown error", variant: "destructive" });
+                }
               }}>
                 <Share2 size={14} /> Send via WhatsApp
               </Button>
@@ -1740,8 +1744,14 @@ function FirmRevenueLedgerView() {
             <Button variant="outline" size="sm" onClick={handleDownloadPdf} className="gap-1"><Download size={14} /> Export PDF</Button>
             <Button variant="outline" size="sm" className="gap-1" onClick={() => {
               const fName = firms.find(f => f.id === firmId)?.name || "Firm";
-              window.open(billingWhatsAppUrl(`Dear Team,\n\nPlease find the Firm Revenue Ledger for ${fName} — FY ${fy}.\n\nRegards`), "caflow_whatsapp");
-              handleDownloadPdf();
+              const tab = reserveBillingWhatsAppTab();
+              buildFirmLedgerPdfBlob()
+                .then(blob => sendBillingWhatsApp({ tab, text: `Dear Team,\n\nPlease find the Firm Revenue Ledger for ${fName} — FY ${fy}.\n\nRegards`,
+                  pdf: { blob, filename: `FirmRevenue_${fName}_${fromDate}_${toDate}.pdf` } }))
+                .catch((err: any) => {
+                  releaseBillingWhatsAppTab(tab);
+                  toast({ title: "WhatsApp failed", description: err?.message || "Unknown error", variant: "destructive" });
+                });
             }}>
               <Share2 size={14} /> Send via WhatsApp
             </Button>

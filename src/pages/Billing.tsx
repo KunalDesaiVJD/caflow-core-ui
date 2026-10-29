@@ -58,7 +58,7 @@ import JSZip from "jszip";
 import { generateInvoicePdfBlob, invoicePdfFilename } from "@/lib/invoicePdfGenerator";
 import { LOCKABLE_DOC_TYPES, firmLockDay, isPeriodLocked, lockMessage } from "@/lib/invoiceLock";
 import { cancelBillingDocument, canCancelDocument, isCancelled, statusLabel } from "@/lib/billingCancellation";
-import { BILLING_WHATSAPP_DISPLAY, billingWhatsAppUrl } from "@/lib/billingWhatsApp";
+import { BILLING_WHATSAPP_DISPLAY, reserveBillingWhatsAppTab, releaseBillingWhatsAppTab, sendBillingWhatsApp } from "@/lib/billingWhatsApp";
 
 // ─── Types ───
 interface Invoice {
@@ -613,6 +613,8 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
     if (isCancelled(shareInvoice.status)) { toast({ title: "This document is cancelled", variant: "destructive" }); return; }
     if (!canSend) { toast({ title: "Not allowed", description: "You don't have permission to send billing documents.", variant: "destructive" }); return; }
     setShareSending(true);
+    // Reserve the WhatsApp tab inside the click (popup blocker); reuses the one already open.
+    const waTab = shareViaWhatsApp ? reserveBillingWhatsAppTab() : null;
     try {
       // ── Generate PDF once — reused for both email attachment and WhatsApp download ──
       let pdfBlob: Blob | null = null;
@@ -690,13 +692,11 @@ function DocumentListTab({ documentType, overrideFirmId }: { documentType: "invo
         toast({ title: pdfBase64 ? "Email sent with PDF attachment" : "Email sent successfully" });
       }
       if (shareViaWhatsApp) {
-        window.open(billingWhatsAppUrl(shareMessage), "caflow_whatsapp");
-        toast({ title: "WhatsApp opened — PDF downloaded for manual attachment" });
-        if (pdfBlob) {
-          downloadBlob(pdfBlob, pdfFilename);
-        }
+        const { attached } = await sendBillingWhatsApp({ tab: waTab, text: shareMessage, pdf: pdfBlob ? { blob: pdfBlob, filename: pdfFilename } : null });
+        toast({ title: attached ? "WhatsApp opened — message and PDF added to the chat for review" : "WhatsApp opened — PDF downloaded for manual attachment" });
       }
     } catch {
+      releaseBillingWhatsAppTab(waTab);
       toast({ title: "Failed to send", variant: "destructive" });
     }
     setShareSending(false);
