@@ -5,8 +5,8 @@ document.documentElement.dataset.caflowWhatsapp = chrome.runtime.getManifest().v
 
 window.addEventListener("message", event => {
   if (event.source !== window || event.data?.type !== "CAFLOW_WA_SEND") return;
-  const { id, phone, text, pdf } = event.data;
-  chrome.runtime.sendMessage({ type: "caflow-wa-send", phone, text, pdf }, resp => {
+  const { id, phone, sender, text, pdf } = event.data;
+  chrome.runtime.sendMessage({ type: "caflow-wa-send", phone, sender, text, pdf }, resp => {
     const result = resp || { ok: false, error: chrome.runtime.lastError?.message || "No response from extension" };
     window.postMessage({ type: "CAFLOW_WA_RESULT", id, ...result }, location.origin);
   });
