@@ -8,7 +8,6 @@
  *  3. Ledger sheet shows OB as first row, matching the Ledger tab
  */
 import { downloadBlob } from "@/lib/downloadBlob";
-import { buildClientLedgerPdf } from "@/lib/clientLedgerPdf";
 import { useState, useEffect, useMemo, useCallback, Fragment } from "react";
 import { useUserFirmAccess } from "@/hooks/useUserFirmAccess";
 import { supabase } from "@/integrations/supabase/client";
@@ -34,7 +33,7 @@ import DocLink from "@/components/billing/DocLink";
 import type { LedgerEntryKind } from "@/lib/ledgerEntryKinds";
 import { composeLedgerEntries, type LedgerEntry, type RawInvoice, type RawReceipt, type RawKasar } from "@/lib/statementOfAccount";
 import { buildGroupStatementPdf } from "@/lib/groupStatementPdf";
-import { loadFirmBankDetails } from "@/lib/multiClientLedgerPdf";
+import { loadFirmBankDetails, type PaymentAdviceRow } from "@/lib/multiClientLedgerPdf";
 import { renderStatementEmailPreview } from "@/lib/billingEmailPreview";
 import {
   ensurePdfUnicodeFont, formatPdfCurrency, setPdfUnicodeFont,
@@ -579,15 +578,32 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
     return out.sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  async function generateGroupStatementPdf(group: DisplayRow, perClient: GroupStatementClient[]): Promise<{ base64: string; blob: Blob }> {
-    const onlyFirm = group.firmIds.length === 1 ? firms.find(f => f.id === group.firmIds[0]) : null;
+  /** Closing balance of each client of a row with each firm — the payment advice lines. */
+  function paymentsFor(row: DisplayRow): PaymentAdviceRow[] {
+    const keys = new Set(row.atomKeys);
+    return rows.filter(a => keys.has(`${a.id}|${a.firmId}`)).map(a => ({
+      clientName: a.name, firmId: a.firmId,
+      firmName: firms.find(f => f.id === a.firmId)?.name ?? "—",
+      closing: netClosing(a),
+    }));
+  }
+
+  // One layout for every statement — group or single client, downloaded or emailed.
+  async function buildStatementPdf(row: DisplayRow, perClient: GroupStatementClient[], single: boolean): Promise<{ base64: string; blob: Blob }> {
+    const onlyFirm = row.firmIds.length === 1 ? firms.find(f => f.id === row.firmIds[0]) : null;
     return buildGroupStatementPdf({
-      groupName: group.name,
-      firmLabel: group.firmIds.map(id => firms.find(f => f.id === id)?.name ?? "").filter(Boolean).join(", "),
+      groupName: row.name,
+      firmLabel: row.firmIds.map(id => firms.find(f => f.id === id)?.name ?? "").filter(Boolean).join(", "),
       logoDataUrl: onlyFirm?.logo_url ? await loadLogoBase64(onlyFirm.logo_url) : null,
       fromDate, toDate, perClient,
-      bankDetails: await loadFirmBankDetails(group.firmIds),
+      bankDetails: await loadFirmBankDetails(row.firmIds),
+      payments: paymentsFor(row),
+      single,
     });
+  }
+
+  async function generateGroupStatementPdf(group: DisplayRow, perClient: GroupStatementClient[]): Promise<{ base64: string; blob: Blob }> {
+    return buildStatementPdf(group, perClient, false);
   }
 
   async function showEmailPreview(title: string, meta: string[], clientName: string, customMessage?: string) {
@@ -911,6 +927,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   }
 
   async function handleExportPdf() {
+    // Drilled into one group: export exactly the statement that is emailed to the group.
+    if (groupFilter) { await handleDownloadRow(buildGroupRow(groupFilter.id, groupFilter.name)); return; }
     setExportingPdf(true);
     try {
       const { blob } = await generateReportPdf();
@@ -922,11 +940,12 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
   // ── Client ledger PDF ─────────────────────────────────────────────────────
 
   async function generateClientLedgerPdf(client: DisplayRow, entries: LedgerEntry[]): Promise<{ base64: string; blob: Blob }> {
-    return buildClientLedgerPdf({
-      clientName: client.name, firmLabel: selectedFirmName,
-      logoDataUrl: firmLogoUrl ? await loadLogoBase64(firmLogoUrl) : null,
-      fromDate, toDate, entries, fallbackClosing: netClosing(client),
-    });
+    // An empty period still gets its opening / closing line.
+    const lines: LedgerEntry[] = entries.length ? entries : [{
+      entry_date: fromDate, doc_no: "—", narration: "Opening Balance",
+      debit: Math.max(0, netClosing(client)), credit: Math.max(0, -netClosing(client)), balance: netClosing(client),
+    } as LedgerEntry];
+    return buildStatementPdf(client, [{ clientId: client.id, name: client.name, entries: lines }], true);
   }
 
   async function handleDownloadClientPdf() {

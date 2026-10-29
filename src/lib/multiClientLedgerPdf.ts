@@ -15,7 +15,7 @@ const WHITE: RGB = [255, 255, 255];
 
 export interface ClientSummaryRow { name: string; opening: number; debit: number; credit: number; closing: number }
 
-export interface FirmBankDetails { firmName: string; bankName: string; accountNumber: string; ifsc: string; branch: string }
+export interface FirmBankDetails { firmId?: string; firmName: string; bankName: string; accountNumber: string; ifsc: string; branch: string }
 
 /** Balance with Dr/Cr suffix; "—" when nil. */
 export function pdfBalance(n: number): string {
@@ -25,10 +25,11 @@ export function pdfBalance(n: number): string {
 const pdfAmount = (n: number) => (n > 0.005 ? formatPdfCurrency(n) : "—");
 
 /** Bank details as saved in Firm Settings → Bank & Billing (firms.bank_details, falling back to settings.billing). */
-export function firmBankDetailsOf(firm: { name?: string | null; bank_details?: any; settings?: any }): FirmBankDetails | null {
+export function firmBankDetailsOf(firm: { id?: string | null; name?: string | null; bank_details?: any; settings?: any }): FirmBankDetails | null {
   const bd = firm.bank_details || {};
   const billing = firm.settings?.billing || {};
   const d: FirmBankDetails = {
+    ...(firm.id ? { firmId: firm.id } : {}),
     firmName: firm.name || "—",
     bankName: bd.bank_name || billing.bank_name || "",
     accountNumber: bd.account_number || bd.account_no || billing.account_number || "",
@@ -46,9 +47,13 @@ export async function loadFirmBankDetails(firmIds: string[]): Promise<FirmBankDe
   return ((data || []) as any[]).map(firmBankDetailsOf).filter(Boolean) as FirmBankDetails[];
 }
 
-/** Page-1 summary table: Client | Opening | Debit | Credit | Closing, with a total row. */
+/**
+ * Page-1 summary table: Client | Opening | Debit | Credit | Closing. A total row is added only when
+ * `totalLabel` is given — statements that go to clients leave it out, so each client sees only
+ * their own closing balance, never a combined figure for the group or the firms.
+ */
 export function drawClientSummaryTable(doc: any, autoTable: any, o: {
-  startY: number; rows: ClientSummaryRow[]; totalLabel: string; firstColumn?: string;
+  startY: number; rows: ClientSummaryRow[]; totalLabel?: string; firstColumn?: string;
 }) {
   const total = o.rows.reduce((t, r) => ({
     opening: t.opening + r.opening, debit: t.debit + r.debit, credit: t.credit + r.credit, closing: t.closing + r.closing,
@@ -56,7 +61,7 @@ export function drawClientSummaryTable(doc: any, autoTable: any, o: {
   const tot = { fontStyle: "bold" as const, fillColor: DARK_BLUE, textColor: WHITE };
   const totR = { ...tot, halign: "right" as const };
   const body: any[][] = o.rows.map(r => [r.name, pdfBalance(r.opening), pdfAmount(r.debit), pdfAmount(r.credit), pdfBalance(r.closing)]);
-  body.push([
+  if (o.totalLabel) body.push([
     { content: o.totalLabel, styles: tot },
     { content: pdfBalance(total.opening), styles: totR }, { content: pdfAmount(total.debit), styles: totR },
     { content: pdfAmount(total.credit), styles: totR }, { content: pdfBalance(total.closing), styles: totR },
@@ -117,4 +122,65 @@ export function stampPageFooters(doc: any, label: string) {
     setPdfUnicodeFont(doc, "normal"); doc.setFontSize(7); doc.setTextColor(120, 130, 145);
     doc.text(`Page ${i} of ${n}   |   ${label}`, 148.5, 206, { align: "center" });
   }
+}
+
+/** What one client owes one firm at the end of the period (negative = advance / credit balance). */
+export interface PaymentAdviceRow { clientName: string; firmId: string; firmName: string; closing: number }
+
+/**
+ * Lines of a payment advice, one per client per firm, sorted by client then firm. Nil balances
+ * are left out; a credit balance is shown as an advance so the client knows nothing is due.
+ */
+export function paymentAdviceLines(rows: PaymentAdviceRow[]) {
+  return rows
+    .filter(r => Math.abs(r.closing) >= 0.5)
+    .sort((a, b) => a.clientName.localeCompare(b.clientName) || a.firmName.localeCompare(b.firmName))
+    .map(r => ({ ...r, payable: r.closing > 0 ? r.closing : 0, advance: r.closing < 0 ? -r.closing : 0 }));
+}
+
+/**
+ * "Payment advice" at the end of a statement: for every client, the amount payable to each firm
+ * with that firm's bank details — one cheque / transfer per line, nothing for the client to add up.
+ */
+export function drawPaymentAdvice(doc: any, autoTable: any, rows: PaymentAdviceRow[], banks: FirmBankDetails[]) {
+  const lines = paymentAdviceLines(rows);
+  const pageH = doc.internal.pageSize.getHeight();
+  let y = ((doc as any).lastAutoTable?.finalY ?? 20) + 10;
+  if (y + 24 + Math.min(lines.length, 4) * 7 > pageH - 16) { doc.addPage(); y = 16; }
+  doc.setTextColor(...DARK_BLUE);
+  setPdfUnicodeFont(doc, "bold"); doc.setFontSize(10);
+  doc.text("Payment Advice — amount payable to each firm", 10, y);
+  setPdfUnicodeFont(doc, "normal"); doc.setFontSize(8); doc.setTextColor(90, 100, 115);
+  doc.text("Please make a separate payment for each line below, in favour of the firm named, quoting the client name.", 10, y + 5);
+  if (lines.length === 0) {
+    doc.setTextColor(...DARK_BLUE); doc.setFontSize(9);
+    doc.text("No amount is payable as on the closing date of this statement.", 10, y + 12);
+    return;
+  }
+  const bankOf = (firmId: string, firmName: string) =>
+    banks.find(b => b.firmId === firmId) ?? banks.find(b => b.firmName === firmName);
+  let lastClient = "";
+  const body = lines.map(l => {
+    const b = bankOf(l.firmId, l.firmName);
+    const first = l.clientName !== lastClient;
+    lastClient = l.clientName;
+    return [
+      first ? l.clientName : "",
+      l.firmName,
+      l.payable > 0 ? formatPdfCurrency(l.payable) : `Nil (advance ${formatPdfCurrency(l.advance)})`,
+      b?.bankName || "—", b?.accountNumber || "—", b?.ifsc || "—",
+    ];
+  });
+  autoTable(doc, {
+    startY: y + 8,
+    head: [["Client", "Pay to (firm)", "Amount payable (₹)", "Bank", "Account No", "IFSC"]],
+    body,
+    styles: { font: "NotoSans", fontSize: 8.5, cellPadding: 2.5, lineColor: [200, 210, 225], lineWidth: 0.3 },
+    headStyles: { font: "NotoSans", fillColor: DARK_BLUE, textColor: WHITE, fontStyle: "bold" },
+    columnStyles: {
+      0: { cellWidth: 64, fontStyle: "bold" }, 1: { cellWidth: 64 }, 2: { cellWidth: 42, halign: "right", fontStyle: "bold" },
+      3: { cellWidth: 45 }, 4: { cellWidth: 32 }, 5: { cellWidth: 30 },
+    },
+    margin: { left: 10, right: 10, bottom: 16 },
+  });
 }

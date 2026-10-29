@@ -62,6 +62,10 @@ describe("buildGroupStatementPdf", () => {
         { firmName: "V J Desai & Co. LLP", bankName: "HDFC Bank", accountNumber: "50200012345678", ifsc: "HDFC0000123", branch: "Ahmedabad" },
         { firmName: "VJD Advisory LLP", bankName: "ICICI Bank", accountNumber: "123405001234", ifsc: "ICIC0001234", branch: "Surat" },
       ],
+      payments: [
+        { clientName: "Alpha Traders", firmId: "f1", firmName: "V J Desai & Co. LLP", closing: 29240 },
+        { clientName: "Beta Enterprises", firmId: "f2", firmName: "VJD Advisory LLP", closing: 45000 },
+      ],
     });
     const bytes = Buffer.from(base64, "base64");
     expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
@@ -70,5 +74,19 @@ describe("buildGroupStatementPdf", () => {
     // Summary on page 1, client-wise ledger from page 2
     expect(bytes.toString("latin1").match(/\/Type \/Page\b/g)?.length).toBeGreaterThanOrEqual(2);
     if (process.env.SAVE_SAMPLE_PDF) (await import("node:fs")).writeFileSync(process.env.SAVE_SAMPLE_PDF, bytes);
+  }, 30_000);
+
+  it("renders a single-client statement in the same layout, with the payment advice", async () => {
+    const { base64 } = await buildGroupStatementPdf({
+      groupName: "Alpha Traders", firmLabel: "V J Desai & Co. LLP", logoDataUrl: null,
+      fromDate: "2026-04-01", toDate: "2026-10-23", perClient: [clientA], single: true,
+      payments: [{ clientName: "Alpha Traders", firmId: "f1", firmName: "V J Desai & Co. LLP", closing: 29240 }],
+      bankDetails: [{ firmId: "f1", firmName: "V J Desai & Co. LLP", bankName: "HDFC Bank", accountNumber: "50200012345678", ifsc: "HDFC0000123", branch: "Ahmedabad" }],
+    });
+    const bytes = Buffer.from(base64, "base64");
+    expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+    // No summary page: a short statement fits on one page
+    expect(bytes.toString("latin1").match(/\/Type \/Page\b/g)?.length).toBe(1);
+    if (process.env.SAVE_SAMPLE_PDF_SINGLE) (await import("node:fs")).writeFileSync(process.env.SAVE_SAMPLE_PDF_SINGLE, bytes);
   }, 30_000);
 });
