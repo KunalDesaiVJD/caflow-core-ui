@@ -41,7 +41,7 @@ const TEMPLATE_TYPES = [
   "new_user_welcome",
 ] as const;
 
-type TemplateType = (typeof TEMPLATE_TYPES)[number];
+export type TemplateType = (typeof TEMPLATE_TYPES)[number];
 
 const DEFAULT_SUBJECTS: Record<TemplateType, string> = {
   invoice_generated: "Invoice from {{firm_name}}",
@@ -370,7 +370,19 @@ interface EditState {
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export default function EmailTemplatesTab({ firmId }: { firmId: string | null }) {
+export default function EmailTemplatesTab({
+  firmId,
+  types,
+  title = "Email Templates",
+  description,
+}: {
+  firmId: string | null;
+  /** Show only these template types (e.g. the reminder templates inside Billing Reminders). */
+  types?: readonly TemplateType[];
+  title?: string;
+  description?: string;
+}) {
+  const shownTypes = types ?? TEMPLATE_TYPES;
   const { user } = useAuth();
   const { toast } = useToast();
   const resolvedFirmId = firmId ?? user?.firm_id ?? null;
@@ -551,7 +563,7 @@ export default function EmailTemplatesTab({ firmId }: { firmId: string | null })
   if (loading) {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 p-1">
-        {TEMPLATE_TYPES.map(t => <Skeleton key={t} className="h-44 w-full rounded-lg" />)}
+        {shownTypes.map(t => <Skeleton key={t} className="h-44 w-full rounded-lg" />)}
       </div>
     );
   }
@@ -560,19 +572,19 @@ export default function EmailTemplatesTab({ firmId }: { firmId: string | null })
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-semibold">Email Templates</h2>
+          <h2 className="text-lg font-semibold">{title}</h2>
           <p className="text-sm text-muted-foreground">
-            Customise the email content sent to clients. Click a template to edit its theme, design, colours, and content.
-            Billing emails (invoice, quotation, proforma, credit note, reminder, statement) always go out as {HEAD_FIRM_NAME} with its logo.
+            {description ?? <>Customise the email content sent to clients. Click a template to edit its theme, design, colours, and content.
+            Billing emails (invoice, quotation, proforma, credit note, reminder, statement) always go out as {HEAD_FIRM_NAME} with its logo.</>}
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={handleApplyStandard} disabled={applyingAll || !resolvedFirmId}>
+        {!types && <Button variant="outline" size="sm" onClick={handleApplyStandard} disabled={applyingAll || !resolvedFirmId}>
           <Wand2 size={14} className="mr-1.5" /> {applyingAll ? "Applying…" : "Apply standard design to all billing templates"}
-        </Button>
+        </Button>}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {TEMPLATE_TYPES.map(type => {
+      <div className={cn("grid grid-cols-1 md:grid-cols-2 gap-4", !types && "xl:grid-cols-3")}>
+        {shownTypes.map(type => {
           const tpl = getTemplateForType(type);
           const isActive = tpl ? tpl.is_active : true;
           const isDefault = !tpl;
@@ -609,6 +621,15 @@ export default function EmailTemplatesTab({ firmId }: { firmId: string | null })
                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-0.5">Subject</p>
                   <p className="text-sm text-foreground truncate" title={subject}>{subject}</p>
                 </div>
+                {types && (
+                  // Inline preview (sample values) so the reminder email can be read without opening the editor.
+                  <iframe
+                    title={`${TEMPLATE_LABELS[type]} preview`}
+                    className="w-full h-[360px] rounded border bg-white"
+                    sandbox=""
+                    srcDoc={withSampleValues(tpl?.body_html ?? buildTemplateHTML("professional", type))}
+                  />
+                )}
                 <div className="flex gap-2 pt-1">
                   <Button
                     variant="outline"
