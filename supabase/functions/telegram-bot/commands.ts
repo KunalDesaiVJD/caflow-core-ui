@@ -26,6 +26,7 @@ export const HELP_TEXT = [
   "/reminders — automatic payment-reminder runs",
   "/emails [client] — billing emails sent in the last 7 days",
   "/cancelled — cancelled invoices / credit notes",
+  "/reset — start a fresh conversation",
   "/myid — your Telegram ID",
   "",
   "Or just ask in plain words, e.g. \"send me the statement of Nirali group without Nirali Exports\", \"email Ramani group statement\", \"how much did we collect in September?\", \"who has not paid for 90 days?\", \"which clients are not in any group?\"",

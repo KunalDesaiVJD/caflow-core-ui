@@ -130,3 +130,52 @@ export function parseCommand(text: string): { cmd: string; arg: string } | null 
   const m = /^\/([a-z_]+)(?:@\w+)?(?:\s+([\s\S]*))?$/i.exec((text || "").trim());
   return m ? { cmd: m[1].toLowerCase(), arg: (m[2] || "").trim() } : null;
 }
+
+// ─── Direct statement requests (no AI needed) ─────────────────────────────────
+
+const STATEMENT_WORDS = /\b(ledger|ledgers|statement|statements|soa|khata|hisab|hisaab|account\s+copy|account\s+statement)\b/i;
+// Anything that needs the AI's judgement: emailing / WhatsApp, a period, a firm, or picking clients.
+const NEEDS_AI = /\b(mail|email|e-mail|whatsapp|wa|to\s+\S+@|fy|financial\s+year|from|till|upto|up\s+to|as\s+on|last\s+year|previous|month|quarter|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|january|february|march|april|june|july|august|september|october|november|december|20\d\d|without|except|excluding|only|firm|vjd|kda)\b/i;
+const FILLER = /\b(please|pls|plz|kindly|give|send|share|get|need|want|show|me|my|us|the|a|an|of|for|whole|full|complete|entire|pdf|copy|in|on|this|chat|here|ledger|ledgers|statement|statements|soa|khata|hisab|hisaab|account|client|party|and|bhejo|bhej|do|de|dena|chahiye|ka|ki|ke|nu|no|ni)\b/gi;
+
+/**
+ * "send ledger of Ramani group" → { name: "Ramani", group: true }. Null when the message is not
+ * a plain statement request (then the AI handles it). After the bot asked which group, a short
+ * reply like "Ramani group" counts too.
+ */
+export function detectStatementRequest(text: string, lastBotMessage?: string): { name: string; group: boolean } | null {
+  const t = (text || "").trim();
+  if (!t || t.startsWith("/") || t.length > 120) return null;
+  const askedForGroup = !!lastBotMessage && /which group|group name|name of the group/i.test(lastBotMessage);
+  const askedForClient = !!lastBotMessage && /which client|client name|name of the client/i.test(lastBotMessage);
+  if (!STATEMENT_WORDS.test(t) && !(askedForGroup || askedForClient)) return null;
+  if (NEEDS_AI.test(t)) return null;
+  // Several things asked at once ("ledger & last 2 invoices") — let the AI do all of it.
+  if (/\b(invoice|invoices|bill|bills|receipt|receipts|outstanding|balance|due|dues|and|&)\b/i.test(t.replace(/\b(and co|& co)\b/gi, ""))) return null;
+  const group = /\bgroup\b/i.test(t) || (askedForGroup && !askedForClient);
+  const name = t.replace(/\bgroup\b/gi, " ").replace(FILLER, " ").replace(/[^\p{L}\p{N}.&'\- ]/gu, " ").replace(/\s+/g, " ").trim();
+  if (name.length < 2 || name.split(" ").length > 6) return null;
+  return { name, group };
+}
+
+// ─── Forgiving name matching ("Satve Realty" → SATVED REALTY) ─────────────────
+
+const NAME_NOISE = new Set(["group", "pvt", "private", "ltd", "limited", "llp", "the", "and", "co", "m", "s", "ms", "prop"]);
+/** Words of a name worth matching on (lower case, no punctuation or company suffixes). */
+export const nameTokens = (s: string) =>
+  (s || "").toLowerCase().replace(/[^a-z0-9 ]+/g, " ").split(/\s+/).filter(w => w.length >= 2 && !NAME_NOISE.has(w));
+
+/** Share of the query's words found at the start of (or containing) a word of the name, 0–1. */
+export function nameScore(query: string, name: string): number {
+  const q = nameTokens(query), n = nameTokens(name);
+  if (!q.length) return 0;
+  const hit = q.filter(w => n.some(x => x.startsWith(w) || w.startsWith(x) && x.length >= 3 || (w.length >= 4 && x.includes(w)))).length;
+  return hit / q.length;
+}
+
+/** Rows whose name matches every word of the query, best first; empty when none does. */
+export function bestNameMatches<T extends { name: string }>(query: string, rows: T[]): T[] {
+  const scored = rows.map(r => ({ r, s: nameScore(query, r.name) })).filter(x => x.s >= 1);
+  // Fewer extra words in the name = closer match.
+  return scored.sort((a, b) => nameTokens(a.r.name).length - nameTokens(b.r.name).length).map(x => x.r);
+}
