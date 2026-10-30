@@ -475,9 +475,12 @@ export function TdsValidateFinalise({
         .map((c: any) => {
           const pooled = computeChallanPooled(c, rowsOf(c));
           const allocatable = pooled.allocatable;
-          const effectiveApplied = isInterestOnlyChallan(c)
-            ? pooled.effectiveApplied + (interestPlan.consumed.get(c.id) || 0)
-            : pooled.effectiveApplied - (interestPlan.via.has(c.id) ? Math.max(0, pooled.interest - (c.interest_deposited || 0)) : 0);
+          // Same adjustment as Data Entry's challan cards: interest the entries
+          // owe beyond what this challan declares is paid out of the filing's
+          // interest pool (not counted here), and what this challan's own
+          // surplus interest pays for the others counts as applied here.
+          const effectiveApplied = pooled.effectiveApplied + (interestPlan.consumed.get(c.id) || 0)
+            - (!isInterestOnlyChallan(c) && interestPlan.via.has(c.id) ? Math.max(0, pooled.interest - (c.interest_deposited || 0)) : 0);
           return isChallanOverApplied(effectiveApplied, allocatable) ? { id: c.id, challanNo: c.challan_serial_no as string | null, shortfall: effectiveApplied - allocatable } : null;
         })
         .filter((x): x is { id: string; challanNo: string | null; shortfall: number } => x != null);

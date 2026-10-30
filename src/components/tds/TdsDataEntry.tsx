@@ -1600,7 +1600,7 @@ export function TdsDataEntry({
         const pooled = computeChallanPooled(challanObj as any, projectedRows as any);
         // Same allowance as getChallanBreakdownAll: interest a separate
         // interest challan already paid is not counted against this challan.
-        const projectedApplied = pooled.effectiveApplied
+        const projectedApplied = pooled.effectiveApplied + (interestChallanPlan.consumed.get(challanId) || 0)
           - (isInterestOnlyChallan(challanObj as Challan) ? 0
             : interestPaidViaIntChallan(challanId, pooled.interest, (challanObj as Challan).interest_deposited || 0));
         if (isChallanOverApplied(projectedApplied, pooled.allocatable) && projectedApplied > bdBefore.effectiveApplied) {
@@ -1917,7 +1917,8 @@ export function TdsDataEntry({
     const ch = challanObj as Challan | null;
     const interestOnly = !!ch && isInterestOnlyChallan(ch);
     const viaIntChallan = ch && !interestOnly ? interestPaidViaIntChallan(challanId, pooled.interest, ch.interest_deposited || 0) : 0;
-    const intChallanConsumed = interestOnly ? (interestChallanPlan.consumed.get(challanId) || 0) : 0;
+    // Any challan can be a source of the interest pool, not only an interest-only one.
+    const intChallanConsumed = interestChallanPlan.consumed.get(challanId) || 0;
     const interest = pooled.interest - viaIntChallan + intChallanConsumed;
     const effectiveApplied = pooled.effectiveApplied - viaIntChallan + intChallanConsumed;
     return {
@@ -2888,8 +2889,13 @@ export function TdsDataEntry({
                                       </Badge>
                                     )}
                                     {!bd.interestOnly && bd.viaIntChallan > 0 && (
-                                      <Badge className="text-[9px] px-1 bg-amber-100 text-amber-700" title="Interest on this challan's entries was paid on a separate interest challan">
-                                        Int. ₹{bd.viaIntChallan.toLocaleString("en-IN")} via interest challan
+                                      <Badge className="text-[9px] px-1 bg-amber-100 text-amber-700" title="Interest on this challan's entries was paid on another challan of this return — it is not counted against this challan">
+                                        Int. ₹{bd.viaIntChallan.toLocaleString("en-IN")} paid on another challan
+                                      </Badge>
+                                    )}
+                                    {!bd.interestOnly && (interestChallanPlan.consumed.get(c.id) || 0) > 0 && (
+                                      <Badge className="text-[9px] px-1 bg-amber-100 text-amber-700" title="This challan declares more interest than its own entries owe — the extra pays the interest of other challans of this return">
+                                        Int. ₹{(interestChallanPlan.consumed.get(c.id) || 0).toLocaleString("en-IN")} covers other challans
                                       </Badge>
                                     )}
                                     {/* Combined-payment challan: same bank challan funding more than one
@@ -3104,11 +3110,14 @@ export function TdsDataEntry({
                             {bd.interestOnly && (
                               <Badge className="text-[9px] bg-amber-100 text-amber-700">Interest challan — ₹{(interestChallanPlan.consumed.get(selectedChallan.id) || 0).toLocaleString("en-IN")} matched to interest on other challans</Badge>
                             )}
-                            {bd.interestOnly && interestChallanPlan.shortfall > 0 && (
-                              <Badge className="text-[9px] bg-red-100 text-red-700" title="Interest the entries owe beyond what the interest challan(s) paid. It does not make any TDS challan over-applied.">Interest short-paid ₹{interestChallanPlan.shortfall.toLocaleString("en-IN")}</Badge>
+                            {!bd.interestOnly && (interestChallanPlan.consumed.get(selectedChallan.id) || 0) > 0 && (
+                              <Badge className="text-[9px] bg-amber-100 text-amber-700">Interest ₹{(interestChallanPlan.consumed.get(selectedChallan.id) || 0).toLocaleString("en-IN")} here pays the interest of other challans</Badge>
+                            )}
+                            {interestChallanPlan.shortfall > 0 && interestChallanPlan.consumed.has(selectedChallan.id) && (
+                              <Badge className="text-[9px] bg-red-100 text-red-700" title="Interest the entries owe beyond what the challans of this return paid in total. It does not make any TDS challan over-applied.">Interest short-paid ₹{interestChallanPlan.shortfall.toLocaleString("en-IN")}</Badge>
                             )}
                             {!bd.interestOnly && bd.viaIntChallan > 0 && (
-                              <Badge className="text-[9px] bg-amber-100 text-amber-700">Interest ₹{bd.viaIntChallan.toLocaleString("en-IN")} paid via separate interest challan</Badge>
+                              <Badge className="text-[9px] bg-amber-100 text-amber-700">Interest ₹{bd.viaIntChallan.toLocaleString("en-IN")} paid on another challan of this return</Badge>
                             )}
                             {bd.earlierQuarter.count > 0 && (
                               <Badge className="text-[9px] bg-slate-100 text-slate-700" title={`These entries belong to a quarter before this challan's own (${selectedChallan.quarter} FY ${selectedChallan.financial_year}), so they were paid from that return's challans. They are shown read-only and not counted in Applied.`}>
@@ -3569,7 +3578,7 @@ export function TdsDataEntry({
                                               </p>
                                               {viaIntChallan > 0 && (
                                                 <p className="text-amber-700 text-[10px] font-medium">
-                                                  Interest on this challan (₹{viaIntChallan.toLocaleString("en-IN")}) was paid on a separate interest challan — it is not added to this challan's Applied.
+                                                  Interest on this challan (₹{viaIntChallan.toLocaleString("en-IN")}) was paid on another challan of this return — it is not added to this challan's Applied.
                                                 </p>
                                               )}
                                             </div>
