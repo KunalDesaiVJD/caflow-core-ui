@@ -3,7 +3,7 @@
  * tab's statement of account (same balances, same lines, same PDF), and the report table
  * itself — client / group / firm wise, any period — can be asked for in plain words.
  */
-import type { ToolDef } from "../_shared/botAgent.ts";
+import { bestNameMatches, nameTokens, type ToolDef } from "../_shared/botAgent.ts";
 import { accumulateBalances, BILLABLE_STATUSES, fetchAllPages, loadReportStatement, netClosing, netOpening } from "../_shared/statement/report.ts";
 import { buildReportStatementPdf, defaultPeriod, fyOf } from "./statementPdf.ts";
 import { todayIst } from "./billingTools.ts";
@@ -127,14 +127,32 @@ export function createReportTools(sb: any, hooks: ReportToolHooks) {
     return out;
   }
 
+  /**
+   * Rows whose name contains the text; failing that, rows matching every word of it
+   * (so "Satve Realty" finds SATVED REALTY and "Amadius Ramani" finds Amadius Group Ramani).
+   */
+  async function findByName(table: string, cols: string, q: string, extra: (x: any) => any = x => x): Promise<{ rows: any[] } | { error: string }> {
+    const text = q.trim().replace(/[%_,()]/g, " ");
+    const { data, error } = await extra(sb.from(table).select(cols).ilike("name", `%${text}%`)).limit(25);
+    if (error) return { error: error.message };
+    if (data?.length) return { rows: data };
+    // Try each word, longest first, and keep the names that match all the words.
+    for (const w of nameTokens(text).sort((a, b) => b.length - a.length).slice(0, 3)) {
+      const stem = w.length > 5 ? w.slice(0, w.length - 1) : w;   // tolerate one wrong last letter
+      const { data: cand, error: e2 } = await extra(sb.from(table).select(cols).ilike("name", `%${stem}%`)).limit(200);
+      if (e2) return { error: e2.message };
+      const best = bestNameMatches(text, (cand || []) as any[]);
+      if (best.length) return { rows: best.slice(0, 25) };
+    }
+    return { rows: [] };
+  }
+
   type Target = { kind: "client" | "group"; id: string; name: string; clientIds: string[]; group?: any; client?: any; note?: string };
   async function resolveTarget(input: Record<string, any>): Promise<Target | { error: string }> {
     if (input.group_name) {
-      const { data, error } = await sb.from("client_groups")
-        .select("id, name, contact_email, contact_phone, extra_emails, extra_phones")
-        .ilike("name", `%${String(input.group_name).trim()}%`).limit(25);
-      if (error) return { error: `Group lookup failed: ${error.message}` };
-      const { hit, ambiguous } = pick((data || []) as any[], input.group_name);
+      const found = await findByName("client_groups", "id, name, contact_email, contact_phone, extra_emails, extra_phones", String(input.group_name));
+      if ("error" in found) return { error: `Group lookup failed: ${found.error}` };
+      const { hit, ambiguous } = pick(found.rows, input.group_name);
       if (ambiguous) return { error: `Several groups match "${input.group_name}": ${ambiguous.join("; ")}. Ask which one.` };
       if (!hit) return { error: `No client group matches "${input.group_name}".` };
       let ids = await groupMembers(hit.id);
@@ -152,10 +170,9 @@ export function createReportTools(sb: any, hooks: ReportToolHooks) {
       return { kind: "group", id: hit.id, name: hit.name, clientIds: ids, group: hit, note };
     }
     if (input.client_name) {
-      const { data, error } = await sb.from("clients").select("id, name, email")
-        .ilike("name", `%${String(input.client_name).trim()}%`).is("deleted_at", null).limit(25);
-      if (error) return { error: `Client lookup failed: ${error.message}` };
-      const { hit, ambiguous } = pick((data || []) as any[], input.client_name);
+      const found = await findByName("clients", "id, name, email", String(input.client_name), q => q.is("deleted_at", null));
+      if ("error" in found) return { error: `Client lookup failed: ${found.error}` };
+      const { hit, ambiguous } = pick(found.rows, input.client_name);
       if (ambiguous) return { error: `Several clients match "${input.client_name}": ${ambiguous.join("; ")}. Ask which one.` };
       if (!hit) return { error: `No client matches "${input.client_name}".` };
       return { kind: "client", id: hit.id, name: hit.name, clientIds: [hit.id], client: hit };

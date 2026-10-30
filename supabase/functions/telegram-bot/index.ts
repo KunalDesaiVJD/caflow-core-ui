@@ -24,7 +24,7 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
 import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
 import { callClaudeCliText, isProviderError } from "../_shared/aiProvider.ts";
-import { agentProtocol, chunkMessage, parseAgentAction, parseCommand } from "../_shared/botAgent.ts";
+import { agentProtocol, chunkMessage, detectStatementRequest, parseAgentAction, parseCommand } from "../_shared/botAgent.ts";
 import { createBillingTools, NEW_BILLING_TOOLS } from "./billingTools.ts";
 import { buildDigest, runCommand } from "./commands.ts";
 import { createReportTools, REPORT_TOOLS } from "./reportTools.ts";
@@ -91,6 +91,8 @@ Indian FY runs 1 April – 31 March.
 
 RULES
 - All firms together unless the user names a firm (firm_name).
+- Never say a PDF or email was sent unless the tool result in THIS turn says so (sent / emailed true); \
+earlier messages in the history do not count — call the tool again.
 - Always fetch real data with tools — never invent or estimate a figure. Several tool calls \
 are fine; combine them to answer compound questions.
 - Dr / positive = receivable from the client; Cr / negative = advance from the client.
@@ -397,6 +399,14 @@ Deno.serve(async (req: Request) => {
     return new Response("ok");
   }
 
+  // Fresh start: forget the conversation (old replies otherwise steer the AI).
+  if (command?.cmd === "reset" || command?.cmd === "new") {
+    await (supabase as any).from("telegram_context").upsert(
+      { user_id: userId, history: [], updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+    await sendTelegram(chatId, "Conversation cleared. Ask away.");
+    return new Response("ok");
+  }
+
   // Slash commands answer instantly from the database — no AI needed.
   if (command) {
     try {
@@ -489,7 +499,23 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
     });
   } catch { /* table may not exist yet — degrade gracefully */ }
 
+  // A plain "ledger / statement of X" goes straight to the Billing → Reports statement — no AI,
+  // so it cannot be answered from memory or misread.
+  const lastBot = [...history].reverse().find(m => m.role === "assistant" && typeof m.content === "string")?.content as string | undefined;
+  const direct = detectStatementRequest(userText, lastBot);
   history.push({ role: "user", content: userText });
+  if (direct) {
+    const reply = await sendStatementDirect(chatId, direct);
+    if (reply) {
+      await sendTelegram(chatId, reply);
+      history.push({ role: "assistant", content: reply });
+      await (supabase as any).from("telegram_context").upsert(
+        { user_id: userId, history: history.slice(-20), updated_at: new Date().toISOString() },
+        { onConflict: "user_id" },
+      );
+      return;
+    }
+  }
 
   if (usingCli) {
     try {
@@ -512,6 +538,34 @@ async function handleWithClaude(chatId: number, userId: number, userText: string
     return;
   }
   return await handleWithClaudeApi(chatId, userId, history);
+}
+
+// ─── Direct statement request ──────────────────────────────────────────────────
+/** Sends the statement; returns the chat reply, or null to let the AI handle the message. */
+async function sendStatementDirect(chatId: number, req: { name: string; group: boolean }): Promise<string | null> {
+  const notFound = (e?: string) => !!e && /^No (client|client group) matches/.test(e);
+  try {
+    let res: any = await reportTools.sendStatement(chatId, req.group ? { group_name: req.name } : { client_name: req.name });
+    // A name can be a client or a group: try the other kind before giving up.
+    if (notFound(res.error)) {
+      const other: any = await reportTools.sendStatement(chatId, req.group ? { client_name: req.name } : { group_name: req.name });
+      if (!notFound(other.error)) res = other;
+    }
+    if (res.error) {
+      if (notFound(res.error)) return null;   // the AI may still work out what was meant
+      return res.error.replace(/ Ask which one\.$/, " Which one?");
+    }
+    const due = (res.payment_advice || []).filter((p: any) => p.closing > 0);
+    const inr = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return [
+      `Statement of account sent — ${res.name} (${res.period})${res.kind === "group" ? `, ${res.clients_in_pdf} clients` : ""}.`,
+      ...(due.length ? ["", "Amount payable:", ...due.slice(0, 25).map((p: any) => `• ${p.client} → ${p.firm}: ${inr(p.closing)}`),
+        ...(due.length > 25 ? [`…and ${due.length - 25} more lines in the PDF.`] : [])] : ["", "Nothing is payable."]),
+    ].join("\n");
+  } catch (e) {
+    console.error("[Bot] direct statement failed:", e);
+    return `The statement could not be prepared: ${(e as Error)?.message || e}`;
+  }
 }
 
 // ─── Text-only agent (Claude CLI): tools driven by one JSON action per turn ─────────
