@@ -23,12 +23,14 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { formatDistanceToNow } from "date-fns";
+import { format, formatDistanceToNow } from "date-fns";
+import { downloadBlob } from "@/lib/downloadBlob";
 import {
   Bell, Building2, Users, User, Layers, Plus, Play, Eye, RefreshCw, Trash2, Save, Mail, Search, Clock, AlertTriangle,
-  ChevronDown, ChevronRight, Download, PauseCircle, IndianRupee, Settings2, FileText, Send,
+  ChevronDown, ChevronRight, Download, PauseCircle, IndianRupee, Settings2, FileText, Send, History,
 } from "lucide-react";
 import EmailTemplatesTab, { type TemplateType } from "./EmailTemplatesTab";
+import ReminderLogTab from "./ReminderLogTab";
 import { describeInvoice, describeLedger, WEEKDAYS } from "@/lib/billingReminderRules";
 import { checkRuleConflicts, type ConflictReport } from "./reminderRuleConflicts";
 
@@ -71,6 +73,13 @@ interface Policy {
   cc_emails: string[] | null;
   send_to_responsible: boolean | null;
   notes: string | null;
+}
+
+// Latest reminder per client from billing_reminder_log: the last one that went, and the
+// latest attempt (so a failure after it shows).
+interface LastSent {
+  sent: { at: string; kind: "invoice" | "ledger" } | null;
+  failedAfter: string | null;
 }
 
 interface FirmGroup { id: string; name: string; firm_ids: string[] }
@@ -427,6 +436,7 @@ export default function BillingRemindersTab({
   const [clients, setClients] = useState<ClientRow[]>([]);
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [lastRun, setLastRun] = useState<any>(null);
+  const [lastSent, setLastSent] = useState<Record<string, LastSent>>({});
   const [loading, setLoading] = useState(true);
 
   const [effective, setEffective] = useState<EffectiveRow[] | null>(null);
@@ -466,7 +476,7 @@ export default function BillingRemindersTab({
     if (!resolvedFirmId) { setLoading(false); return; }
     setLoading(true);
     const sb = supabase as any;
-    const [fgRes, fgmRes, cgRes, cRes, pRes, runRes, firmsRes] = await Promise.all([
+    const [fgRes, fgmRes, cgRes, cRes, pRes, runRes, firmsRes, logRes] = await Promise.all([
       sb.from("firm_groups").select("id, name").order("name"),
       sb.from("firm_group_members").select("firm_group_id, firm_id"),
       // Client groups are usually global (firm_id NULL — wizard and customer sync create them that way).
@@ -480,7 +490,18 @@ export default function BillingRemindersTab({
         .order("started_at", { ascending: false }).limit(1),
       isSuperadmin ? sb.from("firms").select("id, name, settings").order("name")
                    : sb.from("firms").select("id, name, settings").eq("id", resolvedFirmId),
+      sb.from("billing_reminder_log").select("client_id, kind, status, sent_at")
+        .eq("firm_id", resolvedFirmId).order("sent_at", { ascending: false }).limit(5000),
     ]);
+    const ls: Record<string, LastSent> = {};
+    for (const r of (logRes.data || []) as { client_id: string | null; kind: "invoice" | "ledger"; status: string; sent_at: string }[]) {
+      if (!r.client_id) continue;
+      const e = ls[r.client_id] ??= { sent: null, failedAfter: null };
+      if (e.sent) continue; // newest first: everything after the last sent one is older
+      if (r.status === "sent") e.sent = { at: r.sent_at, kind: r.kind };
+      else if (!e.failedAfter) e.failedAfter = r.sent_at;
+    }
+    setLastSent(ls);
     const members = (fgmRes.data || []) as { firm_group_id: string; firm_id: string }[];
     setFirmGroups(((fgRes.data || []) as any[]).map(g => ({
       ...g, firm_ids: members.filter(m => m.firm_group_id === g.id).map(m => m.firm_id),
@@ -835,18 +856,18 @@ export default function BillingRemindersTab({
   });
 
   const exportCsv = () => {
-    const header = ["Client", "Groups", "Open invoices", "Outstanding", "Invoice reminders", "Statement of Account", "To", "CC"];
-    const lines = tableRows.map(r => [
-      r.client_name, r.groups.join("; "), r.open_invoices, r.outstanding.toFixed(2),
-      describeInvoice(r.settings), describeLedger(r.settings), r.to.join("; "), r.cc.join("; "),
-    ].map(csvCell).join(","));
-    const blob = new Blob([[header.map(csvCell).join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `outstanding-reminders-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    const header = ["Client", "Groups", "Open invoices", "Outstanding", "Invoice reminders", "Statement of Account", "To", "CC", "Last sent on", "Last sent type"];
+    const lines = tableRows.map(r => {
+      const last = lastSent[r.client_id]?.sent;
+      return [
+        r.client_name, r.groups.join("; "), r.open_invoices, r.outstanding.toFixed(2),
+        describeInvoice(r.settings), describeLedger(r.settings), r.to.join("; "), r.cc.join("; "),
+        last ? format(new Date(last.at), "dd-MM-yyyy HH:mm") : "",
+        last ? (last.kind === "invoice" ? "Payment reminder" : "Statement of Account") : "",
+      ].map(csvCell).join(",");
+    });
+    downloadBlob(new Blob([[header.map(csvCell).join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" }),
+      `outstanding-reminders-${new Date().toISOString().slice(0, 10)}.csv`);
   };
 
   const openClient = (r: EffectiveRow) => {
@@ -925,6 +946,20 @@ export default function BillingRemindersTab({
           <div className="truncate" title={r.to.join(", ")}>{r.to.join(", ") || <span className="text-amber-600">No email</span>}</div>
           {r.cc.length > 0 && <div className="truncate text-[10px] text-muted-foreground" title={r.cc.join(", ")}>CC: {r.cc.join(", ")}</div>}
         </TableCell>
+        <TableCell className="text-xs whitespace-nowrap">
+          {(() => {
+            const l = lastSent[r.client_id];
+            return <>
+              {l?.sent
+                ? <>
+                    <div>{format(new Date(l.sent.at), "dd MMM yyyy")}</div>
+                    <div className="text-[10px] text-muted-foreground">{l.sent.kind === "invoice" ? "Payment reminder" : "Statement"}</div>
+                  </>
+                : <span className="text-muted-foreground">Never</span>}
+              {l?.failedAfter && <div className="text-[10px] text-destructive">Failed {format(new Date(l.failedAfter), "dd MMM")}</div>}
+            </>;
+          })()}
+        </TableCell>
         <TableCell className="text-right text-xs">
           {inr(r.outstanding)}
           {r.open_invoices > 0 && <div className="text-[10px] text-muted-foreground">{r.open_invoices} invoice{r.open_invoices !== 1 ? "s" : ""}</div>}
@@ -988,6 +1023,7 @@ export default function BillingRemindersTab({
           <TabsTrigger value="outstanding" className="gap-1.5"><IndianRupee size={13} /> Outstanding clients</TabsTrigger>
           <TabsTrigger value="rules" className="gap-1.5"><Settings2 size={13} /> Reminder rules</TabsTrigger>
           <TabsTrigger value="templates" className="gap-1.5"><FileText size={13} /> Reminder templates</TabsTrigger>
+          <TabsTrigger value="log" className="gap-1.5"><History size={13} /> Reminder log</TabsTrigger>
         </TabsList>
 
       <TabsContent value="rules" className="mt-4">
@@ -1263,7 +1299,8 @@ export default function BillingRemindersTab({
                     <TableHead>Reminders</TableHead>
                     <TableHead>Invoice reminders</TableHead>
                     <TableHead>Statement of Account</TableHead>
-                    <TableHead>To / CC</TableHead>
+                    <TableHead>Email ID (To / CC)</TableHead>
+                    <TableHead>Last sent on</TableHead>
                     <TableHead className="text-right">Outstanding</TableHead>
                     <TableHead className="text-right">Remind</TableHead>
                   </TableRow>
@@ -1280,7 +1317,7 @@ export default function BillingRemindersTab({
                             <TableCell>
                               <Checkbox checked={ids.every(id => checked.has(id))} onCheckedChange={v => toggleChecked(ids, !!v)} aria-label={`Select ${g.name}`} />
                             </TableCell>
-                            <TableCell className="text-sm" colSpan={5}>
+                            <TableCell className="text-sm" colSpan={6}>
                               <div className="flex items-center gap-2">
                                 <button className="flex items-center gap-1 font-semibold"
                                   onClick={() => setExpanded(prev => { const n = new Set(prev); open ? n.delete(g.key) : n.add(g.key); return n; })}>
@@ -1302,7 +1339,7 @@ export default function BillingRemindersTab({
                         ];
                       })}
                   {tableRows.length === 0 && (
-                    <TableRow><TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-6">No outstanding clients match.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={9} className="text-center text-sm text-muted-foreground py-6">No outstanding clients match.</TableCell></TableRow>
                   )}
                 </TableBody>
               </Table>
@@ -1310,6 +1347,10 @@ export default function BillingRemindersTab({
           )}
         </CardContent>
       </Card>
+      </TabsContent>
+
+      <TabsContent value="log" className="mt-4">
+        <ReminderLogTab key={`${resolvedFirmId}-${lastRun?.id ?? ""}`} firmId={resolvedFirmId} />
       </TabsContent>
 
       {/* Reminder email templates — the two the engine sends */}
