@@ -11,6 +11,10 @@
  *   preview   — what WOULD be sent today, and who is skipped and why (no send)
  *   run       — send what is due today for the given firms ("Send now")
  *   scheduled — pg_cron daily run across every firm that has a policy
+ *   send_client — { client_id, kind: 'invoice' | 'ledger' }: send one client
+ *               a reminder (all open invoices) or statement right now, from the
+ *               "Send now" button on a client row. Ignores timing, pause and
+ *               on/off rules (a person chose to send); counts as a sent reminder.
  *
  * Auth: the service-role key may do anything. The project anon key (used by
  * pg_cron, like the TDS jobs) may only start a 'scheduled' run — that run is
@@ -370,7 +374,7 @@ async function buildPlan(admin: any, firmIds: string[]) {
     }
   }
 
-  return { today, firms, effectiveRows, planned, skipped };
+  return { today, firms, effectiveRows, planned, skipped, invByClient, history, outstandingOf };
 }
 
 // ── Sending ──────────────────────────────────────────────────────────
@@ -429,7 +433,7 @@ async function sendOne(admin: any, p: Planned, runId: string, trigger: string, t
   } else {
     await admin.from("billing_reminder_log").insert({ ...base, period_key: p.period_key, amount: p.amount });
   }
-  return ok;
+  return { ok, error };
 }
 
 async function executeRun(admin: any, firmIds: string[], trigger: string, userId: string | null) {
@@ -450,7 +454,7 @@ async function executeRun(admin: any, firmIds: string[], trigger: string, userId
     pending = planned.length - batch.length;
     for (let i = 0; i < batch.length; i += CONCURRENCY) {
       const results = await Promise.all(batch.slice(i, i + CONCURRENCY).map(p => sendOne(admin, p, runId, trigger, today)));
-      results.forEach(ok => ok ? sent++ : failed++);
+      results.forEach(r => r.ok ? sent++ : failed++);
     }
   } catch (e: any) {
     runError = e.message;
@@ -476,8 +480,8 @@ Deno.serve(async (req) => {
   if (req.method !== "POST") return jsonResponse({ error: "Method not allowed" }, 405);
 
   try {
-    const { action = "preview", firm_ids } = await req.json().catch(() => ({}));
-    if (!["effective", "preview", "run", "scheduled"].includes(action)) {
+    const { action = "preview", firm_ids, client_id, kind } = await req.json().catch(() => ({}));
+    if (!["effective", "preview", "run", "scheduled", "send_client"].includes(action)) {
       return jsonResponse({ error: `Unknown action: ${action}` }, 400);
     }
 
@@ -538,6 +542,36 @@ Deno.serve(async (req) => {
     }
 
     const plan = await buildPlan(admin, requested);
+
+    if (action === "send_client") {
+      if (kind !== "invoice" && kind !== "ledger") return jsonResponse({ error: "kind must be invoice or ledger" }, 400);
+      // Only a client of the requested (authorised) firms.
+      const row = plan.effectiveRows.find((r: any) => r.client_id === client_id);
+      if (!row) return jsonResponse({ error: "Client not found in this firm" }, 404);
+      const open = plan.invByClient.get(row.client_id) || [];
+      if (!open.length) return jsonResponse({ error: "Nothing outstanding for this client" }, 400);
+      if (!row.to.length) return jsonResponse({ error: "No email address for this client" }, 400);
+      const invoices: Planned["invoices"] = open.map((i: any) => ({
+        id: i.id, invoice_no: i.invoice_no, invoice_date: i.invoice_date, due_date: i.due_date,
+        outstanding: plan.outstandingOf(i), days_overdue: i.due_date ? daysBetween(i.due_date, plan.today) : 0,
+        reminder_no: (plan.history.get(i.id)?.count ?? 0) + 1,
+      }));
+      const p: Planned = {
+        kind, firm_id: row.firm_id, client_id: row.client_id, client_name: row.client_name,
+        to: row.to, cc: row.cc, invoices, amount: invoices.reduce((t, i) => t + i.outstanding, 0),
+        // Not a statement period: the scheduled statement for this month/quarter still goes.
+        ...(kind === "ledger" ? { period_key: `manual:${new Date().toISOString()}` } : {}),
+      };
+      const { data: run } = await admin.from("billing_reminder_runs")
+        .insert({ trigger: "manual_client", firm_id: row.firm_id, started_by: userId }).select("id").single();
+      const { ok, error: sendError } = await sendOne(admin, p, run.id, "manual_client", plan.today);
+      await admin.from("billing_reminder_runs")
+        .update({ finished_at: new Date().toISOString(), sent: ok ? 1 : 0, failed: ok ? 0 : 1, pending: 0, error: sendError })
+        .eq("id", run.id);
+      return jsonResponse({ success: ok, sent: ok ? 1 : 0, to: p.to, cc: p.cc, amount: p.amount, invoices: invoices.length,
+        ...(ok ? {} : { error: sendError || "Email could not be sent" }) });
+    }
+
     if (action === "effective") {
       return jsonResponse({ success: true, today: plan.today, clients: plan.effectiveRows });
     }
