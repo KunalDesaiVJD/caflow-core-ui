@@ -453,6 +453,8 @@ export default function BillingRemindersTab({
   const [effective, setEffective] = useState<EffectiveRow[] | null>(null);
   const [effectiveError, setEffectiveError] = useState<string | null>(null);
   const [effectiveLoading, setEffectiveLoading] = useState(false);
+  // Daily automatic sending (engine secret BILLING_REMINDERS_AUTO); paused since 31-Oct-2026.
+  const [autoSend, setAutoSend] = useState<boolean | null>(null);
   const [tableFilter, setTableFilter] = useState<"all" | "send" | "nosend" | "custom" | "conflict">("all");
   const [tableSearch, setTableSearch] = useState("");
   const [viewMode, setViewMode] = useState<"client" | "group">("client");
@@ -565,6 +567,7 @@ export default function BillingRemindersTab({
       setEffective(null);
     } else {
       setEffective((data as any).clients as EffectiveRow[]);
+      setAutoSend(!!(data as any).auto_send);
     }
     setEffectiveLoading(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1055,7 +1058,10 @@ export default function BillingRemindersTab({
             the same client asking for different things) can't be saved.
           </p>
           <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
-            <Clock size={12} /> Runs automatically every day at 10:00 IST.
+            <Clock size={12} />
+            {autoSend === false
+              ? <span className="text-amber-600 font-medium">Automatic sending is paused — reminders go only when you press Send now.</span>
+              : <> Runs automatically every day at 10:00 IST.</>}
             {lastRun
               ? <> Last run {formatDistanceToNow(new Date(lastRun.started_at), { addSuffix: true })} ({lastRun.trigger}): {lastRun.sent} sent{lastRun.failed ? `, ${lastRun.failed} failed` : ""}{lastRun.error ? ` — ${lastRun.error}` : ""}.</>
               : <> No runs yet.</>}
