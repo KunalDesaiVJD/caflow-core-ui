@@ -38,6 +38,10 @@
  *     _shared/statement/report.ts), so the two tabs agree. Credits are set
  *     against the oldest debits first; the invoices left with a balance are the
  *     open ones. A client at nil (or in advance) gets nothing and is not listed.
+ *   Everything is per (client, invoicing firm), as Reports' atoms: a client billed
+ *     by a firm is that firm's debtor whatever its home firm, under the invoicing
+ *     firm's rules. Archived / draft clients are listed for their balance but not
+ *     emailed. Groups come from the client's memberships, any firm's group.
  *   A client whose rules conflict gets nothing of that kind until resolved.
  */
 
@@ -137,58 +141,12 @@ interface Planned {
 async function buildPlan(admin: any, firmIds: string[]) {
   const today = todayIST();
 
-  const [firms, clients, clientGroups, fgMembers] = await Promise.all([
+  // ── Ledger, exactly as Billing → Reports reads it (as on today) ──
+  // One unit per (client, invoicing firm), like the Report tab's atoms: a client
+  // billed by a firm is that firm's debtor whichever firm the client belongs to.
+  const [firms, fgMembers, ledgerDocs, receipts, obRows, kasars] = await Promise.all([
     admin.from("firms").select("id, name").in("id", firmIds).then((r: any) => r.data || []),
-    fetchAll(() => admin.from("clients")
-      .select("id, name, email, firm_id, is_active, is_draft, deleted_at, responsible_person_id")
-      .in("firm_id", firmIds).is("deleted_at", null).order("name")),
-    // Client groups are usually global (firm_id NULL), so include those.
-    admin.from("client_groups").select("id, name, firm_id")
-      .or(`firm_id.in.(${firmIds.join(",")}),firm_id.is.null`).order("name").then((r: any) => r.data || []),
     admin.from("firm_group_members").select("firm_group_id, firm_id").in("firm_id", firmIds).then((r: any) => r.data || []),
-  ]);
-  const activeClients = clients.filter((c: any) => c.is_active !== false && c.is_draft !== true);
-
-  const knownGroups = new Set(clientGroups.map((g: any) => g.id));
-  const memberships = (await inChunks<any>(activeClients.map((c: any) => c.id), 200, async (chunk) =>
-    (await admin.from("client_group_memberships").select("client_id, group_id").in("client_id", chunk)).data || []))
-    .filter((m: any) => knownGroups.has(m.group_id));
-  const groupIds = [...new Set(memberships.map((m: any) => m.group_id))] as string[];
-  const firmGroupIds = [...new Set(fgMembers.map((m: any) => m.firm_group_id))] as string[];
-  const firmGroups = firmGroupIds.length
-    ? (await admin.from("firm_groups").select("id, name").in("id", firmGroupIds).order("name")).data || []
-    : [];
-
-  const policies = await fetchAll(() => admin.from("billing_reminder_policies").select("*")
-    .or([
-      `firm_id.in.(${firmIds.join(",")})`,
-      ...(firmGroupIds.length ? [`firm_group_id.in.(${firmGroupIds.join(",")})`] : []),
-      ...(groupIds.length ? [`client_group_id.in.(${groupIds.join(",")})`] : []),
-    ].join(",")));
-
-  const byScope = new Map<string, any>();
-  for (const p of policies) {
-    const id = p.scope_type === "firm_group" ? p.firm_group_id
-      : p.scope_type === "firm" ? p.firm_id
-      : p.scope_type === "client_group" ? p.client_group_id : p.client_id;
-    byScope.set(`${p.scope_type}:${id}`, p);
-  }
-  const firmName = new Map(firms.map((f: any) => [f.id, f.name]));
-  const groupName = new Map(clientGroups.map((g: any) => [g.id, g.name]));
-  const groupsOfClient = new Map<string, string[]>();
-  for (const m of memberships) {
-    if (!groupsOfClient.has(m.client_id)) groupsOfClient.set(m.client_id, []);
-    groupsOfClient.get(m.client_id)!.push(m.group_id);
-  }
-  const fgName = new Map(firmGroups.map((g: any) => [g.id, g.name]));
-  const fgOfFirm = new Map<string, string[]>();
-  for (const m of fgMembers) {
-    if (!fgOfFirm.has(m.firm_id)) fgOfFirm.set(m.firm_id, []);
-    fgOfFirm.get(m.firm_id)!.push(m.firm_group_id);
-  }
-
-  // Ledger, exactly as Billing → Reports reads it (as on today).
-  const [ledgerDocs, receipts, obRows, kasars] = await Promise.all([
     fetchAll(() => admin.from("invoices")
       .select("id, invoice_no, client_id, firm_id, total_amount, invoice_date, due_date, payment_due_days, last_reminded_at, document_type")
       .in("firm_id", firmIds)
@@ -205,36 +163,96 @@ async function buildPlan(admin: any, firmIds: string[]) {
       .select("client_id, firm_id, kasar_date, amount").in("firm_id", firmIds).order("id")),
   ]);
   const atoms = accumulateBalances({ fromDate: "0001-01-01", toDate: today, obRows, invoices: ledgerDocs, receipts, kasars });
+  const unitKey = (clientId: string, firmId: string) => `${clientId}|${firmId}`;
   const closingOf = new Map<string, number>();
-  for (const a of atoms.values()) closingOf.set(a.clientId, (closingOf.get(a.clientId) ?? 0) + netClosing(a));
+  for (const a of atoms.values()) closingOf.set(unitKey(a.clientId, a.firmId), netClosing(a));
+  // Advances are kept too: the screen nets a client's firms for "All firms", as Reports does.
+  const units = [...atoms.values()].filter(a => Math.abs(netClosing(a)) >= 0.005);
 
-  // Which invoices are still open: the client's credits (credit notes, receipts,
+  // Clients of those units — archived and draft ones too, as Reports shows them.
+  const clientIds = [...new Set(units.map(u => u.clientId))];
+  const clients = await inChunks<any>(clientIds, 200, async (chunk) =>
+    (await admin.from("clients")
+      .select("id, name, email, firm_id, is_active, is_draft, deleted_at, responsible_person_id")
+      .in("id", chunk)).data || []);
+  const clientById = new Map<string, any>(clients.map((c: any) => [c.id, c]));
+
+  // Groups by membership, whichever firm created the group (Reports does the same).
+  const memberships = await inChunks<any>(clientIds, 200, async (chunk) =>
+    (await admin.from("client_group_memberships").select("client_id, group_id").in("client_id", chunk)).data || []);
+  const groupIds = [...new Set(memberships.map((m: any) => m.group_id))] as string[];
+  const clientGroups = await inChunks<any>(groupIds, 200, async (chunk) =>
+    (await admin.from("client_groups").select("id, name").in("id", chunk)).data || []);
+  const firmGroupIds = [...new Set(fgMembers.map((m: any) => m.firm_group_id))] as string[];
+  const firmGroups = firmGroupIds.length
+    ? (await admin.from("firm_groups").select("id, name").in("id", firmGroupIds).order("name")).data || []
+    : [];
+
+  const policies = [
+    ...await fetchAll(() => admin.from("billing_reminder_policies").select("*")
+      .in("scope_type", ["firm_group", "firm", "client_group"])
+      .or([
+        `firm_id.in.(${firmIds.join(",")})`,
+        ...(firmGroupIds.length ? [`firm_group_id.in.(${firmGroupIds.join(",")})`] : []),
+        ...(groupIds.length ? [`client_group_id.in.(${groupIds.join(",")})`] : []),
+      ].join(",")).order("id")),
+    ...await inChunks<any>(clientIds, 200, async (chunk) =>
+      (await admin.from("billing_reminder_policies").select("*").eq("scope_type", "client").in("client_id", chunk)).data || []),
+  ];
+
+  const byScope = new Map<string, any>();
+  for (const p of policies) {
+    const id = p.scope_type === "firm_group" ? p.firm_group_id
+      : p.scope_type === "firm" ? p.firm_id
+      : p.scope_type === "client_group" ? p.client_group_id : p.client_id;
+    byScope.set(`${p.scope_type}:${id}`, p);
+  }
+  const firmName = new Map(firms.map((f: any) => [f.id, f.name]));
+  const groupName = new Map(clientGroups.map((g: any) => [g.id, g.name]));
+  const groupsOfClient = new Map<string, string[]>();
+  for (const m of memberships) {
+    if (!groupName.has(m.group_id)) continue;
+    if (!groupsOfClient.has(m.client_id)) groupsOfClient.set(m.client_id, []);
+    if (!groupsOfClient.get(m.client_id)!.includes(m.group_id)) groupsOfClient.get(m.client_id)!.push(m.group_id);
+  }
+  const fgName = new Map(firmGroups.map((g: any) => [g.id, g.name]));
+  const fgOfFirm = new Map<string, string[]>();
+  for (const m of fgMembers) {
+    if (!fgOfFirm.has(m.firm_id)) fgOfFirm.set(m.firm_id, []);
+    fgOfFirm.get(m.firm_id)!.push(m.firm_group_id);
+  }
+
+  // Which invoices are still open: the unit's credits (credit notes, receipts,
   // kasar) settle the opening balance and then invoices oldest first, so the
   // open invoices add up to the ledger balance.
   const invoicesOf = new Map<string, any[]>();
   for (const i of ledgerDocs) {
     if (i.document_type !== "invoice" || !Number(i.total_amount) || (i.invoice_date && i.invoice_date > today)) continue;
-    if (!invoicesOf.has(i.client_id)) invoicesOf.set(i.client_id, []);
-    invoicesOf.get(i.client_id)!.push(i);
+    const k = unitKey(i.client_id, i.firm_id);
+    if (!invoicesOf.has(k)) invoicesOf.set(k, []);
+    invoicesOf.get(k)!.push(i);
   }
   const openInvoices: any[] = [];
-  for (const [clientId, closing] of closingOf) {
+  const invByUnit = new Map<string, any[]>();
+  for (const [k, closing] of closingOf) {
     if (closing < NIL) continue;
-    const list = (invoicesOf.get(clientId) || [])
+    const list = (invoicesOf.get(k) || [])
       .sort((a, b) => (a.invoice_date || "9999").localeCompare(b.invoice_date || "9999"));
     // Unsettled debt sits in the newest debits: walk back from the newest invoice.
     let left = closing;
-    for (let k = list.length - 1; k >= 0 && left >= NIL; k--) {
-      const i = list[k];
+    const open: any[] = [];
+    for (let n = list.length - 1; n >= 0 && left >= NIL; n--) {
+      const i = list[n];
       i.remaining = Math.min(Number(i.total_amount), left);
       left -= i.remaining;
-      openInvoices.push(i);
+      // Invoices saved before 23-Oct-2026 have no due_date: use invoice date + payment terms.
+      i.due_date = effectiveDueDate(i);
+      open.unshift(i);
     }
+    invByUnit.set(k, open);
+    openInvoices.push(...open);
   }
-  // Invoices saved before 23-Oct-2026 have no due_date: use invoice date + payment terms.
-  for (const i of openInvoices) i.due_date = effectiveDueDate(i);
   const outstandingOf = (i: any) => Number(i.remaining ?? 0);
-  openInvoices.sort((a, b) => (a.invoice_date || "").localeCompare(b.invoice_date || ""));
 
   // Reminder history per invoice.
   const sentLog = await inChunks(openInvoices.map((i: any) => i.id), 200, async (chunk) =>
@@ -248,27 +266,21 @@ async function buildPlan(admin: any, firmIds: string[]) {
     history.set(r.invoice_id, h);
   }
 
-  // Ledger periods already sent.
+  // Statement periods already sent, per client and firm.
   const ledgerSent = new Set<string>();
   const thisMonth = today.slice(0, 7);
   const thisQuarter = `${today.slice(0, 4)}-Q${Math.floor((Number(today.slice(5, 7)) - 1) / 3) + 1}`;
-  for (const r of await fetchAll(() => admin.from("billing_reminder_log").select("client_id, period_key")
-    .eq("kind", "ledger").eq("status", "sent").in("firm_id", firmIds).in("period_key", [thisMonth, thisQuarter]))) {
-    ledgerSent.add(`${r.client_id}:${r.period_key}`);
+  for (const r of await fetchAll(() => admin.from("billing_reminder_log").select("client_id, firm_id, period_key")
+    .eq("kind", "ledger").eq("status", "sent").in("firm_id", firmIds).in("period_key", [thisMonth, thisQuarter]).order("id"))) {
+    ledgerSent.add(`${unitKey(r.client_id, r.firm_id)}|${r.period_key}`);
   }
 
   // Responsible-person emails.
-  const rpIds = [...new Set(activeClients.map((c: any) => c.responsible_person_id).filter(Boolean))] as string[];
+  const rpIds = [...new Set(clients.map((c: any) => c.responsible_person_id).filter(Boolean))] as string[];
   const rpEmail = new Map<string, string>();
   if (rpIds.length) {
     const { data } = await admin.from("users").select("id, email").in("id", rpIds);
     for (const u of data || []) if (u.email) rpEmail.set(u.id, u.email);
-  }
-
-  const invByClient = new Map<string, any[]>();
-  for (const i of openInvoices) {
-    if (!invByClient.has(i.client_id)) invByClient.set(i.client_id, []);
-    invByClient.get(i.client_id)!.push(i);
   }
 
   const effectiveRows: any[] = [];
@@ -277,7 +289,10 @@ async function buildPlan(admin: any, firmIds: string[]) {
 
   const weekday = new Date(today + "T00:00:00Z").getUTCDay();
 
-  for (const c of activeClients) {
+  for (const u of units) {
+    const c = clientById.get(u.clientId);
+    if (!c) continue;
+    const firmId = u.firmId;
     const layer = (scope: Layer["level"], id: string, label: string): Layer | null => {
       const p = byScope.get(`${scope}:${id}`);
       return p ? { level: scope, id, label, policy: p } : null;
@@ -286,8 +301,9 @@ async function buildPlan(admin: any, firmIds: string[]) {
     const groupLayers = (groupsOfClient.get(c.id) || [])
       .map(g => layer("client_group", g, `Group: ${groupName.get(g)}`)).filter(Boolean) as Layer[];
     groupLayers.sort((a, b) => a.label.localeCompare(b.label));
-    const firmLayer = layer("firm", c.firm_id, `Firm: ${firmName.get(c.firm_id)}`);
-    const fgLayers = (fgOfFirm.get(c.firm_id) || [])
+    // The invoicing firm's rules (and its firm groups) apply.
+    const firmLayer = layer("firm", firmId, `Firm: ${firmName.get(firmId)}`);
+    const fgLayers = (fgOfFirm.get(firmId) || [])
       .map(g => layer("firm_group", g, `Firm group: ${fgName.get(g)}`)).filter(Boolean) as Layer[];
     fgLayers.sort((a, b) => a.label.localeCompare(b.label));
 
@@ -301,22 +317,31 @@ async function buildPlan(admin: any, firmIds: string[]) {
     to.forEach(t => cc.delete(t.toLowerCase()));
     const ccList = [...cc];
 
-    const clientInvoices = invByClient.get(c.id) || [];
-    // The Report tab's balance; nil or an advance counts as nothing outstanding.
-    const closing = closingOf.get(c.id) ?? 0;
+    const clientInvoices = invByUnit.get(unitKey(c.id, firmId)) || [];
+    // The Report tab's balance with this firm; nil or an advance is nothing outstanding.
+    const closing = closingOf.get(unitKey(c.id, firmId)) ?? 0;
     const totalOutstanding = closing >= NIL ? closing : 0;
+    const archived = !!c.deleted_at || c.is_active === false || c.is_draft === true;
 
     effectiveRows.push({
-      client_id: c.id, client_name: c.name, firm_id: c.firm_id, firm_name: firmName.get(c.firm_id),
+      client_id: c.id, client_name: c.name, firm_id: firmId, firm_name: firmName.get(firmId),
       groups: (groupsOfClient.get(c.id) || []).map(g => groupName.get(g)),
       settings: e, source, to, cc: ccList,
-      outstanding: totalOutstanding, open_invoices: clientInvoices.length,
-      has_client_policy: !!clientLayer,
+      // balance may be negative (advance) so "All firms" can net it like Reports.
+      balance: closing, outstanding: totalOutstanding, open_invoices: clientInvoices.length,
+      has_client_policy: !!clientLayer, archived,
       issues: issues.map(i => ({ kind: i.kind, message: i.message })),
     });
+    if (totalOutstanding <= 0) continue;
 
     const skip = (kind: string, reason: string) =>
-      skipped.push({ client_id: c.id, client_name: c.name, firm_id: c.firm_id, kind, reason });
+      skipped.push({ client_id: c.id, client_name: c.name, firm_id: firmId, kind, reason });
+
+    // Archived / inactive / draft clients are listed (their balance is real) but not emailed.
+    if (archived) {
+      if (e.invoice_enabled || e.ledger_enabled) skip(e.invoice_enabled ? "invoice" : "ledger", "Client is archived / inactive — not sent");
+      continue;
+    }
 
     // Conflicting rules: send nothing of that kind until someone resolves them.
     const conflict = (kind: "invoice" | "ledger") =>
@@ -376,7 +401,7 @@ async function buildPlan(admin: any, firmIds: string[]) {
           : ccList;
         if (to.length === 0) skip("invoice", "No email address for client");
         else planned.push({
-          kind: "invoice", firm_id: c.firm_id, client_id: c.id, client_name: c.name, to, cc: invCc,
+          kind: "invoice", firm_id: firmId, client_id: c.id, client_name: c.name, to, cc: invCc,
           invoices: due, amount: due.reduce((s, i) => s + i.outstanding, 0),
         });
       } else if (notYet + maxed + recent + small + noDate > 0) {
@@ -400,7 +425,7 @@ async function buildPlan(admin: any, firmIds: string[]) {
     } else if (e.ledger_enabled) {
       const period = ledgerPeriod(today, e.ledger_frequency, Number(e.ledger_day));
       if (!period) continue;
-      if (ledgerSent.has(`${c.id}:${period.key}`)) continue;
+      if (ledgerSent.has(`${unitKey(c.id, firmId)}|${period.key}`)) continue;
       if (totalOutstanding < NIL) continue; // nil balance: no statement
       if (totalOutstanding < Number(e.ledger_min_balance ?? 0)) {
         if (clientInvoices.length) skip("ledger", "Outstanding below minimum balance");
@@ -408,7 +433,7 @@ async function buildPlan(admin: any, firmIds: string[]) {
       }
       if (to.length === 0) { skip("ledger", "No email address for client"); continue; }
       planned.push({
-        kind: "ledger", firm_id: c.firm_id, client_id: c.id, client_name: c.name, to, cc: ccList,
+        kind: "ledger", firm_id: firmId, client_id: c.id, client_name: c.name, to, cc: ccList,
         period_key: period.key, amount: totalOutstanding,
         invoices: clientInvoices.map(i => ({
           id: i.id, invoice_no: i.invoice_no, invoice_date: i.invoice_date, due_date: i.due_date,
@@ -419,7 +444,7 @@ async function buildPlan(admin: any, firmIds: string[]) {
     }
   }
 
-  return { today, firms, effectiveRows, planned, skipped, invByClient, history, outstandingOf };
+  return { today, firms, effectiveRows, planned, skipped, invByUnit, unitKey, history, outstandingOf };
 }
 
 // ── Sending ──────────────────────────────────────────────────────────
@@ -542,23 +567,12 @@ Deno.serve(async (req) => {
       if (!isService && role !== "anon" && role !== "service_role") {
         return jsonResponse({ error: "Unauthorized" }, 401);
       }
-      const policies = await fetchAll(() => admin.from("billing_reminder_policies")
-        .select("scope_type, firm_id, firm_group_id, client_group_id")
-        .or("invoice_enabled.eq.true,ledger_enabled.eq.true"));
-      const ids = new Set<string>(policies.filter((p: any) => p.firm_id).map((p: any) => p.firm_id));
-      // Client groups are usually global (shared by every firm): reach the firms of their members.
-      const globalGroups = policies.filter((p: any) => p.scope_type === "client_group").map((p: any) => p.client_group_id);
-      if (globalGroups.length) {
-        const members = await fetchAll(() => admin.from("client_group_memberships").select("client_id").in("group_id", globalGroups));
-        const memberFirms = await inChunks([...new Set(members.map((m: any) => m.client_id))] as string[], 200, async (chunk) =>
-          (await admin.from("clients").select("firm_id").in("id", chunk)).data || []);
-        memberFirms.forEach((c: any) => c.firm_id && ids.add(c.firm_id));
-      }
-      const fgIds = policies.filter((p: any) => p.scope_type === "firm_group").map((p: any) => p.firm_group_id);
-      if (fgIds.length) {
-        const { data } = await admin.from("firm_group_members").select("firm_id").in("firm_group_id", fgIds);
-        (data || []).forEach((m: any) => ids.add(m.firm_id));
-      }
+      // Every firm: a client is reminded for each firm it owes (like Reports), and a client or
+      // group rule reaches firms other than the client's own. Nothing is sent unless a rule
+      // switches it on (system default is off), so firms without rules cost only the planning.
+      const { count } = await admin.from("billing_reminder_policies").select("id", { count: "exact", head: true })
+        .or("invoice_enabled.eq.true,ledger_enabled.eq.true");
+      const ids = new Set<string>(count ? ((await admin.from("firms").select("id")).data || []).map((f: any) => f.id) : []);
       if (ids.size === 0) return jsonResponse({ success: true, sent: 0, message: "No reminder policies switched on" });
       return jsonResponse({ success: true, ...await executeRun(admin, [...ids], "scheduled", null) });
     }
@@ -590,33 +604,45 @@ Deno.serve(async (req) => {
 
     if (action === "send_client") {
       if (kind !== "invoice" && kind !== "ledger") return jsonResponse({ error: "kind must be invoice or ledger" }, 400);
-      // Only a client of the requested (authorised) firms.
-      const row = plan.effectiveRows.find((r: any) => r.client_id === client_id);
-      if (!row) return jsonResponse({ error: "Client not found in this firm" }, 404);
-      const open = plan.invByClient.get(row.client_id) || [];
-      if (row.outstanding <= 0) return jsonResponse({ error: "Nothing outstanding for this client (nil balance in Reports)" }, 400);
-      if (kind === "invoice" && !open.length) return jsonResponse({ error: "No open invoice — the balance is opening balance only; send the Statement of Account instead" }, 400);
-      if (!row.to.length) return jsonResponse({ error: "No email address for this client" }, 400);
-      const invoices: Planned["invoices"] = open.map((i: any) => ({
-        id: i.id, invoice_no: i.invoice_no, invoice_date: i.invoice_date, due_date: i.due_date,
-        outstanding: plan.outstandingOf(i), days_overdue: i.due_date ? daysBetween(i.due_date, plan.today) : 0,
-        reminder_no: (plan.history.get(i.id)?.count ?? 0) + 1,
-      }));
-      const p: Planned = {
-        kind, firm_id: row.firm_id, client_id: row.client_id, client_name: row.client_name,
-        to: row.to, cc: row.cc, invoices,
-        amount: kind === "ledger" ? row.outstanding : invoices.reduce((t, i) => t + i.outstanding, 0),
-        // Not a statement period: the scheduled statement for this month/quarter still goes.
-        ...(kind === "ledger" ? { period_key: `manual:${new Date().toISOString()}` } : {}),
-      };
-      const { data: run } = await admin.from("billing_reminder_runs")
-        .insert({ trigger: "manual_client", firm_id: row.firm_id, started_by: userId }).select("id").single();
-      const { ok, error: sendError } = await sendOne(admin, p, run.id, "manual_client", plan.today);
-      await admin.from("billing_reminder_runs")
-        .update({ finished_at: new Date().toISOString(), sent: ok ? 1 : 0, failed: ok ? 0 : 1, pending: 0, error: sendError })
-        .eq("id", run.id);
-      return jsonResponse({ success: ok, sent: ok ? 1 : 0, to: p.to, cc: p.cc, amount: p.amount, invoices: invoices.length,
-        ...(ok ? {} : { error: sendError || "Email could not be sent" }) });
+      // The client's balance with each requested (authorised) firm — one email per firm it owes.
+      const rows = plan.effectiveRows.filter((r: any) => r.client_id === client_id);
+      if (!rows.length) return jsonResponse({ error: "Client not found in the selected firm(s)" }, 404);
+      const owing = rows.filter((r: any) => r.outstanding > 0);
+      if (!owing.length) return jsonResponse({ error: "Nothing outstanding for this client (nil balance in Reports)" }, 400);
+      if (!owing[0].to.length) return jsonResponse({ error: "No email address for this client" }, 400);
+      if (owing.some((r: any) => r.archived)) return jsonResponse({ error: "This client is archived / inactive in Clients" }, 400);
+      const sendable = owing.filter((r: any) => kind === "ledger" || (plan.invByUnit.get(plan.unitKey(r.client_id, r.firm_id)) || []).length);
+      if (!sendable.length) return jsonResponse({ error: "No open invoice — the balance is opening balance only; send the Statement of Account instead" }, 400);
+
+      let sent = 0, amount = 0, invoiceCount = 0;
+      const errors: string[] = [];
+      for (const row of sendable) {
+        const open = plan.invByUnit.get(plan.unitKey(row.client_id, row.firm_id)) || [];
+        const invoices: Planned["invoices"] = open.map((i: any) => ({
+          id: i.id, invoice_no: i.invoice_no, invoice_date: i.invoice_date, due_date: i.due_date,
+          outstanding: plan.outstandingOf(i), days_overdue: i.due_date ? daysBetween(i.due_date, plan.today) : 0,
+          reminder_no: (plan.history.get(i.id)?.count ?? 0) + 1,
+        }));
+        const p: Planned = {
+          kind, firm_id: row.firm_id, client_id: row.client_id, client_name: row.client_name,
+          to: row.to, cc: row.cc, invoices,
+          amount: kind === "ledger" ? row.outstanding : invoices.reduce((t, i) => t + i.outstanding, 0),
+          // Not a statement period: the scheduled statement for this month/quarter still goes.
+          ...(kind === "ledger" ? { period_key: `manual:${new Date().toISOString()}` } : {}),
+        };
+        const { data: run } = await admin.from("billing_reminder_runs")
+          .insert({ trigger: "manual_client", firm_id: row.firm_id, started_by: userId }).select("id").single();
+        const { ok, error: sendError } = await sendOne(admin, p, run.id, "manual_client", plan.today);
+        await admin.from("billing_reminder_runs")
+          .update({ finished_at: new Date().toISOString(), sent: ok ? 1 : 0, failed: ok ? 0 : 1, pending: 0, error: sendError })
+          .eq("id", run.id);
+        if (ok) { sent++; amount += p.amount; invoiceCount += invoices.length; }
+        else errors.push(`${row.firm_name}: ${sendError || "Email could not be sent"}`);
+      }
+      return jsonResponse({
+        success: sent > 0, sent, failed: errors.length, to: sendable[0].to, cc: sendable[0].cc, amount, invoices: invoiceCount,
+        ...(errors.length ? { error: errors.join("; ") } : {}),
+      });
     }
 
     if (action === "effective") {
