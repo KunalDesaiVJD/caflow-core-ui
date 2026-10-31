@@ -37,6 +37,7 @@
 import { useState, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { decodeHtmlEntities } from "@/lib/htmlEntities";
 
 // ─── Entity type mapping (8 values confirmed from live API) ───────────────────
 
@@ -190,14 +191,15 @@ function classifyFetchError(err: unknown, edgeFnAvailable: boolean): string {
 
 // ─── Build field-update payload shared by INSERT and UPDATE ───────────────────
 
+// eOffice sends text HTML-escaped ("V J DESAI &amp; CO LLP"); store it plain.
 function buildClientPayload(r: ApiRecord) {
   return {
-    name:        r.ClientName?.trim()                                 || null,
+    name:        decodeHtmlEntities(r.ClientName).trim()              || null,
     pan:         r.PanCard?.trim()                                    || null,
     entity_type: ENTITY_MAP[r.companytypename] ?? r.companytypename  ?? null,
     email:       r.email?.trim()                                      || null,
     mobile:      (r.Mobile || "").replace(/\D/g, "").slice(0, 10)    || null,
-    address:     r.ComAddress?.trim()                                 || null,
+    address:     decodeHtmlEntities(r.ComAddress).trim()              || null,
     gstin:       r.GST_No?.trim() ? [r.GST_No.trim()]                : null,
     tan_number:  r.TAN_no?.trim()                                     || null,
   };
@@ -450,7 +452,7 @@ export function useCustomerSync() {
       const chunkResults: ChunkResult[] = await Promise.all(
         chunk.map(async (r): Promise<ChunkResult> => {
           const customer_id = String(r.CustomerId);
-          const name        = r.ClientName?.trim() || null;
+          const name        = decodeHtmlEntities(r.ClientName).trim() || null;
           const payload     = buildClientPayload(r);
 
           try {
