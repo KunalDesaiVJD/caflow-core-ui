@@ -24,6 +24,7 @@ const SHELL: Record<string, ShellMeta> = {
   reminder_final: { accent: '#dc2626', pill: { text: 'Urgent &middot; Final Reminder', bg: '#fee2e2', fg: '#b91c1c' }, box: { bg: '#fef2f2', border: '#fecaca', label: '#7f1d1d' } },
   confirmation_filed: { accent: '#16a34a', pill: { text: '&#10003; Filed Successfully', bg: '#dcfce7', fg: '#166534' }, box: { bg: '#f0fdf4', border: '#bbf7d0', label: '#15803d' } },
   confirmation_nil: { accent: '#16a34a', pill: { text: '&#10003; Nil Return Filed', bg: '#dcfce7', fg: '#166534' }, box: { bg: '#f0fdf4', border: '#bbf7d0', label: '#15803d' } },
+  reminder_custom: { accent: '#d97706', pill: { text: 'Reminder &middot; Data Pending', bg: '#fef3c7', fg: '#92400e' }, box: { bg: '#fffbeb', border: '#fde68a', label: '#78716c' } },
   query_client: { accent: '#2563eb', pill: { text: 'Information Required', bg: '#dbeafe', fg: '#1e40af' }, box: { bg: '#eff6ff', border: '#bfdbfe', label: '#1e3a8a' } },
 };
 
@@ -34,20 +35,20 @@ export function buildTdsEmailHtml(opts: { key: string; kind: string; message: st
 
   const rows: Array<[string, string]> = [['TAN', g('tan')]];
   rows.push(['Form', key === 'confirmation_nil' ? `NIL ${g('form_type')}`.trim() : g('form_type')]);
-  rows.push(['Period', `${g('quarter')} FY ${g('financial_year')}`.trim()]);
+  if (g('quarter') || g('financial_year')) rows.push(['Period', `${g('quarter')} FY ${g('financial_year')}`.trim()]);
   if (kind === 'confirmation') {
     if (g('ack_no')) rows.push(['Ack No', g('ack_no')]);
     rows.push(['Filed on', g('filing_date')]);
   } else if (kind === 'query') {
     rows.push(['Please reply by', g('reply_by')]);
   } else {
-    rows.push(['Filing due', g('due_date')]);
+    rows.push([key === 'reminder_custom' ? 'Data needed by' : 'Filing due', g('due_date')]);
   }
   const dueColor = key === 'reminder_final' ? '#dc2626' : '#b45309';
   const detailRows = rows
     .filter(([, val]) => val && val !== '')
     .map(([label, val]) =>
-      `<tr><td style="padding:3px 0;color:${meta.box.label};width:110px;">${label}</td><td style="padding:3px 0;font-weight:600;${label === 'Filing due' || label === 'Please reply by' ? `color:${dueColor};` : ''}">${val}</td></tr>`,
+      `<tr><td style="padding:3px 0;color:${meta.box.label};width:110px;">${label}</td><td style="padding:3px 0;font-weight:600;${label === 'Filing due' || label === 'Data needed by' || label === 'Please reply by' ? `color:${dueColor};` : ''}">${val}</td></tr>`,
     )
     .join('');
 

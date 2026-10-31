@@ -8,6 +8,7 @@ import {
   LayoutDashboard, PenLine,
   ShieldCheck, BadgeCheck, BarChart3, Settings, ClipboardList, Combine, RefreshCw, Repeat2,
   FileEdit, Mail, Home,
+  BellPlus,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { TdsRateMaster } from "@/components/tds/TdsRateMaster";
@@ -22,6 +23,7 @@ import { TdsPortalLoginButtons } from "@/components/tds/TdsPortalLoginButtons";
 import { TdsPropertyModule } from "@/components/tds/property/TdsPropertyModule";
 import { TdsEmailSettingsPage } from "@/pages/TdsEmailSettingsPage";
 import { TdsQueryEmailDialog, type TdsQueryContext } from "@/components/tds/TdsQueryEmailDialog";
+import { TdsCustomReminderDialog } from "@/components/tds/TdsCustomReminderDialog";
 import { Button } from "@/components/ui/button";
 
 interface ClientOption {
@@ -100,6 +102,7 @@ const TdsFilings = () => {
   // the button (visible on every Workspace tab) can pre-fill the email.
   const [queryCtx, setQueryCtx] = useState<TdsQueryContext | null>(null);
   const [queryEmailOpen, setQueryEmailOpen] = useState(false);
+  const [reminderOpen, setReminderOpen] = useState(false);
 
   // ── Filed corrections for the CURRENT workspace context ───────────────────
   // A third Workspace tab appears only once at least one correction return has
@@ -495,6 +498,13 @@ const TdsFilings = () => {
                     is deliberately NOT full login automation. */}
                 <div className="flex-1" />
                 <div className="flex items-center gap-2 pr-1">
+                  <Button
+                    variant="outline" size="sm" className="h-7 text-xs gap-1.5"
+                    onClick={() => setReminderOpen(true)}
+                    title="Send or schedule a custom reminder asking a client for TDS data"
+                  >
+                    <BellPlus size={13} /> Send reminder
+                  </Button>
                   {ctxClient && (
                     <Button
                       variant="outline" size="sm" className="h-7 text-xs gap-1.5"
@@ -686,6 +696,14 @@ const TdsFilings = () => {
           )}
         </div>
       </div>
+      <TdsCustomReminderDialog
+        open={reminderOpen}
+        onOpenChange={setReminderOpen}
+        defaultClientId={ctxClient || undefined}
+        defaultFormType={ctxForm}
+        defaultQuarter={ctxQuarter}
+        defaultFinancialYear={ctxFy}
+      />
       {ctxClient && (
         <TdsQueryEmailDialog
           open={queryEmailOpen}
