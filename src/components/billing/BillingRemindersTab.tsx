@@ -20,10 +20,13 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { formatDistanceToNow } from "date-fns";
 import {
   Bell, Building2, Users, User, Layers, Plus, Play, Eye, RefreshCw, Trash2, Save, Mail, Search, Clock, AlertTriangle,
-  ChevronDown, ChevronRight, Download, PauseCircle, IndianRupee, Settings2, FileText,
+  ChevronDown, ChevronRight, Download, PauseCircle, IndianRupee, Settings2, FileText, Send,
 } from "lucide-react";
 import EmailTemplatesTab, { type TemplateType } from "./EmailTemplatesTab";
 import { describeInvoice, describeLedger, WEEKDAYS } from "@/lib/billingReminderRules";
@@ -440,6 +443,8 @@ export default function BillingRemindersTab({
   const [pauseDate, setPauseDate] = useState<string | null>(null);
   const [section, setSection] = useState("outstanding");
   const [sidebarOutstandingOnly, setSidebarOutstandingOnly] = useState(true);
+  const [sendTarget, setSendTarget] = useState<{ row: EffectiveRow; kind: "invoice" | "ledger" } | null>(null);
+  const [sendingClient, setSendingClient] = useState(false);
 
   const [selected, setSelected] = useState<Scope | null>(null);
   const [draft, setDraft] = useState<Policy | null>(null);
@@ -735,6 +740,30 @@ export default function BillingRemindersTab({
     }
   };
 
+  // ── Send one client a reminder / statement right now ──
+  const sendClientNow = async () => {
+    if (!sendTarget || !resolvedFirmId) return;
+    const { row, kind } = sendTarget;
+    setSendingClient(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("billing-reminders", {
+        body: { action: "send_client", firm_ids: [resolvedFirmId], client_id: row.client_id, kind },
+      });
+      const d = data as any;
+      if (error || !d?.success) throw new Error(d?.error || error?.message || "Request failed");
+      toast({
+        title: `${kind === "invoice" ? "Payment reminder" : "Statement of Account"} sent to ${row.client_name}`,
+        description: `${d.invoices} invoice${d.invoices !== 1 ? "s" : ""} · ${inr(d.amount)} · to ${d.to.join(", ")}`,
+      });
+      setSendTarget(null);
+      fetchAll();
+    } catch (err: any) {
+      toast({ title: `Could not send to ${row.client_name}`, description: err.message, variant: "destructive" });
+    } finally {
+      setSendingClient(false);
+    }
+  };
+
   // ── Derived ──
   // Only clients with something outstanding are listed; the rest have nothing to remind about.
   const outstandingRows = useMemo(() => (effective || []).filter(r => r.outstanding > 0), [effective]);
@@ -899,6 +928,24 @@ export default function BillingRemindersTab({
         <TableCell className="text-right text-xs">
           {inr(r.outstanding)}
           {r.open_invoices > 0 && <div className="text-[10px] text-muted-foreground">{r.open_invoices} invoice{r.open_invoices !== 1 ? "s" : ""}</div>}
+        </TableCell>
+        <TableCell className="text-right">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="h-7 gap-1 text-xs" disabled={r.to.length === 0}
+                title={r.to.length === 0 ? "No email address for this client" : "Send a reminder to this client now"}>
+                <Send size={12} /> Send now <ChevronDown size={11} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setSendTarget({ row: r, kind: "invoice" })}>
+                <Bell size={13} className="mr-2" /> Payment reminder
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSendTarget({ row: r, kind: "ledger" })}>
+                <FileText size={13} className="mr-2" /> Statement of Account
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </TableCell>
       </TableRow>
     );
@@ -1218,6 +1265,7 @@ export default function BillingRemindersTab({
                     <TableHead>Statement of Account</TableHead>
                     <TableHead>To / CC</TableHead>
                     <TableHead className="text-right">Outstanding</TableHead>
+                    <TableHead className="text-right">Remind</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1248,12 +1296,13 @@ export default function BillingRemindersTab({
                               </div>
                             </TableCell>
                             <TableCell className="text-right text-sm font-semibold">{inr(g.outstanding)}</TableCell>
+                            <TableCell />
                           </TableRow>,
                           ...(open ? g.rows.map(r => renderClientRow(r, g.key)) : []),
                         ];
                       })}
                   {tableRows.length === 0 && (
-                    <TableRow><TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-6">No outstanding clients match.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-6">No outstanding clients match.</TableCell></TableRow>
                   )}
                 </TableBody>
               </Table>
@@ -1273,6 +1322,38 @@ export default function BillingRemindersTab({
         />
       </TabsContent>
       </Tabs>
+
+      {/* Send one client now */}
+      <Dialog open={!!sendTarget} onOpenChange={open => { if (!open && !sendingClient) setSendTarget(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Send {sendTarget?.kind === "invoice" ? "payment reminder" : "Statement of Account"} to {sendTarget?.row.client_name}?
+            </DialogTitle>
+          </DialogHeader>
+          {sendTarget && (
+            <div className="space-y-2 text-sm">
+              <p>
+                {sendTarget.row.open_invoices} open invoice{sendTarget.row.open_invoices !== 1 ? "s" : ""} ·{" "}
+                <strong>{inr(sendTarget.row.outstanding)}</strong> outstanding
+              </p>
+              <p className="text-xs">To: {sendTarget.row.to.join(", ")}</p>
+              {sendTarget.row.cc.length > 0 && <p className="text-xs text-muted-foreground">CC: {sendTarget.row.cc.join(", ")}</p>}
+              <p className="text-xs text-muted-foreground">
+                Goes now, whatever this client's reminder rules say (including paused or "Don't send"), using the
+                {sendTarget.kind === "invoice" ? " Payment Reminder" : " Statement of Account"} template.
+                {sendTarget.kind === "invoice" && " It counts as a reminder, so the next automatic one waits for the repeat interval."}
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSendTarget(null)} disabled={sendingClient}>Cancel</Button>
+            <Button className="gap-1.5" onClick={sendClientNow} disabled={sendingClient}>
+              {sendingClient ? <RefreshCw size={13} className="animate-spin" /> : <Send size={13} />} {sendingClient ? "Sending..." : "Send now"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Bulk pause */}
       <Dialog open={pauseDate !== null} onOpenChange={open => { if (!open) setPauseDate(null); }}>
