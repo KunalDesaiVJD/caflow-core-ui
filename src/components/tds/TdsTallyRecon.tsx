@@ -26,7 +26,7 @@ import type { StageReport, ReportMeta, AuditRow } from "@/lib/tds/tdsReport";
 import { makeDateNormaliser, normalizeName, canonicalSection, nameCompare } from "@/lib/tds/match";
 import {
   reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, resolveTaxableIncomeReading,
-  SPLIT_FOLD_CONFIDENCE, oneSidedLabel, learnLedgerSections, overrideMemoryKey,
+  SPLIT_FOLD_CONFIDENCE, oneSidedLabel, acceptVoucherLinkedDates, learnLedgerSections, overrideMemoryKey,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap, type TallyResult,
 } from "@/lib/tds/tallyRecon";
 
@@ -676,21 +676,35 @@ export function TdsTallyRecon({ filing, selClient, selFy, selQuarter, selForm, c
     // that matches his office figure exactly and nothing left over to
     // mis-assign.
     const perMonth = selForm === "24Q";
-    const agg = (rows: TallyRow[]) => (perMonth ? aggregateTaxableByEmployeeMonth(rows) : rows);
+    // Office figures per month let the aggregation split a month that Office
+    // Data itself records as several payouts (see aggregateTaxableByEmployeeMonth).
+    const figuresByMonth = (pick: (o: OfficeTxn) => number | null) => {
+      const m = new Map<string, number[]>();
+      for (const o of parties) {
+        const v = pick(o); const k = (o.date_iso ?? "").slice(0, 7);
+        if (v != null && v !== 0 && k) m.set(k, [...(m.get(k) || []), v]);
+      }
+      return m;
+    };
+    const amountFigures = figuresByMonth((o) => o.amount), tdsFigures = figuresByMonth((o) => o.tds);
+    const agg = (rows: TallyRow[], figs: Map<string, number[]>) => (perMonth ? aggregateTaxableByEmployeeMonth(rows, figs) : rows);
     const untagged = tally.filter((t) => t.amountKind !== "taxable_income");
     const partiesForAmount: OfficeTxn[] = parties.map((o) => ({ ...o, tds: null, section: null }));
     // Resolve the PT-inclusion reading (tallyRecon.ts's resolveTaxableIncomeReading)
     // BEFORE aggregation — the vote needs per-voucher dates, which per-employee-per-
     // month summing would otherwise blur together.
     const salaryLedgerRows = isRealExpenseLedger
-      ? agg(resolveTaxableIncomeReading(partiesForAmount, taggedRows)) : [];
-    const tdsLedgerRows = isRealExpenseLedger ? agg(untagged) : agg(tally);
+      ? agg(resolveTaxableIncomeReading(partiesForAmount, taggedRows), amountFigures) : [];
+    const tdsLedgerRows = isRealExpenseLedger ? agg(untagged, tdsFigures) : agg(tally, tdsFigures);
     const dualLedgerMode = salaryLedgerRows.length > 0;
     let audited: TallyReconRow[]; let surplusLedger: TallyRow[];
     if (dualLedgerMode) {
       const tdsResult = reconcileTallyFull(parties, tdsLedgerRows, null, maps, selForm);
       const salaryResult = reconcileTallyFull(partiesForAmount, salaryLedgerRows, null, maps, selForm);
-      audited = mergeDualLedgerResults(tdsResult.rows, salaryResult.rows);
+      // A TDS credit posted a few days off its salary but under the SAME voucher
+      // is the same payout — see acceptVoucherLinkedDates.
+      const tdsLinked = acceptVoucherLinkedDates(tdsResult.rows, tdsLedgerRows, salaryResult.rows, salaryLedgerRows);
+      audited = mergeDualLedgerResults(tdsLinked, salaryResult.rows);
       // Ledger-side surplus from EACH pass is tagged by which ledger it came
       // from (rather than the generic single-ledger "Office Data Not Found")
       // so a checker sees immediately whether it's the Taxable Income figure
