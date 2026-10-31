@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { TdsEmailTemplatesEditor } from "@/components/tds/TdsEmailTemplatesEditor";
+import { TdsCustomRemindersPanel } from "@/components/tds/TdsCustomRemindersPanel";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +24,7 @@ interface OutboxRow {
   status: OutboxStatus;
   error: string | null;
   reminder_step: number | null;
+  template_key: string;
   created_at: string;
   sent_at: string | null;
 }
@@ -61,7 +63,7 @@ export function TdsEmailSettingsPage() {
     const [{ data: outbox }, { data: clients }] = await Promise.all([
       supabase
         .from("tds_email_outbox" as any)
-        .select("id, client_id, to_email, kind, form_type, financial_year, quarter, subject, status, error, reminder_step, created_at, sent_at")
+        .select("id, client_id, to_email, kind, form_type, financial_year, quarter, subject, status, error, reminder_step, template_key, created_at, sent_at")
         .order("created_at", { ascending: false })
         .limit(400),
       supabase.from("clients").select("id, name"),
@@ -136,7 +138,8 @@ export function TdsEmailSettingsPage() {
         <span>
           Sending is <strong>live</strong> from <strong>tds@vjdesai.com</strong>. Filing confirmations queue
           automatically when a return is marked <em>Filed</em> or <em>NIL</em>; data-pending reminders queue on the
-          fixed quarterly schedule (8th/11th/14th of the month after quarter-end, or 1st/5th/10th May for Q4). Queued
+          fixed quarterly schedule (8th/11th/14th of the month after quarter-end, or 1st/5th/10th May for Q4), and
+          <strong> custom reminders</strong> go to any client on the schedule you set below. Queued
           mail goes out on the hourly run — or click <strong>Send queued now</strong> to flush it immediately.
         </span>
       </div>
@@ -156,6 +159,8 @@ export function TdsEmailSettingsPage() {
           </Button>
         </CardContent>
       </Card>
+
+      <TdsCustomRemindersPanel onChanged={load} />
 
       <Card>
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -205,7 +210,7 @@ export function TdsEmailSettingsPage() {
                             <span className="inline-flex items-center gap-1 text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" /> Confirmation</span>
                           ) : (
                             <span className="inline-flex items-center gap-1 text-amber-700">
-                              <BellRing className="h-3.5 w-3.5" /> Reminder{r.reminder_step ? ` #${r.reminder_step}` : ""}
+                              <BellRing className="h-3.5 w-3.5" /> {r.template_key === "reminder_custom" ? "Custom reminder" : "Reminder"}{r.reminder_step ? ` #${r.reminder_step}` : ""}
                             </span>
                           )}
                         </td>
