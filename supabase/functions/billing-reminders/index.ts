@@ -10,7 +10,10 @@
  *   effective — per-client resolved settings + where each came from (no send)
  *   preview   — what WOULD be sent today, and who is skipped and why (no send)
  *   run       — send what is due today for the given firms ("Send now")
- *   scheduled — pg_cron daily run across every firm that has a policy
+ *   scheduled — pg_cron daily run across every firm that has a policy.
+ *               PAUSED unless the BILLING_REMINDERS_AUTO secret is "on" (31-Oct-2026:
+ *               reminders are sent by hand only). Rules, preview and Send now still work;
+ *               to resume: npx supabase secrets set BILLING_REMINDERS_AUTO=on
  *   send_client — { client_id, kind: 'invoice' | 'ledger' }: send one client
  *               a reminder (all open invoices) or statement right now, from the
  *               "Send now" button on a client row. Ignores timing, pause and
@@ -68,6 +71,9 @@ function jsonResponse(body: unknown, status = 200) {
 // Resolution + conflict rules live in ../_shared/billingReminderRules.ts — a
 // byte-identical copy of src/lib/billingReminderRules.ts, which the
 // Reminders screen uses to block conflicting rules.
+
+// Automatic (daily) sending. Off by default: reminders go only when a person presses Send now.
+const autoSendOn = () => (Deno.env.get("BILLING_REMINDERS_AUTO") || "").toLowerCase() === "on";
 
 const PER_RUN_CAP = 150;   // emails per invocation; the rest go next hourly run
 const CONCURRENCY = 4;
@@ -567,6 +573,9 @@ Deno.serve(async (req) => {
       if (!isService && role !== "anon" && role !== "service_role") {
         return jsonResponse({ error: "Unauthorized" }, 401);
       }
+      if (!autoSendOn()) {
+        return jsonResponse({ success: true, sent: 0, paused: true, message: "Automatic reminders are paused (BILLING_REMINDERS_AUTO is not on)" });
+      }
       // Every firm: a client is reminded for each firm it owes (like Reports), and a client or
       // group rule reaches firms other than the client's own. Nothing is sent unless a rule
       // switches it on (system default is off), so firms without rules cost only the planning.
@@ -646,7 +655,7 @@ Deno.serve(async (req) => {
     }
 
     if (action === "effective") {
-      return jsonResponse({ success: true, today: plan.today, clients: plan.effectiveRows });
+      return jsonResponse({ success: true, today: plan.today, auto_send: autoSendOn(), clients: plan.effectiveRows });
     }
     return jsonResponse({
       success: true,
