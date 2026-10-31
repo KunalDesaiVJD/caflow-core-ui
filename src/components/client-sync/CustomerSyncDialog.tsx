@@ -22,6 +22,7 @@ import {
 import { useCustomerSync, ENTITY_MAP } from "./useCustomerSync";
 import { CustomerSyncProgress } from "./CustomerSyncProgress";
 import { CustomerSyncResults } from "./CustomerSyncResults";
+import { decodeHtmlEntities } from "@/lib/htmlEntities";
 
 interface Props {
   open:         boolean;
@@ -183,7 +184,7 @@ export function CustomerSyncDialog({ open, onOpenChange, firmId, onComplete }: P
                                   {r.CustomerCode || String(r.CustomerId)}
                                 </td>
                                 <td className="px-3 py-1.5 max-w-[180px] truncate">
-                                  {r.ClientName || "—"}
+                                  {decodeHtmlEntities(r.ClientName) || "—"}
                                 </td>
                                 <td className="px-3 py-1.5 font-mono">
                                   {r.PanCard || "—"}

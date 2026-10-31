@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
-import { cleanTallyName } from "@/lib/tallyText";
+import { decodeHtmlEntities } from "@/lib/htmlEntities";
 import {
   Dialog,
   DialogContent,
@@ -131,14 +131,14 @@ function GroupManager({ tableName, membershipTable, title, subtitle, icon: Icon,
 
   const handleSave = async () => {
     // A pasted name can carry HTML entities ("A &amp; B") — store the plain text.
-    const cleanName = cleanTallyName(name).replace(/\s+/g, " ");
+    const cleanName = decodeHtmlEntities(name).replace(/\s+/g, " ");
     if (!cleanName) { toast({ title: "Name is required", variant: "destructive" }); return; }
     // One group per name: a second "Shreenathji & SNJ Group" showed up twice in Billing Reminders.
     const { data: existing } = await supabase.from(tableName).select("id, name") as any;
     const clash = ((existing || []) as { id: string; name: string }[]).find(g =>
-      g.id !== editGroup?.id && cleanTallyName(g.name).replace(/\s+/g, " ").toLowerCase() === cleanName.toLowerCase());
+      g.id !== editGroup?.id && decodeHtmlEntities(g.name).replace(/\s+/g, " ").toLowerCase() === cleanName.toLowerCase());
     if (clash) {
-      toast({ title: "A group with this name already exists", description: `"${cleanTallyName(clash.name)}" — add the clients to that group instead.`, variant: "destructive" });
+      toast({ title: "A group with this name already exists", description: `"${decodeHtmlEntities(clash.name)}" — add the clients to that group instead.`, variant: "destructive" });
       return;
     }
     let contacts: Record<string, unknown> = {};
