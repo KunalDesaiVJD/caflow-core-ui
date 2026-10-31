@@ -33,6 +33,11 @@
  *     with exact days relative to the due date. Escalation adds escalate_cc
  *     from reminder N on. Paused clients and non-sending weekdays wait.
  *   An invoice with no due_date uses invoice date + payment terms.
+ *   Outstanding is the Billing → Reports ledger balance (opening balance +
+ *     invoices − credit notes − receipts incl. TDS − kasar, same rules via
+ *     _shared/statement/report.ts), so the two tabs agree. Credits are set
+ *     against the oldest debits first; the invoices left with a balance are the
+ *     open ones. A client at nil (or in advance) gets nothing and is not listed.
  *   A client whose rules conflict gets nothing of that kind until resolved.
  */
 
@@ -40,6 +45,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   type Layer, hasValue, resolvePolicy, effectiveDueDate, formatValue, WEEKDAYS,
 } from "../_shared/billingReminderRules.ts";
+import { accumulateBalances, BILLABLE_STATUSES, netClosing } from "../_shared/statement/report.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -113,7 +119,8 @@ async function inChunks<T>(ids: string[], size: number, fn: (chunk: string[]) =>
   return out;
 }
 
-const OPEN_STATUS_EXCLUDE = "(draft,cancelled,voided,converted)";
+// Below this a ledger balance is nil (rounding paise).
+const NIL = 1;
 
 interface Planned {
   kind: "invoice" | "ledger";
@@ -180,19 +187,54 @@ async function buildPlan(admin: any, firmIds: string[]) {
     fgOfFirm.get(m.firm_id)!.push(m.firm_group_id);
   }
 
-  // Open invoices (outstanding), all firms.
-  const invoices = await fetchAll(() => admin.from("invoices")
-    .select("id, invoice_no, client_id, firm_id, amount_due, total_amount, invoice_date, due_date, payment_due_days, last_reminded_at, status, payment_status")
-    .in("firm_id", firmIds)
-    .eq("document_type", "invoice")
-    .not("client_id", "is", null)
-    .not("status", "in", OPEN_STATUS_EXCLUDE)
-    .or("payment_status.is.null,payment_status.neq.paid")
-    .order("invoice_date", { ascending: true }));
+  // Ledger, exactly as Billing → Reports reads it (as on today).
+  const [ledgerDocs, receipts, obRows, kasars] = await Promise.all([
+    fetchAll(() => admin.from("invoices")
+      .select("id, invoice_no, client_id, firm_id, total_amount, invoice_date, due_date, payment_due_days, last_reminded_at, document_type")
+      .in("firm_id", firmIds)
+      .in("document_type", ["invoice", "credit_note"])
+      .in("status", BILLABLE_STATUSES)
+      .not("client_id", "is", null)
+      .order("invoice_date", { ascending: true }).order("id")),
+    fetchAll(() => admin.from("billing_receipts")
+      .select("client_id, firm_id, receipt_date, amount_received, tds_amount, gst_tds_amount")
+      .in("firm_id", firmIds).order("id")),
+    fetchAll(() => admin.from("client_billing_opening_balances")
+      .select("client_id, firm_id, amount").in("firm_id", firmIds).order("id")),
+    fetchAll(() => admin.from("billing_kasars")
+      .select("client_id, firm_id, kasar_date, amount").in("firm_id", firmIds).order("id")),
+  ]);
+  const atoms = accumulateBalances({ fromDate: "0001-01-01", toDate: today, obRows, invoices: ledgerDocs, receipts, kasars });
+  const closingOf = new Map<string, number>();
+  for (const a of atoms.values()) closingOf.set(a.clientId, (closingOf.get(a.clientId) ?? 0) + netClosing(a));
+
+  // Which invoices are still open: the client's credits (credit notes, receipts,
+  // kasar) settle the opening balance and then invoices oldest first, so the
+  // open invoices add up to the ledger balance.
+  const invoicesOf = new Map<string, any[]>();
+  for (const i of ledgerDocs) {
+    if (i.document_type !== "invoice" || !Number(i.total_amount) || (i.invoice_date && i.invoice_date > today)) continue;
+    if (!invoicesOf.has(i.client_id)) invoicesOf.set(i.client_id, []);
+    invoicesOf.get(i.client_id)!.push(i);
+  }
+  const openInvoices: any[] = [];
+  for (const [clientId, closing] of closingOf) {
+    if (closing < NIL) continue;
+    const list = (invoicesOf.get(clientId) || [])
+      .sort((a, b) => (a.invoice_date || "9999").localeCompare(b.invoice_date || "9999"));
+    // Unsettled debt sits in the newest debits: walk back from the newest invoice.
+    let left = closing;
+    for (let k = list.length - 1; k >= 0 && left >= NIL; k--) {
+      const i = list[k];
+      i.remaining = Math.min(Number(i.total_amount), left);
+      left -= i.remaining;
+      openInvoices.push(i);
+    }
+  }
   // Invoices saved before 23-Oct-2026 have no due_date: use invoice date + payment terms.
-  for (const i of invoices) i.due_date = effectiveDueDate(i);
-  const outstandingOf = (i: any) => Number(i.amount_due ?? i.total_amount ?? 0);
-  const openInvoices = invoices.filter((i: any) => outstandingOf(i) > 0);
+  for (const i of openInvoices) i.due_date = effectiveDueDate(i);
+  const outstandingOf = (i: any) => Number(i.remaining ?? 0);
+  openInvoices.sort((a, b) => (a.invoice_date || "").localeCompare(b.invoice_date || ""));
 
   // Reminder history per invoice.
   const sentLog = await inChunks(openInvoices.map((i: any) => i.id), 200, async (chunk) =>
@@ -260,7 +302,9 @@ async function buildPlan(admin: any, firmIds: string[]) {
     const ccList = [...cc];
 
     const clientInvoices = invByClient.get(c.id) || [];
-    const totalOutstanding = clientInvoices.reduce((s, i) => s + outstandingOf(i), 0);
+    // The Report tab's balance; nil or an advance counts as nothing outstanding.
+    const closing = closingOf.get(c.id) ?? 0;
+    const totalOutstanding = closing >= NIL ? closing : 0;
 
     effectiveRows.push({
       client_id: c.id, client_name: c.name, firm_id: c.firm_id, firm_name: firmName.get(c.firm_id),
@@ -357,6 +401,7 @@ async function buildPlan(admin: any, firmIds: string[]) {
       const period = ledgerPeriod(today, e.ledger_frequency, Number(e.ledger_day));
       if (!period) continue;
       if (ledgerSent.has(`${c.id}:${period.key}`)) continue;
+      if (totalOutstanding < NIL) continue; // nil balance: no statement
       if (totalOutstanding < Number(e.ledger_min_balance ?? 0)) {
         if (clientInvoices.length) skip("ledger", "Outstanding below minimum balance");
         continue;
@@ -549,7 +594,8 @@ Deno.serve(async (req) => {
       const row = plan.effectiveRows.find((r: any) => r.client_id === client_id);
       if (!row) return jsonResponse({ error: "Client not found in this firm" }, 404);
       const open = plan.invByClient.get(row.client_id) || [];
-      if (!open.length) return jsonResponse({ error: "Nothing outstanding for this client" }, 400);
+      if (row.outstanding <= 0) return jsonResponse({ error: "Nothing outstanding for this client (nil balance in Reports)" }, 400);
+      if (kind === "invoice" && !open.length) return jsonResponse({ error: "No open invoice — the balance is opening balance only; send the Statement of Account instead" }, 400);
       if (!row.to.length) return jsonResponse({ error: "No email address for this client" }, 400);
       const invoices: Planned["invoices"] = open.map((i: any) => ({
         id: i.id, invoice_no: i.invoice_no, invoice_date: i.invoice_date, due_date: i.due_date,
@@ -558,7 +604,8 @@ Deno.serve(async (req) => {
       }));
       const p: Planned = {
         kind, firm_id: row.firm_id, client_id: row.client_id, client_name: row.client_name,
-        to: row.to, cc: row.cc, invoices, amount: invoices.reduce((t, i) => t + i.outstanding, 0),
+        to: row.to, cc: row.cc, invoices,
+        amount: kind === "ledger" ? row.outstanding : invoices.reduce((t, i) => t + i.outstanding, 0),
         // Not a statement period: the scheduled statement for this month/quarter still goes.
         ...(kind === "ledger" ? { period_key: `manual:${new Date().toISOString()}` } : {}),
       };
