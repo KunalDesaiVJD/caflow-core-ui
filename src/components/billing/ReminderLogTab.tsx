@@ -23,6 +23,7 @@ import { Download, RefreshCw, Search } from "lucide-react";
 interface LogRow {
   id: string;
   run_id: string | null;
+  firm_id: string;
   client_id: string | null;
   invoice_id: string | null;
   kind: "invoice" | "ledger";
@@ -41,6 +42,7 @@ interface EmailEntry {
   sent_at: string;
   client_id: string | null;
   client_name: string;
+  firm_name: string;
   kind: "invoice" | "ledger";
   status: "sent" | "failed";
   trigger: string | null;
@@ -62,7 +64,9 @@ const TRIGGER_LABEL: Record<string, string> = {
   manual_client: "Send now (client)",
 };
 
-export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
+export default function ReminderLogTab({ firmIds, firmNames }: { firmIds: string[]; firmNames: Record<string, string> }) {
+  const multiFirm = firmIds.length > 1;
+  const firmKey = firmIds.join(",");
   const [rows, setRows] = useState<LogRow[] | null>(null);
   const [clientNames, setClientNames] = useState<Record<string, string>>({});
   const [invoiceNos, setInvoiceNos] = useState<Record<string, string>>({});
@@ -78,13 +82,13 @@ export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
   const [page, setPage] = useState(0);
 
   const load = useCallback(async () => {
-    if (!firmId) return;
+    if (!firmIds.length) return;
     setLoading(true);
     setLoadError(null);
     const sb = supabase as any;
     const { data, error } = await sb.from("billing_reminder_log")
-      .select("id, run_id, client_id, invoice_id, kind, period_key, status, to_emails, cc_emails, amount, error, trigger, sent_at")
-      .eq("firm_id", firmId).order("sent_at", { ascending: false }).limit(MAX_ROWS);
+      .select("id, run_id, firm_id, client_id, invoice_id, kind, period_key, status, to_emails, cc_emails, amount, error, trigger, sent_at")
+      .in("firm_id", firmIds).order("sent_at", { ascending: false }).limit(MAX_ROWS);
     if (error) { setLoadError(error.message); setRows([]); setLoading(false); return; }
     const list = (data || []) as LogRow[];
 
@@ -108,7 +112,8 @@ export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
     setInvoiceNos(nos);
     setRows(list);
     setLoading(false);
-  }, [firmId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firmKey]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -116,7 +121,7 @@ export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
   const entries = useMemo<EmailEntry[]>(() => {
     const map = new Map<string, EmailEntry>();
     for (const r of rows || []) {
-      const key = r.kind === "invoice" && r.run_id ? `${r.run_id}:${r.client_id}:${r.status}` : r.id;
+      const key = r.kind === "invoice" && r.run_id ? `${r.run_id}:${r.client_id}:${r.firm_id}:${r.status}` : r.id;
       const e = map.get(key);
       const invNo = r.invoice_id ? invoiceNos[r.invoice_id] : null;
       if (e) {
@@ -127,6 +132,7 @@ export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
       map.set(key, {
         key, sent_at: r.sent_at, client_id: r.client_id,
         client_name: (r.client_id && clientNames[r.client_id]) || "Unknown client",
+        firm_name: firmNames[r.firm_id] ?? "—",
         kind: r.kind, status: r.status, trigger: r.trigger,
         to: r.to_emails || [], cc: r.cc_emails || [],
         invoices: invNo ? [invNo] : [], amount: Number(r.amount || 0), error: r.error,
@@ -157,9 +163,9 @@ export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
   const sentCount = filtered.filter(e => e.status === "sent").length;
 
   const exportCsv = () => {
-    const header = ["Sent on", "Client", "Type", "Invoices", "Amount", "To", "CC", "Sent by", "Status", "Error"];
+    const header = ["Sent on", "Client", "Firm", "Type", "Invoices", "Amount", "To", "CC", "Sent by", "Status", "Error"];
     const lines = filtered.map(e => [
-      format(new Date(e.sent_at), "dd-MM-yyyy HH:mm"), e.client_name,
+      format(new Date(e.sent_at), "dd-MM-yyyy HH:mm"), e.client_name, e.firm_name,
       e.kind === "invoice" ? "Payment reminder" : "Statement of Account",
       e.invoices.join("; "), e.amount.toFixed(2), e.to.join("; "), e.cc.join("; "),
       TRIGGER_LABEL[e.trigger || ""] || e.trigger || "", e.status, e.error || "",
@@ -175,7 +181,7 @@ export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
           <div>
             <CardTitle className="text-base">Reminder log</CardTitle>
             <p className="text-xs text-muted-foreground">
-              Every payment reminder and Statement of Account sent for this firm — automatic and "Send now".
+              Every payment reminder and Statement of Account sent for {multiFirm ? "the selected firms" : "this firm"} — automatic and "Send now".
               {rows && <> {filtered.length} email{filtered.length !== 1 ? "s" : ""} · {sentCount} sent · {filtered.length - sentCount} failed</>}
               {rows && rows.length >= MAX_ROWS && <> (latest {MAX_ROWS} log rows)</>}
             </p>
@@ -235,6 +241,7 @@ export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
                   <TableRow>
                     <TableHead>Sent on</TableHead>
                     <TableHead>Client</TableHead>
+                    {multiFirm && <TableHead>Firm</TableHead>}
                     <TableHead>Type</TableHead>
                     <TableHead>Invoices</TableHead>
                     <TableHead>Email ID (To / CC)</TableHead>
@@ -248,6 +255,7 @@ export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
                     <TableRow key={e.key}>
                       <TableCell className="text-xs whitespace-nowrap">{format(new Date(e.sent_at), "dd MMM yyyy, HH:mm")}</TableCell>
                       <TableCell className="text-sm font-medium">{e.client_name}</TableCell>
+                      {multiFirm && <TableCell className="text-xs">{e.firm_name}</TableCell>}
                       <TableCell className="text-xs">{e.kind === "invoice" ? "Payment reminder" : "Statement of Account"}</TableCell>
                       <TableCell className="text-xs max-w-[200px]">
                         <div className="truncate" title={e.invoices.join(", ")}>{e.invoices.join(", ") || "—"}</div>
@@ -267,7 +275,7 @@ export default function ReminderLogTab({ firmId }: { firmId: string | null }) {
                     </TableRow>
                   ))}
                   {shown.length === 0 && (
-                    <TableRow><TableCell colSpan={8} className="text-center text-sm text-muted-foreground py-6">
+                    <TableRow><TableCell colSpan={multiFirm ? 9 : 8} className="text-center text-sm text-muted-foreground py-6">
                       {entries.length ? "No reminders match these filters." : "No reminders have been sent for this firm yet."}
                     </TableCell></TableRow>
                   )}

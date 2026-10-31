@@ -86,10 +86,15 @@ interface FirmGroup { id: string; name: string; firm_ids: string[] }
 interface ClientGroup { id: string; name: string; firm_id: string | null }
 interface ClientRow { id: string; name: string; email: string | null; firm_id: string }
 
+// One row per (client, invoicing firm) from the engine — Billing → Reports' atoms.
 interface EffectiveRow {
   client_id: string;
   client_name: string;
+  firm_id: string;
   firm_name: string;
+  /** Ledger balance with this firm; negative = advance. */
+  balance: number;
+  archived?: boolean;
   groups: string[];
   settings: Record<string, any>;
   source: Record<string, string>;
@@ -138,6 +143,10 @@ const SCOPE_META: Record<ScopeType, { label: string; icon: typeof Bell }> = {
 // The two templates the reminder engine sends (billing-reminders edge function).
 const REMINDER_TEMPLATE_TYPES: readonly TemplateType[] = ["payment_reminder", "ledger_statement"];
 const NO_GROUP = "__none__";
+const ALL_FIRMS = "__all__";
+
+/** A client on the Outstanding screen: its (client, firm) rows netted, as Reports' "All firms (combined)". */
+type ClientView = EffectiveRow & { parts: EffectiveRow[]; name: string; invoices: number };
 
 type SortKey = "high" | "low" | "name" | "invoices";
 const sortRows = <T extends { outstanding: number; name: string; invoices: number }>(rows: T[], key: SortKey) =>
@@ -437,6 +446,8 @@ export default function BillingRemindersTab({
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [lastRun, setLastRun] = useState<any>(null);
   const [lastSent, setLastSent] = useState<Record<string, LastSent>>({});
+  // Firm(s) the Outstanding / Log / Preview / Send now work on — like the Report tab's firm picker.
+  const [firmScope, setFirmScope] = useState<string>(firmId ?? user?.firm_id ?? "");
   const [loading, setLoading] = useState(true);
 
   const [effective, setEffective] = useState<EffectiveRow[] | null>(null);
@@ -476,7 +487,7 @@ export default function BillingRemindersTab({
     if (!resolvedFirmId) { setLoading(false); return; }
     setLoading(true);
     const sb = supabase as any;
-    const [fgRes, fgmRes, cgRes, cRes, pRes, runRes, firmsRes, logRes] = await Promise.all([
+    const [fgRes, fgmRes, cgRes, cRes, pRes, runRes, firmsRes] = await Promise.all([
       sb.from("firm_groups").select("id, name").order("name"),
       sb.from("firm_group_members").select("firm_group_id, firm_id"),
       // Client groups are usually global (firm_id NULL — wizard and customer sync create them that way).
@@ -490,18 +501,7 @@ export default function BillingRemindersTab({
         .order("started_at", { ascending: false }).limit(1),
       isSuperadmin ? sb.from("firms").select("id, name, settings").order("name")
                    : sb.from("firms").select("id, name, settings").eq("id", resolvedFirmId),
-      sb.from("billing_reminder_log").select("client_id, kind, status, sent_at")
-        .eq("firm_id", resolvedFirmId).order("sent_at", { ascending: false }).limit(5000),
     ]);
-    const ls: Record<string, LastSent> = {};
-    for (const r of (logRes.data || []) as { client_id: string | null; kind: "invoice" | "ledger"; status: string; sent_at: string }[]) {
-      if (!r.client_id) continue;
-      const e = ls[r.client_id] ??= { sent: null, failedAfter: null };
-      if (e.sent) continue; // newest first: everything after the last sent one is older
-      if (r.status === "sent") e.sent = { at: r.sent_at, kind: r.kind };
-      else if (!e.failedAfter) e.failedAfter = r.sent_at;
-    }
-    setLastSent(ls);
     const members = (fgmRes.data || []) as { firm_group_id: string; firm_id: string }[];
     setFirmGroups(((fgRes.data || []) as any[]).map(g => ({
       ...g, firm_ids: members.filter(m => m.firm_group_id === g.id).map(m => m.firm_id),
@@ -526,12 +526,39 @@ export default function BillingRemindersTab({
     [isSuperadmin, firmRows, accessibleKey],
   );
 
+  // Follow the firm picked at the top of Billing; "All firms" = every firm in the list.
+  useEffect(() => { if (resolvedFirmId) setFirmScope(resolvedFirmId); }, [resolvedFirmId]);
+  const scopeFirmIds = useMemo(
+    () => (firmScope === ALL_FIRMS ? firms.map(f => f.id) : firmScope ? [firmScope] : []),
+    [firmScope, firms],
+  );
+  const scopeKey = scopeFirmIds.join(",");
+  const allFirms = firmScope === ALL_FIRMS;
+
+  // Last reminder per client in the selected firm(s).
+  const fetchLastSent = useCallback(async () => {
+    if (!scopeFirmIds.length) return;
+    const { data } = await (supabase as any).from("billing_reminder_log").select("client_id, kind, status, sent_at")
+      .in("firm_id", scopeFirmIds).order("sent_at", { ascending: false }).limit(5000);
+    const ls: Record<string, LastSent> = {};
+    for (const r of (data || []) as { client_id: string | null; kind: "invoice" | "ledger"; status: string; sent_at: string }[]) {
+      if (!r.client_id) continue;
+      const e = ls[r.client_id] ??= { sent: null, failedAfter: null };
+      if (e.sent) continue; // newest first: everything after the last sent one is older
+      if (r.status === "sent") e.sent = { at: r.sent_at, kind: r.kind };
+      else if (!e.failedAfter) e.failedAfter = r.sent_at;
+    }
+    setLastSent(ls);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
+  useEffect(() => { fetchLastSent(); }, [fetchLastSent, lastRun?.id]);
+
   const fetchEffective = useCallback(async () => {
-    if (!resolvedFirmId) return;
+    if (!scopeFirmIds.length) return;
     setEffectiveLoading(true);
     setEffectiveError(null);
     const { data, error } = await supabase.functions.invoke("billing-reminders", {
-      body: { action: "effective", firm_ids: [resolvedFirmId] },
+      body: { action: "effective", firm_ids: scopeFirmIds },
     });
     if (error || !(data as any)?.success) {
       setEffectiveError((data as any)?.error || error?.message || "Could not load");
@@ -540,7 +567,8 @@ export default function BillingRemindersTab({
       setEffective((data as any).clients as EffectiveRow[]);
     }
     setEffectiveLoading(false);
-  }, [resolvedFirmId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
   useEffect(() => { fetchEffective(); }, [fetchEffective]);
@@ -739,7 +767,7 @@ export default function BillingRemindersTab({
     setBusy(action);
     try {
       const { data, error } = await supabase.functions.invoke("billing-reminders", {
-        body: { action, firm_ids: [resolvedFirmId] },
+        body: { action, firm_ids: scopeFirmIds },
       });
       const d = data as any;
       if (error || !d?.success) throw new Error(d?.error || error?.message || "Request failed");
@@ -768,7 +796,7 @@ export default function BillingRemindersTab({
     setSendingClient(true);
     try {
       const { data, error } = await supabase.functions.invoke("billing-reminders", {
-        body: { action: "send_client", firm_ids: [resolvedFirmId], client_id: row.client_id, kind },
+        body: { action: "send_client", firm_ids: scopeFirmIds, client_id: row.client_id, kind },
       });
       const d = data as any;
       if (error || !d?.success) throw new Error(d?.error || error?.message || "Request failed");
@@ -787,7 +815,26 @@ export default function BillingRemindersTab({
 
   // ── Derived ──
   // Only clients with something outstanding are listed; the rest have nothing to remind about.
-  const outstandingRows = useMemo(() => (effective || []).filter(r => r.outstanding > 0), [effective]);
+  // One row per client: its firms' balances netted (one firm selected = that firm's balance),
+  // then only clients that owe — Billing → Reports' "Hide nil balance" with advances netted.
+  const clientViews = useMemo<ClientView[]>(() => {
+    const by = new Map<string, EffectiveRow[]>();
+    for (const r of effective || []) by.set(r.client_id, [...(by.get(r.client_id) || []), r]);
+    return [...by.values()].map(parts => {
+      const owing = [...parts].sort((a, b) => b.balance - a.balance);
+      const main = owing[0];
+      const net = parts.reduce((t, p) => t + (p.balance ?? p.outstanding), 0);
+      return {
+        ...main, parts: owing, name: main.client_name,
+        outstanding: Math.round(net * 100) / 100,
+        open_invoices: parts.reduce((t, p) => t + p.open_invoices, 0),
+        invoices: parts.reduce((t, p) => t + p.open_invoices, 0),
+        has_client_policy: parts.some(p => p.has_client_policy),
+        issues: parts.flatMap(p => (p.issues || []).map(i => ({ ...i, message: parts.length > 1 ? `${p.firm_name}: ${i.message}` : i.message }))),
+      };
+    });
+  }, [effective]);
+  const outstandingRows = useMemo(() => clientViews.filter(r => r.outstanding >= 1), [clientViews]);
   const outstandingIds = useMemo(() => new Set(outstandingRows.map(r => r.client_id)), [outstandingRows]);
   const outstandingGroups = useMemo(() => new Set(outstandingRows.flatMap(r => r.groups)), [outstandingRows]);
   const groupOptions = useMemo(() => [...outstandingGroups].sort((a, b) => a.localeCompare(b)), [outstandingGroups]);
@@ -819,7 +866,7 @@ export default function BillingRemindersTab({
 
   // Group-wise view: a client in two groups is listed under both; one with none goes under "No group".
   const groupRows = useMemo(() => {
-    const map = new Map<string, EffectiveRow[]>();
+    const map = new Map<string, ClientView[]>();
     for (const r of tableRows) {
       const names = r.groups.length ? r.groups : [NO_GROUP];
       for (const g of names) {
@@ -856,11 +903,11 @@ export default function BillingRemindersTab({
   });
 
   const exportCsv = () => {
-    const header = ["Client", "Groups", "Open invoices", "Outstanding", "Invoice reminders", "Statement of Account", "To", "CC", "Last sent on", "Last sent type"];
+    const header = ["Client", "Firms", "Groups", "Open invoices", "Outstanding", "Invoice reminders", "Statement of Account", "To", "CC", "Last sent on", "Last sent type"];
     const lines = tableRows.map(r => {
       const last = lastSent[r.client_id]?.sent;
       return [
-        r.client_name, r.groups.join("; "), r.open_invoices, r.outstanding.toFixed(2),
+        r.client_name, r.parts.map(p => `${p.firm_name}: ${p.balance.toFixed(2)}`).join("; "), r.groups.join("; "), r.open_invoices, r.outstanding.toFixed(2),
         describeInvoice(r.settings), describeLedger(r.settings), r.to.join("; "), r.cc.join("; "),
         last ? format(new Date(last.at), "dd-MM-yyyy HH:mm") : "",
         last ? (last.kind === "invoice" ? "Payment reminder" : "Statement of Account") : "",
@@ -900,7 +947,7 @@ export default function BillingRemindersTab({
     );
   };
 
-  const renderClientRow = (r: EffectiveRow, groupKey?: string) => {
+  const renderClientRow = (r: ClientView, groupKey?: string) => {
     const cp = policies.find(p => p.scope_type === "client" && p.client_id === r.client_id);
     const quick = !cp || (cp.invoice_enabled === null && cp.ledger_enabled === null) ? "inherit"
       : cp.invoice_enabled === true && cp.ledger_enabled === true ? "send"
@@ -916,6 +963,12 @@ export default function BillingRemindersTab({
             {r.client_name}
           </button>
           {!groupKey && r.groups.length > 0 && <div className="text-[11px] text-muted-foreground">{r.groups.join(", ")}</div>}
+          {(allFirms || r.parts.length > 1) && (
+            <div className="text-[11px] text-muted-foreground">
+              {r.parts.map(p => `${p.firm_name}: ${p.balance < 0 ? `${inr(-p.balance)} Cr` : inr(p.balance)}`).join(" · ")}
+            </div>
+          )}
+          {r.archived && <div className="text-[11px] text-amber-600">Archived / inactive client — shown for its balance, not emailed</div>}
           {paused && <div className="text-[11px] text-amber-600">Paused until {r.settings.paused_until}</div>}
           {(r.issues || []).map((i, k) => (
             <div key={k} className="text-[11px] text-destructive flex gap-1 items-start mt-0.5">
@@ -1008,7 +1061,14 @@ export default function BillingRemindersTab({
               : <> No runs yet.</>}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+          <Select value={firmScope} onValueChange={v => { setFirmScope(v); setChecked(new Set()); }}>
+            <SelectTrigger className="h-9 w-[220px]"><SelectValue placeholder="Firm" /></SelectTrigger>
+            <SelectContent>
+              {firms.length > 1 && <SelectItem value={ALL_FIRMS}>All firms (combined)</SelectItem>}
+              {firms.map(f => <SelectItem key={f.id} value={f.id}>{f.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
           <Button variant="outline" size="sm" className="gap-1.5" onClick={() => runAction("preview")} disabled={!!busy}>
             {busy === "preview" ? <RefreshCw size={13} className="animate-spin" /> : <Eye size={13} />} Preview today
           </Button>
@@ -1207,6 +1267,7 @@ export default function BillingRemindersTab({
             <div>
               <CardTitle className="text-base">Outstanding clients — who gets what</CardTitle>
               <p className="text-xs text-muted-foreground">
+                Same balances as Billing → Reports (as on today) for {allFirms ? "all firms combined" : firms.find(f => f.id === firmScope)?.name ?? "the selected firm"}.
                 Only clients and groups with an unpaid balance are listed.
                 {effective && <> Showing {tableRows.length} of {counts.total} · {inr(counts.shownAmount)}</>}
               </p>
@@ -1350,7 +1411,8 @@ export default function BillingRemindersTab({
       </TabsContent>
 
       <TabsContent value="log" className="mt-4">
-        <ReminderLogTab key={`${resolvedFirmId}-${lastRun?.id ?? ""}`} firmId={resolvedFirmId} />
+        <ReminderLogTab key={`${scopeKey}-${lastRun?.id ?? ""}`} firmIds={scopeFirmIds}
+          firmNames={Object.fromEntries(firms.map(f => [f.id, f.name]))} />
       </TabsContent>
 
       {/* Reminder email templates — the two the engine sends */}
@@ -1456,7 +1518,7 @@ export default function BillingRemindersTab({
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>Send today's reminders now?</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">
-            This sends everything that is due today for this firm, exactly as the daily run would. Anything sent now is
+            This sends everything that is due today for {allFirms ? "every firm in the list" : "the selected firm"}, exactly as the daily run would. Anything sent now is
             not sent again by today's automatic run. Use "Preview today" first to see the list.
           </p>
           <DialogFooter>
