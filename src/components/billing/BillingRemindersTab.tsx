@@ -19,10 +19,13 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { formatDistanceToNow } from "date-fns";
 import {
   Bell, Building2, Users, User, Layers, Plus, Play, Eye, RefreshCw, Trash2, Save, Mail, Search, Clock, AlertTriangle,
+  ChevronDown, ChevronRight, Download, PauseCircle, IndianRupee, Settings2, FileText,
 } from "lucide-react";
+import EmailTemplatesTab, { type TemplateType } from "./EmailTemplatesTab";
 import { describeInvoice, describeLedger, WEEKDAYS } from "@/lib/billingReminderRules";
 import { checkRuleConflicts, type ConflictReport } from "./reminderRuleConflicts";
 
@@ -119,6 +122,20 @@ const SCOPE_META: Record<ScopeType, { label: string; icon: typeof Bell }> = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// The two templates the reminder engine sends (billing-reminders edge function).
+const REMINDER_TEMPLATE_TYPES: readonly TemplateType[] = ["payment_reminder", "ledger_statement"];
+const NO_GROUP = "__none__";
+
+type SortKey = "high" | "low" | "name" | "invoices";
+const sortRows = <T extends { outstanding: number; name: string; invoices: number }>(rows: T[], key: SortKey) =>
+  [...rows].sort((a, b) =>
+    key === "high" ? b.outstanding - a.outstanding
+    : key === "low" ? a.outstanding - b.outstanding
+    : key === "invoices" ? b.invoices - a.invoices || b.outstanding - a.outstanding
+    : a.name.localeCompare(b.name));
+
+const csvCell = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
 
 const inr = (n: number) => `₹${Number(n || 0).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 const parseEmails = (s: string): string[] | null => {
@@ -414,6 +431,15 @@ export default function BillingRemindersTab({
   const [effectiveLoading, setEffectiveLoading] = useState(false);
   const [tableFilter, setTableFilter] = useState<"all" | "send" | "nosend" | "custom" | "conflict">("all");
   const [tableSearch, setTableSearch] = useState("");
+  const [viewMode, setViewMode] = useState<"client" | "group">("client");
+  const [groupFilter, setGroupFilter] = useState<string>("all"); // group name, NO_GROUP or "all"
+  const [sortBy, setSortBy] = useState<SortKey>("high");
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [pauseDate, setPauseDate] = useState<string | null>(null);
+  const [section, setSection] = useState("outstanding");
+  const [sidebarOutstandingOnly, setSidebarOutstandingOnly] = useState(true);
 
   const [selected, setSelected] = useState<Scope | null>(null);
   const [draft, setDraft] = useState<Policy | null>(null);
@@ -608,29 +634,49 @@ export default function BillingRemindersTab({
     fetchEffective();
   };
 
-  // Quick per-client send / don't send from the table.
-  const setClientSend = async (row: EffectiveRow, value: "inherit" | "send" | "nosend") => {
-    const scope: Scope = { type: "client", id: row.client_id, name: row.client_name, firmId: resolvedFirmId };
-    const existing = policyFor(scope);
-    const flag = value === "inherit" ? null : value === "send";
-    const patch = { invoice_enabled: flag, ledger_enabled: flag, updated_by: resolvedUserId, updated_at: new Date().toISOString() };
-    const report = await checkRuleConflicts({ ...emptyPolicy(scope), ...(existing || {}), ...patch }, { type: "client", id: scope.id });
-    if (report.own.length || report.cross.length) {
+  // Write the same client-level change to one or many clients (table quick-select and bulk actions).
+  // Each client is conflict-checked on its own; a conflicting one is skipped, the rest still go through.
+  const patchClients = async (rows: EffectiveRow[], change: Partial<Policy>, label: string) => {
+    if (!rows.length) return;
+    setBulkBusy(true);
+    const sb = supabase as any;
+    const failed: string[] = [];
+    let done = 0;
+    for (const row of rows) {
+      const scope: Scope = { type: "client", id: row.client_id, name: row.client_name, firmId: resolvedFirmId };
+      const existing = policyFor(scope);
+      const patch = { ...change, updated_by: resolvedUserId, updated_at: new Date().toISOString() };
+      const report = await checkRuleConflicts({ ...emptyPolicy(scope), ...(existing || {}), ...patch }, { type: "client", id: scope.id });
+      if (report.own.length || report.cross.length) {
+        failed.push(`${row.client_name}: ${[...report.own, ...report.cross.map(c => c.message)][0]}`);
+        continue;
+      }
+      const { error } = existing?.id
+        ? await sb.from("billing_reminder_policies").update(patch).eq("id", existing.id)
+        : await sb.from("billing_reminder_policies").insert({ ...emptyPolicy(scope), ...patch });
+      if (error) failed.push(`${row.client_name}: ${error.message}`); else done++;
+    }
+    setBulkBusy(false);
+    if (failed.length) {
       toast({
-        title: `Not changed — ${row.client_name}'s rules would conflict`,
-        description: [...report.own, ...report.cross.map(c => c.message)][0],
+        title: `${label}: ${done} updated, ${failed.length} not changed`,
+        description: failed.slice(0, 3).join(" · ") + (failed.length > 3 ? ` and ${failed.length - 3} more` : ""),
         variant: "destructive",
       });
-      return;
+    } else if (rows.length > 1) {
+      toast({ title: `${label}: ${done} client${done !== 1 ? "s" : ""} updated` });
     }
-    const sb = supabase as any;
-    const { error } = existing?.id
-      ? await sb.from("billing_reminder_policies").update(patch).eq("id", existing.id)
-      : await sb.from("billing_reminder_policies").insert({ ...emptyPolicy(scope), ...patch });
-    if (error) { toast({ title: "Could not update", description: error.message, variant: "destructive" }); return; }
+    setChecked(new Set());
     await fetchAll();
     fetchEffective();
   };
+
+  const sendFlag = (value: "inherit" | "send" | "nosend"): Partial<Policy> => {
+    const flag = value === "inherit" ? null : value === "send";
+    return { invoice_enabled: flag, ledger_enabled: flag };
+  };
+  const setClientSend = (row: EffectiveRow, value: "inherit" | "send" | "nosend") =>
+    patchClients([row], sendFlag(value), "Reminders");
 
   // ── Firm groups ──
   const saveFirmGroup = async () => {
@@ -690,15 +736,27 @@ export default function BillingRemindersTab({
   };
 
   // ── Derived ──
+  // Only clients with something outstanding are listed; the rest have nothing to remind about.
+  const outstandingRows = useMemo(() => (effective || []).filter(r => r.outstanding > 0), [effective]);
+  const outstandingIds = useMemo(() => new Set(outstandingRows.map(r => r.client_id)), [outstandingRows]);
+  const outstandingGroups = useMemo(() => new Set(outstandingRows.flatMap(r => r.groups)), [outstandingRows]);
+  const groupOptions = useMemo(() => [...outstandingGroups].sort((a, b) => a.localeCompare(b)), [outstandingGroups]);
+  const filterSidebar = sidebarOutstandingOnly && !!effective;
+
   const filteredClients = useMemo(() => {
     const q = clientSearch.trim().toLowerCase();
-    return (q ? clients.filter(c => c.name.toLowerCase().includes(q)) : clients).slice(0, 60);
-  }, [clients, clientSearch]);
+    const pool = filterSidebar ? clients.filter(c => outstandingIds.has(c.id)) : clients;
+    return (q ? pool.filter(c => c.name.toLowerCase().includes(q)) : pool).slice(0, 60);
+  }, [clients, clientSearch, filterSidebar, outstandingIds]);
+  const sidebarClientTotal = filterSidebar ? clients.filter(c => outstandingIds.has(c.id)).length : clients.length;
+  const sidebarGroups = filterSidebar ? clientGroups.filter(g => outstandingGroups.has(g.name)) : clientGroups;
 
   const tableRows = useMemo(() => {
     const q = tableSearch.trim().toLowerCase();
-    return (effective || []).filter(r => {
-      if (q && !r.client_name.toLowerCase().includes(q)) return false;
+    const rows = outstandingRows.filter(r => {
+      if (q && !r.client_name.toLowerCase().includes(q) && !r.groups.some(g => g.toLowerCase().includes(q))) return false;
+      if (groupFilter === NO_GROUP && r.groups.length) return false;
+      if (groupFilter !== "all" && groupFilter !== NO_GROUP && !r.groups.includes(groupFilter)) return false;
       const sends = r.settings.invoice_enabled || r.settings.ledger_enabled;
       if (tableFilter === "send") return sends;
       if (tableFilter === "nosend") return !sends;
@@ -706,17 +764,72 @@ export default function BillingRemindersTab({
       if (tableFilter === "conflict") return (r.issues || []).length > 0;
       return true;
     });
-  }, [effective, tableFilter, tableSearch]);
+    return sortRows(rows.map(r => ({ ...r, name: r.client_name, invoices: r.open_invoices })), sortBy);
+  }, [outstandingRows, tableFilter, tableSearch, groupFilter, sortBy]);
+
+  // Group-wise view: a client in two groups is listed under both; one with none goes under "No group".
+  const groupRows = useMemo(() => {
+    const map = new Map<string, EffectiveRow[]>();
+    for (const r of tableRows) {
+      const names = r.groups.length ? r.groups : [NO_GROUP];
+      for (const g of names) {
+        if (groupFilter !== "all" && g !== groupFilter) continue;
+        map.set(g, [...(map.get(g) || []), r]);
+      }
+    }
+    return sortRows([...map.entries()].map(([key, rows]) => ({
+      key, name: key === NO_GROUP ? "No group" : key, rows,
+      outstanding: rows.reduce((s, r) => s + r.outstanding, 0),
+      invoices: rows.reduce((s, r) => s + r.open_invoices, 0),
+    })), sortBy);
+  }, [tableRows, groupFilter, sortBy]);
 
   const counts = useMemo(() => {
-    const rows = effective || [];
+    const rows = outstandingRows;
     const send = rows.filter(r => r.settings.invoice_enabled || r.settings.ledger_enabled).length;
     return {
       total: rows.length, send, nosend: rows.length - send,
       noEmail: rows.filter(r => r.to.length === 0).length,
       conflict: rows.filter(r => (r.issues || []).length > 0).length,
+      amount: rows.reduce((s, r) => s + r.outstanding, 0),
+      invoices: rows.reduce((s, r) => s + r.open_invoices, 0),
+      groups: outstandingGroups.size,
+      shownAmount: tableRows.reduce((s, r) => s + r.outstanding, 0),
     };
-  }, [effective]);
+  }, [outstandingRows, outstandingGroups, tableRows]);
+
+  const checkedRows = useMemo(() => outstandingRows.filter(r => checked.has(r.client_id)), [outstandingRows, checked]);
+  const toggleChecked = (ids: string[], on: boolean) => setChecked(prev => {
+    const next = new Set(prev);
+    ids.forEach(id => (on ? next.add(id) : next.delete(id)));
+    return next;
+  });
+
+  const exportCsv = () => {
+    const header = ["Client", "Groups", "Open invoices", "Outstanding", "Invoice reminders", "Statement of Account", "To", "CC"];
+    const lines = tableRows.map(r => [
+      r.client_name, r.groups.join("; "), r.open_invoices, r.outstanding.toFixed(2),
+      describeInvoice(r.settings), describeLedger(r.settings), r.to.join("; "), r.cc.join("; "),
+    ].map(csvCell).join(","));
+    const blob = new Blob([[header.map(csvCell).join(","), ...lines].join("\n")], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `outstanding-reminders-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const openClient = (r: EffectiveRow) => {
+    selectScope({ type: "client", id: r.client_id, name: r.client_name, firmId: resolvedFirmId });
+    setSection("rules");
+  };
+  const openGroup = (name: string) => {
+    const g = clientGroups.find(x => x.name === name);
+    if (!g) return;
+    selectScope({ type: "client_group", id: g.id, name: g.name, firmId: g.firm_id });
+    setSection("rules");
+  };
 
   const selectedEffective = selected?.type === "client"
     ? (effective || []).find(r => r.client_id === selected.id) ?? null : null;
@@ -734,6 +847,60 @@ export default function BillingRemindersTab({
         {hasPolicy(scope) && <span className="h-1.5 w-1.5 rounded-full bg-primary shrink-0" title="Has its own settings" />}
         {extra}
       </div>
+    );
+  };
+
+  const renderClientRow = (r: EffectiveRow, groupKey?: string) => {
+    const cp = policies.find(p => p.scope_type === "client" && p.client_id === r.client_id);
+    const quick = !cp || (cp.invoice_enabled === null && cp.ledger_enabled === null) ? "inherit"
+      : cp.invoice_enabled === true && cp.ledger_enabled === true ? "send"
+      : cp.invoice_enabled === false && cp.ledger_enabled === false ? "nosend" : "custom";
+    const paused = r.settings.paused_until && r.settings.paused_until >= new Date().toISOString().slice(0, 10);
+    return (
+      <TableRow key={groupKey ? `${groupKey}-${r.client_id}` : r.client_id}>
+        <TableCell>
+          <Checkbox checked={checked.has(r.client_id)} onCheckedChange={v => toggleChecked([r.client_id], !!v)} aria-label={`Select ${r.client_name}`} />
+        </TableCell>
+        <TableCell className={`text-sm ${groupKey ? "pl-8" : ""}`}>
+          <button className="text-left hover:underline font-medium" onClick={() => openClient(r)}>
+            {r.client_name}
+          </button>
+          {!groupKey && r.groups.length > 0 && <div className="text-[11px] text-muted-foreground">{r.groups.join(", ")}</div>}
+          {paused && <div className="text-[11px] text-amber-600">Paused until {r.settings.paused_until}</div>}
+          {(r.issues || []).map((i, k) => (
+            <div key={k} className="text-[11px] text-destructive flex gap-1 items-start mt-0.5">
+              <AlertTriangle size={11} className="shrink-0 mt-0.5" /> {i.message}
+            </div>
+          ))}
+        </TableCell>
+        <TableCell>
+          <Select value={quick} onValueChange={v => v !== "custom" && setClientSend(r, v as "inherit" | "send" | "nosend")}>
+            <SelectTrigger className="h-7 w-[120px] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">Inherit</SelectItem>
+              <SelectItem value="send">Send</SelectItem>
+              <SelectItem value="nosend">Don't send</SelectItem>
+              {quick === "custom" && <SelectItem value="custom">Custom</SelectItem>}
+            </SelectContent>
+          </Select>
+        </TableCell>
+        <TableCell className="text-xs">
+          <div className={r.settings.invoice_enabled ? "" : "text-muted-foreground"}>{describeInvoice(r.settings)}</div>
+          <div className="text-[10px] text-muted-foreground">{r.source.invoice_enabled}</div>
+        </TableCell>
+        <TableCell className="text-xs">
+          <div className={r.settings.ledger_enabled ? "" : "text-muted-foreground"}>{describeLedger(r.settings)}</div>
+          <div className="text-[10px] text-muted-foreground">{r.source.ledger_enabled}</div>
+        </TableCell>
+        <TableCell className="text-xs max-w-[240px]">
+          <div className="truncate" title={r.to.join(", ")}>{r.to.join(", ") || <span className="text-amber-600">No email</span>}</div>
+          {r.cc.length > 0 && <div className="truncate text-[10px] text-muted-foreground" title={r.cc.join(", ")}>CC: {r.cc.join(", ")}</div>}
+        </TableCell>
+        <TableCell className="text-right text-xs">
+          {inr(r.outstanding)}
+          {r.open_invoices > 0 && <div className="text-[10px] text-muted-foreground">{r.open_invoices} invoice{r.open_invoices !== 1 ? "s" : ""}</div>}
+        </TableCell>
+      </TableRow>
     );
   };
 
@@ -769,6 +936,14 @@ export default function BillingRemindersTab({
         </div>
       </div>
 
+      <Tabs value={section} onValueChange={setSection}>
+        <TabsList>
+          <TabsTrigger value="outstanding" className="gap-1.5"><IndianRupee size={13} /> Outstanding clients</TabsTrigger>
+          <TabsTrigger value="rules" className="gap-1.5"><Settings2 size={13} /> Reminder rules</TabsTrigger>
+          <TabsTrigger value="templates" className="gap-1.5"><FileText size={13} /> Reminder templates</TabsTrigger>
+        </TabsList>
+
+      <TabsContent value="rules" className="mt-4">
       <div className="grid gap-4 lg:grid-cols-[280px_1fr]">
         {/* Scope list */}
         <Card>
@@ -796,10 +971,15 @@ export default function BillingRemindersTab({
               <p className="text-[11px] text-muted-foreground px-2">Use the firm selector at the top of Billing to set up another firm.</p>
             </div>
 
+            <label className="flex items-center gap-2 text-xs cursor-pointer px-1">
+              <Checkbox checked={sidebarOutstandingOnly} onCheckedChange={v => setSidebarOutstandingOnly(!!v)} />
+              Only clients / groups with outstanding
+            </label>
+
             <div className="space-y-1">
               <p className="text-xs font-semibold uppercase text-muted-foreground">Client groups</p>
-              {clientGroups.length === 0 && <p className="text-xs text-muted-foreground px-2">No client groups yet</p>}
-              {clientGroups.map(g => (
+              {sidebarGroups.length === 0 && <p className="text-xs text-muted-foreground px-2">{filterSidebar ? "No group has anything outstanding" : "No client groups yet"}</p>}
+              {sidebarGroups.map(g => (
                 <ScopeButton key={g.id} scope={{ type: "client_group", id: g.id, name: g.name, firmId: g.firm_id }}
                   extra={!g.firm_id ? <span className="text-[10px] text-muted-foreground" title="Shared by all firms">all firms</span> : undefined} />
               ))}
@@ -814,8 +994,8 @@ export default function BillingRemindersTab({
               {filteredClients.map(c => (
                 <ScopeButton key={c.id} scope={{ type: "client", id: c.id, name: c.name, firmId: c.firm_id }} />
               ))}
-              {clients.length > filteredClients.length && !clientSearch && (
-                <p className="text-[11px] text-muted-foreground px-2">Showing 60 of {clients.length}. Search to find others, or pick one from the table below.</p>
+              {sidebarClientTotal > filteredClients.length && !clientSearch && (
+                <p className="text-[11px] text-muted-foreground px-2">Showing 60 of {sidebarClientTotal}. Search to find others, or pick one from the Outstanding clients tab.</p>
               )}
             </div>
           </CardContent>
@@ -917,37 +1097,103 @@ export default function BillingRemindersTab({
         </Card>
       </div>
 
-      {/* Who gets what */}
+      </TabsContent>
+
+      {/* Outstanding clients — who gets what */}
+      <TabsContent value="outstanding" className="mt-4 space-y-4">
+        {effective && (
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              { label: "Total outstanding", value: inr(counts.amount), sub: `${counts.invoices} open invoice${counts.invoices !== 1 ? "s" : ""}` },
+              { label: "Clients with outstanding", value: counts.total, sub: `${counts.groups} client group${counts.groups !== 1 ? "s" : ""}` },
+              { label: "Will receive reminders", value: counts.send, sub: `${counts.nosend} won't` },
+              { label: "Need attention", value: counts.noEmail + counts.conflict, sub: `${counts.noEmail} no email · ${counts.conflict} conflicting` },
+            ].map(c => (
+              <Card key={c.label}><CardContent className="p-3">
+                <p className="text-xs text-muted-foreground">{c.label}</p>
+                <p className="text-lg font-bold">{c.value}</p>
+                <p className="text-[11px] text-muted-foreground">{c.sub}</p>
+              </CardContent></Card>
+            ))}
+          </div>
+        )}
+
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="pb-2 space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">Who gets what</CardTitle>
-              {effective && (
-                <p className="text-xs text-muted-foreground">
-                  {counts.total} clients · {counts.send} will receive · {counts.nosend} won't
-                  {counts.noEmail > 0 && <span className="text-amber-600"> · {counts.noEmail} have no email address</span>}
-                  {counts.conflict > 0 && <span className="text-destructive"> · {counts.conflict} held back by conflicting rules</span>}
-                </p>
-              )}
+              <CardTitle className="text-base">Outstanding clients — who gets what</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                Only clients and groups with an unpaid balance are listed.
+                {effective && <> Showing {tableRows.length} of {counts.total} · {inr(counts.shownAmount)}</>}
+              </p>
             </div>
             <div className="flex gap-2">
-              <Input className="h-8 w-48 text-xs" placeholder="Search" value={tableSearch} onChange={e => setTableSearch(e.target.value)} />
-              <Select value={tableFilter} onValueChange={v => setTableFilter(v as typeof tableFilter)}>
-                <SelectTrigger className="h-8 w-[170px] text-xs"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All clients</SelectItem>
-                  <SelectItem value="send">Will receive</SelectItem>
-                  <SelectItem value="nosend">Won't receive</SelectItem>
-                  <SelectItem value="custom">Client-level settings</SelectItem>
-                  <SelectItem value="conflict">Conflicting rules</SelectItem>
-                </SelectContent>
-              </Select>
+              <Button variant="outline" size="sm" className="h-8 gap-1.5 text-xs" onClick={exportCsv} disabled={!tableRows.length}>
+                <Download size={13} /> Export CSV
+              </Button>
               <Button variant="ghost" size="sm" className="h-8" onClick={fetchEffective} disabled={effectiveLoading}>
                 <RefreshCw size={13} className={effectiveLoading ? "animate-spin" : ""} />
               </Button>
             </div>
           </div>
+          <div className="flex flex-wrap gap-2">
+            <Select value={viewMode} onValueChange={v => setViewMode(v as typeof viewMode)}>
+              <SelectTrigger className="h-8 w-[140px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="client">Client-wise</SelectItem>
+                <SelectItem value="group">Group-wise</SelectItem>
+              </SelectContent>
+            </Select>
+            <div className="relative">
+              <Search size={12} className="absolute left-2 top-2.5 text-muted-foreground" />
+              <Input className="h-8 w-52 pl-7 text-xs" placeholder="Search client or group" value={tableSearch} onChange={e => setTableSearch(e.target.value)} />
+            </div>
+            <Select value={groupFilter} onValueChange={setGroupFilter}>
+              <SelectTrigger className="h-8 w-[190px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All client groups</SelectItem>
+                {groupOptions.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+                <SelectItem value={NO_GROUP}>No group</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={sortBy} onValueChange={v => setSortBy(v as SortKey)}>
+              <SelectTrigger className="h-8 w-[190px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="high">Outstanding: highest first</SelectItem>
+                <SelectItem value="low">Outstanding: lowest first</SelectItem>
+                <SelectItem value="invoices">Most open invoices</SelectItem>
+                <SelectItem value="name">Name A–Z</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={tableFilter} onValueChange={v => setTableFilter(v as typeof tableFilter)}>
+              <SelectTrigger className="h-8 w-[170px] text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All reminder statuses</SelectItem>
+                <SelectItem value="send">Will receive</SelectItem>
+                <SelectItem value="nosend">Won't receive</SelectItem>
+                <SelectItem value="custom">Client-level settings</SelectItem>
+                <SelectItem value="conflict">Conflicting rules</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {checkedRows.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 rounded-md border bg-accent/50 p-2 text-xs">
+              <span className="font-medium">{checkedRows.length} selected · {inr(checkedRows.reduce((t, r) => t + r.outstanding, 0))}</span>
+              <div className="flex-1" />
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={bulkBusy}
+                onClick={() => patchClients(checkedRows, sendFlag("send"), "Send reminders")}>Send reminders</Button>
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={bulkBusy}
+                onClick={() => patchClients(checkedRows, sendFlag("nosend"), "Don't send")}>Don't send</Button>
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={bulkBusy}
+                onClick={() => patchClients(checkedRows, sendFlag("inherit"), "Inherit")}>Inherit</Button>
+              <Button size="sm" variant="outline" className="h-7 text-xs gap-1" disabled={bulkBusy}
+                onClick={() => setPauseDate("")}><PauseCircle size={12} /> Pause until…</Button>
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={bulkBusy}
+                onClick={() => patchClients(checkedRows, { paused_until: null }, "Resume")}>Resume</Button>
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => setChecked(new Set())}>Clear</Button>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           {effectiveError ? (
@@ -955,11 +1201,18 @@ export default function BillingRemindersTab({
           ) : !effective ? (
             <Skeleton className="h-40 w-full" />
           ) : (
-            <div className="max-h-[520px] overflow-auto">
+            <div className="max-h-[620px] overflow-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Client</TableHead>
+                    <TableHead className="w-8">
+                      <Checkbox
+                        checked={tableRows.length > 0 && tableRows.every(r => checked.has(r.client_id))}
+                        onCheckedChange={v => toggleChecked(tableRows.map(r => r.client_id), !!v)}
+                        aria-label="Select all shown"
+                      />
+                    </TableHead>
+                    <TableHead>{viewMode === "group" ? "Group / client" : "Client"}</TableHead>
                     <TableHead>Reminders</TableHead>
                     <TableHead>Invoice reminders</TableHead>
                     <TableHead>Statement of Account</TableHead>
@@ -968,57 +1221,39 @@ export default function BillingRemindersTab({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {tableRows.map(r => {
-                    const cp = policies.find(p => p.scope_type === "client" && p.client_id === r.client_id);
-                    const quick = !cp || (cp.invoice_enabled === null && cp.ledger_enabled === null) ? "inherit"
-                      : cp.invoice_enabled === true && cp.ledger_enabled === true ? "send"
-                      : cp.invoice_enabled === false && cp.ledger_enabled === false ? "nosend" : "custom";
-                    return (
-                      <TableRow key={r.client_id}>
-                        <TableCell className="text-sm">
-                          <button className="text-left hover:underline font-medium"
-                            onClick={() => selectScope({ type: "client", id: r.client_id, name: r.client_name, firmId: resolvedFirmId })}>
-                            {r.client_name}
-                          </button>
-                          {r.groups.length > 0 && <div className="text-[11px] text-muted-foreground">{r.groups.join(", ")}</div>}
-                          {(r.issues || []).map((i, k) => (
-                            <div key={k} className="text-[11px] text-destructive flex gap-1 items-start mt-0.5">
-                              <AlertTriangle size={11} className="shrink-0 mt-0.5" /> {i.message}
-                            </div>
-                          ))}
-                        </TableCell>
-                        <TableCell>
-                          <Select value={quick} onValueChange={v => v !== "custom" && setClientSend(r, v as "inherit" | "send" | "nosend")}>
-                            <SelectTrigger className="h-7 w-[120px] text-xs"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="inherit">Inherit</SelectItem>
-                              <SelectItem value="send">Send</SelectItem>
-                              <SelectItem value="nosend">Don't send</SelectItem>
-                              {quick === "custom" && <SelectItem value="custom">Custom</SelectItem>}
-                            </SelectContent>
-                          </Select>
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <div className={r.settings.invoice_enabled ? "" : "text-muted-foreground"}>{describeInvoice(r.settings)}</div>
-                          <div className="text-[10px] text-muted-foreground">{r.source.invoice_enabled}</div>
-                        </TableCell>
-                        <TableCell className="text-xs">
-                          <div className={r.settings.ledger_enabled ? "" : "text-muted-foreground"}>{describeLedger(r.settings)}</div>
-                          <div className="text-[10px] text-muted-foreground">{r.source.ledger_enabled}</div>
-                        </TableCell>
-                        <TableCell className="text-xs max-w-[240px]">
-                          <div className="truncate" title={r.to.join(", ")}>{r.to.join(", ") || <span className="text-amber-600">No email</span>}</div>
-                          {r.cc.length > 0 && <div className="truncate text-[10px] text-muted-foreground" title={r.cc.join(", ")}>CC: {r.cc.join(", ")}</div>}
-                        </TableCell>
-                        <TableCell className="text-right text-xs">
-                          {r.outstanding > 0 ? inr(r.outstanding) : "—"}
-                          {r.open_invoices > 0 && <div className="text-[10px] text-muted-foreground">{r.open_invoices} invoice{r.open_invoices !== 1 ? "s" : ""}</div>}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
+                  {viewMode === "client"
+                    ? tableRows.map(r => renderClientRow(r))
+                    : groupRows.map(g => {
+                        const open = expanded.has(g.key);
+                        const ids = g.rows.map(r => r.client_id);
+                        const sends = g.rows.filter(r => r.settings.invoice_enabled || r.settings.ledger_enabled).length;
+                        return [
+                          <TableRow key={`g-${g.key}`} className="bg-muted/40 hover:bg-muted/60">
+                            <TableCell>
+                              <Checkbox checked={ids.every(id => checked.has(id))} onCheckedChange={v => toggleChecked(ids, !!v)} aria-label={`Select ${g.name}`} />
+                            </TableCell>
+                            <TableCell className="text-sm" colSpan={5}>
+                              <div className="flex items-center gap-2">
+                                <button className="flex items-center gap-1 font-semibold"
+                                  onClick={() => setExpanded(prev => { const n = new Set(prev); open ? n.delete(g.key) : n.add(g.key); return n; })}>
+                                  {open ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                                  <Users size={13} /> {g.name}
+                                </button>
+                                <span className="text-xs text-muted-foreground">
+                                  {g.rows.length} client{g.rows.length !== 1 ? "s" : ""} · {g.invoices} invoice{g.invoices !== 1 ? "s" : ""} · {sends} will receive
+                                </span>
+                                {g.key !== NO_GROUP && (
+                                  <Button variant="ghost" size="sm" className="h-6 px-2 text-[11px]" onClick={() => openGroup(g.name)}>Group rule</Button>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right text-sm font-semibold">{inr(g.outstanding)}</TableCell>
+                          </TableRow>,
+                          ...(open ? g.rows.map(r => renderClientRow(r, g.key)) : []),
+                        ];
+                      })}
                   {tableRows.length === 0 && (
-                    <TableRow><TableCell colSpan={6} className="text-center text-sm text-muted-foreground py-6">No clients match.</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={7} className="text-center text-sm text-muted-foreground py-6">No outstanding clients match.</TableCell></TableRow>
                   )}
                 </TableBody>
               </Table>
@@ -1026,6 +1261,37 @@ export default function BillingRemindersTab({
           )}
         </CardContent>
       </Card>
+      </TabsContent>
+
+      {/* Reminder email templates — the two the engine sends */}
+      <TabsContent value="templates" className="mt-4">
+        <EmailTemplatesTab
+          firmId={resolvedFirmId}
+          types={REMINDER_TEMPLATE_TYPES}
+          title="Reminder templates"
+          description="These are the emails the reminder engine sends: Payment Reminder for overdue invoices and Statement of Account for the periodic outstanding statement. The preview uses sample values; edit a template to change its wording or design."
+        />
+      </TabsContent>
+      </Tabs>
+
+      {/* Bulk pause */}
+      <Dialog open={pauseDate !== null} onOpenChange={open => { if (!open) setPauseDate(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Pause reminders for {checkedRows.length} client{checkedRows.length !== 1 ? "s" : ""}</DialogTitle></DialogHeader>
+          <div className="space-y-1">
+            <Label className="text-xs">Pause until</Label>
+            <Input type="date" className="h-8" value={pauseDate ?? ""} onChange={e => setPauseDate(e.target.value)} />
+            <p className="text-[11px] text-muted-foreground">E.g. payment promised or invoice disputed. Nothing is sent to these clients until this date.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPauseDate(null)}>Cancel</Button>
+            <Button disabled={!pauseDate || bulkBusy}
+              onClick={async () => { const d = pauseDate; setPauseDate(null); await patchClients(checkedRows, { paused_until: d }, "Pause"); }}>
+              Pause
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Firm group dialog */}
       <Dialog open={!!fgDialog} onOpenChange={open => { if (!open) setFgDialog(null); }}>
