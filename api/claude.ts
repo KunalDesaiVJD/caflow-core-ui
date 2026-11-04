@@ -134,7 +134,16 @@ async function resolveKey(): Promise<{ key: string; source: KeySource } | null> 
 
 function anthropicClient(apiKey: string, timeoutMs: number): Anthropic {
   // One retry for 429 / 5xx / network, inside the caller's time budget.
-  return new Anthropic({ apiKey, timeout: timeoutMs, maxRetries: 1 });
+  // Send the key as x-api-key, the way console keys are meant to be used.
+  // This SDK version sends apiKey as "Authorization: Bearer", which the API
+  // treats as an unscoped credential and rejects with "not scoped to a
+  // workspace" for ordinary keys.
+  return new Anthropic({
+    apiKey,
+    timeout: timeoutMs,
+    maxRetries: 1,
+    defaultHeaders: { "x-api-key": apiKey, Authorization: null },
+  });
 }
 
 /** Turn an SDK error into a message the firm can act on. Never includes the key. */
