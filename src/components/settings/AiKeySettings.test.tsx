@@ -10,38 +10,72 @@ const { toast } = vi.hoisted(() => ({ toast: vi.fn() }));
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 
 const KEY = "sk-ant-api03-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123a1b2";
-let saved: { masked: string; saved_by: string; saved_at: string } | null;
+const NO_CREDIT_KEY = "sk-ant-api03-NOCREDITNOCREDITNOCREDITzzzz";
+const NO_CREDIT =
+  "Anthropic knows this key, but its account has no API credit, so it was not saved. Add credit at console.anthropic.com › Settings › Billing (a Claude subscription does not cover the API), then paste it again.";
+const MODELS = [
+  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5" },
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
+  { id: "claude-haiku-5-5", label: "Claude Haiku 5.5" },
+];
+
+let pasted: boolean;
 const sentBodies: Record<string, unknown>[] = [];
 
+function statusBody() {
+  return {
+    key: pasted
+      ? { source: "pasted", hint: "a1b2", savedOn: "2026-11-04T13:00:00Z", savedBy: "Meet Admin" }
+      : { source: "server" },
+    serverKeySet: true,
+    model: "claude-sonnet-5-5",
+    modelSource: "default",
+    modelSavedBy: null,
+    modelSavedOn: null,
+    models: MODELS,
+  };
+}
+
 beforeEach(() => {
-  saved = null;
+  pasted = false;
   sentBodies.length = 0;
   vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
     const body = JSON.parse(String(init.body));
     sentBodies.push(body);
-    const ok = (json: unknown) => new Response(JSON.stringify(json), { status: 200 });
+    const reply = (json: unknown, status = 200) => new Response(JSON.stringify(json), { status });
     switch (body.action) {
       case "status":
-        return ok({ active: saved ? "ui" : "env", ui: saved, env_configured: true, model: "claude-sonnet-4-5" });
+        return reply(statusBody());
       case "save":
-        saved = { masked: "sk-ant-…a1b2", saved_by: "Meet Admin", saved_at: "2026-11-04T13:00:00Z" };
-        return ok({ ok: true, ...saved });
+        if (body.apiKey === NO_CREDIT_KEY) return reply({ error: NO_CREDIT }, 400);
+        pasted = true;
+        return reply(statusBody());
       case "test":
-        return ok({ ok: true, source: saved ? "ui" : "env", model: "claude-sonnet-4-5" });
+        return reply({ ok: true, source: pasted ? "pasted" : "server", model: "claude-sonnet-5-5", reply: "The connection works." });
       case "remove":
-        saved = null;
-        return ok({ ok: true, active: "env" });
+        pasted = false;
+        return reply(statusBody());
     }
-    return new Response("{}", { status: 400 });
+    return reply({}, 400);
   }));
 });
 
 describe("AiKeySettings", () => {
-  it("saves the key once, then shows only the masked value; test and remove work", async () => {
+  it("shows Anthropic's refusal sentence and clears the field", async () => {
     render(<AiKeySettings />);
-    expect(await screen.findByText("Vercel ANTHROPIC_API_KEY")).toBeInTheDocument();
+    expect(await screen.findByText(/Key set where the app is hosted/)).toBeInTheDocument();
+    const input = screen.getByLabelText("Paste key") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: NO_CREDIT_KEY } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    expect(await screen.findByText(NO_CREDIT)).toBeInTheDocument();
+    expect(input.value).toBe("");
+  });
 
-    const input = screen.getByLabelText("API key") as HTMLInputElement;
+  it("saves the key once, then shows only the last 4; test and remove work", async () => {
+    render(<AiKeySettings />);
+    expect(await screen.findByText(/Key set where the app is hosted/)).toBeInTheDocument();
+
+    const input = screen.getByLabelText("Paste key") as HTMLInputElement;
     expect(input.type).toBe("password");
 
     const saveBtn = screen.getByRole("button", { name: /save/i });
@@ -51,20 +85,18 @@ describe("AiKeySettings", () => {
 
     fireEvent.change(input, { target: { value: KEY } });
     fireEvent.click(saveBtn);
-    expect(await screen.findByText("sk-ant-…a1b2")).toBeInTheDocument();
-    expect(screen.getByText("Key saved here")).toBeInTheDocument();
-    expect(screen.getByText(/by Meet Admin/)).toBeInTheDocument();
-    expect((screen.getByLabelText("Replace API key") as HTMLInputElement).value).toBe("");
+    expect(await screen.findByText(/Key ending a1b2, pasted here by Meet Admin/)).toBeInTheDocument();
+    expect((screen.getByLabelText("Replace key") as HTMLInputElement).value).toBe("");
     // The key left the browser exactly once, in the save call, and is not on the page.
     expect(sentBodies.filter((b) => JSON.stringify(b).includes(KEY))).toHaveLength(1);
     expect(document.body.innerHTML).not.toContain(KEY);
 
     fireEvent.click(screen.getByRole("button", { name: /test connection/i }));
-    expect(await screen.findByText(/OK — Claude answered/)).toBeInTheDocument();
+    expect(await screen.findByText(/OK — claude-sonnet-5-5 answered/)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /remove/i }));
+    fireEvent.click(screen.getByRole("button", { name: /remove key/i }));
     fireEvent.click(await screen.findByRole("button", { name: "Remove" }));
-    await waitFor(() => expect(screen.getByText("Vercel ANTHROPIC_API_KEY")).toBeInTheDocument());
-    expect(screen.queryByText("sk-ant-…a1b2")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Key set where the app is hosted/)).toBeInTheDocument());
+    expect(screen.queryByText(/Key ending a1b2/)).not.toBeInTheDocument();
   });
 });
