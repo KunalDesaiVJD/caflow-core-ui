@@ -6,6 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import RequiredDocsMaster from "./RequiredDocsMaster";
+import AiKeySettings from "@/components/settings/AiKeySettings";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,6 +75,8 @@ const SettingsPage = () => {
   const canViewSettings = isSuperadmin || can("Settings", "can_view");
   const canEditSettings = isSuperadmin || can("Settings", "can_edit");
   const isAdmin = canViewSettings; // backward compat alias
+  // AI key management: superadmin / firm_admin only (re-checked by /api/claude).
+  const canManageAiKey = user?.role === "superadmin" || user?.role === "firm_admin";
 
   // ─── Firm State (shared — needed for notification and billing saves) ───
   const [firmLoading, setFirmLoading] = useState(true);
@@ -316,13 +319,14 @@ const SettingsPage = () => {
       </div>
 
       <Tabs defaultValue="notifications" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-6">
+        <TabsList className={cn("grid w-full", canManageAiKey ? "grid-cols-7" : "grid-cols-6")}>
           <TabsTrigger value="team" className="text-xs">Team</TabsTrigger>
           <TabsTrigger value="notifications" className="text-xs">Notifications</TabsTrigger>
           <TabsTrigger value="scrutiny-rules" className="text-xs">Scrutiny Rules</TabsTrigger>
           <TabsTrigger value="billing" className="text-xs">Billing</TabsTrigger>
           <TabsTrigger value="tax-audit" className="text-xs">Tax Audit</TabsTrigger>
           <TabsTrigger value="required-docs" className="text-xs">Required Docs</TabsTrigger>
+          {canManageAiKey && <TabsTrigger value="ai" className="text-xs">AI</TabsTrigger>}
         </TabsList>
 
         {/* ─── TAB 1: Team ─── */}
@@ -566,6 +570,13 @@ const SettingsPage = () => {
         <TabsContent value="required-docs">
           <RequiredDocsMaster embedded />
         </TabsContent>
+
+        {/* ─── TAB 7: AI (admin only) ─── */}
+        {canManageAiKey && (
+          <TabsContent value="ai">
+            <AiKeySettings />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* ─── Add/Edit Rule Modal ─── */}
