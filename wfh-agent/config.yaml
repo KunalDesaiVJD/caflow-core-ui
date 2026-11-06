@@ -19,7 +19,11 @@ identity:
   device_id:   "demo-laptop-01"
 
 server:
-  mode: local                 # 'local' = store on this laptop only (demo). No upload.
+  mode: local                 # 'local' = store on this laptop only (demo, no upload).
+                              # 'http'  = also upload to the caflow wfh-ingest function
+                              #           so the superadmin can view them in the app.
+  ingest_url: ""              # e.g. https://hubyywmodekfdzhwiumb.functions.supabase.co/wfh-ingest
+  ingest_token: ""            # shared device token; must equal the WFH_INGEST_TOKEN secret
 
 disclosure:
   # These are NOT optional. The collector will not capture if the tray can't

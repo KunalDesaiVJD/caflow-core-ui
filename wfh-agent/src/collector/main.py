@@ -13,13 +13,13 @@ the collector exits without capturing anything.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
-import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # allow running from source: add src/ to path
@@ -29,6 +29,7 @@ from caflow_common import config as cfg_mod  # noqa: E402
 from caflow_common.paths import Storage  # noqa: E402
 from caflow_common.storage import Store  # noqa: E402
 from collector import capture  # noqa: E402
+from collector.uploader import CaptureItem, Uploader  # noqa: E402
 
 
 def _setup_logging(storage: Storage) -> None:
@@ -123,11 +124,12 @@ def clear_pause(storage: Storage) -> None:
 # ----------------------------- capture loop ----------------------------------
 
 class CaptureLoop(threading.Thread):
-    def __init__(self, cfg: cfg_mod.Config, storage: Storage, store: Store):
+    def __init__(self, cfg: cfg_mod.Config, storage: Storage, store: Store, uploader=None):
         super().__init__(daemon=True)
         self.cfg = cfg
         self.storage = storage
         self.store = store
+        self.uploader = uploader
         self._stop = threading.Event()
         self._last_purge_day = None
 
@@ -167,8 +169,23 @@ class CaptureLoop(threading.Thread):
                     else:
                         app, title = capture.foreground_info()
                         ts = int(cycle_start)
+                        captured_at = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        batch = []
                         for display_no, webp in capture.grab_screens(self.cfg.webp_quality):
                             self.store.save_screenshot(display_no, webp, app, title, idle, ts=ts)
+                            if self.uploader:
+                                batch.append(CaptureItem(
+                                    captured_at=captured_at,
+                                    display_no=display_no,
+                                    app=app,
+                                    title=title,
+                                    idle=idle,
+                                    sha256=hashlib.sha256(webp).hexdigest(),
+                                    bytes=len(webp),
+                                    image_bytes=webp,
+                                ))
+                        if self.uploader and batch:
+                            self.uploader.upload(batch)  # best-effort; local copy already saved
             except Exception as exc:
                 logging.error("Capture cycle error: %s", exc)
 
@@ -244,7 +261,15 @@ def main():
         return 0
 
     store = Store(storage, cfg.employee_id, cfg.device_id)
-    loop = CaptureLoop(cfg, storage, store)
+
+    uploader = None
+    if cfg.server_mode == "http" and cfg.ingest_url and cfg.ingest_token:
+        uploader = Uploader(cfg.ingest_url, cfg.ingest_token, cfg.device_id, cfg.employee_id)
+        logging.info("Upload mode: posting to %s", cfg.ingest_url)
+    elif cfg.server_mode == "http":
+        logging.warning("server.mode=http but ingest_url/ingest_token missing; storing locally only.")
+
+    loop = CaptureLoop(cfg, storage, store, uploader)
 
     if cfg.tray_required:
         try:

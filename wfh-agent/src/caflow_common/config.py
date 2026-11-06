@@ -36,6 +36,9 @@ class Config:
     retention_days: int
     employee_id: str
     device_id: str
+    server_mode: str          # 'local' or 'http'
+    ingest_url: str
+    ingest_token: str
     tray_required: bool
     require_consent: bool
     policy_notice_file: str
@@ -63,6 +66,7 @@ def load() -> Config:
     ident = raw["identity"]
     disc = raw["disclosure"]
     pause = raw.get("pause", {})
+    server = raw.get("server", {})
 
     return Config(
         interval_seconds=int(cap["interval_seconds"]),
@@ -78,6 +82,9 @@ def load() -> Config:
         retention_days=int(sto.get("retention_days", 90)),
         employee_id=str(ident["employee_id"]),
         device_id=str(ident["device_id"]),
+        server_mode=str(server.get("mode", "local")).lower(),
+        ingest_url=str(server.get("ingest_url", "")),
+        ingest_token=str(server.get("ingest_token", "")),
         tray_required=bool(disc.get("tray_required", True)),
         require_consent=bool(disc.get("require_consent", True)),
         policy_notice_file=str(disc.get("policy_notice_file", "policy-notice.txt")),
