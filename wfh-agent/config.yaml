@@ -1,0 +1,32 @@
+# CAFlow WFH Agent — demo configuration
+capture:
+  interval_seconds: 15
+  image_format: webp
+  webp_quality: 60          # 0-100; lower = smaller files, text stays readable ~60
+  idle_threshold_seconds: 180   # no input for this long = idle
+  capture_when_idle: true       # still screenshot when idle (set false to skip)
+  working_hours:
+    start: "09:30"
+    end:   "19:00"
+    days:  [mon, tue, wed, thu, fri, sat]   # drop 'sat' for 5-day weeks
+
+storage:
+  root: "C:/ProgramData/CAFlowAgent"
+  retention_days: 90          # screenshots + rows older than this are purged daily
+
+identity:
+  employee_id: "demo-user-01"
+  device_id:   "demo-laptop-01"
+
+server:
+  mode: local                 # 'local' = store on this laptop only (demo). No upload.
+
+disclosure:
+  # These are NOT optional. The collector will not capture if the tray can't
+  # start, and will not start before the policy notice is acknowledged.
+  tray_required: true
+  require_consent: true
+  policy_notice_file: "policy-notice.txt"
+
+pause:
+  max_minutes: 30             # how long a tray "pause for break" lasts
