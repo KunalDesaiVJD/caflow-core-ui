@@ -4,7 +4,13 @@
 
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
-$src    = Join-Path $PSScriptRoot "dist"
+$distDir = Join-Path $PSScriptRoot "dist"
+$src = if (Test-Path (Join-Path $distDir "masterflow-collector.exe")) {
+    $distDir
+} else {
+    # GitHub Actions artifacts place the executables beside this installer.
+    $PSScriptRoot
+}
 $target = "C:\Program Files\MasterFlowAgent"
 
 if (-not (Test-Path (Join-Path $src "masterflow-collector.exe"))) {
