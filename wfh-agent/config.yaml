@@ -19,11 +19,10 @@ identity:
   device_id:   "demo-laptop-01"
 
 server:
-  mode: local                 # 'local' = store on this laptop only (demo, no upload).
-                              # 'http'  = also upload to the caflow wfh-ingest function
-                              #           so the superadmin can view them in the app.
-  ingest_url: ""              # e.g. https://hubyywmodekfdzhwiumb.functions.supabase.co/wfh-ingest
-  ingest_token: ""            # shared device token; must equal the WFH_INGEST_TOKEN secret
+  mode: http                  # upload to caflow so the superadmin sees captures in-app
+                              # ('local' = store on this laptop only, no upload)
+  ingest_url: "https://hubyywmodekfdzhwiumb.functions.supabase.co/wfh-ingest"
+  ingest_token: ""            # leave blank — install.ps1 asks you to paste this during setup
 
 disclosure:
   # These are NOT optional. The collector will not capture if the tray can't

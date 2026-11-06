@@ -18,6 +18,23 @@ Copy-Item (Join-Path $src "caflow-watchdog.exe")  $target -Force
 Copy-Item (Join-Path $src "config.yaml")          $target -Force
 Copy-Item (Join-Path $src "policy-notice.txt")    $target -Force
 
+# --- Ask for the upload token so you never have to edit a text file ---
+$cfgPath = Join-Path $target "config.yaml"
+$cfg = Get-Content $cfgPath -Raw
+if ($cfg -match 'ingest_token:\s*""') {
+    Write-Host ""
+    Write-Host "Paste the WFH upload token (Claude saved it for you), then press Enter."
+    $tok = Read-Host "Token"
+    if ($tok.Trim()) {
+        $cfg = $cfg -replace 'ingest_token:\s*".*"', ('ingest_token: "' + $tok.Trim() + '"')
+        Set-Content -Path $cfgPath -Value $cfg -Encoding UTF8
+        Write-Host "Token saved. Uploads to caflow are ON." -ForegroundColor Green
+    } else {
+        Write-Host "No token entered — the agent will still run and store locally;" -ForegroundColor Yellow
+        Write-Host "add the token to $cfgPath later to turn on uploads." -ForegroundColor Yellow
+    }
+}
+
 # Create the runtime data tree up front.
 $data = "C:\ProgramData\CAFlowAgent"
 foreach ($d in @("db","screens","logs","state")) {

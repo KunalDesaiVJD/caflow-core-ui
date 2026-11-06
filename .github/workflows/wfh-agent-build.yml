@@ -1,0 +1,66 @@
+name: Build WFH Agent (Windows .exe)
+
+# Builds the WFH agent executables on a real Windows runner (PyInstaller cannot
+# cross-compile from Linux, and the agent needs Windows-only libraries). The
+# compiled exes are uploaded as a downloadable build artifact — grab them from
+# the run's "Artifacts" section, no Python needed on the laptop.
+#
+# Trigger: automatically on changes under wfh-agent/, or manually from the
+# Actions tab (Run workflow).
+
+on:
+  push:
+    paths:
+      - 'wfh-agent/**'
+      - '.github/workflows/wfh-agent-build.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: wfh-agent
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build caflow-collector.exe (tray + capture)
+        run: >
+          pyinstaller --noconfirm --clean --onefile --noconsole
+          --name caflow-collector
+          --paths src
+          --hidden-import win32timezone
+          --hidden-import pystray._win32
+          --collect-submodules pystray
+          src/collector/main.py
+
+      - name: Build caflow-watchdog.exe (SYSTEM keep-alive)
+        run: >
+          pyinstaller --noconfirm --clean --onefile --noconsole
+          --name caflow-watchdog
+          --paths src
+          src/watchdog/main.py
+
+      - name: Stage config + policy next to the exes
+        run: |
+          Copy-Item config.yaml dist/config.yaml -Force
+          Copy-Item policy-notice.txt dist/policy-notice.txt -Force
+          Copy-Item install.ps1 dist/install.ps1 -Force
+          Copy-Item uninstall.ps1 dist/uninstall.ps1 -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: caflow-wfh-agent-windows
+          path: wfh-agent/dist/*
+          retention-days: 14
+          if-no-files-found: error
