@@ -118,9 +118,11 @@ The agent always keeps the local copy; upload is best-effort on top.
 
 > Data note: in `http` mode, unredacted screenshots (which can contain client
 > data) are stored in the **production** Supabase project alongside firm/client
-> data. Access is superadmin-only and URLs expire in 1 hour, but keep the
-> bucket's retention short and treat it as sensitive. The `screens` purge on the
-> laptop does not delete uploaded copies — prune the bucket/table separately.
+> data. Access is superadmin-only and URLs expire in 1 hour. Retention is
+> **7 days on both sides**: the laptop purges local copies daily
+> (`retention_days: 7`) and a server pg_cron job
+> (`masterflow_ss_retention_7d`, migration `20261106130000`) deletes uploaded
+> images + rows older than 7 days each day at 01:15 UTC.
 
 ## Non-removal (demo-grade)
 

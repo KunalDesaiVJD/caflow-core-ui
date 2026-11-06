@@ -1,7 +1,7 @@
 WORK ACTIVITY MONITORING — NOTICE AND ACKNOWLEDGEMENT
 
 This is a company-owned laptop. While you are signed in during working hours,
-the CAFlow work-activity agent records:
+the Master Flow work-activity agent records:
 
   - A screenshot of your screen(s) every 15 seconds.
   - The name and window title of the application in the foreground.

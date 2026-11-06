@@ -214,12 +214,12 @@ def run_tray(cfg: cfg_mod.Config, storage: Storage, store: Store, loop: CaptureL
 
     def do_pause(icon, _item):
         set_pause(storage, cfg.pause_max_minutes)
-        icon.notify(f"Paused for {cfg.pause_max_minutes} min", "CAFlow")
+        icon.notify(f"Paused for {cfg.pause_max_minutes} min", "Master Flow")
         icon.update_menu()
 
     def do_resume(icon, _item):
         clear_pause(storage)
-        icon.notify("Tracking resumed", "CAFlow")
+        icon.notify("Tracking resumed", "Master Flow")
         icon.update_menu()
 
     def open_storage(_icon, _item):
@@ -235,7 +235,7 @@ def run_tray(cfg: cfg_mod.Config, storage: Storage, store: Store, loop: CaptureL
         Item("Resume now", do_resume),
         Item("Open my data folder", open_storage),
     )
-    icon = pystray.Icon("CAFlow", _tray_image(), "CAFlow — Tracking ON", menu)
+    icon = pystray.Icon("MasterFlow", _tray_image(), "Master Flow — Tracking on", menu)
 
     # refresh the status label periodically
     def refresher():

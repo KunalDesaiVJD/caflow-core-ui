@@ -12,7 +12,7 @@ capture:
 
 storage:
   root: "C:/ProgramData/CAFlowAgent"
-  retention_days: 90          # screenshots + rows older than this are purged daily
+  retention_days: 7           # screenshots + rows older than this are purged daily
 
 identity:
   employee_id: "demo-user-01"
