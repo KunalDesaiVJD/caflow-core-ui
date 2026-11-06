@@ -1,6 +1,6 @@
 """Filesystem layout for the agent.
 
-All runtime data lives under storage.root (default C:\\ProgramData\\CAFlowAgent).
+All runtime data lives under storage.root (default C:\\ProgramData\\MasterFlowAgent).
 Config and the policy notice are read from next to the executable when frozen,
 or from the project root when run from source.
 """

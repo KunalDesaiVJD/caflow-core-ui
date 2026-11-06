@@ -1,4 +1,4 @@
-name: Build WFH Agent (Windows .exe)
+name: Build Master Flow Agent (Windows .exe)
 
 # Builds the WFH agent executables on a real Windows runner (PyInstaller cannot
 # cross-compile from Linux, and the agent needs Windows-only libraries). The
@@ -33,20 +33,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Build caflow-collector.exe (tray + capture)
+      - name: Build masterflow-collector.exe (tray + capture)
         run: >
           pyinstaller --noconfirm --clean --onefile --noconsole
-          --name caflow-collector
+          --name masterflow-collector
           --paths src
           --hidden-import win32timezone
           --hidden-import pystray._win32
           --collect-submodules pystray
           src/collector/main.py
 
-      - name: Build caflow-watchdog.exe (SYSTEM keep-alive)
+      - name: Build masterflow-watchdog.exe (SYSTEM keep-alive)
         run: >
           pyinstaller --noconfirm --clean --onefile --noconsole
-          --name caflow-watchdog
+          --name masterflow-watchdog
           --paths src
           src/watchdog/main.py
 
@@ -61,7 +61,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: caflow-wfh-agent-windows
+          name: masterflow-agent-windows
           path: wfh-agent/dist/*
           retention-days: 14
           if-no-files-found: error

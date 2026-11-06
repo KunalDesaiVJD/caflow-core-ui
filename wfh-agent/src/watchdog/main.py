@@ -1,4 +1,4 @@
-"""CAFlow watchdog — runs as SYSTEM (startup scheduled task).
+"""Master Flow watchdog — runs as SYSTEM (startup scheduled task).
 
 The collector runs in the user session and can be ended by the user from Task
 Manager. This process detects that (via a stale heartbeat) and relaunches the
@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from caflow_common import config as cfg_mod  # noqa: E402
 from caflow_common.paths import Storage  # noqa: E402
 
-COLLECTOR_TASK = "CAFlowCollector"
+COLLECTOR_TASK = "MasterFlowCollector"
 
 
 def _heartbeat_age(storage: Storage) -> float:

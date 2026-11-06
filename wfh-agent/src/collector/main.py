@@ -1,4 +1,4 @@
-"""CAFlow collector — runs in the logged-in user's session.
+"""Master Flow collector — runs in the logged-in user's session.
 
 Responsibilities:
   * Show the policy notice and record acknowledgement on first run.
@@ -61,7 +61,7 @@ def ensure_consent(cfg: cfg_mod.Config, storage: Storage) -> bool:
         from tkinter import scrolledtext
 
         root = tk.Tk()
-        root.title("Work Activity Monitoring — Please read")
+        root.title("Master Flow — Monitoring notice")
         root.geometry("640x520")
         root.attributes("-topmost", True)
 
@@ -209,7 +209,7 @@ def run_tray(cfg: cfg_mod.Config, storage: Storage, store: Store, loop: CaptureL
     from pystray import MenuItem as Item
 
     def status_text(_item=None):
-        state = "Paused" if is_paused(storage) else "Tracking: ON"
+        state = "Master Flow — Paused" if is_paused(storage) else "Master Flow — Tracking on"
         return f"{state}  ·  {store.count_today()} captures today"
 
     def do_pause(icon, _item):

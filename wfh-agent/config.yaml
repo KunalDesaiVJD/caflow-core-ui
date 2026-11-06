@@ -1,4 +1,4 @@
-# CAFlow WFH Agent — demo configuration
+# Master Flow agent — demo configuration
 capture:
   interval_seconds: 15
   image_format: webp
@@ -11,7 +11,7 @@ capture:
     days:  [mon, tue, wed, thu, fri, sat]   # drop 'sat' for 5-day weeks
 
 storage:
-  root: "C:/ProgramData/CAFlowAgent"
+  root: "C:/ProgramData/MasterFlowAgent"
   retention_days: 7           # screenshots + rows older than this are purged daily
 
 identity:
