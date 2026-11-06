@@ -55,6 +55,7 @@ jobs:
           Copy-Item config.yaml dist/config.yaml -Force
           Copy-Item policy-notice.txt dist/policy-notice.txt -Force
           Copy-Item install.ps1 dist/install.ps1 -Force
+          Copy-Item install.bat dist/install.bat -Force
           Copy-Item uninstall.ps1 dist/uninstall.ps1 -Force
 
       - name: Upload build artifact

@@ -75,3 +75,6 @@ Write-Host "  - To prove non-removal: log in as a standard (non-admin) user and 
 Write-Host "    to delete $target or end the task from that account."
 Write-Host "`nProduction: replace the tasks with real SYSTEM Windows services + Intune"
 Write-Host "enforcement and auto-reinstall, per the architecture document."
+
+Write-Host ""
+Read-Host "Setup finished. Press Enter to close this window"
