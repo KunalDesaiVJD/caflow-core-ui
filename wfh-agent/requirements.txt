@@ -1,0 +1,8 @@
+# CAFlow WFH Agent (demo) — Windows, Python 3.12
+mss==9.0.1            # fast multi-monitor screen capture
+Pillow==10.4.0        # WebP encoding
+pywin32==306          # foreground window / process info
+psutil==6.0.0         # process lookup for foreground app + watchdog checks
+pystray==0.19.5       # visible tray indicator (required component)
+PyYAML==6.0.2         # config.yaml
+pyinstaller==6.10.0   # build only

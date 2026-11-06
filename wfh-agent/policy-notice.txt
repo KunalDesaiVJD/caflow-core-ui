@@ -1,0 +1,26 @@
+WORK ACTIVITY MONITORING — NOTICE AND ACKNOWLEDGEMENT
+
+This is a company-owned laptop. While you are signed in during working hours,
+the Master Flow work-activity agent records:
+
+  - A screenshot of your screen(s) every 15 seconds.
+  - The name and window title of the application in the foreground.
+  - Whether the computer is active or idle.
+
+Purpose: to fill in timesheets, measure workload, and confirm time spent on
+client work. The agent is always running and shows a tray icon while active.
+You can pause it for breaks using the tray menu.
+
+What it does NOT do: it does not record keystrokes, passwords, your camera, or
+your microphone.
+
+Data is stored on company systems, access is logged, and recordings are kept
+for a limited period and then deleted, as set out in the company monitoring
+policy. You may ask to see your own data and raise a concern through the
+grievance process in that policy.
+
+By clicking "I acknowledge", you confirm you have read this notice. A signed
+copy of the full monitoring policy applies in addition to this notice.
+
+[This is a template notice for a demo. Have it reviewed against the DPDP Act,
+2023 and your employment policy before any real use.]

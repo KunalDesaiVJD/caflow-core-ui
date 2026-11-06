@@ -14,6 +14,7 @@ import {
   Palette,
   ClipboardList,
   History,
+  MonitorSmartphone,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +27,7 @@ const navItems = [
   { title: "Internal Team",        path: "/internal",                 icon: ClipboardList },
   { title: "System Logs",          path: "/admin/logs",               icon: ScrollText },
   { title: "Audit Trail",          path: "/admin/audit-trail",        icon: History },
+  { title: "Employee Screenshots", path: "/admin/screenshots",        icon: MonitorSmartphone },
   { title: "AI Skills",            path: "/admin/ai-skills",          icon: Brain },
   { title: "Theme Studio",         path: "/admin/theme-studio",       icon: Palette },
   { title: "Settings",             path: "/admin/settings",           icon: Settings },

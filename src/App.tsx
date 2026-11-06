@@ -54,6 +54,7 @@ const AdminAuditTrail          = lazy(() => import("./pages/admin/AdminAuditTrai
 const AdminAiSkills            = lazy(() => import("./pages/admin/AdminAiSkills"));
 const AdminThemeStudio         = lazy(() => import("./pages/admin/AdminThemeStudio"));
 const AdminFirmAccess          = lazy(() => import("./pages/admin/AdminFirmAccess"));
+const AdminScreenshots         = lazy(() => import("./pages/admin/AdminScreenshots"));
 const Login                    = lazy(() => import("./pages/Login"));
 const ForgotPassword           = lazy(() => import("./pages/ForgotPassword"));
 const ResetPassword            = lazy(() => import("./pages/ResetPassword"));
@@ -242,6 +243,7 @@ const App = () => (
               <Route path="/admin/firm-access" element={<Navigate to="/admin/access-permissions" replace />} />
               <Route path="/admin/logs" element={<AdminLogs />} />
               <Route path="/admin/audit-trail" element={<AdminAuditTrail />} />
+              <Route path="/admin/screenshots" element={<AdminScreenshots />} />
               <Route path="/admin/ai-skills" element={<AdminAiSkills />} />
               <Route path="/admin/theme-studio" element={<AdminThemeStudio />} />
               <Route path="/admin/settings" element={<SettingsPage />} />
