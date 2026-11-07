@@ -256,6 +256,20 @@ def main():
     storage = Storage(cfg.storage_root)
     _setup_logging(storage)
 
+    # Single-instance guard: several launchers (Run key, scheduled task,
+    # watchdog) must never produce two capturing processes at once.
+    try:
+        import win32api
+        import win32event
+        import winerror
+        _mutex = win32event.CreateMutex(None, False, "Global\\MasterFlowCollector")
+        if win32api.GetLastError() == winerror.ERROR_ALREADY_EXISTS:
+            logging.info("Another Master Flow collector is already running; exiting.")
+            return 0
+    except Exception as exc:
+        logging.warning("Single-instance check skipped: %s", exc)
+        _mutex = None  # noqa: F841 (kept alive for process lifetime)
+
     if not ensure_consent(cfg, storage):
         logging.warning("Monitoring not acknowledged; collector exiting without capture.")
         return 0
@@ -271,15 +285,16 @@ def main():
 
     loop = CaptureLoop(cfg, storage, store, uploader)
 
-    if cfg.tray_required:
-        try:
-            run_tray(cfg, storage, store, loop)  # starts loop + blocks on tray
-        except Exception as exc:
-            logging.error("Tray required but failed to start (%s); refusing to capture.", exc)
-            loop.stop()
-            return 1
-    else:
-        loop.start()
+    # Always show the tray when possible. If the tray can't start (e.g. a
+    # non-interactive relaunch), keep capturing headless rather than quitting —
+    # the employee was already notified via the first-run notice and signed
+    # policy, and the normal login launch shows the tray.
+    try:
+        run_tray(cfg, storage, store, loop)  # starts loop + blocks on tray
+    except Exception as exc:
+        logging.warning("Tray unavailable (%s); running headless, capture continues.", exc)
+        if not loop.is_alive():
+            loop.start()
         try:
             while loop.is_alive():
                 loop.join(timeout=1)

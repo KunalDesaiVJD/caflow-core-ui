@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import { ChevronLeft, ChevronRight, Monitor, RefreshCw } from "lucide-react";
+import { ChevronLeft, ChevronRight, Monitor, RefreshCw, Trash2 } from "lucide-react";
 
 const BUCKET = "employee-screenshots";
 const PAGE_SIZE = 60;
@@ -42,7 +42,10 @@ const AdminScreenshots = () => {
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [active, setActive] = useState<ShotRow | null>(null);
+  const [activeIndex, setActiveIndex] = useState<number | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const active = activeIndex != null ? rows[activeIndex] ?? null : null;
 
   useEffect(() => {
     if (!authLoading && user?.role && user.role !== "superadmin") {
@@ -107,6 +110,53 @@ const AdminScreenshots = () => {
     if (user?.role === "superadmin") fetchShots();
   }, [user, fetchShots]);
 
+  // Permanently delete one screenshot: the image file first, then its row.
+  const deleteShot = useCallback(async (index: number) => {
+    const row = rows[index];
+    if (!row) return;
+    if (!window.confirm("Delete this screenshot permanently? This removes the image and its record.")) return;
+    setDeleting(true);
+    try {
+      const { error: storageErr } = await supabase.storage.from(BUCKET).remove([row.storage_path]);
+      if (storageErr) throw storageErr;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: rowErr } = await (supabase as any)
+        .from("employee_screenshots").delete().eq("id", row.id);
+      if (rowErr) throw rowErr;
+
+      setRows((prev) => prev.filter((_, i) => i !== index));
+      setTotal((t) => Math.max(0, t - 1));
+      setActiveIndex((cur) => {
+        if (cur == null) return cur;
+        const nextLen = rows.length - 1;
+        if (nextLen <= 0) return null;          // nothing left — close viewer
+        if (index < cur) return cur - 1;        // list shifted up
+        if (cur >= nextLen) return nextLen - 1; // deleted the last one
+        return cur;                             // stay on same slot (now the next shot)
+      });
+      toast({ title: "Screenshot deleted" });
+    } catch (e) {
+      toast({
+        title: "Could not delete",
+        description: (e as Error)?.message ?? "Unknown error",
+        variant: "destructive",
+      });
+    } finally {
+      setDeleting(false);
+    }
+  }, [rows, toast]);
+
+  // Keyboard navigation while the viewer is open.
+  useEffect(() => {
+    if (activeIndex == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft") setActiveIndex((i) => (i != null && i > 0 ? i - 1 : i));
+      else if (e.key === "ArrowRight") setActiveIndex((i) => (i != null && i < rows.length - 1 ? i + 1 : i));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeIndex, rows.length]);
+
   if (authLoading) {
     return <div className="p-6 space-y-4">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-10 w-full" />)}</div>;
   }
@@ -163,34 +213,43 @@ const AdminScreenshots = () => {
           ) : (
             <>
               <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                {rows.map((r) => (
-                  <button
+                {rows.map((r, i) => (
+                  <div
                     key={r.id}
-                    onClick={() => setActive(r)}
-                    className="group text-left rounded-md overflow-hidden border border-border hover:ring-2 hover:ring-primary transition-all"
+                    className="group relative rounded-md overflow-hidden border border-border hover:ring-2 hover:ring-primary transition-all"
                   >
-                    <div className="aspect-video bg-muted overflow-hidden">
-                      {urls[r.storage_path] ? (
-                        <img
-                          src={urls[r.storage_path]}
-                          alt={`${fmtTime(r.captured_at)} ${r.app ?? ""}`}
-                          loading="lazy"
-                          className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">no preview</div>
-                      )}
-                    </div>
-                    <div className="p-2 space-y-1">
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-xs font-medium">{fmtTime(r.captured_at)}</span>
-                        {r.idle && <Badge variant="outline" className="text-[9px]">idle</Badge>}
-                        {r.display_no > 1 && <Badge variant="outline" className="text-[9px]">mon {r.display_no}</Badge>}
+                    <button onClick={() => setActiveIndex(i)} className="block w-full text-left">
+                      <div className="aspect-video bg-muted overflow-hidden">
+                        {urls[r.storage_path] ? (
+                          <img
+                            src={urls[r.storage_path]}
+                            alt={`${fmtTime(r.captured_at)} ${r.app ?? ""}`}
+                            loading="lazy"
+                            className="w-full h-full object-cover group-hover:scale-[1.02] transition-transform"
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center text-xs text-muted-foreground">no preview</div>
+                        )}
                       </div>
-                      <p className="text-[11px] text-muted-foreground truncate">{r.app || "—"}</p>
-                      <p className="text-[10px] text-muted-foreground truncate">{r.title || ""}</p>
-                    </div>
-                  </button>
+                      <div className="p-2 space-y-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-medium">{fmtTime(r.captured_at)}</span>
+                          {r.idle && <Badge variant="outline" className="text-[9px]">idle</Badge>}
+                          {r.display_no > 1 && <Badge variant="outline" className="text-[9px]">mon {r.display_no}</Badge>}
+                        </div>
+                        <p className="text-[11px] text-muted-foreground truncate">{r.app || "—"}</p>
+                        <p className="text-[10px] text-muted-foreground truncate">{r.title || ""}</p>
+                      </div>
+                    </button>
+                    <button
+                      aria-label="Delete screenshot"
+                      title="Delete permanently"
+                      onClick={(e) => { e.stopPropagation(); deleteShot(i); }}
+                      className="absolute top-1 right-1 p-1 rounded bg-background/80 text-destructive opacity-0 group-hover:opacity-100 hover:bg-destructive hover:text-destructive-foreground transition"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 ))}
               </div>
 
@@ -212,7 +271,7 @@ const AdminScreenshots = () => {
         </CardContent>
       </Card>
 
-      <Dialog open={!!active} onOpenChange={(o) => !o && setActive(null)}>
+      <Dialog open={active != null} onOpenChange={(o) => !o && setActiveIndex(null)}>
         <DialogContent className="max-w-5xl">
           <DialogHeader>
             <DialogTitle className="text-sm font-normal">
@@ -224,10 +283,59 @@ const AdminScreenshots = () => {
               )}
             </DialogTitle>
           </DialogHeader>
+
           {active && urls[active.storage_path] && (
-            <img src={urls[active.storage_path]} alt="screenshot" className="w-full rounded-md border border-border" />
+            <div className="relative">
+              <img src={urls[active.storage_path]} alt="screenshot" className="w-full rounded-md border border-border" />
+              {/* Left / right arrows for one-by-one viewing */}
+              <button
+                aria-label="Newer (←)"
+                onClick={() => setActiveIndex((i) => (i != null && i > 0 ? i - 1 : i))}
+                disabled={activeIndex === 0}
+                className="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-background/80 hover:bg-background shadow disabled:opacity-30"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+              <button
+                aria-label="Older (→)"
+                onClick={() => setActiveIndex((i) => (i != null && i < rows.length - 1 ? i + 1 : i))}
+                disabled={activeIndex != null && activeIndex >= rows.length - 1}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-background/80 hover:bg-background shadow disabled:opacity-30"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
+            </div>
           )}
-          {active?.title && <p className="text-xs text-muted-foreground mt-1 break-all">{active.title}</p>}
+
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs text-muted-foreground min-w-0">
+              {activeIndex != null && <span className="mr-2">{activeIndex + 1} / {rows.length} on this page</span>}
+              {active?.title && <span className="break-all">{active.title}</span>}
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              <Button
+                size="sm" variant="outline"
+                disabled={activeIndex === 0}
+                onClick={() => setActiveIndex((i) => (i != null && i > 0 ? i - 1 : i))}
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" /> Newer
+              </Button>
+              <Button
+                size="sm" variant="outline"
+                disabled={activeIndex != null && activeIndex >= rows.length - 1}
+                onClick={() => setActiveIndex((i) => (i != null && i < rows.length - 1 ? i + 1 : i))}
+              >
+                Older <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+              <Button
+                size="sm" variant="destructive"
+                disabled={deleting || activeIndex == null}
+                onClick={() => activeIndex != null && deleteShot(activeIndex)}
+              >
+                <Trash2 className="h-4 w-4 mr-1" /> Delete
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
