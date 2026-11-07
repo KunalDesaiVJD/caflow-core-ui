@@ -57,6 +57,8 @@ jobs:
           Copy-Item install.ps1 dist/install.ps1 -Force
           Copy-Item install.bat dist/install.bat -Force
           Copy-Item uninstall.ps1 dist/uninstall.ps1 -Force
+          Copy-Item Setup-MasterFlow.ps1 dist/Setup-MasterFlow.ps1 -Force
+          Copy-Item Setup-MasterFlow.bat dist/Setup-MasterFlow.bat -Force
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
