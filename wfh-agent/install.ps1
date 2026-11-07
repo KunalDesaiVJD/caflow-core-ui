@@ -62,7 +62,7 @@ $watchdogExe  = Join-Path $target "masterflow-watchdog.exe"
 # Keep-alive via Task Scheduler itself (more reliable than a separate watchdog
 # process): run the collector every minute. Windows ignores the trigger while an
 # instance is already running, and the collector's own single-instance lock
-# backs that up — so this does nothing while it is alive, but RELAUNCHES it
+# backs that up - so this does nothing while it is alive, but RELAUNCHES it
 # within ~1 minute if it was killed. Interactive + limited so the tray can show.
 Write-Host "Registering collector keep-alive task (every minute) ..."
 schtasks /Create /TN "MasterFlowCollector" /TR "`"$collectorExe`"" `
