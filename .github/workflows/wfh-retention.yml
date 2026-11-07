@@ -1,0 +1,63 @@
+name: Master Flow — 7-day screenshot retention
+
+# Permanently deletes employee screenshots older than 7 days, every day.
+# It deletes the real image files via the Storage API (not just DB rows), so
+# nothing older than a week is retrievable or left orphaned in storage.
+#
+# Order matters: delete the storage OBJECTS first (needs the paths from the
+# rows), then delete the rows. Uses the existing SUPABASE_ACCESS_TOKEN secret
+# to read the service-role key at run time.
+
+on:
+  schedule:
+    - cron: '20 1 * * *'   # daily, 01:20 UTC
+  workflow_dispatch:        # manual run from the Actions tab
+
+jobs:
+  purge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete screenshots older than 7 days (objects + rows)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          REF: hubyywmodekfdzhwiumb
+          BUCKET: employee-screenshots
+          RETENTION_DAYS: '7'
+        run: |
+          python3 - <<'PY'
+          import os, json, urllib.request, urllib.error
+          ref=os.environ['REF']; tok=os.environ['SUPABASE_ACCESS_TOKEN']
+          bucket=os.environ['BUCKET']; days=os.environ['RETENTION_DAYS']
+          if not tok:
+              raise SystemExit("SUPABASE_ACCESS_TOKEN secret is empty — set it in repo settings.")
+
+          def api(url, data=None, method="GET", headers=None):
+              req=urllib.request.Request(url, data=(json.dumps(data).encode() if data is not None else None),
+                                         method=method, headers=headers or {})
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  body=r.read().decode()
+                  return r.status, (json.loads(body) if body.strip() else None)
+
+          mgmt=f"https://api.supabase.com/v1/projects/{ref}/database/query"
+          mh={"Authorization":f"Bearer {tok}","Content-Type":"application/json"}
+
+          # 1) service-role key (to call the Storage API)
+          _,keys=api(f"https://api.supabase.com/v1/projects/{ref}/api-keys", headers={"Authorization":f"Bearer {tok}"})
+          service=next(k['api_key'] for k in keys if k['name']=='service_role')
+
+          # 2) paths of screenshots older than the window
+          _,rows=api(mgmt, {"query":f"select storage_path from public.employee_screenshots where captured_at < now() - interval '{days} days';"}, "POST", mh)
+          paths=[r['storage_path'] for r in (rows or [])]
+          print(f"objects to delete: {len(paths)}")
+
+          # 3) physically remove the image files, in batches
+          sb={"Authorization":f"Bearer {service}","apikey":service,"Content-Type":"application/json"}
+          for i in range(0, len(paths), 100):
+              batch=paths[i:i+100]
+              st,_=api(f"https://{ref}.supabase.co/storage/v1/object/{bucket}", {"prefixes":batch}, "DELETE", sb)
+              print(f"  deleted batch {i//100+1}: HTTP {st} ({len(batch)} files)")
+
+          # 4) delete the metadata rows
+          api(mgmt, {"query":f"delete from public.employee_screenshots where captured_at < now() - interval '{days} days';"}, "POST", mh)
+          print("rows older than window deleted. retention pass complete.")
+          PY
