@@ -67,7 +67,7 @@ const AdminScreenshots = () => {
         )
         .gte("captured_at", start.toISOString())
         .lt("captured_at", end.toISOString())
-        .order("captured_at", { ascending: true });
+        .order("captured_at", { ascending: false });
 
       if (filters.employee_id) q = q.ilike("employee_id", `%${filters.employee_id}%`);
       if (filters.device_id) q = q.ilike("device_id", `%${filters.device_id}%`);
