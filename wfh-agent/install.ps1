@@ -37,7 +37,7 @@ if ($cfg -match 'ingest_token:\s*""') {
         Set-Content -Path $cfgPath -Value $cfg -Encoding UTF8
         Write-Host "Token saved. Master Flow uploads are ON." -ForegroundColor Green
     } else {
-        Write-Host "No token entered — the agent will still run and store locally;" -ForegroundColor Yellow
+        Write-Host "No token entered - the agent will still run and store locally;" -ForegroundColor Yellow
         Write-Host "re-run this installer later to add the token." -ForegroundColor Yellow
     }
 }
