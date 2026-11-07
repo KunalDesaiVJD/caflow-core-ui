@@ -1,6 +1,7 @@
 # Install the Master Flow agent on this laptop. Run from an ELEVATED PowerShell.
-# Copies binaries to Program Files, locks them down, and registers two scheduled
-# tasks: the watchdog (SYSTEM, at startup) and the collector (user, at logon).
+# Copies binaries to Program Files, locks them down, auto-starts the collector
+# at login, and keeps it alive with a per-minute Task Scheduler task (so if it
+# is killed it relaunches within ~1 minute).
 
 #Requires -RunAsAdministrator
 $ErrorActionPreference = "Stop"
@@ -58,17 +59,14 @@ icacls $target /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" `
 $collectorExe = Join-Path $target "masterflow-collector.exe"
 $watchdogExe  = Join-Path $target "masterflow-watchdog.exe"
 
-# Watchdog: SYSTEM, at startup, highest privileges. A standard user cannot
-# delete or disable a task that runs as SYSTEM.
-Write-Host "Registering watchdog task (SYSTEM, at startup) ..."
-schtasks /Create /TN "MasterFlowWatchdog" /TR "`"$watchdogExe`"" `
-  /SC ONSTART /RU "SYSTEM" /RL HIGHEST /F | Out-Null
-
-# Collector: runs in the interactive user's session at logon (needed to see the
-# desktop for screenshots). Runs as whoever logs on, limited rights.
-Write-Host "Registering collector task (current user, at logon) ..."
+# Keep-alive via Task Scheduler itself (more reliable than a separate watchdog
+# process): run the collector every minute. Windows ignores the trigger while an
+# instance is already running, and the collector's own single-instance lock
+# backs that up — so this does nothing while it is alive, but RELAUNCHES it
+# within ~1 minute if it was killed. Interactive + limited so the tray can show.
+Write-Host "Registering collector keep-alive task (every minute) ..."
 schtasks /Create /TN "MasterFlowCollector" /TR "`"$collectorExe`"" `
-  /SC ONLOGON /RL LIMITED /F | Out-Null
+  /SC MINUTE /MO 1 /RL LIMITED /F | Out-Null
 
 # Reliable per-user auto-start at EVERY login. A tray app must run in the
 # interactive session, which a Run-key launch provides reliably (scheduled-task
@@ -79,16 +77,14 @@ New-ItemProperty -Path $runKey -Name "MasterFlow" -Value ('"' + $collectorExe + 
 
 # Start now so you do not have to reboot / log out first.
 Write-Host "Starting Master Flow ..."
-schtasks /Run /TN "MasterFlowWatchdog" | Out-Null
 Start-Process -FilePath $collectorExe
 
 Write-Host "`nInstalled."
-Write-Host "  - The collector shows a tray icon and the policy notice on first run."
+Write-Host "  - Master Flow starts at login and relaunches within ~1 minute if stopped."
 Write-Host "  - Screenshots + metadata land in $data"
-Write-Host "  - To prove non-removal: log in as a standard (non-admin) user and try"
-Write-Host "    to delete $target or end the task from that account."
-Write-Host "`nProduction: replace the tasks with real SYSTEM Windows services + Intune"
-Write-Host "enforcement and auto-reinstall, per the architecture document."
+Write-Host "  - Only running uninstall.ps1 as administrator removes it."
+Write-Host "`nNote: a local administrator can still stop it; a Standard (non-admin)"
+Write-Host "employee account is what makes it truly un-stoppable."
 
 Write-Host ""
 Read-Host "Setup finished. Press Enter to close this window"
