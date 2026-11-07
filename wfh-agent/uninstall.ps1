@@ -1,4 +1,4 @@
-# Remove the Master Flow agent. Run from an ELEVATED PowerShell (admin only — a
+# Remove the Master Flow agent. Run from an ELEVATED PowerShell (admin only - a
 # standard user cannot do this, which is the point).
 #   .\uninstall.ps1              keeps captured data
 #   .\uninstall.ps1 -PurgeData   also deletes C:\ProgramData\MasterFlowAgent
