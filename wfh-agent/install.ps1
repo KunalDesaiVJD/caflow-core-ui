@@ -70,10 +70,17 @@ Write-Host "Registering collector task (current user, at logon) ..."
 schtasks /Create /TN "MasterFlowCollector" /TR "`"$collectorExe`"" `
   /SC ONLOGON /RL LIMITED /F | Out-Null
 
-# Start now so you can demo without rebooting / re-logging in.
-Write-Host "Starting tasks ..."
-schtasks /Run /TN "MasterFlowWatchdog"  | Out-Null
-schtasks /Run /TN "MasterFlowCollector" | Out-Null
+# Reliable per-user auto-start at EVERY login. A tray app must run in the
+# interactive session, which a Run-key launch provides reliably (scheduled-task
+# launches of tray apps often don't show the icon). This is what makes it start
+# on its own without anyone double-clicking it.
+$runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+New-ItemProperty -Path $runKey -Name "MasterFlow" -Value ('"' + $collectorExe + '"') -PropertyType String -Force | Out-Null
+
+# Start now so you do not have to reboot / log out first.
+Write-Host "Starting Master Flow ..."
+schtasks /Run /TN "MasterFlowWatchdog" | Out-Null
+Start-Process -FilePath $collectorExe
 
 Write-Host "`nInstalled."
 Write-Host "  - The collector shows a tray icon and the policy notice on first run."
