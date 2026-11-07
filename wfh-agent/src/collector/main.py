@@ -209,7 +209,7 @@ def run_tray(cfg: cfg_mod.Config, storage: Storage, store: Store, loop: CaptureL
     from pystray import MenuItem as Item
 
     def status_text(_item=None):
-        state = "Master Flow — Paused" if is_paused(storage) else "Master Flow — Tracking on"
+        state = "Master Flow — Paused" if is_paused(storage) else "Master Flow"
         return f"{state}  ·  {store.count_today()} captures today"
 
     def do_pause(icon, _item):
@@ -219,7 +219,7 @@ def run_tray(cfg: cfg_mod.Config, storage: Storage, store: Store, loop: CaptureL
 
     def do_resume(icon, _item):
         clear_pause(storage)
-        icon.notify("Tracking resumed", "Master Flow")
+        icon.notify("Resumed", "Master Flow")
         icon.update_menu()
 
     def open_storage(_icon, _item):
@@ -235,7 +235,7 @@ def run_tray(cfg: cfg_mod.Config, storage: Storage, store: Store, loop: CaptureL
         Item("Resume now", do_resume),
         Item("Open my data folder", open_storage),
     )
-    icon = pystray.Icon("MasterFlow", _tray_image(), "Master Flow — Tracking on", menu)
+    icon = pystray.Icon("MasterFlow", _tray_image(), "Master Flow", menu)
 
     # refresh the status label periodically
     def refresher():
