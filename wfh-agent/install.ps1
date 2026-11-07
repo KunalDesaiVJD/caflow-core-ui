@@ -24,20 +24,21 @@ Copy-Item (Join-Path $src "masterflow-watchdog.exe")  $target -Force
 Copy-Item (Join-Path $src "config.yaml")          $target -Force
 Copy-Item (Join-Path $src "policy-notice.txt")    $target -Force
 
-# --- Ask for the upload token so you never have to edit a text file ---
+# --- Ask for the upload token in a simple pop-up box (Ctrl+V works here) ---
 $cfgPath = Join-Path $target "config.yaml"
 $cfg = Get-Content $cfgPath -Raw
 if ($cfg -match 'ingest_token:\s*""') {
-    Write-Host ""
-    Write-Host "Paste the Master Flow upload token, then press Enter."
-    $tok = Read-Host "Token"
-    if ($tok.Trim()) {
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $tok = [Microsoft.VisualBasic.Interaction]::InputBox(
+        "Paste the Master Flow upload token below and click OK.`r`n(It's the long text after WFH_INGEST_TOKEN= in the file Claude sent you.)",
+        "Master Flow setup", "")
+    if ($tok -and $tok.Trim()) {
         $cfg = $cfg -replace 'ingest_token:\s*".*"', ('ingest_token: "' + $tok.Trim() + '"')
         Set-Content -Path $cfgPath -Value $cfg -Encoding UTF8
         Write-Host "Token saved. Master Flow uploads are ON." -ForegroundColor Green
     } else {
         Write-Host "No token entered — the agent will still run and store locally;" -ForegroundColor Yellow
-        Write-Host "add the token to $cfgPath later to turn on uploads." -ForegroundColor Yellow
+        Write-Host "re-run this installer later to add the token." -ForegroundColor Yellow
     }
 }
 
