@@ -46,13 +46,15 @@ icacls $target /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)
 
 $collectorExe = Join-Path $target "masterflow-collector.exe"
 
-Write-Host "4/6 Registering keep-alive task (runs every minute; restarts if killed) ..."
+Write-Host "4/6 Registering keep-alive task (at boot, at login, every minute; survives restarts) ..."
 $a = New-ScheduledTaskAction -Execute $collectorExe
-$t = New-ScheduledTaskTrigger -Once -At (Get-Date)
-$t.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
+$tLogon = New-ScheduledTaskTrigger -AtLogOn
+$tBoot  = New-ScheduledTaskTrigger -AtStartup
+$tMin   = New-ScheduledTaskTrigger -Once -At (Get-Date)
+$tMin.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
 $p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-$s = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName "MasterFlowCollector" -Action $a -Trigger $t -Principal $p -Settings $s -Force | Out-Null
+$s = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+Register-ScheduledTask -TaskName "MasterFlowCollector" -Action $a -Trigger @($tLogon,$tBoot,$tMin) -Principal $p -Settings $s -Force | Out-Null
 
 Write-Host "5/6 Adding a login shortcut (instant start at sign-in) ..."
 $startup = [Environment]::GetFolderPath('Startup')

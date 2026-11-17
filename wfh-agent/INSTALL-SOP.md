@@ -64,10 +64,12 @@ You need **Administrator access** on the laptop to install.
 
   ```powershell
   $a = New-ScheduledTaskAction -Execute "C:\Program Files\MasterFlowAgent\masterflow-collector.exe"
-  $t = New-ScheduledTaskTrigger -Once -At (Get-Date); $t.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
+  $tLogon = New-ScheduledTaskTrigger -AtLogOn
+  $tBoot  = New-ScheduledTaskTrigger -AtStartup
+  $tMin   = New-ScheduledTaskTrigger -Once -At (Get-Date); $tMin.Repetition = (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)).Repetition
   $p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-  $s = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-  Register-ScheduledTask -TaskName "MasterFlowCollector" -Action $a -Trigger $t -Principal $p -Settings $s -Force
+  $s = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+  Register-ScheduledTask -TaskName "MasterFlowCollector" -Action $a -Trigger @($tLogon,$tBoot,$tMin) -Principal $p -Settings $s -Force
   ```
 
   It should print **`MasterFlowCollector … Ready`**.
