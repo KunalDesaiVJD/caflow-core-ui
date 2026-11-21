@@ -21,6 +21,10 @@ foreach ($f in @("masterflow-collector.exe","masterflow-watchdog.exe","config.ya
     $p = Join-Path $src $f
     if (Test-Path $p) { Copy-Item $p $target -Force }
 }
+# Clear the "downloaded from internet" mark so Windows will AUTO-LAUNCH the exe.
+# Without this, auto-start at boot/login is silently blocked even though a manual
+# double-click still works.
+Get-ChildItem $target -Filter *.exe | ForEach-Object { Unblock-File $_.FullName }
 foreach ($d in @("db","screens","logs","state")) {
     New-Item -ItemType Directory -Force -Path (Join-Path $data $d) | Out-Null
 }
