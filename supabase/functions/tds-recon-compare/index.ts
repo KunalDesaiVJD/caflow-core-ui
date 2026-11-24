@@ -358,6 +358,18 @@ function recDatesMatch(o: Rec, i: Rec): boolean {
 // a pairing outright, and a fuzzy name pairs only when it is uniquely best for BOTH sides.
 // See the pairing section in serve() below.
 
+/** The value-based identity of a Stage-1 result, for tds_override_memory. Built
+ * from what each side IS (PAN, date, amount, TDS), never from ids — a Genius
+ * re-import recreates every office deductee and a client-file re-import every
+ * imported row, so an id-keyed override could never survive either. Executed by
+ * the stage1Compare test. */
+function reconMemoryKey(o: Rec | null, i: Rec | null): string {
+  const side = (r: Rec | null) => r
+    ? `${r.panN || normalizeName(r.name == null ? null : String(r.name)).replace(/\s+/g, "")}|${r.iso ?? ""}|${r.amountN ?? ""}|${normAmount(r.tds) ?? ""}`
+    : "-";
+  return `${side(o)}#${side(i)}`;
+}
+
 function fieldDiff(field: FieldKey, office: unknown, imported: unknown, matched: boolean, reason: string): FieldDiff {
   return { field, office, imported, matched, difference: matched ? "" : reason };
 }
@@ -713,10 +725,39 @@ serve(async (req) => {
     for (const p of prior ?? []) priorMap.set(`${p.office_deductee_id ?? ""}|${p.imported_row_id ?? ""}`, p);
     const priorIds = (prior ?? []).map((p: any) => p.id);
 
-    const rowFor = (officeId: string | null, importedId: string | null, label: unknown, status: string, fields: FieldDiff[]) => {
-      const carry = priorMap.get(`${officeId ?? ""}|${importedId ?? ""}`);
+    // Remembered override decisions, keyed by VALUES (reconMemoryKey) — they
+    // survive the re-imports that wipe tds_recon_results and re-id both sides.
+    // Consumed one per row so two identical records never share one decision.
+    const { data: memRows } = await supabase
+      .from("tds_override_memory").select("record_key, result, override_reason, overridden_by, overridden_at")
+      .eq("filing_id", filing_id).eq("stage", "recon");
+    const memory = new Map<string, any[]>();
+    for (const m of memRows ?? []) {
+      const k = `${m.record_key}|${m.result}`;
+      memory.set(k, [...(memory.get(k) ?? []), m]);
+    }
+    const toRemember: any[] = [];
+
+    const rowFor = (o: Rec | null, i: Rec | null, label: unknown, status: string, fields: FieldDiff[]) => {
+      const officeId = o?.id ?? null, importedId = i?.id ?? null;
+      const memoryKey = reconMemoryKey(o, i);
+      const byId = priorMap.get(`${officeId ?? ""}|${importedId ?? ""}`);
+      const remembered = memory.get(`${memoryKey}|${status}`)?.shift();
+      let carry: any = null;
+      if (byId?.overridden) {
+        carry = byId;
+        // Write-through: an override made before the memory existed is
+        // remembered now, so the NEXT re-import keeps it too.
+        if (!remembered && status !== "matched") toRemember.push({
+          filing_id, firm_id: filing.firm_id, stage: "recon", record_key: memoryKey, result: status,
+          override_reason: byId.override_note, overridden_by: byId.overridden_by, overridden_at: byId.overridden_at,
+        });
+      } else if (remembered && status !== "matched") {
+        carry = { overridden: true, overridden_by: remembered.overridden_by, overridden_at: remembered.overridden_at, override_note: remembered.override_reason };
+      }
       const keep = !!carry?.overridden;
       return {
+        memory_key: memoryKey,
         filing_id, batch_id: batchId, firm_id: filing.firm_id,
         office_deductee_id: officeId, imported_row_id: importedId,
         record_label: label ? String(label).slice(0, 200) : null,
@@ -800,7 +841,7 @@ serve(async (req) => {
       if (status === "mismatched" && aggregatedPans.has(p.o.panN) && p.mismatchFields.every(f => AGG_OK_FIELDS.has(f))) {
         status = "matched"; aggregatedCount++;
       }
-      newRows.push(rowFor(p.o.id, p.i.id, p.o.name ?? p.i.name, status, fields));
+      newRows.push(rowFor(p.o, p.i, p.o.name ?? p.i.name, status, fields));
     }
     for (let oi = 0; oi < oRecs.length; oi++) if (!oUsed[oi]) {
       const o = oRecs[oi];
@@ -808,18 +849,22 @@ serve(async (req) => {
       // not a missing record → matched (aggregated).
       const agg = aggregatedPans.has(o.panN);
       if (agg) aggregatedCount++;
-      newRows.push(rowFor(o.id, null, o.name, agg ? "matched" : "office_only", oneSided(o, "office")));
+      newRows.push(rowFor(o, null, o.name, agg ? "matched" : "office_only", oneSided(o, "office")));
     }
     for (let ii = 0; ii < iRecs.length; ii++) if (!iUsed[ii]) {
       const i = iRecs[ii];
       const agg = aggregatedPans.has(i.panN);
       if (agg) aggregatedCount++;
-      newRows.push(rowFor(null, i.id, i.name, agg ? "matched" : "imported_only", oneSided(i, "imported")));
+      newRows.push(rowFor(null, i, i.name, agg ? "matched" : "imported_only", oneSided(i, "imported")));
     }
 
     // Replace results safely: INSERT new rows first, then delete superseded ids.
     const { error: insErr } = await supabase.from("tds_recon_results").insert(newRows);
     if (insErr) return json({ error: `Result insert failed: ${insErr.message}` }, 500);
+    if (toRemember.length) {
+      const { error: memErr } = await supabase.from("tds_override_memory").insert(toRemember);
+      if (memErr) console.error("tds-recon-compare: override memory write failed (recoverable):", memErr.message);
+    }
     if (priorIds.length) {
       const { error: delErr } = await supabase.from("tds_recon_results").delete().in("id", priorIds);
       if (delErr) console.error("tds-recon-compare: stale result cleanup failed (recoverable):", delErr.message);

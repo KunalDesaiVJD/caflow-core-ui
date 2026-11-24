@@ -97,6 +97,9 @@ interface ReconResult {
   overridden: boolean;
   overridden_by?: string | null;
   override_note?: string | null;
+  // Value-based identity stamped by tds-recon-compare (see reconMemoryKey there) —
+  // the key an override is remembered under in tds_override_memory.
+  memory_key?: string | null;
 }
 
 const fmtVal = (v: unknown): string => {
@@ -922,6 +925,11 @@ export function TdsValidateFinalise({
       overridden: true, overridden_by: user?.id, overridden_at: now, override_note: reason,
     }).eq("id", ovTarget.id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); setSavingOv(false); return; }
+    // Remember the decision by value so a re-import never asks for it again.
+    if (filing && ovTarget.memory_key) await supabase.from("tds_override_memory" as any).insert({
+      filing_id: filing.id, firm_id: filing.firm_id, stage: "recon", record_key: ovTarget.memory_key,
+      result: ovTarget.match_status, override_reason: reason, overridden_by: user?.id ?? null, overridden_at: now,
+    });
     await logReconAudit({
       filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
       actionType: "RECON_OVERRIDE",
@@ -939,6 +947,12 @@ export function TdsValidateFinalise({
       overridden: false, overridden_by: null, overridden_at: null, override_note: null,
     }).eq("id", r.id);
     if (error) { toast({ title: "Error", description: error.message, variant: "destructive" }); return; }
+    if (filing && r.memory_key) {
+      const { data: mem } = await supabase.from("tds_override_memory" as any).select("id")
+        .eq("filing_id", filing.id).eq("stage", "recon").eq("record_key", r.memory_key).eq("result", r.match_status).limit(1);
+      const memId = (mem as any[] | null)?.[0]?.id;
+      if (memId) await supabase.from("tds_override_memory" as any).delete().eq("id", memId);
+    }
     await logReconAudit({
       filingId: filing?.id, firmId: filing?.firm_id, userId: user?.id, userName: userMap[user?.id ?? ""],
       actionType: "RECON_OVERRIDE_UNDO",

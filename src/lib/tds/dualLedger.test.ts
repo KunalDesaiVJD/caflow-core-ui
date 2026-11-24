@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, resolveTaxableIncomeReading,
+  reconcileTallyFull, mergeDualLedgerResults, aggregateTaxableByEmployeeMonth, resolveTaxableIncomeReading, acceptVoucherLinkedDates,
   oneSidedLabel, SPLIT_FOLD_CONFIDENCE,
   type OfficeTxn, type TallyRow, type TallyReconRow, type PartyMap,
 } from "./tallyRecon";
@@ -525,5 +525,73 @@ describe("a spare ledger entry must never land on a name-similar employee", () =
     const { rows } = dualRecon(office, [tdsRow(1, 135200), tdsRow(2, 17472)]);
     const urvashi = byName(rows)["URVASHI VIRENDER SINGH"];
     expect(urvashi.tally_credit).toBe(17472);       // the spare entry, on the wrong person
+  });
+});
+
+/**
+ * Regression — Microcircuits Innovations, 24Q Q2 FY 2026-27, Kunjal Hasmukhbhai
+ * Gami. Office Data has TWO September records (01-Sep ₹5,60,770 / TDS ₹37,181
+ * and 30-Sep ₹1,02,718 / TDS ₹7,249). The Salary ledger books them as voucher
+ * 201 (Salary ₹3,60,770 + Bonus ₹2,00,000) and voucher 250 (₹1,02,718); the TDS
+ * ledger posts voucher 201's ₹37,181 on 31-Aug. Summing the whole month gave
+ * ₹6,63,488 and the 31-Aug date read as a mismatch — both records overridden.
+ */
+describe("24Q — several payouts in one month, linked by voucher", () => {
+  const name = "Kunjal Hasmukhbhai Gami";
+  const party = "Kunjal Hasmukhbhai Gami - Salary";
+  const office: OfficeTxn[] = [
+    { deductee_id: "jul", name, date_iso: "2026-07-31", amount: 39705, tds: 0, section: "192B", pan: null },
+    { deductee_id: "sep1", name, date_iso: "2026-09-01", amount: 560770, tds: 37181, section: "192B", pan: null },
+    { deductee_id: "sep30", name, date_iso: "2026-09-30", amount: 102718, tds: 7249, section: "192B", pan: null },
+  ];
+  const row = (i: number, iso: string, date: string, credit: number, vch: string, section: string | null, taxable: boolean): TallyRow => ({
+    row_index: i, date, iso, party, debit: taxable ? credit : null, credit, vch_no: vch, vch_type: "Journal", section,
+    ...(taxable ? { amountKind: "taxable_income" as const } : {}),
+  });
+  const salary = [
+    row(2, "2026-07-31", "31-Jul-26", 39705, "146", "192", true),
+    row(38, "2026-09-01", "1-Sep-26", 360770, "201", "192", true),
+    row(10, "2026-09-01", "1-Sep-26", 200000, "201", null, true),
+    row(40, "2026-09-30", "30-Sep-26", 102718, "250", "192", true),
+  ];
+  const tds = [
+    row(5, "2026-08-31", "31-Aug-26", 37181, "201", "192B", false),
+    row(11, "2026-09-30", "30-Sep-26", 7249, "250", "192B", false),
+  ];
+  const figs = (pick: (o: OfficeTxn) => number | null) => {
+    const m = new Map<string, number[]>();
+    for (const o of office) { const v = pick(o); if (v) m.set(o.date_iso!.slice(0, 7), [...(m.get(o.date_iso!.slice(0, 7)) || []), v]); }
+    return m;
+  };
+
+  it("splits September by voucher instead of summing the month", () => {
+    const out = aggregateTaxableByEmployeeMonth(salary, figs((o) => o.amount));
+    const sep = out.filter((r) => r.iso?.startsWith("2026-09")).map((r) => r.credit).sort((a, b) => a! - b!);
+    expect(sep).toEqual([102718, 560770]);
+    // Without office figures the old month-total behaviour is unchanged.
+    expect(aggregateTaxableByEmployeeMonth(salary).filter((r) => r.iso?.startsWith("2026-09")).map((r) => r.credit)).toEqual([663488]);
+  });
+
+  it("matches both September records once the TDS date is linked by voucher", () => {
+    const salRows = aggregateTaxableByEmployeeMonth(salary, figs((o) => o.amount));
+    const tdsRows = aggregateTaxableByEmployeeMonth(tds, figs((o) => o.tds));
+    const amountOnly = office.map((o) => ({ ...o, tds: null, section: null }));
+    const t = reconcileTallyFull(office, tdsRows, null, {}, "24Q");
+    const s = reconcileTallyFull(amountOnly, salRows, null, {}, "24Q");
+    const merged = mergeDualLedgerResults(acceptVoucherLinkedDates(t.rows, tdsRows, s.rows, salRows), s.rows);
+    const by = Object.fromEntries(merged.map((r) => [r.office_deductee_id, r]));
+    expect(by.sep1.result).toBe("Matched");
+    expect(by.sep30.result).toBe("Matched");
+    expect(by.jul.result).toBe("Matched");
+    expect(by.sep1.reason).toBeTruthy();
+  });
+
+  it("does not link a TDS entry under a different voucher", () => {
+    const other = tds.map((r) => (r.row_index === 5 ? { ...r, vch_no: "999" } : r));
+    const salRows = aggregateTaxableByEmployeeMonth(salary, figs((o) => o.amount));
+    const t = reconcileTallyFull(office, other, null, {}, "24Q");
+    const s = reconcileTallyFull(office.map((o) => ({ ...o, tds: null, section: null })), salRows, null, {}, "24Q");
+    const linked = acceptVoucherLinkedDates(t.rows, other, s.rows, salRows);
+    expect(linked.find((r) => r.office_deductee_id === "sep1")!.result).not.toBe("Matched");
   });
 });

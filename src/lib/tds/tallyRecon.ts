@@ -44,6 +44,10 @@ export interface TallyRow {
   // own doc on the field for why narration is deliberately NOT a matching
   // signal).
   narration?: string | null;
+  // Which imported ledger file (tds_tally_batches.id) this row came from.
+  // Bookkeeping only — never read by the matching engine; the caller uses it
+  // to learn the section of a ledger whose heading carried none.
+  batch_id?: string | null;
   // The TDS section this row belongs to, taken from ITS OWN sheet/ledger title.
   // Carried PER ROW (not per file) because a client's Tally dataset is normally
   // one ledger PER SECTION — spread across several sheets AND several files — and
@@ -324,9 +328,19 @@ export function reconcileTallyFull(
   // doc: a Tally salary ledger titled just "192" never claimed to be anything
   // other than a lettered sub-code, so it still covers a 192A/192B/192C record.
   const sectionCovered = (s: string) => covered.has(s) || [...covered].some((c) => salaryBareCompatible(c, s));
+  // A ledger whose section could not be read at all (title "TDS FEES", file
+  // "194J.pdf" printed without the code in its heading) is NOT evidence that a
+  // section is missing — it may well BE the missing section. Real case
+  // (Sarkhej Motor Transport, 26Q Q2 FY 2026-27): a 194C ledger plus an
+  // untagged 194J ledger made all eight 194J office records "No Ledger for
+  // Section" while their exact party/date/TDS twins sat in the untagged file as
+  // "Office Data Not Found" — sixteen manual overrides on every re-import. So
+  // while ANY untagged credit exists, an uncovered office section stays
+  // assignable; sectionEq already treats a null ledger section as permissive.
+  const hasUntagged = credits.some(({ t }) => !sectionOf(t));
   const unassignable = (o: OfficeTxn): string | null => {
     const oSec = canonicalSection(o.section);
-    return sectionScoped && oSec && !sectionCovered(oSec) ? oSec : null;
+    return sectionScoped && !hasUntagged && oSec && !sectionCovered(oSec) ? oSec : null;
   };
 
   const asgOffice: AsgOffice[] = office.map((o) => ({
@@ -376,7 +390,13 @@ export function reconcileTallyFull(
  * Only ever applied to taxable-income rows: TDS is a separate figure that
  * reconciles against the TDS ledger on its own and is never aggregated here.
  */
-export function aggregateTaxableByEmployeeMonth(rows: TallyRow[]): TallyRow[] {
+export function aggregateTaxableByEmployeeMonth(
+  rows: TallyRow[],
+  // Office figures (Taxable Income for the Salary pass, TDS for the TDS pass)
+  // per calendar month "yyyy-mm". Optional — omitted, every employee-month is
+  // combined exactly as before.
+  officeFiguresByMonth?: Map<string, number[]>,
+): TallyRow[] {
   const groups = new Map<string, TallyRow[]>();
   for (const r of rows) {
     const month = (r.iso ?? "").slice(0, 7);          // yyyy-mm
@@ -384,21 +404,84 @@ export function aggregateTaxableByEmployeeMonth(rows: TallyRow[]): TallyRow[] {
     const g = groups.get(key);
     if (g) g.push(r); else groups.set(key, [r]);
   }
-  const out: TallyRow[] = [];
-  for (const g of groups.values()) {
-    if (g.length === 1) { out.push(g[0]); continue; }
+  const combine = (g: TallyRow[], what: string): TallyRow => {
+    if (g.length === 1) return g[0];
     const total = g.reduce((sum, r) => sum + (r.credit ?? 0), 0);
     // The latest-dated row represents the group: that is the month-end salary
     // entry, whose date is the one Office Data carries.
     const anchor = g.reduce((a, b) => ((b.iso ?? "") > (a.iso ?? "") ? b : a));
     const parts = g.map((r) => `${r.date ?? "—"} ${inr(r.credit)}`).join(" + ");
-    out.push({
-      ...anchor,
-      credit: total,
-      narration: `Combined from ${g.length} ledger entries for this employee in the month: ${parts} = ${inr(total)}.`,
-    });
+    return { ...anchor, credit: total, narration: `Combined from ${g.length} ledger entries for this employee ${what}: ${parts} = ${inr(total)}.` };
+  };
+  const near = (a: number, b: number) => Math.abs(a - b) <= 1;
+  const out: TallyRow[] = [];
+  for (const g of groups.values()) {
+    if (g.length === 1) { out.push(g[0]); continue; }
+    const figs = officeFiguresByMonth?.get((g[0].iso ?? "").slice(0, 7)) ?? [];
+    const total = g.reduce((sum, r) => sum + (r.credit ?? 0), 0);
+    // SEVERAL PAYOUTS IN ONE MONTH. Office Data normally holds one line per
+    // employee per month, but a month can carry two genuine payouts (a 1st-of-
+    // month salary + bonus run AND a month-end salary — Microcircuits, Kunjal
+    // Gami, Sep 2026: office ₹5,60,770 on 01-Sep and ₹1,02,718 on 30-Sep).
+    // Summing the whole month (₹6,63,488) then matches neither. When the month
+    // total is not itself an office figure, split by VOUCHER (one Tally voucher
+    // = one payout: Salary ₹3,60,770 + Bonus ₹2,00,000 both under voucher 201)
+    // — but only when EVERY voucher group lands on its own office figure, so a
+    // split is never guessed.
+    if (figs.length >= 2 && !figs.some((f) => near(f, total))) {
+      const byVch = new Map<string, TallyRow[]>();
+      for (const r of g) {
+        const k = r.vch_no ? `v:${r.vch_no}` : `d:${r.iso ?? ""}`;
+        byVch.set(k, [...(byVch.get(k) || []), r]);
+      }
+      const subs = [...byVch.values()];
+      const left = [...figs];
+      const allLand = subs.length >= 2 && subs.every((sg) => {
+        const sum = sg.reduce((s2, r) => s2 + (r.credit ?? 0), 0);
+        const at = left.findIndex((f) => near(f, sum));
+        if (at < 0) return false;
+        left.splice(at, 1);
+        return true;
+      });
+      if (allLand) { for (const sg of subs) out.push(combine(sg, `under voucher ${sg[0].vch_no ?? sg[0].date ?? "—"}`)); continue; }
+    }
+    out.push(combine(g, "in the month"));
   }
   return out;
+}
+
+/**
+ * ONE PAYOUT, TWO BOOKING DATES — LINKED BY ITS VOUCHER.
+ *
+ * Tally often posts the TDS credit a day or two away from the salary it was
+ * deducted from (Microcircuits, Kunjal Gami: TDS ₹37,181 on 31-Aug, salary
+ * ₹5,60,770 on 01-Sep — both voucher 201). The TDS pass alone sees only a date
+ * gap and reports "Date Mismatch". When the SALARY pass matched the same office
+ * record and the TDS entry carries that salary entry's voucher number, within
+ * `maxDays`, the two are the same payout: the TDS verdict is upgraded to
+ * Matched with the voucher named in the reason. Nothing else is touched.
+ */
+export function acceptVoucherLinkedDates(
+  tdsRows: TallyReconRow[], tdsLedger: TallyRow[],
+  salaryRows: TallyReconRow[], salaryLedger: TallyRow[],
+  maxDays = 7,
+): TallyReconRow[] {
+  const find = (ledger: TallyRow[], r: { tally_row_index: number | null; tally_party: string | null; tally_credit: number | null }) =>
+    ledger.find((t) => t.row_index === r.tally_row_index && t.party === r.tally_party && t.credit === r.tally_credit);
+  const salaryBy = new Map(salaryRows.filter((r) => r.result === "Matched" && r.tally_row_index != null).map((r) => [r.office_deductee_id, r]));
+  return tdsRows.map((r) => {
+    if (r.result !== "Date Mismatch" || r.tally_row_index == null) return r;
+    const sal = salaryBy.get(r.office_deductee_id);
+    if (!sal) return r;
+    const t = find(tdsLedger, r), st = find(salaryLedger, sal);
+    if (!t?.vch_no || !st?.vch_no || t.vch_no !== st.vch_no || !t.iso || !st.iso) return r;
+    const days = Math.abs(Date.parse(t.iso) - Date.parse(st.iso)) / 86_400_000;
+    if (!(days <= maxDays)) return r;
+    return {
+      ...r, result: "Matched" as const,
+      reason: `TDS ledger entry dated ${t.date ?? t.iso} is booked under the same voucher (No. ${t.vch_no}) as the ${st.date ?? st.iso} salary entry — one payout, posted ${days} day${days === 1 ? "" : "s"} apart.`,
+    };
+  });
 }
 
 /** Reduce ONE single-ledger TallyReconRow (from a dual-ledger PASS — either
@@ -962,4 +1045,68 @@ function render(
         : `Date, amount, party and section all match.`) + twins + panWarn,
     confidence: conf,
   };
+}
+
+/**
+ * LEARN THE SECTION OF AN UNTAGGED LEDGER FROM WHAT IT ACTUALLY MATCHED.
+ *
+ * A ledger whose heading and file name carry no section still reconciles (see
+ * reconcileTallyFull's `hasUntagged`), but left untagged it keeps every later
+ * run, report and coverage hint guessing. Once a run has matched its rows, the
+ * office records they matched ARE the evidence: if they all share one section,
+ * that is the ledger's section. Conservative by design — learned only when at
+ * least two rows matched, at least half the ledger's credits matched, and every
+ * match agrees on a single canonical section. Any disagreement learns nothing.
+ *
+ * Returns batch_id → learned canonical section, for batches that had none.
+ */
+export function learnLedgerSections(audited: TallyReconRow[], tally: TallyRow[]): Map<string, string> {
+  const credits = new Map<string, TallyRow[]>();
+  const tagged = new Set<string>();
+  for (const t of tally) {
+    if (!t.batch_id) continue;
+    if (canonicalSection(t.section)) { tagged.add(t.batch_id); continue; }
+    if (t.credit == null || t.credit === 0) continue;
+    credits.set(t.batch_id, [...(credits.get(t.batch_id) || []), t]);
+  }
+  const votes = new Map<string, { n: number; secs: Set<string> }>();
+  for (const r of audited) {
+    if (r.result !== "Matched" || r.tally_row_index == null) continue;
+    const oSec = canonicalSection(r.office_section);
+    for (const [batchId, rows] of credits) {
+      if (tagged.has(batchId)) continue;
+      const hit = rows.some((t) => t.row_index === r.tally_row_index && t.party === r.tally_party && t.credit === r.tally_credit);
+      if (!hit) continue;
+      const v = votes.get(batchId) || { n: 0, secs: new Set<string>() };
+      v.n++; v.secs.add(oSec ?? "");
+      votes.set(batchId, v);
+    }
+  }
+  const learned = new Map<string, string>();
+  for (const [batchId, v] of votes) {
+    const total = credits.get(batchId)?.length ?? 0;
+    const [only] = [...v.secs];
+    if (v.secs.size === 1 && only && v.n >= 2 && v.n * 2 >= total) learned.set(batchId, only);
+  }
+  return learned;
+}
+
+/**
+ * The value-based identity of a Stage-3 result row, for tds_override_memory.
+ * Built from what the record IS (party, date, amount), never from ids — a
+ * Genius re-import recreates every deductee with a new id and a ledger
+ * re-import recreates every row, so an id-keyed override could never survive
+ * either. Office-side rows key on name/date/TDS, ledger-only rows on
+ * party/date/credit. MUST stay identical to the backfill expression in
+ * supabase/migrations/20261029120000_tds_override_memory.sql.
+ */
+export function overrideMemoryKey(r: {
+  office_deductee_id?: string | null; office_name: string | null; office_date: string | null; office_tds: number | string | null;
+  tally_party: string | null; tally_date: string | null; tally_credit: number | string | null;
+}): string {
+  const n = (s: string | null) => (s ?? "").replace(/[^A-Za-z0-9]+/g, "").toLowerCase();
+  const num = (v: number | string | null) => (v == null || v === "" ? "" : String(Number(v)));
+  return r.office_deductee_id || r.office_name
+    ? `o|${n(r.office_name)}|${r.office_date ?? ""}|${num(r.office_tds)}`
+    : `l|${n(r.tally_party)}|${r.tally_date ?? ""}|${num(r.tally_credit)}`;
 }
