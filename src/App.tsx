@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -16,6 +16,7 @@ import { PermissionsProvider } from "./hooks/usePermissions";
 import { AuditContextProvider } from "./hooks/useAuditContext";
 import { Skeleton } from "./components/ui/skeleton";
 import { AuthProvider, useAuth } from "./hooks/useAuth";
+import { supabase } from "./integrations/supabase/client";
 
 // ─── Lazy-loaded pages ────────────────────────────────────────────────────────
 // Each page is split into its own JS chunk so the browser only downloads the
@@ -163,6 +164,39 @@ function CAGuard({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** The /admin area — Employee Screenshots included — is the superadmin's alone.
+ *  The role useAuth exposes first comes from the login token's user_metadata,
+ *  which is optimistic and user-editable, so it is never trusted here: the
+ *  database's own is_superadmin() (the same check the screenshots' RLS uses)
+ *  must confirm it before the admin sidebar renders at all. Any other login is
+ *  sent to the app without ever seeing the admin menu. */
+function SuperadminGuard({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth();
+  const [confirmed, setConfirmed] = useState<{ id: string; ok: boolean } | null>(null);
+  useEffect(() => {
+    if (!user?.id) return;
+    let live = true;
+    supabase.rpc("is_superadmin" as any).then(({ data, error }) => {
+      if (live) setConfirmed({ id: user.id, ok: !error && data === true });
+    });
+    return () => { live = false; };
+  }, [user?.id]);
+  if (!loading && !user) return <Navigate to="/login" replace />;
+  if (loading || !user || confirmed?.id !== user.id) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="space-y-4 w-64">
+          <Skeleton className="h-8 w-48 mx-auto" />
+          <Skeleton className="h-4 w-full" />
+          <Skeleton className="h-4 w-3/4" />
+        </div>
+      </div>
+    );
+  }
+  if (!confirmed.ok) return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function InternalGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
   if (loading) {
@@ -231,7 +265,7 @@ const App = () => (
               <Route path="/internal/team" element={<InternalTeam />} />
             </Route>
 
-            <Route element={<ProtectedRoute><CAGuard><AdminLayout /></CAGuard></ProtectedRoute>}>
+            <Route element={<ProtectedRoute><CAGuard><SuperadminGuard><AdminLayout /></SuperadminGuard></CAGuard></ProtectedRoute>}>
               <Route path="/admin" element={<AdminOverview />} />
               <Route path="/admin/firms" element={<AdminFirms />} />
               <Route path="/admin/users" element={<UserManagement />} />

@@ -27,6 +27,8 @@ const navItems = [
   { title: "Internal Team",        path: "/internal",                 icon: ClipboardList },
   { title: "System Logs",          path: "/admin/logs",               icon: ScrollText },
   { title: "Audit Trail",          path: "/admin/audit-trail",        icon: History },
+  // Employee monitoring — superadmin only. Enforced by SuperadminGuard (App.tsx),
+  // which keeps every other login out of this whole layout.
   { title: "Employee Screenshots", path: "/admin/screenshots",        icon: MonitorSmartphone },
   { title: "AI Skills",            path: "/admin/ai-skills",          icon: Brain },
   { title: "Theme Studio",         path: "/admin/theme-studio",       icon: Palette },
