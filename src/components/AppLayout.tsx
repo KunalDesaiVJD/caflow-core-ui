@@ -30,16 +30,16 @@ export function AppLayout() {
   }
 
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen flex bg-background">
       <AppSidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
       <div
         className={cn(
           "flex-1 flex flex-col transition-all duration-300 min-w-0 overflow-x-hidden",
-          collapsed ? "ml-16" : "ml-60"
+          collapsed ? "ml-14" : "ml-64"
         )}
       >
-        <TopBar />
-        <main className="flex-1 p-6 min-w-0">
+        {/* GST Keeper layout: no desktop top bar; full-width main with room for the assistant launcher */}
+        <main className="flex-1 min-w-0 px-6 pt-6 pb-24 animate-fade-in">
           <Outlet />
         </main>
       </div>

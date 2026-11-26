@@ -111,26 +111,28 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
   return (
     <aside
       className={cn(
-        "fixed left-0 top-0 h-screen bg-sidebar flex flex-col z-40 transition-all duration-300 border-r border-sidebar-border",
-        collapsed ? "w-16" : "w-60"
+        "fixed left-0 top-0 h-screen bg-sidebar text-sidebar-foreground flex flex-col z-40 transition-all duration-300 shadow-[4px_0_6px_-1px_rgb(0_0_0/0.1)]",
+        collapsed ? "w-14" : "w-64"
       )}
     >
       {/* Logo */}
       <div className={cn("flex items-center border-b border-sidebar-border", collapsed ? "h-16 px-2 justify-center" : "h-20 px-4")}>
         <Link to="/" className={cn("flex items-center gap-2", !collapsed && "overflow-hidden")}>
           {firmLogo ? (
-            <img
-              src={firmLogo}
-              alt="Firm Logo"
-              className={cn("object-contain rounded", collapsed ? "h-11 w-11" : "h-[54px] max-w-[200px]")}
-            />
+            <span className={cn("flex items-center justify-center rounded-lg bg-white", collapsed ? "h-10 w-10 p-1" : "px-3 py-2")}>
+              <img
+                src={firmLogo}
+                alt="Firm Logo"
+                className={cn("object-contain", collapsed ? "h-8 w-8" : "h-8 max-w-[160px] w-auto")}
+              />
+            </span>
           ) : (
-            <>
-              <span className="text-sidebar-gold font-display font-bold text-xl tracking-tight shrink-0">CA</span>
+            <span className={cn("flex items-center justify-center rounded-lg bg-white", collapsed ? "h-10 w-10" : "px-4 py-2")}>
+              <span className="font-heading font-bold text-xl tracking-tight text-primary shrink-0">CA</span>
               {!collapsed && (
-                <span className="text-sidebar-foreground font-display font-semibold text-lg tracking-tight">Flow</span>
+                <span className="font-heading font-bold text-xl tracking-tight text-coral">Flow</span>
               )}
-            </>
+            </span>
           )}
         </Link>
         <button
@@ -148,10 +150,10 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             key={item.path}
             to={item.path}
             className={cn(
-              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200 group",
+              "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 group",
               isActive(item.path)
-                ? "bg-sidebar-gold/15 text-sidebar-gold"
-                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
             )}
           >
             <item.icon size={20} className={cn("shrink-0 transition-colors", isActive(item.path) && "text-sidebar-gold")} />
@@ -165,26 +167,26 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             <Link
               to="/audit"
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+                "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
                 isAuditActive
-                  ? "bg-sidebar-gold/15 text-sidebar-gold"
-                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                  ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                  : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
               )}
             >
-              <Search size={20} className="shrink-0 text-sidebar-gold" />
+              <Search size={20} className="shrink-0" />
             </Link>
           ) : (
             <Collapsible open={auditOpen} onOpenChange={setAuditOpen}>
               <CollapsibleTrigger className="w-full">
                 <div
                   className={cn(
-                    "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200 w-full",
+                    "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 w-full",
                     isAuditActive
-                      ? "bg-sidebar-gold/15 text-sidebar-gold"
-                      : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                      ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                      : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
                   )}
                 >
-                  <Search size={20} className="shrink-0 text-sidebar-gold" />
+                  <Search size={20} className="shrink-0" />
                   <span className="truncate flex-1 text-left">
                     Audit Intelligence
                     <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded bg-sidebar-gold/20 text-sidebar-gold font-semibold uppercase tracking-wider">
@@ -206,8 +208,8 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
                           className={cn(
                             "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
                             isActive(item.path) && !location.pathname.startsWith("/audit/pipeline")
-                              ? "bg-sidebar-gold/10 text-sidebar-gold"
-                              : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
+                              ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                              : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                           )}
                         >
                           <item.icon size={14} className="shrink-0" />
@@ -233,8 +235,8 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
                         className={cn(
                           "w-full flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200 text-left",
                           isStageActive && item.stage
-                            ? "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
-                            : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
+                            ? "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                            : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                         )}
                       >
                         <item.icon size={14} className="shrink-0" />
@@ -259,8 +261,8 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
                           className={cn(
                             "flex items-center gap-2.5 px-2 py-1.5 rounded-md text-xs font-medium transition-all duration-200",
                             isActive(item.path)
-                              ? "bg-sidebar-gold/10 text-sidebar-gold"
-                              : "text-sidebar-foreground/80 hover:bg-sidebar-hover hover:text-sidebar-foreground"
+                              ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                              : "text-sidebar-foreground/80 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
                           )}
                         >
                           <item.icon size={14} className="shrink-0" />
@@ -283,10 +285,10 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             <Link
               to="/admin"
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+                "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
                 isActive("/admin")
                   ? "bg-destructive/15 text-destructive"
-                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-destructive"
+                  : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-destructive"
               )}
             >
               <Shield size={20} className="shrink-0 text-destructive" />
@@ -296,10 +298,10 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             <Link
               to="/admin/firms"
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+                "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
                 isActive("/admin/firms")
-                  ? "bg-sidebar-gold/15 text-sidebar-gold"
-                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                  ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                  : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
               )}
             >
               <Building2 size={20} className="shrink-0" />
@@ -309,10 +311,10 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
             <Link
               to="/admin/users"
               className={cn(
-                "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+                "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
                 isActive("/admin/users")
-                  ? "bg-sidebar-gold/15 text-sidebar-gold"
-                  : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                  ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                  : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
               )}
             >
               <Users size={20} className="shrink-0" />
@@ -326,10 +328,10 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           <Link
             to="/settings/users"
             className={cn(
-              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
               isActive("/settings/users")
-                ? "bg-sidebar-gold/15 text-sidebar-gold"
-                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
             )}
           >
             <Users size={20} className="shrink-0" />
@@ -342,10 +344,10 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           <Link
             to="/settings/firm"
             className={cn(
-              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
               isActive("/settings/firm")
-                ? "bg-sidebar-gold/15 text-sidebar-gold"
-                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
             )}
           >
             <Building2 size={20} className="shrink-0" />
@@ -358,10 +360,10 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           <Link
             to="/settings/services"
             className={cn(
-              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
               isActive("/settings/services")
-                ? "bg-sidebar-gold/15 text-sidebar-gold"
-                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
             )}
           >
             <Package size={20} className="shrink-0" />
@@ -375,10 +377,10 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           <Link
             to="/settings/access-permissions"
             className={cn(
-              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
               isActive("/settings/access-permissions")
-                ? "bg-sidebar-gold/15 text-sidebar-gold"
-                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
             )}
           >
             <Shield size={20} className="shrink-0" />
@@ -391,10 +393,10 @@ export function AppSidebar({ collapsed, onToggle }: AppSidebarProps) {
           <Link
             to={settingsItem.path}
             className={cn(
-              "flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-all duration-200",
+              "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200",
               isActive(settingsItem.path) && !isActive("/settings/users") && !isActive("/settings/firm") && !isActive("/settings/roles") && !isActive("/settings/access-permissions") && !isActive("/settings/services")
-                ? "bg-sidebar-gold/15 text-sidebar-gold"
-                : "text-sidebar-foreground hover:bg-sidebar-hover hover:text-sidebar-gold-foreground"
+                ? "relative bg-sidebar-accent text-sidebar-accent-foreground font-semibold shadow-sm before:absolute before:left-0 before:top-1/2 before:h-6 before:w-1 before:-translate-y-1/2 before:rounded-r-full before:bg-coral"
+                : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
             )}
           >
             <settingsItem.icon size={20} className="shrink-0" />

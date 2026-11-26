@@ -1186,7 +1186,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
           {r.kind === "firm" ? <Building2 size={11} className="text-muted-foreground flex-shrink-0" />
             : r.kind === "group" ? <Users size={11} className="text-muted-foreground flex-shrink-0" />
             : <FileText size={11} className="text-muted-foreground flex-shrink-0" />}
-          <span className="font-medium truncate text-[#1A2744] hover:underline">{r.name}</span>
+          <span className="font-medium truncate text-[#142952] hover:underline">{r.name}</span>
           {r.kind !== "client" && (
             <span className="text-[10px] text-muted-foreground flex-shrink-0">{r.clientCount} client{r.clientCount !== 1 ? "s" : ""}</span>
           )}
@@ -1308,8 +1308,8 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       </div>
 
       {/* ── Report frame ── */}
-      <div className="rounded-lg border border-[#1A2744]/20 overflow-hidden shadow-sm">
-        <div className="bg-[#1A2744] text-white px-5 py-2.5">
+      <div className="rounded-lg border border-[#142952]/20 overflow-hidden shadow-sm">
+        <div className="bg-[#142952] text-white px-5 py-2.5">
           <div className="flex items-center justify-between gap-2">
             <div className="font-semibold text-sm">Sundry Debtors — {viewLabel}</div>
             {groupFilter && (
@@ -1371,7 +1371,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
 
         {/* Grand Total */}
         {!loading && filtered.length > 0 && (
-          <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] px-4 py-3 bg-[#1A2744] text-white text-[12px] font-bold">
+          <div className="grid grid-cols-[minmax(160px,1fr)_150px_120px_120px_150px_110px_200px_84px] px-4 py-3 bg-[#142952] text-white text-[12px] font-bold">
             <div className="flex items-center gap-1.5">
               <TrendingUp size={13} className="text-orange-400" /> Grand Total
               <span className="text-[10px] font-normal text-white/60 ml-1">({grandTotal.clients} client{grandTotal.clients !== 1 ? "s" : ""})</span>
@@ -1401,7 +1401,7 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
       {/* ── Client Ledger Sheet ── */}
       <Sheet open={!!sheetClient} onOpenChange={open => { if (!open) setSheetClient(null); }}>
         <SheetContent side="right" className="w-full sm:max-w-3xl p-0 flex flex-col">
-          <SheetHeader className="bg-[#1A2744] text-white px-6 py-4 flex-shrink-0">
+          <SheetHeader className="bg-[#142952] text-white px-6 py-4 flex-shrink-0">
             <SheetTitle className="text-white flex items-center justify-between">
               <div>
                 <div className="text-base font-bold">{sheetClient?.name}</div>
@@ -1410,11 +1410,11 @@ export default function ReceivablesReportTab({ defaultFirmId }: { defaultFirmId?
                 </div>
               </div>
               <div className="flex gap-2">
-                <Button size="sm" variant="outline" className="h-8 text-[#1A2744] text-xs gap-1 bg-white/90 hover:bg-white" onClick={handleDownloadClientPdf}>
+                <Button size="sm" variant="outline" className="h-8 text-[#142952] text-xs gap-1 bg-white/90 hover:bg-white" onClick={handleDownloadClientPdf}>
                   <Download size={12} /> PDF
                 </Button>
                 {sheetClient?.email && (
-                  <Button size="sm" variant="outline" className="h-8 text-[#1A2744] text-xs gap-1 bg-white/90 hover:bg-white" onClick={() => setEmailClient(sheetClient)}>
+                  <Button size="sm" variant="outline" className="h-8 text-[#142952] text-xs gap-1 bg-white/90 hover:bg-white" onClick={() => setEmailClient(sheetClient)}>
                     <Mail size={12} /> Email
                   </Button>
                 )}

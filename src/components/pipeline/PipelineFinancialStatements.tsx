@@ -8136,7 +8136,7 @@ export default function PipelineFinancialStatements({
       <div className="grid grid-cols-2 gap-x-8">
         {/* ── Left — CA Firm block ─────────────────────────────────────── */}
         <div className="space-y-0.5">
-          <div className="font-bold text-[#1A2744]">
+          <div className="font-bold text-[#142952]">
             For, {sigFirmName || <span className="italic text-muted-foreground">[Audit Firm Name]</span>}
           </div>
           <div>Chartered Accountants</div>
@@ -8144,7 +8144,7 @@ export default function PipelineFinancialStatements({
 
           <div className="h-6" />{/* gap row matching Word's spacing.before */}
           <div className="font-mono">__________________</div>
-          <div className="font-bold text-[#1A2744]">
+          <div className="font-bold text-[#142952]">
             {sigPartnerName || <span className="italic text-muted-foreground">[Partner Name]</span>}
           </div>
           <div>Partner</div>
@@ -8178,7 +8178,7 @@ export default function PipelineFinancialStatements({
           </div>
 
           <div className="h-8" />{/* 480 dxa gap before "For, Client" */}
-          <div className="font-bold text-[#1A2744]">
+          <div className="font-bold text-[#142952]">
             For, {sigClientName || <span className="italic text-muted-foreground">[Client Name]</span>}
           </div>
 
