@@ -261,10 +261,10 @@ function QueryCard({ query, clientName }: { query: AuditQuery; clientName: strin
                       <div key={msg.id} className={cn("flex", isClient ? "justify-end" : "justify-start")}>
                         <div className={cn(
                           "max-w-[80%] rounded-xl px-3 py-2 space-y-1",
-                          isClient ? "bg-amber-50 border border-amber-200 rounded-tr-sm" : "bg-[#0A131E]/5 border border-[#0A131E]/10 rounded-tl-sm",
+                          isClient ? "bg-amber-50 border border-amber-200 rounded-tr-sm" : "bg-[#142952]/5 border border-[#142952]/10 rounded-tl-sm",
                         )}>
                           <div className="flex items-baseline gap-2">
-                            <span className={cn("text-[10px] font-semibold", isClient ? "text-amber-700" : "text-[#0A131E]")}>
+                            <span className={cn("text-[10px] font-semibold", isClient ? "text-amber-700" : "text-[#142952]")}>
                               {isClient ? "You" : (msg.sender_name || "Auditor")}
                             </span>
                             <span className="text-[9px] text-muted-foreground">{fmtTime(msg.created_at)}</span>
@@ -407,7 +407,7 @@ export default function PortalQueries() {
     <div className="space-y-5">
 
       {/* ── Header ── */}
-      <div className="rounded-xl bg-[#0A131E] text-white px-6 py-5">
+      <div className="rounded-xl bg-[#142952] text-white px-6 py-5">
         <div className="flex items-start justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 rounded-full bg-amber-500/20 border-2 border-amber-400 flex items-center justify-center shrink-0">

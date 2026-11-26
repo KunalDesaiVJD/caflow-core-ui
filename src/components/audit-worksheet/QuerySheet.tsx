@@ -1162,7 +1162,7 @@ export default function QuerySheet({
             <FileText size={12} /> Export PDF
           </Button>
           <Button size="sm" variant="outline"
-            className="gap-1 h-7 text-xs border-[#1A2744] text-[#1A2744] hover:bg-[#1A2744]/5"
+            className="gap-1 h-7 text-xs border-[#142952] text-[#142952] hover:bg-[#142952]/5"
             onClick={() => fileInputRef.current?.click()}>
             <Upload size={12} /> Import Excel
           </Button>
@@ -1610,7 +1610,7 @@ export default function QuerySheet({
         <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Upload size={16} className="text-[#1A2744]" /> Import Queries Preview
+              <Upload size={16} className="text-[#142952]" /> Import Queries Preview
             </DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground px-1">
@@ -1659,7 +1659,7 @@ export default function QuerySheet({
           </div>
           <DialogFooter className="gap-2 pt-2">
             <Button variant="outline" size="sm" onClick={() => setImportPreview(null)}>Cancel</Button>
-            <Button size="sm" className="bg-[#1A2744] hover:bg-[#1A2744]/90 text-white gap-1.5"
+            <Button size="sm" className="bg-[#142952] hover:bg-[#142952]/90 text-white gap-1.5"
               onClick={confirmImport} disabled={importing}>
               {importing ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
               Import All ({importPreview?.length})

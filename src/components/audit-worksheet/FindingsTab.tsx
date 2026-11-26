@@ -453,7 +453,7 @@ export function FindingsTab({ data, engagementId, externalPrefill, onPrefillCons
     <div className="space-y-4">
 
       {/* ══════════ HEADER ══════════ */}
-      <div className="bg-[#1a2744] text-white px-6 py-4 rounded-lg">
+      <div className="bg-[#142952] text-white px-6 py-4 rounded-lg">
         <div className="flex items-center gap-2 flex-wrap">
           <ShieldAlert size={17} />
           <span className="text-base font-semibold tracking-wide">{data.firmName || "Audit Firm"}</span>
@@ -493,7 +493,7 @@ export function FindingsTab({ data, engagementId, externalPrefill, onPrefillCons
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 flex-wrap">
           <Button size="sm" variant="outline"
-            className="gap-1.5 h-8 text-xs border-[#1a2744] text-[#1a2744] hover:bg-[#1a2744]/5"
+            className="gap-1.5 h-8 text-xs border-[#142952] text-[#142952] hover:bg-[#142952]/5"
             onClick={() => { addFinding(); toast.success("New finding added."); }}>
             <Plus size={13} /> Add Finding
           </Button>

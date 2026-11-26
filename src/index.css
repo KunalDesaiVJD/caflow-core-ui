@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Poppins:wght@500;600;700&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -6,51 +6,57 @@
 
 @layer base {
   :root {
-    --background: 220 14% 96%;
-    --foreground: 215 28% 10%;
-
+    /* GST Keeper design system — CAFlow re-skin */
+    --background: 0 0% 97%;
+    --foreground: 222 47% 11%;
     --card: 0 0% 100%;
-    --card-foreground: 215 28% 10%;
-
+    --card-foreground: 222 47% 11%;
     --popover: 0 0% 100%;
-    --popover-foreground: 215 28% 10%;
-
-    --primary: 42 52% 54%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 220 60% 25%;
     --primary-foreground: 0 0% 100%;
-
-    --secondary: 216 18% 16%;
-    --secondary-foreground: 220 14% 86%;
-
-    --muted: 220 14% 92%;
-    --muted-foreground: 215 12% 50%;
-
-    --accent: 42 52% 54%;
-    --accent-foreground: 0 0% 100%;
-
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 9% 46%;
+    --accent: 220 14% 94%;          /* quiet hover (design note: avoid coral hovers) */
+    --accent-foreground: 222 47% 11%;
+    --coral: 16 100% 66%;            /* the 4px active-nav bar only */
     --destructive: 0 84% 60%;
     --destructive-foreground: 0 0% 100%;
-
-    --border: 220 13% 90%;
-    --input: 220 13% 90%;
-    --ring: 42 52% 54%;
-
+    --success: 142 76% 36%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+    --info: 199 89% 48%;
+    --info-foreground: 0 0% 100%;
+    --success-strong: 142 72% 26%;
+    --destructive-strong: 0 72% 42%;
+    --cell-input: 48 100% 95%;
+    --cell-input-foreground: 221 83% 38%;
+    --cell-variance: 24 95% 88%;
+    --cell-variance-foreground: 17 88% 30%;
+    --border: 220 13% 91%;
+    --input: 220 13% 91%;
+    --ring: 220 60% 25%;
     --radius: 0.5rem;
 
-    --sidebar-bg: 214 48% 8%;
-    --sidebar-fg: 220 14% 80%;
-    --sidebar-gold: 42 52% 54%;
-    --sidebar-gold-fg: 42 80% 90%;
-    --sidebar-hover: 214 40% 14%;
-    --sidebar-active: 42 52% 54%;
-
-    --sidebar-background: 214 48% 8%;
-    --sidebar-foreground: 220 14% 80%;
-    --sidebar-primary: 42 52% 54%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 214 40% 14%;
-    --sidebar-accent-foreground: 220 14% 96%;
-    --sidebar-border: 214 40% 14%;
-    --sidebar-ring: 42 52% 54%;
+    /* Sidebar: dark navy, coral active bar */
+    --sidebar-background: 220 60% 20%;
+    --sidebar-foreground: 220 20% 85%;
+    --sidebar-primary: 0 0% 100%;
+    --sidebar-primary-foreground: 220 60% 20%;
+    --sidebar-accent: 220 60% 28%;
+    --sidebar-accent-foreground: 0 0% 100%;
+    --sidebar-border: 220 50% 30%;
+    --sidebar-ring: 220 60% 50%;
+    /* legacy CAFlow sidebar aliases, re-pointed to the new palette */
+    --sidebar-bg: 220 60% 20%;
+    --sidebar-fg: 220 20% 85%;
+    --sidebar-gold: 0 0% 100%;
+    --sidebar-gold-fg: 0 0% 100%;
+    --sidebar-hover: 220 60% 28%;
+    --sidebar-active: 16 100% 66%;
   }
 }
 
@@ -60,6 +66,9 @@
   }
   body {
     @apply bg-background text-foreground font-sans;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Poppins', sans-serif;
     -webkit-tap-highlight-color: transparent;
   }
 }

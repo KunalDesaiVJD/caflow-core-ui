@@ -167,7 +167,7 @@ export default function PortalDocuments() {
   return (
     <div className="space-y-5">
       <div>
-        <h1 className="text-xl font-bold flex items-center gap-2 text-[#1A2744]">
+        <h1 className="text-xl font-bold flex items-center gap-2 text-[#142952]">
           <FolderOpen size={22} className="text-orange-600" /> My Documents
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">

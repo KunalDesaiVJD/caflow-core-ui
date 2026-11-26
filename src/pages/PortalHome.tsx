@@ -310,7 +310,7 @@ export default function PortalHome() {
     <div className="space-y-6">
 
       {/* Welcome banner */}
-      <div className="rounded-xl bg-[#0A131E] text-white px-6 py-5 flex items-center gap-4">
+      <div className="rounded-xl bg-[#142952] text-white px-6 py-5 flex items-center gap-4">
         <div className="h-12 w-12 rounded-full bg-amber-500/20 border-2 border-amber-400 flex items-center justify-center shrink-0">
           <Building2 size={22} className="text-amber-300" />
         </div>
@@ -357,7 +357,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2">
-              <FileText size={16} className="text-[#0A131E]" /> ITR Status
+              <FileText size={16} className="text-[#142952]" /> ITR Status
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -388,7 +388,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center gap-2">
-              <Receipt size={16} className="text-[#0A131E]" /> TDS Summary
+              <Receipt size={16} className="text-[#142952]" /> TDS Summary
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -431,7 +431,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <FolderOpen size={16} className="text-[#0A131E]" /> My Documents
+              <FolderOpen size={16} className="text-[#142952]" /> My Documents
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-1">
@@ -463,7 +463,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <CreditCard size={16} className="text-[#0A131E]" /> Invoices
+              <CreditCard size={16} className="text-[#142952]" /> Invoices
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -502,7 +502,7 @@ export default function PortalHome() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-sm">
-              <Bell size={16} className="text-[#0A131E]" /> Recent Notifications
+              <Bell size={16} className="text-[#142952]" /> Recent Notifications
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -534,7 +534,7 @@ export default function PortalHome() {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-sm">
-            <Upload size={16} className="text-[#0A131E]" /> Upload Document to Your CA
+            <Upload size={16} className="text-[#142952]" /> Upload Document to Your CA
           </CardTitle>
         </CardHeader>
         <CardContent>
